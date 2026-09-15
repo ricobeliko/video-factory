@@ -523,6 +523,21 @@
     "OFox Upstream Vendor Help": "OFox 视频生成使用的上游厂商。BytePlus（国际）为默认值，内容政策一致；火山引擎为大陆厂商；自动分发由 OFox 网关按权重在可用厂商间调度。",
     "OFox Vendor BytePlus": "BytePlus（国际，默认）",
     "OFox Vendor Volcengine": "火山引擎（中国大陆）",
-    "OFox Vendor Auto": "自动分发（网关调度）"
+    "OFox Vendor Auto": "自动分发（网关调度）",
+    "Publish": "发布",
+    "Publish Task": "发布任务",
+    "Publish Task Confirmation": "确认将此视频发布到已配置的社交媒体平台？",
+    "Confirm Publish": "确认发布",
+    "Publishing Started": "发布已启动",
+    "Publishing Failed": "启动发布失败",
+    "Task Already Published Warning": "此视频之前已发布过。确认后将发起新的发布。",
+    "Previous Publish Failed Notice": "此任务上次发布失败，您可以重试发布。",
+    "Upload-Post integration is disabled": "Upload-Post 集成未启用",
+    "Please enable Upload-Post in Settings to publish videos.": "请在设置中启用 Upload-Post 以发布视频。",
+    "Upload-Post is not configured": "Upload-Post 未配置",
+    "Please configure API Key and Username in Settings.": "请在设置中配置 API Key 和发布用户名。",
+    "No Platforms Configured": "未配置目标平台",
+    "Please select at least one target platform in Settings.": "请在设置中至少选择一个目标发布平台。",
+    "No final video file found": "未找到最终视频文件"
   }
 }

@@ -88,6 +88,11 @@ _VIDEO_MUSIC_PROVIDERS = {
     },
 }
 
+_FINAL_VIDEO_PATTERN = re.compile(
+    r"^final-(?P<index>\d+)\.(?P<extension>mp4|mov|mkv|webm)$",
+    re.IGNORECASE,
+)
+
 
 def _get_video_music_prompt(params: VideoParams) -> str:
     """
@@ -1298,7 +1303,7 @@ def _finalize_cross_post_future(task_id: str, future: Future) -> None:
 def _schedule_cross_post(
     task_id: str,
     video_paths: list[str],
-    params: VideoParams,
+    params: VideoParams | dict | None,
     video_script: str,
     platforms: list[str],
     youtube_privacy_status: str,
@@ -1320,13 +1325,23 @@ def _schedule_cross_post(
         return error
 
     try:
+        video_subject = (
+            getattr(params, "video_subject", None)
+            or (params.get("video_subject") if isinstance(params, dict) else "")
+            or ""
+        )
+        video_language = (
+            getattr(params, "video_language", None)
+            or (params.get("video_language") if isinstance(params, dict) else "")
+            or ""
+        )
         future = _cross_post_executor.submit(
             _run_cross_post_with_slot,
             task_id,
             tuple(video_paths),
-            params.video_subject or "",
+            video_subject,
             video_script,
-            params.video_language or "",
+            video_language,
             tuple(platforms),
             youtube_privacy_status,
             youtube_made_for_kids,
@@ -1348,6 +1363,104 @@ def _schedule_cross_post(
         return f"failed to schedule cross-post: {exc}"
 
     return None
+
+
+def publish_task(task_id: str) -> tuple[bool, str]:
+    """
+    Manually publish an existing completed task's final video to configured platforms via Upload-Post.
+
+    Returns (True, "") on successful scheduling, or (False, error_message) on failure.
+    """
+    if not upload_post.upload_post_service.enabled:
+        return False, "Upload-Post integration is disabled in settings"
+    if not upload_post.upload_post_service.is_configured():
+        return False, "Upload-Post is not fully configured (missing API Key or username)"
+
+    platforms = list(upload_post.upload_post_service.platforms)
+    if not platforms:
+        return False, "No target platforms selected for publishing"
+
+    task = sm.state.get_task(task_id) or {}
+    task_path = os.path.join(utils.task_dir(), task_id)
+    if not os.path.isdir(task_path):
+        return False, f"Task directory not found: {task_id}"
+
+    if is_task_busy(task):
+        return False, "Task is currently processing or already publishing"
+
+    task_state = task.get("state")
+    if task_state == const.TASK_STATE_FAILED:
+        return False, "Cannot publish a failed task"
+
+    video_paths = [v for v in (task.get("videos") or []) if os.path.isfile(v)]
+    if not video_paths:
+        final_videos = []
+        try:
+            for file_name in os.listdir(task_path):
+                match = _FINAL_VIDEO_PATTERN.fullmatch(file_name)
+                if match:
+                    final_videos.append(
+                        (int(match.group("index")), os.path.join(task_path, file_name))
+                    )
+        except OSError:
+            pass
+        if final_videos:
+            final_videos.sort(key=lambda item: item[0])
+            video_paths = [path for _, path in final_videos]
+
+    if not video_paths:
+        return False, "No final video file found for this task"
+
+    script_data = {}
+    script_file = os.path.join(task_path, "script.json")
+    if os.path.isfile(script_file):
+        try:
+            with open(script_file, "r", encoding="utf-8") as f:
+                script_data = json.load(f)
+        except Exception as e:
+            logger.warning(f"failed to read script data for task {task_id}: {e}")
+
+    params_data = (
+        script_data.get("params", {}) if isinstance(script_data, dict) else {}
+    )
+    video_script = (
+        (script_data.get("script") if isinstance(script_data, dict) else "")
+        or task.get("script", "")
+        or ""
+    )
+    subject = (
+        (params_data.get("video_subject") if isinstance(params_data, dict) else "")
+        or task.get("video_subject")
+        or task.get("subject")
+        or task_id
+    )
+
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_COMPLETE,
+        progress=100,
+        video_subject=subject,
+        videos=video_paths,
+        script=video_script,
+        cross_post_state=const.CROSS_POST_STATE_PENDING,
+        cross_post_results=None,
+        cross_post_error=None,
+        cross_post_owner=_cross_post_process_owner,
+    )
+
+    scheduling_error = _schedule_cross_post(
+        task_id=task_id,
+        video_paths=video_paths,
+        params=params_data,
+        video_script=video_script,
+        platforms=platforms,
+        youtube_privacy_status=upload_post.upload_post_service.youtube_privacy_status,
+        youtube_made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
+    )
+    if scheduling_error:
+        return False, scheduling_error
+
+    return True, ""
 
 
 def _run_pipeline(

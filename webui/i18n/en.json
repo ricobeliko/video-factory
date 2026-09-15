@@ -523,6 +523,21 @@
     "OFox Upstream Vendor Help": "Which upstream vendor serves OFox video generation. BytePlus (international) is the default with a consistent content policy; Volcano Engine is the mainland-China vendor; Auto lets the OFox gateway load-balance across vendors.",
     "OFox Vendor BytePlus": "BytePlus (International, default)",
     "OFox Vendor Volcengine": "Volcano Engine (Mainland China)",
-    "OFox Vendor Auto": "Auto (gateway load balancing)"
+    "OFox Vendor Auto": "Auto (gateway load balancing)",
+    "Publish": "Publish",
+    "Publish Task": "Publish Task",
+    "Publish Task Confirmation": "Do you want to publish this video to the configured social platforms?",
+    "Confirm Publish": "Confirm Publish",
+    "Publishing Started": "Publishing started",
+    "Publishing Failed": "Failed to start publishing",
+    "Task Already Published Warning": "This video was already published previously. Confirming will start a new publication.",
+    "Previous Publish Failed Notice": "The previous publication for this task failed. You can retry publishing now.",
+    "Upload-Post integration is disabled": "Upload-Post integration is disabled",
+    "Please enable Upload-Post in Settings to publish videos.": "Please enable Upload-Post in Settings to publish videos.",
+    "Upload-Post is not configured": "Upload-Post is not configured",
+    "Please configure API Key and Username in Settings.": "Please configure API Key and Username in Settings.",
+    "No Platforms Configured": "No Platforms Configured",
+    "Please select at least one target platform in Settings.": "Please select at least one target platform in Settings.",
+    "No final video file found": "No final video file found"
   }
 }

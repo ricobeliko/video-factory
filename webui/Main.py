@@ -847,6 +847,15 @@ def _queue_task_restore(task_id):
     st.rerun(scope="app")
 
 
+def _queue_task_publish(task_id):
+    # 任务列表运行在 fragment 中，通过记录候选任务并触发整页 rerun 打开确认弹窗。
+    st.session_state["task_publish_candidate_id"] = task_id
+    st.session_state["task_manager_popover_nonce"] = (
+        st.session_state.get("task_manager_popover_nonce", 0) + 1
+    )
+    st.rerun(scope="app")
+
+
 def _normalize_task_state(state):
     if state in (
         const.TASK_STATE_COMPLETE,
@@ -1175,7 +1184,7 @@ def _build_video_download_name(subject, index, total):
 
 def _render_task_table(filtered_tasks, key_prefix):
     with st.container(key=f"task_table_header_{key_prefix}"):
-        header_cols = st.columns([1.1, 1.7, 3.0, 0.8, 1.6], vertical_alignment="center")
+        header_cols = st.columns([1.0, 1.5, 2.7, 0.8, 2.0], vertical_alignment="center")
         header_cols[0].caption(tr("Task Status"))
         header_cols[1].caption(tr("Task Updated At"))
         header_cols[2].caption(tr("Task Subject"))
@@ -1206,7 +1215,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                 key=f"task_row_{key_prefix}_{safe_task_key}", border=True
             ):
                 row_cols = st.columns(
-                    [1.1, 1.7, 3.0, 0.8, 1.6],
+                    [1.0, 1.5, 2.7, 0.8, 2.0],
                     vertical_alignment="center",
                 )
                 row_cols[0].write(_task_state_label(task["state"], has_video))
@@ -1215,7 +1224,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                 row_cols[3].write(f"{task['progress']}%")
 
                 action_cols = row_cols[4].columns(
-                    4,
+                    5,
                     vertical_alignment="center",
                     gap="small",
                 )
@@ -1243,6 +1252,30 @@ def _render_task_table(filtered_tasks, key_prefix):
                         _open_task_path(task["task_path"])
 
                 with action_cols[2]:
+                    publish_label = tr("Publish")
+                    is_completed = (
+                        _task_state_filter_key(task) == "complete"
+                        and has_video
+                        and not is_busy
+                    )
+                    if is_busy:
+                        publish_help = f"{publish_label} ({tr('Task Status Processing')})"
+                    elif not has_video or _task_state_filter_key(task) != "complete":
+                        publish_help = f"{publish_label} ({tr('Task Status Failed')})"
+                    else:
+                        publish_help = publish_label
+
+                    if st.button(
+                        publish_label,
+                        key=f"publish_task_{key_prefix}_{task_id}",
+                        use_container_width=True,
+                        icon=":material/cloud_upload:",
+                        help=publish_help,
+                        disabled=not is_completed,
+                    ):
+                        _queue_task_publish(task_id)
+
+                with action_cols[3]:
                     restore_label = tr("Regenerate Task")
                     if st.button(
                         restore_label,
@@ -1254,7 +1287,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _queue_task_restore(task_id)
 
-                with action_cols[3]:
+                with action_cols[4]:
                     delete_label = tr("Delete Task")
                     delete_help = (
                         f"{delete_label} ({tr('Task Status Processing')})"
@@ -1606,6 +1639,128 @@ def _render_task_restore_dialog(task_id):
     ):
         st.session_state["task_restore_payload"] = payload
         st.session_state.pop("task_restore_candidate_id", None)
+        st.rerun(scope="app")
+
+
+def _dismiss_task_publish_dialog():
+    st.session_state.pop("task_publish_candidate_id", None)
+
+
+@st.dialog(
+    tr("Publish Task"),
+    width="small",
+    on_dismiss=_dismiss_task_publish_dialog,
+)
+def _render_task_publish_dialog(task_id):
+    tasks_root = utils.task_dir()
+    task_path = os.path.join(tasks_root, task_id)
+    runtime_task = sm.state.get_task(task_id) or {}
+    script_data = _safe_load_task_script(task_path)
+    params_data = script_data.get("params", {}) if script_data else {}
+    subject = (
+        runtime_task.get("video_subject")
+        or params_data.get("video_subject")
+        or script_data.get("script", "")[:40]
+        or task_id
+    )
+    video_file = (
+        runtime_task.get("videos", [""])[0]
+        if runtime_task.get("videos")
+        else _find_final_task_video(task_path)
+    )
+
+    is_enabled = config.app.get("upload_post_enabled", False)
+    api_key = config.app.get("upload_post_api_key", "").strip()
+    username = config.app.get("upload_post_username", "").strip()
+    platforms = config.app.get("upload_post_platforms", [])
+
+    if not is_enabled:
+        st.error(tr("Upload-Post integration is disabled"))
+        st.caption(tr("Please enable Upload-Post in Settings to publish videos."))
+        if st.button(
+            tr("Open Settings"),
+            key="open_settings_from_publish",
+            use_container_width=True,
+        ):
+            _dismiss_task_publish_dialog()
+            _open_settings_dialog("publish")
+            st.rerun(scope="app")
+        return
+
+    if not api_key or not username:
+        st.error(tr("Upload-Post is not configured"))
+        st.caption(tr("Please configure API Key and Username in Settings."))
+        if st.button(
+            tr("Open Settings"),
+            key="open_settings_from_publish_cfg",
+            use_container_width=True,
+        ):
+            _dismiss_task_publish_dialog()
+            _open_settings_dialog("publish")
+            st.rerun(scope="app")
+        return
+
+    if not platforms:
+        st.warning(tr("No Platforms Configured"))
+        st.caption(tr("Please select at least one target platform in Settings."))
+        if st.button(
+            tr("Open Settings"),
+            key="open_settings_from_publish_plat",
+            use_container_width=True,
+        ):
+            _dismiss_task_publish_dialog()
+            _open_settings_dialog("publish")
+            st.rerun(scope="app")
+        return
+
+    if not video_file or not os.path.isfile(video_file):
+        st.error(tr("No final video file found"))
+        if st.button(
+            tr("Cancel"),
+            key="cancel_missing_video_publish",
+            use_container_width=True,
+        ):
+            _dismiss_task_publish_dialog()
+            st.rerun(scope="app")
+        return
+
+    st.write(tr("Publish Task Confirmation"))
+    st.caption(_format_task_subject(subject, max_length=80))
+
+    st.markdown(f"**{tr('Platforms')}:** {', '.join(platforms)}")
+    if "youtube" in platforms:
+        yt_privacy = config.app.get("upload_post_youtube_privacy_status", "public")
+        yt_kids = config.app.get("upload_post_youtube_made_for_kids", False)
+        kids_str = tr("Made for Kids") if yt_kids else tr("Not Made for Kids")
+        st.caption(f"YouTube: {yt_privacy.title()} · {kids_str}")
+
+    cross_post_state = runtime_task.get("cross_post_state")
+    if cross_post_state == const.CROSS_POST_STATE_COMPLETE:
+        st.warning(tr("Task Already Published Warning"))
+    elif cross_post_state == const.CROSS_POST_STATE_FAILED:
+        st.info(tr("Previous Publish Failed Notice"))
+
+    cancel_col, confirm_col = st.columns(2)
+    if cancel_col.button(
+        tr("Cancel"),
+        key="cancel_task_publish",
+        use_container_width=True,
+    ):
+        _dismiss_task_publish_dialog()
+        st.rerun(scope="app")
+
+    if confirm_col.button(
+        tr("Confirm Publish"),
+        key="confirm_task_publish",
+        type="primary",
+        use_container_width=True,
+    ):
+        success, error_msg = tm.publish_task(task_id)
+        _dismiss_task_publish_dialog()
+        if success:
+            st.session_state["task_publish_succeeded"] = True
+        else:
+            st.session_state["task_publish_error"] = error_msg
         st.rerun(scope="app")
 
 
@@ -3059,6 +3214,7 @@ def _render_settings_dialog():
         settings_tab_targets = {
             "llm": tr("LLM Settings Tab"),
             "material": tr("Material API Tab"),
+            "publish": tr("Auto-Publish Settings"),
         }
         settings_tabs_key = localized_widget_key("settings_dialog_tabs")
         target_tab = st.session_state.pop("settings_dialog_target_tab", None)
@@ -7670,6 +7826,16 @@ def _render_application():
     restore_succeeded = st.session_state.pop("task_restore_succeeded", False)
     if restore_applied or restore_succeeded:
         st.success(tr("Task Configuration Loaded"))
+
+    publish_candidate_id = st.session_state.get("task_publish_candidate_id")
+    if publish_candidate_id:
+        _render_task_publish_dialog(publish_candidate_id)
+
+    if st.session_state.pop("task_publish_succeeded", False):
+        st.toast(tr("Publishing Started"), icon="🚀")
+    publish_error = st.session_state.pop("task_publish_error", None)
+    if publish_error:
+        st.toast(f"{tr('Publishing Failed')}: {publish_error}", icon="❌")
 
     with st.container(key="main_settings_grid"):
         panel = st.columns(4)

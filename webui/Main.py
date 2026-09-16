@@ -48,6 +48,7 @@ from app.models.schema import (
 )
 from app.services import bgm as bgm_service
 from app.services import (
+    autopilot,
     cache_manager,
     llm,
     loomloom,
@@ -728,7 +729,10 @@ _initialize_session_state()
 
 
 def tr(key):
-    loc = locales.get(st.session_state["ui_language"], {})
+    ui_lang = st.session_state.get("ui_language") if hasattr(st, "session_state") else None
+    if not ui_lang:
+        ui_lang = config.ui.get("language", "zh")
+    loc = locales.get(ui_lang, {})
     value = loc.get("Translation", {}).get(key)
     if value is not None:
         return value
@@ -1011,10 +1015,12 @@ def _scan_history_tasks(limit=30):
 
 
 def _collect_task_summaries(limit=20):
-    history_tasks = {task["task_id"]: task for task in _scan_history_tasks(limit=50)}
+    scan_limit = max(50, limit)
+    history_tasks = {task["task_id"]: task for task in _scan_history_tasks(limit=scan_limit)}
 
     try:
-        runtime_tasks, _ = sm.state.get_all_tasks(1, 100)
+        runtime_limit = max(100, limit)
+        runtime_tasks, _ = sm.state.get_all_tasks(1, runtime_limit)
     except Exception as e:
         logger.warning(f"failed to load runtime tasks: {e}")
         runtime_tasks = []
@@ -1042,6 +1048,7 @@ def _collect_task_summaries(limit=20):
             "subject": subject,
             "state": task.get("state"),
             "cross_post_state": task.get("cross_post_state"),
+            "planned_platforms": task.get("planned_platforms") or [],
             "progress": int(task.get("progress", 0) or 0),
             "mtime": os.path.getmtime(task_path)
             if os.path.isdir(task_path)
@@ -1114,6 +1121,8 @@ def _collect_task_summaries(limit=20):
                 item["subject"] = live_task["video_subject"]
             if live_task.get("videos") and not item.get("video_file"):
                 item["video_file"] = live_task["videos"][0]
+            if live_task.get("planned_platforms"):
+                item["planned_platforms"] = live_task.get("planned_platforms")
 
         has_video = bool(item.get("video_file") and os.path.isfile(item["video_file"]))
         if has_video or _normalize_task_state(item.get("state")) == const.TASK_STATE_COMPLETE:
@@ -1289,6 +1298,8 @@ def _render_task_table(filtered_tasks, key_prefix):
                     task["subject"] = live_task["video_subject"]
                 if live_task.get("videos") and not task.get("video_file"):
                     task["video_file"] = live_task["videos"][0]
+                if live_task.get("planned_platforms"):
+                    task["planned_platforms"] = live_task["planned_platforms"]
 
             has_video = bool(task["video_file"] and os.path.isfile(task["video_file"]))
             if has_video or _normalize_task_state(task.get("state")) == const.TASK_STATE_COMPLETE:
@@ -1305,7 +1316,7 @@ def _render_task_table(filtered_tasks, key_prefix):
             safe_task_key = "".join(ch if ch.isalnum() else "_" for ch in task_id)[:40]
 
             # 使用 Streamlit 原生 bordered container + columns 保留每行操作。
-            # 相比自定义 HTML/CSS 表格，这种方式对 Streamlit 版本变更更稳；
+            # 相比 custom HTML/CSS 表格，这种方式对 Streamlit 版本变更更稳；
             # 相比 dataframe，又能保留播放、打开目录、删除等行内动作。
             with st.container(
                 key=f"task_row_{key_prefix}_{safe_task_key}", border=True
@@ -1316,7 +1327,12 @@ def _render_task_table(filtered_tasks, key_prefix):
                 )
                 row_cols[0].write(_task_state_label(task["state"], has_video))
                 row_cols[1].write(_format_task_time(task["mtime"]))
-                row_cols[2].write(_format_task_subject(task["subject"]))
+                subject_text = _format_task_subject(task["subject"])
+                if task.get("planned_platforms"):
+                    p_labels = [p.capitalize() for p in task["planned_platforms"] if p]
+                    if p_labels:
+                        subject_text += f" [{', '.join(p_labels)}]"
+                row_cols[2].write(subject_text)
                 row_cols[3].write(f"{task['progress']}%")
 
                 action_cols = row_cols[4].columns(
@@ -7588,6 +7604,428 @@ def _render_subtitle_settings(panel, params):
 parse_batch_topics = webui_task.parse_batch_topics
 
 
+def _validate_batch_prerequisites(
+    params,
+    voice_mode,
+    uploaded_audio_file,
+    uploaded_bgm_file,
+    has_local_materials,
+):
+    if params.video_source not in [
+        "pexels",
+        "pixabay",
+        "coverr",
+        "wavespeed",
+        "volcengine_seedance",
+        "ofox",
+        "metaso_minimax",
+        "loomloom",
+        "openai_image",
+        "local",
+    ]:
+        st.error(tr("Please Select a Valid Video Source"))
+        st.stop()
+
+    if params.video_source == "pexels" and not config.app.get(
+        "pexels_api_keys", ""
+    ):
+        st.error(tr("Please Enter the Pexels API Key"))
+        st.stop()
+
+    if params.video_source == "pixabay" and not config.app.get(
+        "pixabay_api_keys", ""
+    ):
+        st.error(tr("Please Enter the Pixabay API Key"))
+        st.stop()
+
+    if params.video_source == "coverr" and not config.app.get(
+        "coverr_api_keys", ""
+    ):
+        st.error(tr("Please Enter the Coverr API Key"))
+        st.stop()
+
+    if params.video_source == "wavespeed" and not config.app.get(
+        "wavespeed_api_keys", ""
+    ):
+        st.error(tr("Please Enter the WaveSpeed API Key"))
+        st.stop()
+
+    if params.video_source == "wavespeed" and not st.session_state.get(
+        "wavespeed_confirm_charge", False
+    ):
+        st.error(tr("Confirm WaveSpeed Charge Required"))
+        st.stop()
+
+    if params.video_source == "volcengine_seedance" and not (
+        volcengine_seedance.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        )
+    ):
+        st.error(tr("Please Enter the Volcano Engine Ark API Key"))
+        st.stop()
+
+    if params.video_source == "volcengine_seedance" and not st.session_state.get(
+        "volcengine_seedance_confirm_charge", False
+    ):
+        st.error(tr("Confirm Volcano Engine Seedance Charge Required"))
+        st.stop()
+
+    if params.video_source == "ofox" and not (
+        ofox.is_enabled(config.snapshot_config_with_pending(config.app))
+    ):
+        st.error(tr("Please Enter the OFox API Key"))
+        st.stop()
+
+    if params.video_source == "ofox" and not st.session_state.get(
+        "ofox_confirm_charge", False
+    ):
+        st.error(tr("Confirm OFox Charge Required"))
+        st.stop()
+
+    if params.video_source == "metaso_minimax" and not (
+        metaso_minimax.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        )
+    ):
+        st.error(tr("Please Enter the Metaso MiniMax API Key"))
+        st.stop()
+
+    if params.video_source == "metaso_minimax" and not st.session_state.get(
+        "metaso_minimax_confirm_charge", False
+    ):
+        st.error(tr("Confirm Metaso MiniMax Charge Required"))
+        st.stop()
+
+    if params.video_source == "openai_image" and not material.is_openai_image_enabled(
+        config.snapshot_config_with_pending(config.app)
+    ):
+        st.error(tr("Please Configure the OpenAI Image Source"))
+        st.stop()
+
+    if (
+        params.bgm_type == "sonilo"
+        and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+        and not sonilo_service.is_enabled()
+    ):
+        st.error(tr("Sonilo API Key Required"))
+        st.stop()
+
+    if (
+        params.bgm_type == "elevenlabs"
+        and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+        and not elevenlabs_music_service.is_enabled()
+    ):
+        st.error(tr("ElevenLabs API Key Required"))
+        st.stop()
+
+    if params.video_source == "local" and not has_local_materials:
+        st.error(tr("Please Upload Local Materials First"))
+        st.stop()
+
+    if voice_mode == VOICE_MODE_UPLOAD and not uploaded_audio_file:
+        st.error(tr("Please Upload Voiceover File First"))
+        st.stop()
+
+    _save_runtime_config()
+
+    if uploaded_bgm_file and bgm_service.should_use_bgm(
+        params.bgm_type, params.bgm_volume
+    ):
+        try:
+            saved_bgm_name = bgm_service.save_bgm_upload(
+                uploaded_bgm_file.name, uploaded_bgm_file
+            )
+            params.bgm_file = saved_bgm_name
+        except Exception:
+            st.error(tr("Background Music Validation Failed"))
+            st.stop()
+
+
+def _render_autopilot_section(
+    params,
+    voice_mode,
+    uploaded_audio_file,
+    uploaded_bgm_file,
+    has_local_materials,
+):
+    with st.expander(f"🚀 {tr('Autopilot')}", expanded=False):
+        st.caption(tr("Autopilot Description"))
+
+        # 1. Estoque
+        stock_header_cols = st.columns([0.65, 0.35], vertical_alignment="center")
+        with stock_header_cols[0]:
+            st.write(f"**{tr('Stock Status')}**")
+        with stock_header_cols[1]:
+            desired_stock = st.number_input(
+                tr("Desired Stock"),
+                min_value=1,
+                max_value=200,
+                value=autopilot.DEFAULT_DESIRED_STOCK,
+                step=1,
+                key="autopilot_desired_stock",
+            )
+
+        all_summaries = _collect_task_summaries(limit=1000)
+        stock_info = autopilot.calculate_stock(all_summaries, desired_stock=desired_stock)
+
+        stock_cols = st.columns(6)
+        stock_cols[0].metric(tr("Desired Stock"), stock_info["desired"])
+        stock_cols[1].metric(tr("Ready"), stock_info["ready"])
+        stock_cols[2].metric(tr("Processing"), stock_info["processing"])
+        stock_cols[3].metric(tr("Pending"), stock_info["pending"])
+        stock_cols[4].metric(tr("Total"), stock_info["total"])
+        stock_cols[5].metric(tr("Deficit"), stock_info["deficit"])
+
+        if stock_info["is_sufficient"]:
+            st.info(tr("Stock Sufficient Notice"))
+
+        st.divider()
+
+        # 2. Configurações de Entrada
+        niche = st.text_input(
+            tr("Niche"),
+            placeholder=tr("Niche Placeholder"),
+            key="autopilot_niche_input",
+        )
+
+        col_count, col_tk, col_yt = st.columns([1, 1.2, 1.2])
+        with col_count:
+            ideas_count = st.number_input(
+                tr("Ideas Count"),
+                min_value=autopilot.MIN_IDEAS_COUNT,
+                max_value=autopilot.MAX_IDEAS_COUNT,
+                value=autopilot.DEFAULT_IDEAS_COUNT,
+                step=1,
+                key="autopilot_ideas_count_input",
+            )
+        with col_tk:
+            tiktok_active = st.checkbox(
+                tr("TikTok Active"),
+                value=True,
+                key="autopilot_tiktok_active_cb",
+            )
+            tiktok_target = st.number_input(
+                tr("TikTok Daily Target"),
+                min_value=1,
+                max_value=autopilot.MAX_TIKTOK_TARGET,
+                value=autopilot.DEFAULT_TIKTOK_TARGET,
+                step=1,
+                key="autopilot_tiktok_target_input",
+                disabled=not tiktok_active,
+            )
+        with col_yt:
+            youtube_active = st.checkbox(
+                tr("YouTube Active"),
+                value=True,
+                key="autopilot_youtube_active_cb",
+            )
+            youtube_target = st.number_input(
+                tr("YouTube Daily Target"),
+                min_value=1,
+                max_value=autopilot.MAX_YOUTUBE_TARGET,
+                value=autopilot.DEFAULT_YOUTUBE_TARGET,
+                step=1,
+                key="autopilot_youtube_target_input",
+                disabled=not youtube_active,
+            )
+
+        generate_ideas_btn = st.button(
+            tr("Generate Ideas"),
+            key="autopilot_generate_ideas_btn",
+            type="secondary",
+            icon=":material/lightbulb:",
+            use_container_width=True,
+        )
+
+        if generate_ideas_btn:
+            if not niche.strip():
+                st.error(tr("Please Enter a Niche"))
+            else:
+                with st.spinner(tr("Generating Ideas...")):
+                    try:
+                        lang = params.video_language or "pt-BR"
+                        ideas = autopilot.generate_ideas(
+                            niche=niche,
+                            count=ideas_count,
+                            language=lang,
+                            app_config=config.app,
+                        )
+                        if ideas:
+                            st.session_state["autopilot_ideas"] = [
+                                {"topic": idea, "selected": True} for idea in ideas
+                            ]
+                            for k in list(st.session_state.keys()):
+                                if k.startswith("autopilot_topic_") or k.startswith("autopilot_sel_"):
+                                    del st.session_state[k]
+                            st.toast(f"{len(ideas)} ideias geradas!", icon="💡")
+                            st.rerun(scope="app")
+                        else:
+                            st.warning("Nenhuma ideia gerada.")
+                    except Exception as exc:
+                        st.error(f"Erro ao gerar ideias: {exc}")
+
+        # 3. Lista de Ideias Geradas
+        ideas_list = st.session_state.get("autopilot_ideas", [])
+        if ideas_list:
+            st.write(f"**{tr('Generated Ideas')} ({len(ideas_list)})**")
+
+            col_toggle, _ = st.columns([0.3, 0.7])
+            with col_toggle:
+                all_checked = all(
+                    st.session_state.get(f"autopilot_sel_{i}", item.get("selected", True))
+                    for i, item in enumerate(ideas_list)
+                )
+                toggle_label = "Desmarcar todos" if all_checked else tr("Select/Deselect All")
+                if st.button(toggle_label, key="autopilot_toggle_selection_btn"):
+                    new_val = not all_checked
+                    for i, item in enumerate(ideas_list):
+                        st.session_state[f"autopilot_sel_{i}"] = new_val
+                        item["selected"] = new_val
+                    st.rerun(scope="app")
+
+            current_selections = [
+                st.session_state.get(f"autopilot_sel_{i}", item.get("selected", True))
+                for i, item in enumerate(ideas_list)
+            ]
+            selected_indices = [i for i, is_sel in enumerate(current_selections) if is_sel]
+
+            distribution_plan = autopilot.plan_distribution(
+                len(selected_indices),
+                tiktok_active=tiktok_active,
+                tiktok_target=tiktok_target,
+                youtube_active=youtube_active,
+                youtube_target=youtube_target,
+            )
+            plan_map = {}
+            for rank, orig_i in enumerate(selected_indices):
+                plan_map[orig_i] = distribution_plan[rank]
+
+            for idx, item in enumerate(ideas_list):
+                item_cols = st.columns([0.08, 0.65, 0.27], vertical_alignment="center")
+                with item_cols[0]:
+                    sel = st.checkbox(
+                        "",
+                        value=item.get("selected", True),
+                        key=f"autopilot_sel_{idx}",
+                        label_visibility="collapsed",
+                    )
+                    item["selected"] = sel
+                with item_cols[1]:
+                    topic_val = st.text_input(
+                        "",
+                        value=item.get("topic", ""),
+                        key=f"autopilot_topic_{idx}",
+                        label_visibility="collapsed",
+                    )
+                    item["topic"] = topic_val
+                with item_cols[2]:
+                    if sel:
+                        destinations = plan_map.get(idx, [])
+                        badges = []
+                        if "tiktok" in destinations:
+                            badges.append("🎵 TikTok")
+                        if "youtube" in destinations:
+                            badges.append("▶️ YouTube")
+                        st.caption(" + ".join(badges) if badges else "—")
+                    else:
+                        st.caption("—")
+
+            queue_locked = bool(
+                webui_task.has_active_generation_tasks() or _has_active_generation()
+            )
+            add_queue_btn = st.button(
+                tr("Add Selected to Queue"),
+                key="autopilot_add_queue_btn",
+                type="primary",
+                use_container_width=True,
+                disabled=queue_locked or not selected_indices,
+                icon=":material/playlist_add:",
+                help=tr(
+                    "There is a generation in progress. Please wait for completion before starting another."
+                )
+                if queue_locked
+                else None,
+            )
+
+            if add_queue_btn:
+                if queue_locked:
+                    st.warning(
+                        tr(
+                            "There is a generation in progress. Please wait for completion before starting another."
+                        )
+                    )
+                    st.stop()
+
+                selected_topics = []
+                for i in selected_indices:
+                    topic_text = st.session_state.get(f"autopilot_topic_{i}", ideas_list[i].get("topic", "")).strip()
+                    if topic_text:
+                        selected_topics.append((i, topic_text))
+
+                if not selected_topics:
+                    st.error(tr("No Ideas Selected"))
+                    st.stop()
+
+                _validate_batch_prerequisites(
+                    params=params,
+                    voice_mode=voice_mode,
+                    uploaded_audio_file=uploaded_audio_file,
+                    uploaded_bgm_file=uploaded_bgm_file,
+                    has_local_materials=has_local_materials,
+                )
+
+                final_plan = autopilot.plan_distribution(
+                    len(selected_topics),
+                    tiktok_active=tiktok_active,
+                    tiktok_target=tiktok_target,
+                    youtube_active=youtube_active,
+                    youtube_target=youtube_target,
+                )
+
+                submitted_task_ids = []
+                for rank, (orig_i, topic) in enumerate(selected_topics):
+                    task_id = str(uuid4())
+                    item_params = params.model_copy(deep=True)
+                    item_params.video_subject = topic
+                    item_params.video_script = ""
+                    _add_active_generation_task(task_id, subject=topic)
+                    try:
+                        webui_task.submit_generation(
+                            task_id=task_id,
+                            params=item_params,
+                            capture_logs=not config.ui.get("hide_log", False),
+                            voice_preview=None,
+                            loomloom_video_request=None,
+                        )
+                        assigned = final_plan[rank] if rank < len(final_plan) else []
+                        sm.state.update_task(task_id, planned_platforms=assigned)
+                        submitted_task_ids.append(task_id)
+                    except Exception as exc:
+                        logger.error(
+                            f"Failed to submit autopilot task {task_id} for topic '{topic}': {exc}"
+                        )
+                        _remove_active_generation_task(task_id)
+
+                if submitted_task_ids:
+                    submitted_indices_set = {orig_i for orig_i, _ in selected_topics}
+                    remaining_ideas = [
+                        item for i, item in enumerate(ideas_list)
+                        if i not in submitted_indices_set
+                    ]
+                    st.session_state["autopilot_ideas"] = remaining_ideas
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("autopilot_topic_") or k.startswith("autopilot_sel_"):
+                            del st.session_state[k]
+
+                    st.session_state["current_generation_task_id"] = submitted_task_ids[0]
+                    feedback_msg = tr("{count} videos added to generation queue").format(
+                        count=len(submitted_task_ids)
+                    )
+                    st.success(feedback_msg)
+                    st.toast(feedback_msg, icon="📋")
+                    st.rerun(scope="app")
+
+
 def _render_generation_controls(
     params, uploaded_files, uploaded_audio_file, uploaded_bgm_file, voice_mode
 ):
@@ -8033,134 +8471,13 @@ def _render_generation_controls(
             )
             st.stop()
 
-        if params.video_source not in [
-            "pexels",
-            "pixabay",
-            "coverr",
-            "wavespeed",
-            "volcengine_seedance",
-            "ofox",
-            "metaso_minimax",
-            "loomloom",
-            "openai_image",
-            "local",
-        ]:
-            st.error(tr("Please Select a Valid Video Source"))
-            st.stop()
-
-        if params.video_source == "pexels" and not config.app.get(
-            "pexels_api_keys", ""
-        ):
-            st.error(tr("Please Enter the Pexels API Key"))
-            st.stop()
-
-        if params.video_source == "pixabay" and not config.app.get(
-            "pixabay_api_keys", ""
-        ):
-            st.error(tr("Please Enter the Pixabay API Key"))
-            st.stop()
-
-        if params.video_source == "coverr" and not config.app.get(
-            "coverr_api_keys", ""
-        ):
-            st.error(tr("Please Enter the Coverr API Key"))
-            st.stop()
-
-        if params.video_source == "wavespeed" and not config.app.get(
-            "wavespeed_api_keys", ""
-        ):
-            st.error(tr("Please Enter the WaveSpeed API Key"))
-            st.stop()
-
-        if params.video_source == "wavespeed" and not st.session_state.get(
-            "wavespeed_confirm_charge", False
-        ):
-            st.error(tr("Confirm WaveSpeed Charge Required"))
-            st.stop()
-
-        if params.video_source == "volcengine_seedance" and not (
-            volcengine_seedance.is_enabled(
-                config.snapshot_config_with_pending(config.app)
-            )
-        ):
-            st.error(tr("Please Enter the Volcano Engine Ark API Key"))
-            st.stop()
-
-        if params.video_source == "volcengine_seedance" and not st.session_state.get(
-            "volcengine_seedance_confirm_charge", False
-        ):
-            st.error(tr("Confirm Volcano Engine Seedance Charge Required"))
-            st.stop()
-
-        if params.video_source == "ofox" and not (
-            ofox.is_enabled(config.snapshot_config_with_pending(config.app))
-        ):
-            st.error(tr("Please Enter the OFox API Key"))
-            st.stop()
-
-        if params.video_source == "ofox" and not st.session_state.get(
-            "ofox_confirm_charge", False
-        ):
-            st.error(tr("Confirm OFox Charge Required"))
-            st.stop()
-
-        if params.video_source == "metaso_minimax" and not (
-            metaso_minimax.is_enabled(
-                config.snapshot_config_with_pending(config.app)
-            )
-        ):
-            st.error(tr("Please Enter the Metaso MiniMax API Key"))
-            st.stop()
-
-        if params.video_source == "metaso_minimax" and not st.session_state.get(
-            "metaso_minimax_confirm_charge", False
-        ):
-            st.error(tr("Confirm Metaso MiniMax Charge Required"))
-            st.stop()
-
-        if params.video_source == "openai_image" and not material.is_openai_image_enabled(
-            config.snapshot_config_with_pending(config.app)
-        ):
-            st.error(tr("Please Configure the OpenAI Image Source"))
-            st.stop()
-
-        if (
-            params.bgm_type == "sonilo"
-            and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
-            and not sonilo_service.is_enabled()
-        ):
-            st.error(tr("Sonilo API Key Required"))
-            st.stop()
-
-        if (
-            params.bgm_type == "elevenlabs"
-            and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
-            and not elevenlabs_music_service.is_enabled()
-        ):
-            st.error(tr("ElevenLabs API Key Required"))
-            st.stop()
-
-        if params.video_source == "local" and not has_local_materials:
-            st.error(tr("Please Upload Local Materials First"))
-            st.stop()
-
-        if voice_mode == VOICE_MODE_UPLOAD and not uploaded_audio_file:
-            st.error(tr("Please Upload Voiceover File First"))
-            st.stop()
-
-        _save_runtime_config()
-
-        if uploaded_bgm_file and bgm_service.should_use_bgm(
-            params.bgm_type, params.bgm_volume
-        ):
-            try:
-                saved_bgm_name = bgm_service.save_bgm_upload(
-                    uploaded_bgm_file.name, uploaded_bgm_file
-                )
-                params.bgm_file = saved_bgm_name
-            except Exception:
-                st.error(tr("Background Music Validation Failed"))
-                st.stop()
+        _validate_batch_prerequisites(
+            params=params,
+            voice_mode=voice_mode,
+            uploaded_audio_file=uploaded_audio_file,
+            uploaded_bgm_file=uploaded_bgm_file,
+            has_local_materials=has_local_materials,
+        )
 
         submitted_task_ids = []
         for topic in topics:
@@ -8199,6 +8516,14 @@ def _render_generation_controls(
                     )
                 )
             st.rerun(scope="app")
+
+    _render_autopilot_section(
+        params=params,
+        voice_mode=voice_mode,
+        uploaded_audio_file=uploaded_audio_file,
+        uploaded_bgm_file=uploaded_bgm_file,
+        has_local_materials=has_local_materials,
+    )
 
     _render_current_generation_task()
     return start_button

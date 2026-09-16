@@ -66,12 +66,14 @@ class MemoryState(BaseState):
             progress = 100
 
         with self._lock:
-            self._tasks[task_id] = {
+            existing = dict(self._tasks.get(task_id, {}))
+            existing.update({
                 "task_id": task_id,
                 "state": state,
                 "progress": progress,
                 **kwargs,
-            }
+            })
+            self._tasks[task_id] = existing
 
     def get_task(self, task_id: str):
         with self._lock:

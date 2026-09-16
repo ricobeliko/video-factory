@@ -433,6 +433,22 @@
     "Please configure API Key and Username in Settings.": "Configure a Chave de API e o Usuário nas Configurações.",
     "No Platforms Configured": "Nenhuma plataforma configurada",
     "Please select at least one target platform in Settings.": "Selecione pelo menos uma plataforma de destino nas Configurações.",
-    "No final video file found": "Nenhum arquivo final de vídeo encontrado"
+    "No final video file found": "Nenhum arquivo final de vídeo encontrado",
+    "Batch Generation": "Geração em lote",
+    "Batch Generation Description": "Gere múltiplos vídeos independentes a partir de uma lista de temas (um por linha). Cada vídeo será enfileirado no Gerenciador de tarefas.",
+    "Batch Topics": "Temas do lote (um por linha)",
+    "Batch Topics Placeholder": "3 curiosidades sobre Saturno\nPor que Mercúrio é tão quente?\nO planeta mais estranho já descoberto\nO que aconteceria se a Lua desaparecesse?\nPor que o espaço é silencioso?",
+    "Batch Topics Help": "Informe um tema de vídeo por linha. Limite máximo de 10 temas por lote.",
+    "Generate Batch": "Gerar lote",
+    "Please Enter at Least One Topic for Batch Generation": "Informe pelo menos um tema para iniciar a geração em lote.",
+    "Batch Generation Limit Exceeded": "Limite de geração em lote excedido: máximo de {max} temas por lote (foram encontrados {count} temas). Reduza a lista e tente novamente.",
+    "{count} videos added to generation queue": "{count} vídeos adicionados à fila de geração!",
+    "{count} duplicate topics removed from batch": "{count} tema(s) duplicado(s) removido(s) do lote.",
+    "There is a generation in progress. Please wait for completion before starting another.": "Há uma geração em andamento. Aguarde a conclusão antes de iniciar outra.",
+    "Português (Brasil)": "Português (Brasil)",
+    "Portuguese (Brazil)": "Português (Brasil)",
+    "pt-BR": "Português (Brasil)",
+    "Open Settings": "Abrir configurações",
+    "Português": "Português"
   }
 }

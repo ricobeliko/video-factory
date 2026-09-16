@@ -22,6 +22,8 @@ _task_manager = InMemoryTaskManager(
 )
 _task_logs: dict[str, deque[str]] = {}
 _task_logs_lock = threading.RLock()
+_active_task_ids: list[str] = []
+_active_task_ids_lock = threading.RLock()
 _MAX_LOG_TASKS = 20
 _MAX_LOG_RECORDS_PER_TASK = 1000
 # Streamlit 无法由后台线程直接推送组件更新，只能通过 Fragment 轮询。0.5 秒
@@ -66,6 +68,11 @@ def _run_generation(
     """
     log_handler_id = None
     worker_thread_id = threading.get_ident()
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=0,
+    )
     try:
         if capture_logs:
             log_handler_id = logger.add(
@@ -110,6 +117,9 @@ def _run_generation(
         )
         return failure
     finally:
+        with _active_task_ids_lock:
+            if task_id in _active_task_ids:
+                _active_task_ids.remove(task_id)
         if log_handler_id is not None:
             try:
                 logger.remove(log_handler_id)
@@ -139,12 +149,19 @@ def submit_generation(
     # 已确认请求是冻结的数据对象，只在当前进程内传递。API Key 不会进入
     # VideoParams、任务状态、日志或落盘历史，也不会受后续页面 rerun 影响。
     loomloom_request_snapshot = loomloom_video_request
+    is_queued = _task_manager.has_active_tasks()
+    initial_state = (
+        const.TASK_STATE_PENDING if is_queued else const.TASK_STATE_PROCESSING
+    )
     sm.state.update_task(
         task_id,
-        state=const.TASK_STATE_PROCESSING,
+        state=initial_state,
         progress=0,
         video_subject=task_params.video_subject or task_params.video_script or task_id,
     )
+    with _active_task_ids_lock:
+        if task_id not in _active_task_ids:
+            _active_task_ids.append(task_id)
     try:
         _task_manager.add_task(
             _run_generation,
@@ -155,6 +172,9 @@ def submit_generation(
             loomloom_video_request=loomloom_request_snapshot,
         )
     except Exception as exc:
+        with _active_task_ids_lock:
+            if task_id in _active_task_ids:
+                _active_task_ids.remove(task_id)
         # 调度失败与流水线失败一样必须成为可查询状态，避免任务管理器永久显示
         # “生成中”。保留异常类型便于从 Docker 或本机日志快速定位队列问题。
         error = f"{type(exc).__name__}: {exc}"
@@ -169,3 +189,54 @@ def submit_generation(
             f"failed to submit WebUI generation task, task_id={task_id}, error={exc}"
         )
         raise
+
+
+def get_active_task_ids() -> list[str]:
+    """Return a snapshot of all currently running and queued generation task IDs."""
+    with _active_task_ids_lock:
+        return list(_active_task_ids)
+
+
+def has_active_generation_tasks() -> bool:
+    """Check if any video generation task is currently running or queued in the task manager."""
+    return _task_manager.has_active_tasks()
+
+
+has_active_tasks = has_active_generation_tasks
+
+
+def parse_batch_topics(
+    raw_text: str, max_limit: int = 10
+) -> tuple[list[str], int, str | None]:
+    """
+    Parse multiline text into a list of clean, unique topics.
+
+    Returns:
+        (unique_topics, duplicates_count, error_code)
+        error_code can be "empty", "limit_exceeded", or None.
+    """
+    if not raw_text or not raw_text.strip():
+        return [], 0, "empty"
+
+    lines = raw_text.splitlines()
+    unique_topics = []
+    seen = set()
+    duplicates_count = 0
+
+    for line in lines:
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            duplicates_count += 1
+        else:
+            seen.add(cleaned)
+            unique_topics.append(cleaned)
+
+    if not unique_topics:
+        return [], 0, "empty"
+
+    if len(unique_topics) > max_limit:
+        return unique_topics, duplicates_count, "limit_exceeded"
+
+    return unique_topics, duplicates_count, None

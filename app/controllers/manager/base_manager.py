@@ -105,3 +105,7 @@ class TaskManager:
 
     def queue_size(self):
         raise NotImplementedError()
+
+    def has_active_tasks(self) -> bool:
+        with self.lock:
+            return self.current_tasks > 0 or not self.is_queue_empty()

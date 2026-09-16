@@ -538,6 +538,20 @@
     "Please configure API Key and Username in Settings.": "请在设置中配置 API Key 和发布用户名。",
     "No Platforms Configured": "未配置目标平台",
     "Please select at least one target platform in Settings.": "请在设置中至少选择一个目标发布平台。",
-    "No final video file found": "未找到最终视频文件"
+    "No final video file found": "未找到最终视频文件",
+    "Batch Generation": "批量生成",
+    "Batch Generation Description": "根据主题列表（每行一个）批量生成多个独立视频。每个视频将依次加入任务管理器的队列中。",
+    "Batch Topics": "批量主题（每行一个）",
+    "Batch Topics Placeholder": "关于土星的3个有趣事实\n为什么水星这么热？\n迄今发现最奇怪的行星\n如果月球消失了会发生什么？\n为什么太空是无声的？",
+    "Batch Topics Help": "每行输入一个视频主题。每次批量生成最多10个主题。",
+    "Generate Batch": "批量生成",
+    "Please Enter at Least One Topic for Batch Generation": "请输入至少一个主题以开始批量生成。",
+    "Batch Generation Limit Exceeded": "超出批量生成限制：单次最多允许 {max} 个主题（当前包含 {count} 个主题）。请减少主题数量后重试。",
+    "{count} videos added to generation queue": "已将 {count} 个视频加入生成队列！",
+    "{count} duplicate topics removed from batch": "已从批次中移除 {count} 个重复主题。",
+    "There is a generation in progress. Please wait for completion before starting another.": "当前已有正在进行的生成任务，请等待完成后再发起新任务。",
+    "Português (Brasil)": "葡萄牙语（巴西）",
+    "Portuguese (Brazil)": "葡萄牙语（巴西）",
+    "pt-BR": "葡萄牙语（巴西）"
   }
 }

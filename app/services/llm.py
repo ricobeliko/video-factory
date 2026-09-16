@@ -716,7 +716,16 @@ def build_script_prompt(
 - number of paragraphs: {paragraph_number}
 """.rstrip()
     if language:
-        prompt += f"\n- language: {language}"
+        normalized_language = language.strip()
+        if normalized_language.lower().replace("_", "-") in {
+            "pt-br",
+            "português (brasil)",
+            "portugues (brasil)",
+            "portuguese (brazil)",
+        }:
+            prompt += f"\n- language: {normalized_language} (Escreva em português brasileiro (pt-BR), com linguagem natural, fluida e adequada ao público brasileiro. Evite construções típicas do português europeu.)"
+        else:
+            prompt += f"\n- language: {normalized_language}"
     if video_script_prompt:
         prompt += f"""
 
@@ -1010,6 +1019,13 @@ def _social_language_instruction(language: str | None) -> str:
             "Use the same language as the video subject and script. If the subject "
             "and script use different languages, prefer the script language."
         )
+    if language.strip().lower().replace("_", "-") in {
+        "pt-br",
+        "português (brasil)",
+        "portugues (brasil)",
+        "portuguese (brazil)",
+    }:
+        return 'Write "title" and "caption" in Brazilian Portuguese (pt-BR).'
 
     return f'Write "title" and "caption" in this language: {language}.'
 

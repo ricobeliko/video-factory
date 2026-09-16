@@ -538,6 +538,20 @@
     "Please configure API Key and Username in Settings.": "Please configure API Key and Username in Settings.",
     "No Platforms Configured": "No Platforms Configured",
     "Please select at least one target platform in Settings.": "Please select at least one target platform in Settings.",
-    "No final video file found": "No final video file found"
+    "No final video file found": "No final video file found",
+    "Batch Generation": "Batch Generation",
+    "Batch Generation Description": "Generate multiple independent videos from a list of topics (one per line). Each video will be queued in the Task Manager.",
+    "Batch Topics": "Batch Topics (one per line)",
+    "Batch Topics Placeholder": "3 curious facts about Saturn\nWhy is Mercury so hot?\nThe strangest planet ever discovered\nWhat if the Moon disappeared?\nWhy is space silent?",
+    "Batch Topics Help": "Enter one video topic per line. Maximum 10 topics per batch.",
+    "Generate Batch": "Generate Batch",
+    "Please Enter at Least One Topic for Batch Generation": "Please enter at least one topic for batch generation.",
+    "Batch Generation Limit Exceeded": "Batch generation limit exceeded: maximum {max} topics allowed (found {count} topics). Please reduce the list and try again.",
+    "{count} videos added to generation queue": "{count} videos added to generation queue!",
+    "{count} duplicate topics removed from batch": "{count} duplicate topic(s) removed from batch.",
+    "There is a generation in progress. Please wait for completion before starting another.": "There is a generation in progress. Please wait for completion before starting another.",
+    "Português (Brasil)": "Português (Brasil)",
+    "Portuguese (Brazil)": "Portuguese (Brazil)",
+    "pt-BR": "Português (Brasil)"
   }
 }

@@ -18,7 +18,10 @@ from uuid import UUID, uuid4
 import requests
 import streamlit as st
 from loguru import logger
-from streamlit_tour import Tour
+try:
+    from streamlit_tour import Tour
+except Exception:
+    Tour = None
 
 # WebUI 作为独立入口运行时，需要让项目根目录优先于第三方依赖，
 # 避免依赖中的同名 app 包遮蔽 MoneyPrinterTurbo 自己的 app 包。
@@ -861,6 +864,7 @@ def _normalize_task_state(state):
         const.TASK_STATE_COMPLETE,
         const.TASK_STATE_FAILED,
         const.TASK_STATE_PROCESSING,
+        const.TASK_STATE_PENDING,
     ):
         return state
     try:
@@ -903,13 +907,35 @@ def _prepare_generation_task():
     _add_active_generation_task(task_id, subject=subject)
 
 
+def _has_active_generation() -> bool:
+    """Check if there is any active video generation currently running or queued."""
+    if webui_task.has_active_tasks():
+        return True
+    if st.session_state.get("pending_generation_task_id"):
+        return True
+    active_tasks = _active_generation_tasks()
+    for task_id in list(active_tasks.keys()):
+        try:
+            task = sm.state.get_task(task_id)
+            if task:
+                state = _normalize_task_state(task.get("state"))
+                if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
+                    _remove_active_generation_task(task_id)
+                    continue
+                if state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def _task_state_label(state, has_video):
     normalized_state = _normalize_task_state(state)
     if normalized_state == const.TASK_STATE_COMPLETE:
         return tr("Task Status Complete")
     if normalized_state == const.TASK_STATE_FAILED:
         return tr("Task Status Failed")
-    if normalized_state == const.TASK_STATE_PROCESSING:
+    if normalized_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
         return tr("Task Status Processing")
     if has_video:
         return tr("Task Status Complete")
@@ -918,11 +944,11 @@ def _task_state_label(state, has_video):
 
 def _task_state_filter_key(task):
     normalized_state = _normalize_task_state(task.get("state"))
-    if normalized_state == const.TASK_STATE_PROCESSING:
+    if normalized_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
         return "processing"
     if normalized_state == const.TASK_STATE_FAILED:
         return "failed"
-    if normalized_state == const.TASK_STATE_COMPLETE or task["video_file"]:
+    if normalized_state == const.TASK_STATE_COMPLETE or task.get("video_file"):
         return "complete"
     return "history"
 
@@ -988,7 +1014,7 @@ def _collect_task_summaries(limit=20):
     history_tasks = {task["task_id"]: task for task in _scan_history_tasks(limit=50)}
 
     try:
-        runtime_tasks, _ = sm.state.get_all_tasks(1, 50)
+        runtime_tasks, _ = sm.state.get_all_tasks(1, 100)
     except Exception as e:
         logger.warning(f"failed to load runtime tasks: {e}")
         runtime_tasks = []
@@ -1019,36 +1045,82 @@ def _collect_task_summaries(limit=20):
             "progress": int(task.get("progress", 0) or 0),
             "mtime": os.path.getmtime(task_path)
             if os.path.isdir(task_path)
-            else history_task.get("mtime", 0),
+            else (history_task.get("mtime") or datetime.now().timestamp()),
             "task_path": task_path,
             "video_file": video_file,
             "source": "runtime",
         }
 
-    for task_id, active_task in _active_generation_tasks().items():
+    for task_id, active_task in list(_active_generation_tasks().items()):
         history_task = history_tasks.get(task_id, {})
-        if history_task and _task_state_filter_key(history_task) in {
-            "complete",
-            "failed",
-        }:
-            # 会话中的 active 标记只负责覆盖任务刚提交到状态存储前的极短窗口。
-            # 后台任务结束后必须以真实终态为准，不能把失败任务重新显示为生成中。
+        task_path = os.path.join(utils.task_dir(), task_id)
+
+        # Consult authoritative live state from state storage
+        live_task = None
+        try:
+            live_task = sm.state.get_task(task_id)
+        except Exception:
+            live_task = None
+
+        live_state = _normalize_task_state((live_task or {}).get("state"))
+        if live_state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
+            _remove_active_generation_task(task_id)
+            if history_task:
+                history_task["state"] = live_state
+                if live_state == const.TASK_STATE_COMPLETE:
+                    history_task["progress"] = 100
+                elif live_state == const.TASK_STATE_FAILED:
+                    history_task["state"] = const.TASK_STATE_FAILED
             continue
 
-        task_path = os.path.join(utils.task_dir(), task_id)
+        live_progress = (
+            int(live_task.get("progress", 0) or 0)
+            if live_task and "progress" in live_task
+            else history_task.get("progress", 0)
+        )
+        live_subject = (
+            (live_task.get("video_subject") if live_task else None)
+            or active_task.get("subject")
+            or history_task.get("subject")
+            or task_id
+        )
+
         history_tasks[task_id] = {
             "task_id": task_id,
-            "subject": active_task.get("subject")
-            or history_task.get("subject")
-            or task_id,
-            "state": const.TASK_STATE_PROCESSING,
-            "progress": history_task.get("progress", 0),
+            "subject": live_subject,
+            "state": live_state if live_state is not None else const.TASK_STATE_PROCESSING,
+            "progress": live_progress,
             "mtime": active_task.get("mtime")
             or history_task.get("mtime", datetime.now().timestamp()),
             "task_path": task_path,
             "video_file": history_task.get("video_file", ""),
             "source": "active",
         }
+
+    # Synchronize all collected tasks with authoritative state if available
+    for task_id, item in list(history_tasks.items()):
+        try:
+            live_task = sm.state.get_task(task_id)
+        except Exception:
+            live_task = None
+
+        if live_task:
+            live_state = _normalize_task_state(live_task.get("state"))
+            if live_state is not None:
+                item["state"] = live_state
+            if "progress" in live_task:
+                item["progress"] = int(live_task.get("progress", 0) or 0)
+            if live_task.get("video_subject"):
+                item["subject"] = live_task["video_subject"]
+            if live_task.get("videos") and not item.get("video_file"):
+                item["video_file"] = live_task["videos"][0]
+
+        has_video = bool(item.get("video_file") and os.path.isfile(item["video_file"]))
+        if has_video or _normalize_task_state(item.get("state")) == const.TASK_STATE_COMPLETE:
+            item["progress"] = 100
+            item["state"] = const.TASK_STATE_COMPLETE
+        elif _normalize_task_state(item.get("state")) == const.TASK_STATE_FAILED:
+            item["state"] = const.TASK_STATE_FAILED
 
     tasks = list(history_tasks.values())
     return sorted(tasks, key=lambda item: item["mtime"], reverse=True)[:limit]
@@ -1200,7 +1272,31 @@ def _render_task_table(filtered_tasks, key_prefix):
     with st.container(height=list_height, border=False):
         for task in visible_tasks:
             task_id = task["task_id"]
+
+            # Re-consult authoritative task state from TaskManager/state storage
+            try:
+                live_task = sm.state.get_task(task_id)
+            except Exception:
+                live_task = None
+
+            if live_task:
+                live_state = _normalize_task_state(live_task.get("state"))
+                if live_state is not None:
+                    task["state"] = live_state
+                if "progress" in live_task:
+                    task["progress"] = int(live_task.get("progress", 0) or 0)
+                if live_task.get("video_subject"):
+                    task["subject"] = live_task["video_subject"]
+                if live_task.get("videos") and not task.get("video_file"):
+                    task["video_file"] = live_task["videos"][0]
+
             has_video = bool(task["video_file"] and os.path.isfile(task["video_file"]))
+            if has_video or _normalize_task_state(task.get("state")) == const.TASK_STATE_COMPLETE:
+                task["progress"] = 100
+                task["state"] = const.TASK_STATE_COMPLETE
+            elif _normalize_task_state(task.get("state")) == const.TASK_STATE_FAILED:
+                task["state"] = const.TASK_STATE_FAILED
+
             is_processing = _task_state_filter_key(task) == "processing"
             is_busy = is_processing or tm.is_task_busy(task)
             has_restore_data = os.path.isfile(
@@ -1371,7 +1467,7 @@ def _render_task_video_preview():
     st.video(preview_file)
 
 
-@st.fragment(run_every="2s")
+@st.fragment(run_every="1.5s")
 def _render_task_manager_entry():
     # 任务可能由当前页面或其它页面触发生成。入口单独用 fragment 定时刷新，
     # 只更新任务数量和 popover 内容，不打断主页面表单输入。
@@ -1910,6 +2006,7 @@ support_locales = [
     "vi-VN",
     "th-TH",
     "tr-TR",
+    "pt-BR",
 ]
 
 
@@ -2033,21 +2130,22 @@ def render_onboarding_tour():
         else:
             step.popover["nextBtnText"] = f"{next_text} &rarr;"
 
-    tour = Tour(
-        steps=steps,
-        key=ONBOARDING_TOUR_KEY,
-        show_progress=True,
-        animate=True,
-        overlay_opacity=0.55,
-        one_time_tour=True,
-    )
+    if Tour is not None:
+        tour = Tour(
+            steps=steps,
+            key=ONBOARDING_TOUR_KEY,
+            show_progress=True,
+            animate=True,
+            overlay_opacity=0.55,
+            one_time_tour=True,
+        )
 
-    # 每个 Streamlit 会话只主动启动一次。是否已经完成则由组件通过浏览器
-    # localStorage 判断，避免页面 rerun 或普通控件交互反复弹出引导。
-    auto_start_key = f"{ONBOARDING_TOUR_KEY}-auto-started"
-    if not st.session_state.get(auto_start_key, False):
-        st.session_state[auto_start_key] = True
-        tour.start()
+        # 每个 Streamlit 会话只主动启动一次。是否已经完成则由组件通过浏览器
+        # localStorage 判断，避免页面 rerun 或普通控件交互反复弹出引导。
+        auto_start_key = f"{ONBOARDING_TOUR_KEY}-auto-started"
+        if not st.session_state.get(auto_start_key, False):
+            st.session_state[auto_start_key] = True
+            tour.start()
 
 
 def _render_generation_logs(task_id):
@@ -2166,6 +2264,39 @@ def _render_generation_task_snapshot(task_id, task):
         logger.info(f"{tr('Video Generation Completed')}: task_id={task_id}")
 
 
+def _get_next_active_generation_task_id(current_task_id=None):
+    """Locate the next active or queued generation task ID to monitor."""
+    # 1. First inspect the global task manager's active tasks
+    for tid in webui_task.get_active_task_ids():
+        if current_task_id and tid == current_task_id:
+            continue
+        try:
+            live = sm.state.get_task(tid)
+            if live and _normalize_task_state(live.get("state")) in {
+                const.TASK_STATE_PROCESSING,
+                const.TASK_STATE_PENDING,
+            }:
+                return tid
+        except Exception:
+            pass
+
+    # 2. Inspect session active tasks
+    for active_id in list(_active_generation_tasks().keys()):
+        if current_task_id and active_id == current_task_id:
+            continue
+        try:
+            active_task = sm.state.get_task(active_id)
+            if active_task and _normalize_task_state(active_task.get("state")) in {
+                const.TASK_STATE_PROCESSING,
+                const.TASK_STATE_PENDING,
+            }:
+                return active_id
+        except Exception:
+            pass
+
+    return ""
+
+
 @st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)
 def _render_running_generation_task(task_id):
     """只在任务运行期间轮询；结束后切回静态结果，停止不必要的定时刷新。"""
@@ -2181,6 +2312,9 @@ def _render_running_generation_task(task_id):
     state = _normalize_task_state((task or {}).get("state"))
     if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
         _remove_active_generation_task(task_id)
+        next_task_id = _get_next_active_generation_task_id(current_task_id=task_id)
+        if next_task_id:
+            st.session_state["current_generation_task_id"] = next_task_id
         # 完整页面脚本现在没有耗时生成逻辑，可以安全 rerun 并把结果改为静态
         # 渲染。这样任务结束后不会让浏览器永久保留一个两秒轮询的 Fragment。
         st.rerun(scope="app")
@@ -2192,7 +2326,12 @@ def _render_current_generation_task():
     """在生成按钮下方恢复当前页面最近提交任务的可查询 UI。"""
     task_id = st.session_state.get("current_generation_task_id", "")
     if not task_id:
-        return
+        next_task_id = _get_next_active_generation_task_id()
+        if next_task_id:
+            task_id = next_task_id
+            st.session_state["current_generation_task_id"] = next_task_id
+        else:
+            return
 
     try:
         task = sm.state.get_task(task_id)
@@ -2206,6 +2345,11 @@ def _render_current_generation_task():
     state = _normalize_task_state((task or {}).get("state"))
     if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
         _remove_active_generation_task(task_id)
+        next_task_id = _get_next_active_generation_task_id(current_task_id=task_id)
+        if next_task_id:
+            st.session_state["current_generation_task_id"] = next_task_id
+            _render_running_generation_task(next_task_id)
+            return
         _render_generation_task_snapshot(task_id, task)
         return
 
@@ -4947,7 +5091,13 @@ def _render_script_settings(panel, params):
                 (tr("Auto Detect"), ""),
             ]
             for code in support_locales:
-                video_languages.append((code, code))
+                if code.lower().replace("_", "-") == "pt-br":
+                    label = tr("Português (Brasil)")
+                elif code.lower() == "pt":
+                    label = tr("Português")
+                else:
+                    label = tr(code)
+                video_languages.append((label, code))
 
             selected_language_code = stable_selectbox(
                 tr("Script Language"),
@@ -7435,6 +7585,9 @@ def _render_subtitle_settings(panel, params):
                 st.toast(tr("Default Subtitle Settings Restored"))
 
 
+parse_batch_topics = webui_task.parse_batch_topics
+
+
 def _render_generation_controls(
     params, uploaded_files, uploaded_audio_file, uploaded_bgm_file, voice_mode
 ):
@@ -7471,15 +7624,38 @@ def _render_generation_controls(
 
     _render_settings_transfer(params)
 
+    generation_locked = bool(
+        webui_task.has_active_generation_tasks() or _has_active_generation()
+    )
+    if generation_locked:
+        st.info(
+            tr(
+                "There is a generation in progress. Please wait for completion before starting another."
+            )
+        )
+
     start_button = st.button(
         tr("Generate Video"),
         use_container_width=True,
         type="primary",
         key="generate_video_button",
+        disabled=generation_locked,
+        help=tr(
+            "There is a generation in progress. Please wait for completion before starting another."
+        )
+        if generation_locked
+        else None,
         on_click=_prepare_generation_task,
     )
     render_onboarding_tour()
     if start_button:
+        if webui_task.has_active_generation_tasks() or _has_active_generation():
+            st.warning(
+                tr(
+                    "There is a generation in progress. Please wait for completion before starting another."
+                )
+            )
+            st.stop()
         _save_runtime_config()
         task_id = st.session_state.get("pending_generation_task_id") or str(uuid4())
         _add_active_generation_task(
@@ -7804,6 +7980,225 @@ def _render_generation_controls(
 
         st.session_state["current_generation_task_id"] = task_id
         logger.info(f"WebUI generation task submitted: task_id={task_id}")
+        st.rerun(scope="app")
+
+    with st.expander(f"📦 {tr('Batch Generation')}", expanded=False):
+        st.caption(tr("Batch Generation Description"))
+        batch_topics_raw = st.text_area(
+            tr("Batch Topics"),
+            placeholder=tr("Batch Topics Placeholder"),
+            height=140,
+            key="batch_generation_topics_input",
+            label_visibility="collapsed",
+            help=tr("Batch Topics Help"),
+        )
+        batch_locked = bool(
+            webui_task.has_active_generation_tasks() or _has_active_generation()
+        )
+        batch_button = st.button(
+            tr("Generate Batch"),
+            use_container_width=True,
+            type="secondary",
+            key="generate_batch_button",
+            disabled=batch_locked,
+            help=tr(
+                "There is a generation in progress. Please wait for completion before starting another."
+            )
+            if batch_locked
+            else None,
+            icon=":material/playlist_add:",
+        )
+
+    batch_submitted = False
+    if batch_button:
+        if webui_task.has_active_generation_tasks() or _has_active_generation():
+            st.warning(
+                tr(
+                    "There is a generation in progress. Please wait for completion before starting another."
+                )
+            )
+            st.stop()
+        topics, duplicates_count, error_code = parse_batch_topics(
+            batch_topics_raw, max_limit=10
+        )
+        if error_code == "empty":
+            st.error(tr("Please Enter at Least One Topic for Batch Generation"))
+            st.stop()
+        if error_code == "limit_exceeded":
+            st.error(
+                tr("Batch Generation Limit Exceeded").format(
+                    count=len(topics),
+                    max=10,
+                )
+            )
+            st.stop()
+
+        if params.video_source not in [
+            "pexels",
+            "pixabay",
+            "coverr",
+            "wavespeed",
+            "volcengine_seedance",
+            "ofox",
+            "metaso_minimax",
+            "loomloom",
+            "openai_image",
+            "local",
+        ]:
+            st.error(tr("Please Select a Valid Video Source"))
+            st.stop()
+
+        if params.video_source == "pexels" and not config.app.get(
+            "pexels_api_keys", ""
+        ):
+            st.error(tr("Please Enter the Pexels API Key"))
+            st.stop()
+
+        if params.video_source == "pixabay" and not config.app.get(
+            "pixabay_api_keys", ""
+        ):
+            st.error(tr("Please Enter the Pixabay API Key"))
+            st.stop()
+
+        if params.video_source == "coverr" and not config.app.get(
+            "coverr_api_keys", ""
+        ):
+            st.error(tr("Please Enter the Coverr API Key"))
+            st.stop()
+
+        if params.video_source == "wavespeed" and not config.app.get(
+            "wavespeed_api_keys", ""
+        ):
+            st.error(tr("Please Enter the WaveSpeed API Key"))
+            st.stop()
+
+        if params.video_source == "wavespeed" and not st.session_state.get(
+            "wavespeed_confirm_charge", False
+        ):
+            st.error(tr("Confirm WaveSpeed Charge Required"))
+            st.stop()
+
+        if params.video_source == "volcengine_seedance" and not (
+            volcengine_seedance.is_enabled(
+                config.snapshot_config_with_pending(config.app)
+            )
+        ):
+            st.error(tr("Please Enter the Volcano Engine Ark API Key"))
+            st.stop()
+
+        if params.video_source == "volcengine_seedance" and not st.session_state.get(
+            "volcengine_seedance_confirm_charge", False
+        ):
+            st.error(tr("Confirm Volcano Engine Seedance Charge Required"))
+            st.stop()
+
+        if params.video_source == "ofox" and not (
+            ofox.is_enabled(config.snapshot_config_with_pending(config.app))
+        ):
+            st.error(tr("Please Enter the OFox API Key"))
+            st.stop()
+
+        if params.video_source == "ofox" and not st.session_state.get(
+            "ofox_confirm_charge", False
+        ):
+            st.error(tr("Confirm OFox Charge Required"))
+            st.stop()
+
+        if params.video_source == "metaso_minimax" and not (
+            metaso_minimax.is_enabled(
+                config.snapshot_config_with_pending(config.app)
+            )
+        ):
+            st.error(tr("Please Enter the Metaso MiniMax API Key"))
+            st.stop()
+
+        if params.video_source == "metaso_minimax" and not st.session_state.get(
+            "metaso_minimax_confirm_charge", False
+        ):
+            st.error(tr("Confirm Metaso MiniMax Charge Required"))
+            st.stop()
+
+        if params.video_source == "openai_image" and not material.is_openai_image_enabled(
+            config.snapshot_config_with_pending(config.app)
+        ):
+            st.error(tr("Please Configure the OpenAI Image Source"))
+            st.stop()
+
+        if (
+            params.bgm_type == "sonilo"
+            and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+            and not sonilo_service.is_enabled()
+        ):
+            st.error(tr("Sonilo API Key Required"))
+            st.stop()
+
+        if (
+            params.bgm_type == "elevenlabs"
+            and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+            and not elevenlabs_music_service.is_enabled()
+        ):
+            st.error(tr("ElevenLabs API Key Required"))
+            st.stop()
+
+        if params.video_source == "local" and not has_local_materials:
+            st.error(tr("Please Upload Local Materials First"))
+            st.stop()
+
+        if voice_mode == VOICE_MODE_UPLOAD and not uploaded_audio_file:
+            st.error(tr("Please Upload Voiceover File First"))
+            st.stop()
+
+        _save_runtime_config()
+
+        if uploaded_bgm_file and bgm_service.should_use_bgm(
+            params.bgm_type, params.bgm_volume
+        ):
+            try:
+                saved_bgm_name = bgm_service.save_bgm_upload(
+                    uploaded_bgm_file.name, uploaded_bgm_file
+                )
+                params.bgm_file = saved_bgm_name
+            except Exception:
+                st.error(tr("Background Music Validation Failed"))
+                st.stop()
+
+        submitted_task_ids = []
+        for topic in topics:
+            task_id = str(uuid4())
+            item_params = params.model_copy(deep=True)
+            item_params.video_subject = topic
+            item_params.video_script = ""
+            _add_active_generation_task(task_id, subject=topic)
+            try:
+                webui_task.submit_generation(
+                    task_id=task_id,
+                    params=item_params,
+                    capture_logs=not config.ui.get("hide_log", False),
+                    voice_preview=None,
+                    loomloom_video_request=None,
+                )
+                submitted_task_ids.append(task_id)
+            except Exception as exc:
+                logger.error(
+                    f"Failed to submit batch task {task_id} for topic '{topic}': {exc}"
+                )
+                _remove_active_generation_task(task_id)
+
+        if submitted_task_ids:
+            batch_submitted = True
+            st.session_state["current_generation_task_id"] = submitted_task_ids[0]
+            feedback_msg = tr("{count} videos added to generation queue").format(
+                count=len(submitted_task_ids)
+            )
+            st.success(feedback_msg)
+            st.toast(feedback_msg, icon="📋")
+            if duplicates_count > 0:
+                st.info(
+                    tr("{count} duplicate topics removed from batch").format(
+                        count=duplicates_count
+                    )
+                )
+            st.rerun(scope="app")
 
     _render_current_generation_task()
     return start_button
@@ -7871,4 +8266,5 @@ def _render_application():
         _save_runtime_config()
 
 
-_render_application()
+if __name__ == "__main__":
+    _render_application()

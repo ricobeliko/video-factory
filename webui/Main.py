@@ -2314,7 +2314,7 @@ def _get_next_active_generation_task_id(current_task_id=None):
     return ""
 
 
-@st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)
+@st.fragment(run_every="1.5s")
 def _render_running_generation_task(task_id):
     """只在任务运行期间轮询；结束后切回静态结果，停止不必要的定时刷新。"""
     try:
@@ -2332,9 +2332,17 @@ def _render_running_generation_task(task_id):
         next_task_id = _get_next_active_generation_task_id(current_task_id=task_id)
         if next_task_id:
             st.session_state["current_generation_task_id"] = next_task_id
-        # 完整页面脚本现在没有耗时生成逻辑，可以安全 rerun 并把结果改为静态
-        # 渲染。这样任务结束后不会让浏览器永久保留一个两秒轮询的 Fragment。
-        st.rerun(scope="app")
+            # Handoff suave entre tarefas em lote: permanece no fragmento sem recarregar a aplicação inteira
+            try:
+                next_task = sm.state.get_task(next_task_id)
+            except Exception:
+                next_task = None
+            _render_generation_task_snapshot(next_task_id, next_task)
+            return
+        else:
+            # Fila finalizada: aciona rerun global para reabilitar botões na página principal
+            st.rerun(scope="app")
+            return
 
     _render_generation_task_snapshot(task_id, task)
 
@@ -7742,6 +7750,152 @@ def _validate_batch_prerequisites(
             st.stop()
 
 
+@st.fragment(run_every="5s")
+def _render_publication_schedule():
+    st.divider()
+    st.write(f"### 📅 {tr('Publication Schedule')}")
+    st.caption(tr("Scheduler Notice"))
+
+    current_settings = scheduler.get_all_settings()
+
+    scheduler_on = st.checkbox(
+        tr("Scheduler Enabled"),
+        value=current_settings["scheduler_enabled"],
+        key="scheduler_enabled_cb",
+    )
+    if scheduler_on != current_settings["scheduler_enabled"]:
+        scheduler.set_setting("scheduler_enabled", scheduler_on)
+        st.rerun(scope="fragment")
+
+    # Exibir limites e uso na janela móvel de 24h
+    tk_limits = scheduler.get_platform_rate_limits("tiktok")
+    yt_limits = scheduler.get_platform_rate_limits("youtube")
+
+    rate_col1, rate_col2 = st.columns(2)
+    with rate_col1:
+        st.markdown(
+            f"**🎵 TikTok**\n\n"
+            f"- {tr('Limit')}: **{tk_limits['limit']}/24h**\n"
+            f"- {tr('Used Last 24h')}: **{tk_limits['used_past_24h']}**\n"
+            f"- {tr('Scheduled')}: **{tk_limits['scheduled_24h']}**\n"
+            f"- {tr('Available')}: **{tk_limits['available_slots']}**"
+        )
+    with rate_col2:
+        st.markdown(
+            f"**▶️ YouTube**\n\n"
+            f"- {tr('Limit')}: **{yt_limits['limit']}/24h**\n"
+            f"- {tr('Used Last 24h')}: **{yt_limits['used_past_24h']}**\n"
+            f"- {tr('Scheduled')}: **{yt_limits['scheduled_24h']}**\n"
+            f"- {tr('Available')}: **{yt_limits['available_slots']}**"
+        )
+
+    all_summaries = _collect_task_summaries(limit=1000)
+
+    # Vídeos concluídos sem destino planejado (adoção pelo Scheduler)
+    adoptable_tasks = scheduler.get_adoptable_tasks(all_summaries)
+    if adoptable_tasks:
+        with st.expander(f"📥 {tr('Completed Videos Without Planned Destination')} ({len(adoptable_tasks)})", expanded=True):
+            st.caption(tr("Select completed videos to adopt into scheduler"))
+
+            selected_adopt_ids = []
+            for atask in adoptable_tasks:
+                tid = atask["task_id"]
+                subj = atask.get("subject") or tid
+                if st.checkbox(subj, value=True, key=f"adopt_task_{tid}"):
+                    selected_adopt_ids.append(tid)
+
+            st.write(f"**{tr('Planned Destination')}:**")
+            dest_col1, dest_col2 = st.columns(2)
+            with dest_col1:
+                dest_tk = st.checkbox("🎵 TikTok", value=True, key="adopt_dest_tk")
+            with dest_col2:
+                dest_yt = st.checkbox("▶️ YouTube", value=True, key="adopt_dest_yt")
+
+            adopt_btn = st.button(
+                tr("Add Selected to Scheduler"),
+                key="adopt_selected_to_scheduler_btn",
+                type="secondary",
+                use_container_width=True,
+                icon=":material/library_add:",
+            )
+            if adopt_btn:
+                chosen_platforms = []
+                if dest_tk:
+                    chosen_platforms.append("tiktok")
+                if dest_yt:
+                    chosen_platforms.append("youtube")
+
+                if not selected_adopt_ids:
+                    st.warning(tr("No Videos Selected"))
+                elif not chosen_platforms:
+                    st.warning(tr("Select At Least One Destination"))
+                else:
+                    adopted_count = scheduler.adopt_tasks_into_scheduler(selected_adopt_ids, chosen_platforms)
+                    st.toast(tr("Videos Adopted").format(count=adopted_count), icon="📥")
+                    st.rerun(scope="fragment")
+
+    sched_btn_cols = st.columns(2)
+    with sched_btn_cols[0]:
+        plan_schedule_btn = st.button(
+            tr("Plan Schedule"),
+            key="autopilot_plan_schedule_btn",
+            type="primary",
+            use_container_width=True,
+            icon=":material/calendar_month:",
+        )
+    with sched_btn_cols[1]:
+        clear_schedule_btn = st.button(
+            tr("Clear Future Schedule"),
+            key="autopilot_clear_schedule_btn",
+            use_container_width=True,
+            icon=":material/delete_sweep:",
+        )
+
+    if plan_schedule_btn:
+        new_scheduled = scheduler.plan_schedule(all_summaries)
+        if new_scheduled:
+            st.success(tr("Schedule Planned").format(count=len(new_scheduled)))
+            st.toast(tr("Schedule Planned").format(count=len(new_scheduled)), icon="📅")
+            st.rerun(scope="fragment")
+        else:
+            if tk_limits["available_slots"] <= 0 and yt_limits["available_slots"] <= 0:
+                st.warning(tr("No Available Slots"))
+            else:
+                st.info(tr("No Eligible Tasks to Schedule"))
+
+    if clear_schedule_btn:
+        st.session_state["confirm_clear_future_schedule"] = True
+        st.rerun(scope="fragment")
+
+    if st.session_state.get("confirm_clear_future_schedule", False):
+        st.warning(tr("Confirm Clear Schedule"))
+        c_yes, c_no = st.columns(2)
+        with c_yes:
+            if st.button("Confirmar Limpeza", key="confirm_clear_sched_yes_btn", type="primary", use_container_width=True):
+                removed_count = scheduler.clear_future_schedule()
+                st.session_state["confirm_clear_future_schedule"] = False
+                st.toast(tr("Schedule Cleared"), icon="🗑️")
+                st.rerun(scope="fragment")
+        with c_no:
+            if st.button("Cancelar", key="confirm_clear_sched_no_btn", use_container_width=True):
+                st.session_state["confirm_clear_future_schedule"] = False
+                st.rerun(scope="fragment")
+
+    # Próximos Posts
+    upcoming_posts = scheduler.get_upcoming_posts(limit=25)
+    st.write(f"**{tr('Upcoming Posts')} ({len(upcoming_posts)})**")
+    if upcoming_posts:
+        task_subject_map = {t["task_id"]: t.get("subject", t["task_id"]) for t in all_summaries}
+        for post in upcoming_posts:
+            post_dt = scheduler._from_iso(post["scheduled_at"])
+            formatted_time = post_dt.strftime("%H:%M (%d/%m)")
+            p_label = "🎵 TikTok" if post["platform"] == "tiktok" else "▶️ YouTube"
+            subj = task_subject_map.get(post["task_id"], post["task_id"])
+            st.markdown(f"- `{formatted_time}` — **{p_label}** — {subj}")
+    else:
+        st.caption(tr("No Upcoming Posts"))
+
+
 def _render_autopilot_section(
     params,
     voice_mode,
@@ -7859,7 +8013,6 @@ def _render_autopilot_section(
                                 if k.startswith("autopilot_topic_") or k.startswith("autopilot_sel_"):
                                     del st.session_state[k]
                             st.toast(f"{len(ideas)} ideias geradas!", icon="💡")
-                            st.rerun(scope="app")
                         else:
                             st.warning("Nenhuma ideia gerada.")
                     except Exception as exc:
@@ -7882,7 +8035,7 @@ def _render_autopilot_section(
                     for i, item in enumerate(ideas_list):
                         st.session_state[f"autopilot_sel_{i}"] = new_val
                         item["selected"] = new_val
-                    st.rerun(scope="app")
+                    st.rerun()
 
             current_selections = [
                 st.session_state.get(f"autopilot_sel_{i}", item.get("selected", True))
@@ -8027,146 +8180,8 @@ def _render_autopilot_section(
                     st.toast(feedback_msg, icon="📋")
                     st.rerun(scope="app")
 
-        # --- 4. Subseção: Agenda de Publicação ---
-        st.divider()
-        st.write(f"### 📅 {tr('Publication Schedule')}")
-        st.caption(tr("Scheduler Notice"))
-
-        current_settings = scheduler.get_all_settings()
-
-        scheduler_on = st.checkbox(
-            tr("Scheduler Enabled"),
-            value=current_settings["scheduler_enabled"],
-            key="scheduler_enabled_cb",
-        )
-        if scheduler_on != current_settings["scheduler_enabled"]:
-            scheduler.set_setting("scheduler_enabled", scheduler_on)
-            st.rerun(scope="app")
-
-        # Exibir limites e uso na janela móvel de 24h
-        tk_limits = scheduler.get_platform_rate_limits("tiktok")
-        yt_limits = scheduler.get_platform_rate_limits("youtube")
-
-        rate_col1, rate_col2 = st.columns(2)
-        with rate_col1:
-            st.markdown(
-                f"**🎵 TikTok**\n\n"
-                f"- {tr('Limit')}: **{tk_limits['limit']}/24h**\n"
-                f"- {tr('Used Last 24h')}: **{tk_limits['used_past_24h']}**\n"
-                f"- {tr('Scheduled')}: **{tk_limits['scheduled_24h']}**\n"
-                f"- {tr('Available')}: **{tk_limits['available_slots']}**"
-            )
-        with rate_col2:
-            st.markdown(
-                f"**▶️ YouTube**\n\n"
-                f"- {tr('Limit')}: **{yt_limits['limit']}/24h**\n"
-                f"- {tr('Used Last 24h')}: **{yt_limits['used_past_24h']}**\n"
-                f"- {tr('Scheduled')}: **{yt_limits['scheduled_24h']}**\n"
-                f"- {tr('Available')}: **{yt_limits['available_slots']}**"
-            )
-
-        # Vídeos concluídos sem destino planejado (adoção pelo Scheduler)
-        adoptable_tasks = scheduler.get_adoptable_tasks(all_summaries)
-        if adoptable_tasks:
-            with st.expander(f"📥 {tr('Completed Videos Without Planned Destination')} ({len(adoptable_tasks)})", expanded=True):
-                st.caption(tr("Select completed videos to adopt into scheduler"))
-
-                selected_adopt_ids = []
-                for atask in adoptable_tasks:
-                    tid = atask["task_id"]
-                    subj = atask.get("subject") or tid
-                    if st.checkbox(subj, value=True, key=f"adopt_task_{tid}"):
-                        selected_adopt_ids.append(tid)
-
-                st.write(f"**{tr('Planned Destination')}:**")
-                dest_col1, dest_col2 = st.columns(2)
-                with dest_col1:
-                    dest_tk = st.checkbox("🎵 TikTok", value=True, key="adopt_dest_tk")
-                with dest_col2:
-                    dest_yt = st.checkbox("▶️ YouTube", value=True, key="adopt_dest_yt")
-
-                adopt_btn = st.button(
-                    tr("Add Selected to Scheduler"),
-                    key="adopt_selected_to_scheduler_btn",
-                    type="secondary",
-                    use_container_width=True,
-                    icon=":material/library_add:",
-                )
-                if adopt_btn:
-                    chosen_platforms = []
-                    if dest_tk:
-                        chosen_platforms.append("tiktok")
-                    if dest_yt:
-                        chosen_platforms.append("youtube")
-
-                    if not selected_adopt_ids:
-                        st.warning(tr("No Videos Selected"))
-                    elif not chosen_platforms:
-                        st.warning(tr("Select At Least One Destination"))
-                    else:
-                        adopted_count = scheduler.adopt_tasks_into_scheduler(selected_adopt_ids, chosen_platforms)
-                        st.toast(tr("Videos Adopted").format(count=adopted_count), icon="📥")
-                        st.rerun(scope="app")
-
-        sched_btn_cols = st.columns(2)
-        with sched_btn_cols[0]:
-            plan_schedule_btn = st.button(
-                tr("Plan Schedule"),
-                key="autopilot_plan_schedule_btn",
-                type="primary",
-                use_container_width=True,
-                icon=":material/calendar_month:",
-            )
-        with sched_btn_cols[1]:
-            clear_schedule_btn = st.button(
-                tr("Clear Future Schedule"),
-                key="autopilot_clear_schedule_btn",
-                use_container_width=True,
-                icon=":material/delete_sweep:",
-            )
-
-        if plan_schedule_btn:
-            new_scheduled = scheduler.plan_schedule(all_summaries)
-            if new_scheduled:
-                st.success(tr("Schedule Planned").format(count=len(new_scheduled)))
-                st.toast(tr("Schedule Planned").format(count=len(new_scheduled)), icon="📅")
-                st.rerun(scope="app")
-            else:
-                if tk_limits["available_slots"] <= 0 and yt_limits["available_slots"] <= 0:
-                    st.warning(tr("No Available Slots"))
-                else:
-                    st.info(tr("No Eligible Tasks to Schedule"))
-
-        if clear_schedule_btn:
-            st.session_state["confirm_clear_future_schedule"] = True
-
-        if st.session_state.get("confirm_clear_future_schedule", False):
-            st.warning(tr("Confirm Clear Schedule"))
-            c_yes, c_no = st.columns(2)
-            with c_yes:
-                if st.button("Confirmar Limpeza", key="confirm_clear_sched_yes_btn", type="primary", use_container_width=True):
-                    removed_count = scheduler.clear_future_schedule()
-                    st.session_state["confirm_clear_future_schedule"] = False
-                    st.toast(tr("Schedule Cleared"), icon="🗑️")
-                    st.rerun(scope="app")
-            with c_no:
-                if st.button("Cancelar", key="confirm_clear_sched_no_btn", use_container_width=True):
-                    st.session_state["confirm_clear_future_schedule"] = False
-                    st.rerun(scope="app")
-
-        # Próximos Posts
-        upcoming_posts = scheduler.get_upcoming_posts(limit=25)
-        st.write(f"**{tr('Upcoming Posts')} ({len(upcoming_posts)})**")
-        if upcoming_posts:
-            task_subject_map = {t["task_id"]: t.get("subject", t["task_id"]) for t in all_summaries}
-            for post in upcoming_posts:
-                post_dt = scheduler._from_iso(post["scheduled_at"])
-                formatted_time = post_dt.strftime("%H:%M (%d/%m)")
-                p_label = "🎵 TikTok" if post["platform"] == "tiktok" else "▶️ YouTube"
-                subj = task_subject_map.get(post["task_id"], post["task_id"])
-                st.markdown(f"- `{formatted_time}` — **{p_label}** — {subj}")
-        else:
-            st.caption(tr("No Upcoming Posts"))
+        # --- 4. Subseção: Agenda de Publicação (Fragmento isolado) ---
+        _render_publication_schedule()
 
 
 def _render_generation_controls(

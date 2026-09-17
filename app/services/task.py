@@ -1127,6 +1127,29 @@ def recover_interrupted_cross_posts(page_size: int = 100) -> int | None:
     return recovered
 
 
+def are_all_task_platforms_published(task_id: str, published_platforms: list[str], db_path: str | None = None) -> bool:
+    """Verifica se todas as plataformas planejadas para a task já foram publicadas."""
+    try:
+        from app.services import scheduler
+        planned = scheduler.get_task_platforms(task_id, db_path=db_path)
+        if not planned:
+            task = sm.state.get_task(task_id) or {}
+            planned = task.get("planned_platforms") or []
+        if not planned:
+            return True
+        with scheduler.get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT platform FROM publication_events WHERE task_id = ? AND status = 'success';",
+                (task_id,),
+            ).fetchall()
+            all_successful = {r["platform"].lower() for r in rows}
+        all_successful.update(p.lower() for p in published_platforms)
+        return all(p.lower() in all_successful for p in planned)
+    except Exception as exc:
+        logger.warning(f"failed to check all task platforms for {task_id}: {exc}")
+        return True
+
+
 def _run_cross_post(
     task_id: str,
     video_paths: tuple[str, ...],
@@ -1223,10 +1246,21 @@ def _run_cross_post(
                 f"failed: {len(failures)}, total: {len(results)}"
             )
         else:
-            cross_post_state = const.CROSS_POST_STATE_COMPLETE
+            try:
+                from app.services import scheduler
+                req_id = results[0].get("request_id") if results and isinstance(results[0], dict) else None
+                for p in platforms:
+                    scheduler.record_publication_event(task_id, p, status="success", external_id=req_id)
+            except Exception as e:
+                logger.warning(f"failed to record publication event in scheduler: {e}")
+
+            if are_all_task_platforms_published(task_id, list(platforms)):
+                cross_post_state = const.CROSS_POST_STATE_COMPLETE
+            else:
+                cross_post_state = getattr(const, "CROSS_POST_STATE_PARTIAL", "partial")
             cross_post_error = None
             logger.success(
-                f"cross-post completed, task_id: {task_id}, videos: {len(results)}"
+                f"cross-post completed, task_id: {task_id}, videos: {len(results)}, state: {cross_post_state}"
             )
 
         state_updated = _patch_cross_post_state(
@@ -1365,19 +1399,36 @@ def _schedule_cross_post(
     return None
 
 
-def publish_task(task_id: str) -> tuple[bool, str]:
+def publish_task(
+    task_id: str,
+    platforms: list[str] | None = None,
+    synchronous: bool = False,
+    db_path: str | None = None,
+) -> tuple[bool, str]:
     """
-    Manually publish an existing completed task's final video to configured platforms via Upload-Post.
+    Manually or automatically publish an existing completed task's final video to configured platforms via Upload-Post.
 
-    Returns (True, "") on successful scheduling, or (False, error_message) on failure.
+    Args:
+        task_id: The ID of the task to publish.
+        platforms: Optional list of target platforms (e.g. ["tiktok"]).
+                   If None, uses upload_post_service.platforms.
+        synchronous: If True, executes publishing synchronously in caller thread.
+                     If False, schedules publishing asynchronously in background.
+        db_path: Optional custom SQLite DB path (useful for testing and execution engine isolation).
+
+    Returns (True, "") on successful scheduling/execution, or (False, error_message) on failure.
     """
     if not upload_post.upload_post_service.enabled:
         return False, "Upload-Post integration is disabled in settings"
     if not upload_post.upload_post_service.is_configured():
         return False, "Upload-Post is not fully configured (missing API Key or username)"
 
-    platforms = list(upload_post.upload_post_service.platforms)
-    if not platforms:
+    if platforms is None:
+        target_platforms = list(upload_post.upload_post_service.platforms)
+    else:
+        target_platforms = [p.lower().strip() for p in platforms if p and p.strip()]
+
+    if not target_platforms:
         return False, "No target platforms selected for publishing"
 
     task = sm.state.get_task(task_id) or {}
@@ -1435,32 +1486,160 @@ def publish_task(task_id: str) -> tuple[bool, str]:
         or task_id
     )
 
-    sm.state.update_task(
-        task_id,
-        state=const.TASK_STATE_COMPLETE,
-        progress=100,
-        video_subject=subject,
-        videos=video_paths,
-        script=video_script,
-        cross_post_state=const.CROSS_POST_STATE_PENDING,
-        cross_post_results=None,
-        cross_post_error=None,
-        cross_post_owner=_cross_post_process_owner,
-    )
+    if not synchronous:
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            video_subject=subject,
+            videos=video_paths,
+            script=video_script,
+            cross_post_state=const.CROSS_POST_STATE_PENDING,
+            cross_post_results=None,
+            cross_post_error=None,
+            cross_post_owner=_cross_post_process_owner,
+        )
 
-    scheduling_error = _schedule_cross_post(
-        task_id=task_id,
-        video_paths=video_paths,
-        params=params_data,
-        video_script=video_script,
-        platforms=platforms,
-        youtube_privacy_status=upload_post.upload_post_service.youtube_privacy_status,
-        youtube_made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
-    )
-    if scheduling_error:
-        return False, scheduling_error
+        scheduling_error = _schedule_cross_post(
+            task_id=task_id,
+            video_paths=video_paths,
+            params=params_data,
+            video_script=video_script,
+            platforms=target_platforms,
+            youtube_privacy_status=upload_post.upload_post_service.youtube_privacy_status,
+            youtube_made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
+        )
+        if scheduling_error:
+            return False, scheduling_error
 
-    return True, ""
+        return True, ""
+
+    # Synchronous execution
+    try:
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            cross_post_state=const.CROSS_POST_STATE_PROCESSING,
+            cross_post_error=None,
+            cross_post_owner=_cross_post_process_owner,
+        )
+        youtube_extra = None
+        post_title = subject or "Check out this video! #shorts #viral"
+        has_youtube = any(p.startswith("youtube") for p in target_platforms)
+        social_platform = "youtube_shorts"
+        if not has_youtube and target_platforms:
+            first = (target_platforms[0] or "").strip().lower()
+            social_platform = _CROSS_POST_SOCIAL_PLATFORMS.get(first, first)
+
+        video_lang = (
+            getattr(params_data, "video_language", None)
+            or (params_data.get("video_language") if isinstance(params_data, dict) else "")
+            or ""
+        )
+        metadata = llm.generate_social_metadata(
+            video_subject=subject,
+            video_script=video_script,
+            language=video_lang or "",
+            platform=social_platform,
+        )
+        if has_youtube:
+            youtube_extra = {
+                "youtube_title": metadata.get("title", subject),
+                "youtube_description": metadata.get("caption", ""),
+                "tags": metadata.get("hashtags", []),
+                "privacyStatus": upload_post.upload_post_service.youtube_privacy_status,
+                "selfDeclaredMadeForKids": upload_post.upload_post_service.youtube_made_for_kids,
+                "containsSyntheticMedia": True,
+            }
+        post_title = (
+            metadata.get("caption")
+            or metadata.get("title")
+            or subject
+            or "Check out this video! #shorts #viral"
+        )
+
+        results = []
+        for video_path in video_paths:
+            res = upload_post.cross_post_video(
+                video_path=video_path,
+                title=post_title,
+                platforms=list(target_platforms),
+                youtube_extra=youtube_extra,
+            )
+            if not isinstance(res, dict):
+                res = {"success": False, "error": "Upload-Post returned an invalid response"}
+            results.append(res)
+
+        failures = [r for r in results if not r.get("success")]
+        if failures:
+            error_msgs = [str(r.get("error") or r.get("message") or "upload error") for r in failures]
+            err_str = "; ".join(error_msgs)
+            sm.state.update_task(
+                task_id,
+                state=const.TASK_STATE_COMPLETE,
+                progress=100,
+                cross_post_state=const.CROSS_POST_STATE_FAILED,
+                cross_post_results=results,
+                cross_post_error=err_str,
+                cross_post_owner=None,
+            )
+            return False, err_str
+
+        try:
+            from app.services import scheduler
+            first_res = results[0] if results and isinstance(results[0], dict) else {}
+            provider_req_id = first_res.get("request_id")
+            sub_results = first_res.get("results", {}) if isinstance(first_res.get("results"), dict) else {}
+
+            for p in target_platforms:
+                p_clean = (p or "").lower().strip()
+                p_info = sub_results.get(p_clean, {})
+                if not isinstance(p_info, dict):
+                    p_info = {}
+                platform_post_id = (
+                    p_info.get("post_id")
+                    or p_info.get("id")
+                    or p_info.get("video_id")
+                    or p_info.get("itemId")
+                )
+                scheduler.record_publication_event(
+                    task_id=task_id,
+                    platform=p,
+                    status="success",
+                    external_id=str(platform_post_id) if platform_post_id else None,
+                    provider_request_id=str(provider_req_id) if provider_req_id else None,
+                    db_path=db_path,
+                )
+        except Exception as e:
+            logger.warning(f"failed to record publication event in scheduler: {e}")
+
+        if are_all_task_platforms_published(task_id, target_platforms, db_path=db_path):
+            final_state = const.CROSS_POST_STATE_COMPLETE
+        else:
+            final_state = getattr(const, "CROSS_POST_STATE_PARTIAL", "partial")
+
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            cross_post_state=final_state,
+            cross_post_results=results,
+            cross_post_error=None,
+            cross_post_owner=None,
+        )
+        return True, ""
+    except Exception as exc:
+        logger.exception(f"synchronous cross-post failed for task {task_id}: {exc}")
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            cross_post_state=const.CROSS_POST_STATE_FAILED,
+            cross_post_error=str(exc),
+            cross_post_owner=None,
+        )
+        return False, str(exc)
 
 
 def _run_pipeline(

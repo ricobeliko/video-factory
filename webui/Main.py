@@ -7754,18 +7754,88 @@ def _validate_batch_prerequisites(
 def _render_publication_schedule():
     st.divider()
     st.write(f"### 📅 {tr('Publication Schedule')}")
-    st.caption(tr("Scheduler Notice"))
+
+    # Garante que o worker daemon do executor esteja ativo em background
+    scheduler.start_scheduler_worker(interval_seconds=30)
 
     current_settings = scheduler.get_all_settings()
 
-    scheduler_on = st.checkbox(
-        tr("Scheduler Enabled"),
-        value=current_settings["scheduler_enabled"],
-        key="scheduler_enabled_cb",
-    )
-    if scheduler_on != current_settings["scheduler_enabled"]:
-        scheduler.set_setting("scheduler_enabled", scheduler_on)
-        st.rerun(scope="fragment")
+    # Controles principais da publicação
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
+    with ctrl_col1:
+        scheduler_on = st.checkbox(
+            tr("Scheduler Enabled"),
+            value=current_settings["scheduler_enabled"],
+            key="scheduler_enabled_cb",
+        )
+        if scheduler_on != current_settings["scheduler_enabled"]:
+            scheduler.set_setting("scheduler_enabled", scheduler_on)
+            st.rerun(scope="fragment")
+
+    with ctrl_col2:
+        auto_pub_on = st.checkbox(
+            tr("Auto Publish Enabled"),
+            value=current_settings["auto_publish_enabled"],
+            key="scheduler_auto_publish_cb",
+        )
+        if auto_pub_on != current_settings["auto_publish_enabled"]:
+            scheduler.set_setting("auto_publish_enabled", auto_pub_on)
+            st.rerun(scope="fragment")
+
+    with ctrl_col3:
+        dry_run_on = st.checkbox(
+            tr("Simulation Mode (Dry Run)"),
+            value=current_settings["dry_run"],
+            key="scheduler_dry_run_cb",
+        )
+        if dry_run_on != current_settings["dry_run"]:
+            scheduler.set_setting("dry_run", dry_run_on)
+            st.rerun(scope="fragment")
+
+    if current_settings["dry_run"]:
+        st.warning(f"⚠️ {tr('Simulation Notice')}")
+    else:
+        yt_priv = config.app.get("upload_post_youtube_privacy_status", "private").upper()
+        st.error(f"⚠️ **PUBLICAÇÃO REAL ATIVADA** | Destino: **YouTube** | Privacidade: **{yt_priv}** | Os posts elegíveis serão enviados externamente.")
+
+
+    # Painel de Status do Executor
+    executor_info = scheduler.get_executor_status()
+    exec_state = executor_info.get("state", "stopped")
+    if not current_settings["scheduler_enabled"]:
+        badge = f"⚪ **{tr('Executor Stopped')}**"
+    elif not current_settings["auto_publish_enabled"]:
+        badge = f"🟡 **{tr('Executor Idle')}** (Modo Planejamento)"
+    elif exec_state == "processing":
+        badge = f"🔵 **{tr('Executor Processing')}**"
+    elif exec_state == "limit_blocked":
+        badge = f"🟠 **{tr('Executor Limit Blocked')}**"
+    elif exec_state == "error":
+        badge = f"🔴 **{tr('Executor Error')}**"
+    else:
+        badge = f"🟢 **{tr('Executor Idle')}**"
+
+    worker_active = executor_info.get("worker_active", False)
+    worker_badge = f"🟢 **{tr('Worker Active')}**" if worker_active else f"🔴 **{tr('Worker Stopped')}**"
+    last_tick_display = ""
+    if executor_info.get("last_tick"):
+        last_tick_display = f" ({tr('Last Tick')}: `{scheduler.format_local_time(executor_info['last_tick'], fmt='%H:%M:%S')}`)"
+
+    stat_col1, stat_col2 = st.columns(2)
+    with stat_col1:
+        st.markdown(f"**Worker:** {worker_badge}{last_tick_display}\n\n**{tr('Executor Status')}:** {badge}")
+    with stat_col2:
+        if executor_info.get("last_result"):
+            last_run_display = ""
+            if executor_info.get("last_run_at"):
+                try:
+                    last_local_time = scheduler.format_local_time(executor_info["last_run_at"], fmt="%H:%M:%S")
+                    last_run_display = f" às {last_local_time}"
+                except Exception:
+                    pass
+            st.caption(f"**{tr('Last Execution')}:** {executor_info['last_result']}{last_run_display}")
+        if executor_info.get("last_cycle_summary"):
+            st.caption(f"**{tr('Last Cycle')}:** {executor_info['last_cycle_summary']}")
 
     # Exibir limites e uso na janela móvel de 24h
     tk_limits = scheduler.get_platform_rate_limits("tiktok")
@@ -7886,14 +7956,86 @@ def _render_publication_schedule():
     st.write(f"**{tr('Upcoming Posts')} ({len(upcoming_posts)})**")
     if upcoming_posts:
         task_subject_map = {t["task_id"]: t.get("subject", t["task_id"]) for t in all_summaries}
+
+        # Destaque para a próxima publicação imediata
+        first_post = upcoming_posts[0]
+        first_time = scheduler.format_local_time(first_post["scheduled_at"], fmt="%H:%M (%d/%m)")
+        first_plat = "🎵 TikTok" if first_post["platform"] == "tiktok" else "▶️ YouTube"
+        first_subj = task_subject_map.get(first_post["task_id"], first_post["task_id"])
+        st.info(f"📌 **{tr('Next Publication')}:** {first_subj} — **{first_plat}** — `{first_time}`")
+
         for post in upcoming_posts:
-            post_dt = scheduler._from_iso(post["scheduled_at"])
-            formatted_time = post_dt.strftime("%H:%M (%d/%m)")
+            formatted_time = scheduler.format_local_time(post["scheduled_at"], fmt="%H:%M (%d/%m)")
             p_label = "🎵 TikTok" if post["platform"] == "tiktok" else "▶️ YouTube"
             subj = task_subject_map.get(post["task_id"], post["task_id"])
             st.markdown(f"- `{formatted_time}` — **{p_label}** — {subj}")
     else:
         st.caption(tr("No Upcoming Posts"))
+
+    # Ferramenta de Homologação / Teste Rápido do Scheduler
+    with st.expander(f"🧪 {tr('Quick Scheduler Test (Homologation)')}", expanded=False):
+        st.caption(f"⚠️ {tr('Homologation Tool Notice')}")
+        if upcoming_posts:
+            task_subject_map = {t["task_id"]: t.get("subject", t["task_id"]) for t in all_summaries}
+            post_options = {}
+            for p in upcoming_posts:
+                p_time = scheduler.format_local_time(p["scheduled_at"], fmt="%H:%M:%S (%d/%m)")
+                p_plat = "🎵 TikTok" if p["platform"] == "tiktok" else "▶️ YouTube"
+                subj = task_subject_map.get(p["task_id"], p["task_id"])
+                post_options[p["id"]] = f"{subj} — {p_plat} — {p_time}"
+
+            selected_post_id = st.selectbox(
+                tr("Select Post"),
+                options=list(post_options.keys()),
+                format_func=lambda pid: post_options[pid],
+                key="test_reschedule_post_select",
+            )
+
+            interval_choice = st.radio(
+                tr("Reschedule Interval"),
+                options=[2, 5, 10],
+                format_func=lambda m: f"+{m} min",
+                horizontal=True,
+                key="test_reschedule_interval_radio",
+            )
+
+            if st.button(
+                tr("Reschedule for Test"),
+                key="test_reschedule_submit_btn",
+                type="secondary",
+                icon=":material/update:",
+                use_container_width=True,
+            ):
+                res = scheduler.reschedule_post_for_test(selected_post_id, interval_choice)
+                if res.get("success"):
+                    new_time_str = scheduler.format_local_time(res["new_scheduled_at"], fmt="%H:%M:%S")
+                    msg = tr("Post Rescheduled for Time").format(time=new_time_str)
+                    st.toast(msg, icon="🧪")
+                    st.success(f"✅ {msg}")
+                    st.rerun(scope="fragment")
+                else:
+                    st.error(res.get("message", "Erro ao reagendar post"))
+
+            if st.button(
+                "⚡ " + tr("Run Cycle Now"),
+                key="test_run_cycle_now_btn",
+                type="primary",
+                icon=":material/play_circle:",
+                use_container_width=True,
+            ):
+                cycle_res = scheduler.run_scheduler_cycle()
+                c_status = cycle_res.get("status")
+                c_reason = cycle_res.get("reason", "")
+                st.toast(f"Ciclo executado: {c_status}", icon="⚡")
+                if c_status in ("published", "simulated"):
+                    st.success(f"Ciclo executado com sucesso: {c_status} (task={cycle_res.get('task_id')}, plat={cycle_res.get('platform')})")
+                elif c_status == "idle":
+                    st.info("Ciclo executado: Nenhum post vencido para processar.")
+                else:
+                    st.warning(f"Ciclo executado: {c_status} ({c_reason})")
+                st.rerun(scope="fragment")
+        else:
+            st.caption(tr("No Planned Posts Available to Reschedule"))
 
 
 def _render_autopilot_section(

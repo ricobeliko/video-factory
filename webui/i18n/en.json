@@ -724,6 +724,17 @@
     "Duration Fit": "Duration Fit",
     "Historical Performance": "Historical Signal",
     "Visual Match": "Visual Potential",
-    "No ideas match quality filter": "No ideas meet the minimum score of the selected quality filter."
+    "No ideas match quality filter": "No ideas meet the minimum score of the selected quality filter.",
+    "Strategy Tier Filter": "Strategy Tier Filter",
+    "All Strategy Tiers": "All Strategy Tiers",
+    "Strategy Bucket Filter": "Mix Bucket Filter",
+    "All Buckets": "All Buckets",
+    "Organize Strategic Batch": "Organize Strategic Batch (Mix 10)",
+    "Strategy Details": "Strategy Details",
+    "Recommended Structure": "Recommended Structure",
+    "Suggested Duration": "Suggested Duration",
+    "Topic Cluster": "Topic Cluster",
+    "Diversity Score": "Diversity Score",
+    "No ideas match strategy filter": "No ideas match the selected strategy/bucket filter."
   }
 }

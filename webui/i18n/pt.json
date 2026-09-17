@@ -621,6 +621,17 @@
     "Duration Fit": "Aderência de Duração",
     "Historical Performance": "Sinal Histórico",
     "Visual Match": "Potencial Visual",
-    "No ideas match quality filter": "Nenhuma ideia atingiu a nota mínima do filtro de qualidade selecionado."
+    "No ideas match quality filter": "Nenhuma ideia atingiu a nota mínima do filtro de qualidade selecionado.",
+    "Strategy Tier Filter": "Filtro de Estratégia",
+    "All Strategy Tiers": "Todas as Faixas",
+    "Strategy Bucket Filter": "Filtro de Mix (Bucket)",
+    "All Buckets": "Todos os Buckets",
+    "Organize Strategic Batch": "Organizar Lote Estratégico (Mix 10)",
+    "Strategy Details": "Detalhes de Estratégia",
+    "Recommended Structure": "Estrutura Recomendada",
+    "Suggested Duration": "Duração Sugerida",
+    "Topic Cluster": "Cluster Temático",
+    "Diversity Score": "Score de Diversidade",
+    "No ideas match strategy filter": "Nenhuma ideia atingiu os filtros de estratégia/mix selecionados."
   }
 }

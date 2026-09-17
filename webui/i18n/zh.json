@@ -636,6 +636,17 @@
     "Explicador": "解说阐释",
     "Fato + Contexto": "事实与背景",
     "Mito vs Realidade": "流言揭秘",
-    "História Curta": "短篇故事"
+    "História Curta": "短篇故事",
+    "Strategy Tier Filter": "策略层级筛选",
+    "All Strategy Tiers": "所有策略层级",
+    "Strategy Bucket Filter": "组合类型筛选",
+    "All Buckets": "所有类型",
+    "Organize Strategic Batch": "组织战略批次 (Mix 10)",
+    "Strategy Details": "策略详情",
+    "Recommended Structure": "推荐叙事结构",
+    "Suggested Duration": "建议时长",
+    "Topic Cluster": "主题聚类",
+    "Diversity Score": "多样性评分",
+    "No ideas match strategy filter": "没有创意符合所选的策略/类型筛选。"
   }
 }

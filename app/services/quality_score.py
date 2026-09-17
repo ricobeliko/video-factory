@@ -757,24 +757,41 @@ def get_recent_quality_scores(
         if has_trend_table:
             rows = conn.execute(
                 """
-                SELECT 
-                    cqs.*,
-                    ti.source AS trend_source,
-                    ti.source_count AS trend_source_count,
-                    ti.verification AS trend_verification,
-                    ti.trend_score AS trend_radar_trend_score,
-                    ti.relevance_score AS trend_radar_relevance_score,
-                    ti.source_confidence AS trend_radar_source_confidence,
-                    ti.opportunity_score AS trend_radar_opportunity_score
-                FROM content_quality_scores cqs
-                LEFT JOIN trend_items ti ON cqs.trend_id = ti.trend_id
-                ORDER BY cqs.id DESC LIMIT ?;
+                SELECT * FROM (
+                    SELECT
+                        cqs.*,
+                        ti.source AS trend_source,
+                        ti.source_count AS trend_source_count,
+                        ti.verification AS trend_verification,
+                        ti.trend_score AS trend_radar_trend_score,
+                        ti.relevance_score AS trend_radar_relevance_score,
+                        ti.source_confidence AS trend_radar_source_confidence,
+                        ti.opportunity_score AS trend_radar_opportunity_score,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY COALESCE(cqs.trend_id, cqs.topic)
+                            ORDER BY cqs.created_at DESC, cqs.id DESC
+                        ) AS rn
+                    FROM content_quality_scores cqs
+                    LEFT JOIN trend_items ti ON cqs.trend_id = ti.trend_id
+                ) WHERE rn = 1
+                ORDER BY created_at DESC, id DESC LIMIT ?;
                 """,
                 (limit,)
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM content_quality_scores ORDER BY id DESC LIMIT ?;",
+                """
+                SELECT * FROM (
+                    SELECT
+                        *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY COALESCE(trend_id, topic)
+                            ORDER BY created_at DESC, id DESC
+                        ) AS rn
+                    FROM content_quality_scores
+                ) WHERE rn = 1
+                ORDER BY created_at DESC, id DESC LIMIT ?;
+                """,
                 (limit,)
             ).fetchall()
         result = []

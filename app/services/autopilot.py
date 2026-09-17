@@ -351,3 +351,49 @@ def evaluate_idea_quality(
         persist=persist,
         db_path=db_path,
     )
+
+
+def evaluate_idea_strategy(
+    topic: str,
+    niche: Optional[str] = None,
+    preset: Optional[str] = None,
+    trend_data: Optional[Dict[str, Any]] = None,
+    quality_data: Optional[Dict[str, Any]] = None,
+    recent_history: Optional[List[Dict[str, Any]]] = None,
+    last_used_structure: Optional[str] = None,
+    task_id: Optional[str] = None,
+    persist: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Avalia estrategicamente uma ideia combinando sinais de qualidade, tendência, analytics e diversidade."""
+    from app.services import content_strategy
+
+    return content_strategy.evaluate_strategy(
+        topic=topic,
+        niche=niche,
+        preset=preset,
+        trend_data=trend_data,
+        quality_data=quality_data,
+        recent_history=recent_history,
+        last_used_structure=last_used_structure,
+        task_id=task_id,
+        persist=persist,
+        db_path=db_path,
+    )
+
+
+def build_strategy_batch(
+    evaluated_ideas: List[Dict[str, Any]],
+    target_count: int = 10,
+    has_sufficient_history: bool = False,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Organiza lote diversificado de ideias com base em estratégia de mix."""
+    from app.services import content_strategy
+
+    return content_strategy.build_strategy_batch(
+        evaluated_ideas=evaluated_ideas,
+        target_count=target_count,
+        has_sufficient_history=has_sufficient_history,
+        db_path=db_path,
+    )

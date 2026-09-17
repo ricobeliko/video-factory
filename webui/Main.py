@@ -51,6 +51,7 @@ from app.services import (
     analytics,
     autopilot,
     cache_manager,
+    content_strategy,
     llm,
     loomloom,
     material,
@@ -8226,6 +8227,24 @@ def _render_trend_radar_section():
                             sent["quality_label"] = q_res["quality_label"]
                             sent["reasons"] = q_res["reasons"]
                             sent["components"] = q_res["components"]
+
+                            s_res = autopilot.evaluate_idea_strategy(
+                                topic=top,
+                                niche=sent.get("niche") or radar_niche,
+                                preset=const.PRESET_CROSS_PLATFORM,
+                                trend_data=sent,
+                                quality_data=q_res,
+                                persist=True,
+                            )
+                            sent["strategy_score"] = s_res["strategy_score"]
+                            sent["strategy_label"] = s_res["strategy_label"]
+                            sent["strategy_bucket"] = s_res["strategy_bucket"]
+                            sent["topic_cluster"] = s_res["topic_cluster"]
+                            sent["recommended_structure"] = s_res["recommended_structure"]
+                            sent["suggested_duration"] = s_res["suggested_duration"]
+                            sent["strategy_reasons"] = s_res["reasons"]
+                            sent["strategy_components"] = s_res["components"]
+
                             existing_ideas.append(sent)
                             existing_topic_set.add(top.lower())
                             added += 1
@@ -8711,6 +8730,15 @@ def _render_autopilot_section(
                                     preset=selected_preset,
                                     persist=True,
                                 )
+                                s_res = autopilot.evaluate_idea_strategy(
+                                    topic=idea,
+                                    niche=niche,
+                                    preset=selected_preset,
+                                    quality_data=q_res,
+                                    recent_history=new_ideas,
+                                    last_used_structure=new_ideas[-1].get("recommended_structure") if new_ideas else None,
+                                    persist=True,
+                                )
                                 new_ideas.append({
                                     "topic": idea,
                                     "selected": True,
@@ -8719,6 +8747,14 @@ def _render_autopilot_section(
                                     "quality_label": q_res["quality_label"],
                                     "reasons": q_res["reasons"],
                                     "components": q_res["components"],
+                                    "strategy_score": s_res["strategy_score"],
+                                    "strategy_label": s_res["strategy_label"],
+                                    "strategy_bucket": s_res["strategy_bucket"],
+                                    "topic_cluster": s_res["topic_cluster"],
+                                    "recommended_structure": s_res["recommended_structure"],
+                                    "suggested_duration": s_res["suggested_duration"],
+                                    "strategy_reasons": s_res["reasons"],
+                                    "strategy_components": s_res["components"],
                                 })
                             st.session_state["autopilot_ideas"] = new_ideas
                             for k in list(st.session_state.keys()):
@@ -8772,21 +8808,69 @@ def _render_autopilot_section(
         if ideas_list:
             st.write(f"**{tr('Generated Ideas')} ({len(ideas_list)})**")
 
-            col_toggle, col_q_filter = st.columns([0.45, 0.55], vertical_alignment="center")
-            with col_toggle:
+            filter_row1_c1, filter_row1_c2, filter_row1_c3 = st.columns([0.28, 0.36, 0.36], vertical_alignment="center")
+            with filter_row1_c1:
                 all_checked = all(
                     st.session_state.get(f"autopilot_sel_{i}", item.get("selected", True))
                     for i, item in enumerate(ideas_list)
                 )
                 toggle_label = "Desmarcar todos" if all_checked else tr("Select/Deselect All")
-                if st.button(toggle_label, key="autopilot_toggle_selection_btn"):
+                if st.button(toggle_label, key="autopilot_toggle_selection_btn", use_container_width=True):
                     new_val = not all_checked
                     for i, item in enumerate(ideas_list):
                         st.session_state[f"autopilot_sel_{i}"] = new_val
                         item["selected"] = new_val
                     st.rerun()
 
-            with col_q_filter:
+            with filter_row1_c2:
+                if st.button(f"🗂️ {tr('Organize Strategic Batch')}", key="autopilot_organize_batch_btn", use_container_width=True):
+                    for i, it in enumerate(ideas_list):
+                        if it.get("strategy_score") is None:
+                            s_ev = autopilot.evaluate_idea_strategy(
+                                topic=it.get("topic", ""),
+                                niche=it.get("niche") or niche,
+                                preset=selected_preset,
+                                trend_data=it,
+                                quality_data=it,
+                                recent_history=ideas_list[:i],
+                                last_used_structure=ideas_list[i-1].get("recommended_structure") if i > 0 else None,
+                                persist=True,
+                            )
+                            it["strategy_score"] = s_ev["strategy_score"]
+                            it["strategy_label"] = s_ev["strategy_label"]
+                            it["strategy_bucket"] = s_ev["strategy_bucket"]
+                            it["topic_cluster"] = s_ev["topic_cluster"]
+                            it["recommended_structure"] = s_ev["recommended_structure"]
+                            it["suggested_duration"] = s_ev["suggested_duration"]
+                            it["strategy_reasons"] = s_ev["reasons"]
+                            it["strategy_components"] = s_ev["components"]
+                    batched = autopilot.build_strategy_batch(ideas_list, target_count=10)
+                    batched_topics = {(it.get("topic") or "").strip().lower() for it in batched}
+                    for i, it in enumerate(ideas_list):
+                        in_b = (it.get("topic") or "").strip().lower() in batched_topics
+                        it["selected"] = in_b
+                        st.session_state[f"autopilot_sel_{i}"] = in_b
+                    st.session_state["autopilot_ideas"] = batched + [it for it in ideas_list if (it.get("topic") or "").strip().lower() not in batched_topics]
+                    st.rerun()
+
+            with filter_row1_c3:
+                strat_tier_choice = st.selectbox(
+                    tr("Strategy Tier Filter"),
+                    options=["all", "85", "70", "55"],
+                    format_func=lambda o: tr("All Strategy Tiers") if o == "all" else f"≥ {o} ({'PRIORITY' if o=='85' else ('PROMISING+' if o=='70' else 'EXPERIMENT+')})",
+                    key="autopilot_strategy_tier_select",
+                )
+
+            filter_row2_c1, filter_row2_c2 = st.columns(2, vertical_alignment="center")
+            with filter_row2_c1:
+                bucket_filter_choice = st.selectbox(
+                    tr("Strategy Bucket Filter"),
+                    options=["all", content_strategy.BUCKET_PROVEN_WINNER, content_strategy.BUCKET_TREND_OPPORTUNITY, content_strategy.BUCKET_EVERGREEN, content_strategy.BUCKET_EXPERIMENT, content_strategy.BUCKET_DIVERSITY],
+                    format_func=lambda b: tr("All Buckets") if b == "all" else b,
+                    key="autopilot_strategy_bucket_select",
+                )
+
+            with filter_row2_c2:
                 quality_filter_choice = st.selectbox(
                     tr("Quality Filter"),
                     options=["all", "55", "70", "85"],
@@ -8818,6 +8902,13 @@ def _render_autopilot_section(
                 quality_score.LABEL_WEAK: "🔴",
             }
 
+            strat_icons = {
+                content_strategy.LABEL_PRIORITY: "🟣",
+                content_strategy.LABEL_PROMISING: "🟢",
+                content_strategy.LABEL_EXPERIMENT: "🔵",
+                content_strategy.LABEL_LOW: "⚪",
+            }
+
             rendered_count = 0
             for idx, item in enumerate(ideas_list):
                 if item.get("quality_score") is None or "components" not in item:
@@ -8833,12 +8924,46 @@ def _render_autopilot_section(
                     item["reasons"] = q_eval["reasons"]
                     item["components"] = q_eval["components"]
 
+                need_strat_eval = (
+                    item.get("strategy_score") is None
+                    or "strategy_bucket" not in item
+                    or (
+                        item.get("strategy_components", {}).get("quality_signal") is not None
+                        and item.get("quality_score") is not None
+                        and abs(float(item["quality_score"]) - float(item["strategy_components"]["quality_signal"])) > 0.5
+                    )
+                )
+                if need_strat_eval:
+                    s_eval = autopilot.evaluate_idea_strategy(
+                        topic=item.get("topic", ""),
+                        niche=item.get("niche") or niche,
+                        preset=selected_preset,
+                        trend_data=item,
+                        quality_data=item,
+                        recent_history=ideas_list[:idx],
+                        last_used_structure=ideas_list[idx-1].get("recommended_structure") if idx > 0 else None,
+                        persist=True,
+                    )
+                    item["strategy_score"] = s_eval["strategy_score"]
+                    item["strategy_label"] = s_eval["strategy_label"]
+                    item["strategy_bucket"] = s_eval["strategy_bucket"]
+                    item["topic_cluster"] = s_eval["topic_cluster"]
+                    item["recommended_structure"] = s_eval["recommended_structure"]
+                    item["suggested_duration"] = s_eval["suggested_duration"]
+                    item["strategy_reasons"] = s_eval["reasons"]
+                    item["strategy_components"] = s_eval["components"]
+
                 q_score = item["quality_score"]
                 q_label = item["quality_label"]
-                reasons = item.get("reasons", [])
-                comps = item.get("components", {})
+                s_score = item.get("strategy_score", 50.0)
+                s_label = item.get("strategy_label", content_strategy.LABEL_LOW)
+                s_bucket = item.get("strategy_bucket", content_strategy.BUCKET_EXPERIMENT)
 
                 if quality_filter_choice != "all" and q_score < float(quality_filter_choice):
+                    continue
+                if strat_tier_choice != "all" and s_score < float(strat_tier_choice):
+                    continue
+                if bucket_filter_choice != "all" and s_bucket != bucket_filter_choice:
                     continue
 
                 rendered_count += 1
@@ -8871,11 +8996,39 @@ def _render_autopilot_section(
                     else:
                         st.caption("—")
 
-                icon = label_icons.get(q_label, "⚪")
-                reasons_str = " • ".join(reasons[:3]) if reasons else ""
-                st.markdown(f"{icon} **Quality:** {q_score:.0f} — **{q_label}**" + (f" | {reasons_str}" if reasons_str else ""))
+                s_icon = strat_icons.get(s_label, "⚪")
+                q_icon = label_icons.get(q_label, "⚪")
+                s_struct = item.get("recommended_structure", "explainer")
+                s_dur = item.get("suggested_duration", "62–75s")
+                s_reasons = item.get("strategy_reasons", [])
+                s_reasons_str = " • ".join(s_reasons[:3]) if s_reasons else ""
+
+                st.markdown(
+                    f"{s_icon} **Strategy:** {s_score:.0f} — **{s_label}** | **Bucket:** `{s_bucket}` | **Estrutura:** `{s_struct}` | **Duração:** `{s_dur}`"
+                )
+                q_reasons = item.get("reasons", [])
+                q_reasons_str = " • ".join(q_reasons[:3]) if q_reasons else ""
+                st.markdown(
+                    f"{q_icon} **Quality:** {q_score:.0f} — **{q_label}**" + (f" | *{s_reasons_str}*" if s_reasons_str else (f" | *{q_reasons_str}*" if q_reasons_str else ""))
+                )
+
+                with st.expander(f"🎯 {tr('Strategy Details')} (#{idx+1})", expanded=False):
+                    s_comps = item.get("strategy_components", {})
+                    s_col1, s_col2 = st.columns(2)
+                    with s_col1:
+                        st.markdown(f"- **{tr('Topic Cluster')}:** `{item.get('topic_cluster', 'geral')}`")
+                        st.markdown(f"- **{tr('Diversity Score')}:** {s_comps.get('novelty_diversity') or '—'}")
+                        st.markdown(f"- **Quality Signal (30%):** {s_comps.get('quality_signal') or '—'}")
+                        st.markdown(f"- **Trend Opportunity (20%):** {s_comps.get('trend_opportunity') or '—'}")
+                    with s_col2:
+                        st.markdown(f"- **Histórico Analytics (20%):** {s_comps.get('historical_performance') or '—'}")
+                        st.markdown(f"- **Relevância Nicho (10%):** {s_comps.get('niche_relevance') or '—'}")
+                        st.markdown(f"- **Confiança de Fonte (5%):** {s_comps.get('source_confidence') or '—'}")
+                        if s_reasons:
+                            st.markdown(f"- **Motivos:** {'; '.join(s_reasons)}")
 
                 with st.expander(f"🔍 {tr('Quality Score Details')} (#{idx+1})", expanded=False):
+                    comps = item.get("components", {})
                     c_det1, c_det2 = st.columns(2)
                     with c_det1:
                         st.markdown(f"- **{tr('Hook Strength')}:** {comps.get('hook_strength', '—')}")
@@ -8891,7 +9044,7 @@ def _render_autopilot_section(
                         st.markdown(f"- **{tr('Visual Match')}:** {comps.get('visual_match', '—')}")
 
             if rendered_count == 0 and ideas_list:
-                st.info(tr("No ideas match quality filter"))
+                st.info(tr("No ideas match strategy filter"))
         else:
             st.info("Nenhuma ideia na fila do Autopilot no momento. Gere ideias com o botão acima ou envie temas aprovados do Trend Radar para avaliar o Quality Score.")
 
@@ -9006,6 +9159,19 @@ def _render_autopilot_section(
                             )
                         except Exception as q_exc:
                             logger.warning(f"Could not persist quality score for task {task_id}: {q_exc}")
+
+                        try:
+                            content_strategy.evaluate_strategy(
+                                topic=topic,
+                                niche=niche,
+                                preset=selected_preset,
+                                trend_data=orig_item,
+                                last_used_structure=item_params.narrative_structure,
+                                task_id=task_id,
+                                persist=True,
+                            )
+                        except Exception as s_exc:
+                            logger.warning(f"Could not persist strategy score for task {task_id}: {s_exc}")
                         submitted_task_ids.append(task_id)
 
                     except Exception as exc:

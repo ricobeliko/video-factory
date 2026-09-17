@@ -48,6 +48,7 @@ from app.models.schema import (
 )
 from app.services import bgm as bgm_service
 from app.services import (
+    analytics,
     autopilot,
     cache_manager,
     llm,
@@ -8324,6 +8325,241 @@ def _render_trend_radar_section():
                 st.divider()
 
 
+def _render_analytics_section():
+    with st.expander(f"📊 {tr('Analytics')}", expanded=False):
+        st.caption(tr("Analytics Description"))
+
+        tab_dash, tab_entry = st.tabs([
+            f"📈 {tr('Performance Dashboard')}",
+            f"📝 {tr('Record Snapshot')}",
+        ])
+
+        with tab_dash:
+            # 1. Filtros
+            f_col1, f_col2 = st.columns(2)
+            with f_col1:
+                plat_filter = st.selectbox(
+                    tr("Platform Filter"),
+                    options=["all", "youtube", "tiktok"],
+                    format_func=lambda p: tr("All Platforms") if p == "all" else ("YouTube" if p == "youtube" else "TikTok"),
+                    key="analytics_filter_plat",
+                )
+            with f_col2:
+                lookback_filter = st.selectbox(
+                    tr("Period Filter"),
+                    options=[0, 7, 30],
+                    format_func=lambda d: tr("All Time") if d == 0 else f"{d} {tr('days')}",
+                    key="analytics_filter_lookback",
+                )
+
+            effective_plat = None if plat_filter == "all" else plat_filter
+            feedback_data = analytics.get_content_performance_feedback(
+                platform=effective_plat,
+                lookback_days=lookback_filter if lookback_filter > 0 else None,
+            )
+
+            # Métricas Globais
+            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            m_col1.metric(tr("Total Videos Measured"), feedback_data.get("total_measured", 0))
+
+            pb = feedback_data.get("platform_breakdown", {})
+            total_views_str = ", ".join([f"{k.capitalize()}: {v['total_views']:,}" for k, v in pb.items()]) if pb else "0"
+            m_col2.metric(tr("Total Views by Platform"), total_views_str)
+            m_col3.metric(tr("Average Engagement"), f"{feedback_data.get('avg_engagement_rate', 0.0) * 100:.2f}%")
+            m_col4.metric(tr("Average Performance"), f"{feedback_data.get('avg_performance_score', 0.0)}/100")
+
+            st.divider()
+
+            # Top Estruturas & Top Presets
+            c_struct, c_preset = st.columns(2)
+            with c_struct:
+                st.subheader(f"🧠 {tr('Top Narrative Structures')}")
+                structs = feedback_data.get("structures", {})
+                if structs:
+                    sorted_structs = sorted(structs.items(), key=lambda kv: kv[1]["avg_performance"], reverse=True)
+                    for st_name, s_data in sorted_structs:
+                        diff_prefix = "+" if s_data["relative_diff"] > 0 else ""
+                        st.markdown(
+                            f"- **{st_name}**: {s_data['avg_performance']}/100 "
+                            f"({diff_prefix}{s_data['relative_diff']}%) | "
+                            f"Eng: {s_data['avg_engagement']*100:.2f}% | Vídeos: {s_data['count']}"
+                        )
+                else:
+                    st.caption(tr("No data available"))
+
+            with c_preset:
+                st.subheader(f"💎 {tr('Top Presets')}")
+                presets = feedback_data.get("presets", {})
+                if presets:
+                    sorted_presets = sorted(presets.items(), key=lambda kv: kv[1]["avg_performance"], reverse=True)
+                    for pr_name, p_data in sorted_presets:
+                        diff_prefix = "+" if p_data["relative_diff"] > 0 else ""
+                        st.markdown(
+                            f"- **{pr_name}**: {p_data['avg_performance']}/100 "
+                            f"({diff_prefix}{p_data['relative_diff']}%) | "
+                            f"Eng: {p_data['avg_engagement']*100:.2f}% | Vídeos: {p_data['count']}"
+                        )
+                else:
+                    st.caption(tr("No data available"))
+
+            st.divider()
+
+            # Top Fontes de Trend & Duração Ótima
+            c_sources, c_duration = st.columns(2)
+            with c_sources:
+                st.subheader(f"📡 {tr('Top Trend Sources')}")
+                sources = feedback_data.get("trend_sources", {})
+                if sources:
+                    for src_name, src_data in sources.items():
+                        st.markdown(
+                            f"- **{src_name}**: Score médio {src_data['avg_performance']}/100 | "
+                            f"Média views: {src_data['avg_views']:,.0f} | Vídeos: {src_data['count']}"
+                        )
+                else:
+                    st.caption(tr("No trend items evaluated yet"))
+
+            with c_duration:
+                st.subheader(f"⏱️ {tr('Optimal Duration')}")
+                opt_dur = feedback_data.get("optimal_duration")
+                if opt_dur:
+                    st.success(f"{opt_dur:.1f} segundos (média dos vídeos de maior destaque)")
+                else:
+                    st.caption(tr("Insufficient data to determine optimal duration"))
+
+            # Top Temas
+            st.subheader(f"🏆 {tr('Top Performing Topics')}")
+            top_topics = feedback_data.get("topics", [])
+            if top_topics:
+                for idx, top_t in enumerate(top_topics[:5], 1):
+                    st.markdown(
+                        f"{idx}. **{top_t['topic']}** ({top_t['platform'].capitalize()}) — "
+                        f"Performance: **{top_t['performance_score']}** | "
+                        f"Views: {top_t['views']:,} | Eng: {top_t['engagement_rate']*100:.2f}%"
+                    )
+            else:
+                st.caption(tr("No topics measured yet"))
+
+        with tab_entry:
+            st.subheader(f"📝 {tr('Register Metrics Snapshot')}")
+            st.caption(tr("Manual Metrics Description"))
+
+            pub_options = []
+            try:
+                with scheduler.get_connection() as conn:
+                    pub_rows = conn.execute(
+                        """
+                        SELECT pe.id, pe.task_id, pe.platform, pe.published_at, pe.external_id,
+                               ms.topic, ms.preset, ms.narrative_structure, ms.actual_duration
+                        FROM publication_events pe
+                        LEFT JOIN monetization_safety ms ON pe.task_id = ms.task_id
+                        WHERE pe.status = 'success'
+                        ORDER BY pe.published_at DESC LIMIT 30;
+                        """
+                    ).fetchall()
+                    for r in pub_rows:
+                        t_label = r["topic"] or r["task_id"][:8]
+                        pub_options.append({
+                            "label": f"[{r['platform'].capitalize()}] {t_label} ({r['published_at'][:10]})",
+                            "task_id": r["task_id"],
+                            "platform": r["platform"],
+                            "external_id": r["external_id"] or "",
+                            "topic": r["topic"] or "",
+                            "published_at": r["published_at"],
+                            "pub_id": r["id"],
+                        })
+            except Exception:
+                pass
+
+            choice_labels = [p["label"] for p in pub_options] + [tr("Custom Task ID")]
+            selected_pub_label = st.selectbox(
+                tr("Select Published Video"),
+                options=choice_labels,
+                key="analytics_selected_pub",
+            )
+
+            selected_pub = next((p for p in pub_options if p["label"] == selected_pub_label), None)
+
+            c_meta1, c_meta2 = st.columns(2)
+            with c_meta1:
+                snap_task_id = st.text_input(
+                    "Task ID",
+                    value=selected_pub["task_id"] if selected_pub else "",
+                    key="snap_input_task_id",
+                )
+                snap_platform = st.selectbox(
+                    tr("Platform"),
+                    options=["youtube", "tiktok"],
+                    index=0 if (not selected_pub or selected_pub["platform"] == "youtube") else 1,
+                    key="snap_input_platform",
+                )
+                snap_topic = st.text_input(
+                    tr("Topic / Title"),
+                    value=(selected_pub["topic"] if selected_pub else ""),
+                    key="snap_input_topic",
+                )
+            with c_meta2:
+                snap_external_id = st.text_input(
+                    tr("External Video ID"),
+                    value=(selected_pub["external_id"] if selected_pub else ""),
+                    key="snap_input_external_id",
+                )
+                snap_pub_at = st.text_input(
+                    tr("Published At (ISO UTC)"),
+                    value=(selected_pub["published_at"] if selected_pub else ""),
+                    key="snap_input_published_at",
+                )
+                snap_trend_id = st.text_input(
+                    tr("Trend ID (Optional)"),
+                    value="",
+                    key="snap_input_trend_id",
+                )
+
+            st.write(f"**{tr('Metrics')}**")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                in_views = st.number_input(tr("Views"), min_value=0, value=0, step=10, key="snap_in_views")
+                in_favs = st.number_input(tr("Favorites (TikTok)"), min_value=0, value=0, step=1, key="snap_in_favs")
+            with col_m2:
+                in_likes = st.number_input(tr("Likes"), min_value=0, value=0, step=5, key="snap_in_likes")
+                in_avg_view_dur = st.number_input(tr("Average View Duration (s)"), min_value=0.0, value=0.0, step=1.0, key="snap_in_avg_view_dur")
+            with col_m3:
+                in_comments = st.number_input(tr("Comments"), min_value=0, value=0, step=1, key="snap_in_comments")
+                in_pct_viewed = st.number_input(tr("Average % Viewed (0-100)"), min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="snap_in_pct_viewed")
+            with col_m4:
+                in_shares = st.number_input(tr("Shares"), min_value=0, value=0, step=1, key="snap_in_shares")
+                in_completion = st.number_input(tr("Completion Rate % (0-100)"), min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="snap_in_completion")
+
+            in_subs = st.number_input(tr("Subscribers Gained (YouTube)"), min_value=0, value=0, step=1, key="snap_in_subs")
+
+            if st.button(f"💾 {tr('Save Snapshot')}", key="snap_save_btn", type="primary", use_container_width=True):
+                if not snap_task_id.strip():
+                    st.error(tr("Task ID is required"))
+                else:
+                    try:
+                        res_snap = analytics.save_snapshot(
+                            task_id=snap_task_id.strip(),
+                            platform=snap_platform,
+                            views=int(in_views),
+                            likes=int(in_likes),
+                            comments=int(in_comments),
+                            shares=int(in_shares),
+                            favorites=int(in_favs),
+                            average_view_duration=float(in_avg_view_dur) if in_avg_view_dur > 0 else None,
+                            average_percentage_viewed=float(in_pct_viewed) if in_pct_viewed > 0 else None,
+                            completion_rate=float(in_completion) if in_completion > 0 else None,
+                            subscribers_gained=int(in_subs) if in_subs > 0 else None,
+                            external_id=snap_external_id.strip() or None,
+                            trend_id=snap_trend_id.strip() or None,
+                            topic=snap_topic.strip() or None,
+                            published_at=snap_pub_at.strip() or None,
+                        )
+                        st.success(f"✅ Snapshot gravado! Performance: {res_snap['performance_score']}/100 | Engajamento: {res_snap['engagement_rate']*100:.2f}% | Bucket: {res_snap['age_bucket']}")
+                        st.toast("Snapshot de Analytics salvo com sucesso!", icon="📊")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Erro ao salvar snapshot: {exc}")
+
+
 def _render_autopilot_section(
     params,
     voice_mode,
@@ -8596,6 +8832,7 @@ def _render_autopilot_section(
                 assigned_structures = autopilot.assign_batch_narrative_structures(
                     len(selected_topics),
                     recent_structures=recent_structures,
+                    performance_context=analytics.get_content_performance_feedback(),
                 )
 
                 submitted_task_ids = []
@@ -9132,6 +9369,7 @@ def _render_generation_controls(
         assigned_structures = autopilot.assign_batch_narrative_structures(
             len(topics),
             recent_structures=recent_structures,
+            performance_context=analytics.get_content_performance_feedback(),
         )
 
         submitted_task_ids = []
@@ -9175,6 +9413,7 @@ def _render_generation_controls(
             st.rerun(scope="app")
 
     _render_trend_radar_section()
+    _render_analytics_section()
 
     _render_autopilot_section(
         params=params,

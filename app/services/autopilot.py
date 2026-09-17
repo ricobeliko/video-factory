@@ -259,11 +259,15 @@ def plan_distribution(
 def assign_batch_narrative_structures(
     selected_count: int,
     recent_structures: Optional[List[str]] = None,
+    performance_context: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Distribui estruturas narrativas entre os itens do lote de forma variada.
 
     Garante que itens consecutivos nunca usem a mesma estrutura e evita repetir
     a última estrutura registrada no histórico.
+    Se performance_context for fornecido, utiliza como sinal adicional leve para
+    priorizar estruturas com melhor histórico, preservando a variedade e
+    a regra de não-repetição consecutiva.
     """
     if selected_count <= 0:
         return []
@@ -273,11 +277,27 @@ def assign_batch_narrative_structures(
     assigned: List[str] = []
     current_history = list(recent_structures or [])
 
+    preferred_order = list(const.NARRATIVE_STRUCTURES)
+    if performance_context and isinstance(performance_context, dict):
+        struct_data = performance_context.get("structures", {})
+        if struct_data:
+            def _score(s: str) -> float:
+                return float(struct_data.get(s, {}).get("relative_diff", 0.0))
+            preferred_order = sorted(const.NARRATIVE_STRUCTURES, key=_score, reverse=True)
+
     for i in range(selected_count):
-        struct = safety_gate.get_next_narrative_structure(
-            recent_structures=current_history,
-            current_index=i,
-        )
+        last_struct = current_history[0] if current_history else None
+
+        if performance_context and preferred_order:
+            candidate = preferred_order[i % len(preferred_order)]
+            if candidate == last_struct:
+                candidate = preferred_order[(i + 1) % len(preferred_order)]
+            struct = candidate
+        else:
+            struct = safety_gate.get_next_narrative_structure(
+                recent_structures=current_history,
+                current_index=i,
+            )
         assigned.append(struct)
         current_history = [struct] + current_history[:5]
 

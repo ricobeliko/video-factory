@@ -826,3 +826,9 @@ def send_trends_to_autopilot(
     _TREND_CACHE.clear()
     logger.info(f"[TrendRadar] {len(sent_items)} temas enviados com sucesso para o Autopilot.")
     return sent_items
+
+
+def get_trend_source_performance(db_path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Retorna o desempenho histórico das fontes do Trend Radar a partir do Analytics."""
+    from app.services import analytics
+    return analytics.get_trend_source_performance(db_path=db_path)

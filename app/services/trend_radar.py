@@ -818,10 +818,16 @@ def send_trends_to_autopilot(
                 "topic": item["title"],
                 "trend_id": item["trend_id"],
                 "source": item["source"],
-                "opportunity_score": item["opportunity_score"],
+                "source_count": item.get("source_count") or 1,
+                "verification": item.get("verification"),
+                "trend_score": item.get("trend_score"),
+                "relevance_score": item.get("relevance_score"),
+                "source_confidence": item.get("source_confidence"),
+                "opportunity_score": item.get("opportunity_score"),
                 "niche": item["niche"],
                 "selected": True,
             })
+
 
     _TREND_CACHE.clear()
     logger.info(f"[TrendRadar] {len(sent_items)} temas enviados com sucesso para o Autopilot.")

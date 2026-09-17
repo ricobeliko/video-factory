@@ -56,6 +56,7 @@ from app.services import (
     material,
     metaso_minimax,
     ofox,
+    quality_score,
     scheduler,
     trend_radar,
     video,
@@ -8214,6 +8215,17 @@ def _render_trend_radar_section():
                     for sent in sent_topics:
                         top = (sent.get("topic") or "").strip()
                         if top and top.lower() not in existing_topic_set:
+                            q_res = autopilot.evaluate_idea_quality(
+                                topic=top,
+                                niche=sent.get("niche") or radar_niche,
+                                preset=const.PRESET_CROSS_PLATFORM,
+                                trend_data=sent,
+                                persist=True,
+                            )
+                            sent["quality_score"] = q_res["quality_score"]
+                            sent["quality_label"] = q_res["quality_label"]
+                            sent["reasons"] = q_res["reasons"]
+                            sent["components"] = q_res["components"]
                             existing_ideas.append(sent)
                             existing_topic_set.add(top.lower())
                             added += 1
@@ -8691,9 +8703,24 @@ def _render_autopilot_section(
                             app_config=config.app,
                         )
                         if ideas:
-                            st.session_state["autopilot_ideas"] = [
-                                {"topic": idea, "selected": True} for idea in ideas
-                            ]
+                            new_ideas = []
+                            for idea in ideas:
+                                q_res = autopilot.evaluate_idea_quality(
+                                    topic=idea,
+                                    niche=niche,
+                                    preset=selected_preset,
+                                    persist=True,
+                                )
+                                new_ideas.append({
+                                    "topic": idea,
+                                    "selected": True,
+                                    "niche": niche,
+                                    "quality_score": q_res["quality_score"],
+                                    "quality_label": q_res["quality_label"],
+                                    "reasons": q_res["reasons"],
+                                    "components": q_res["components"],
+                                })
+                            st.session_state["autopilot_ideas"] = new_ideas
                             for k in list(st.session_state.keys()):
                                 if k.startswith("autopilot_topic_") or k.startswith("autopilot_sel_"):
                                     del st.session_state[k]
@@ -8704,11 +8731,48 @@ def _render_autopilot_section(
                         st.error(f"Erro ao gerar ideias: {exc}")
 
         # 3. Lista de Ideias Geradas
+        if "autopilot_ideas" not in st.session_state:
+            recent_evals = quality_score.get_recent_quality_scores(limit=10)
+            if recent_evals:
+                st.session_state["autopilot_ideas"] = [
+                    {
+                        "topic": row["topic"],
+                        "selected": True,
+                        "niche": row.get("niche"),
+                        "trend_id": row.get("trend_id"),
+                        "source": row.get("source"),
+                        "source_count": row.get("source_count") or 1,
+                        "verification": row.get("verification"),
+                        "trend_score": row.get("trend_score"),
+                        "relevance_score": row.get("relevance_score"),
+                        "source_confidence": row.get("source_confidence"),
+                        "opportunity_score": row.get("opportunity_score"),
+                        "quality_score": row["quality_score"],
+                        "quality_label": row["quality_label"],
+                        "reasons": row.get("reasons") or [],
+                        "components": {
+                            "hook_strength": row.get("hook_score"),
+                            "originality": row.get("originality_score"),
+                            "trend_strength": row.get("trend_score"),
+                            "niche_relevance": row.get("relevance_score"),
+                            "source_confidence": row.get("source_confidence_score"),
+                            "repetition_risk": row.get("repetition_score"),
+                            "narrative_fit": row.get("narrative_fit_score"),
+                            "duration_fit": row.get("duration_fit_score"),
+                            "historical_performance": row.get("historical_performance_score"),
+                            "visual_match": row.get("visual_match_score"),
+                        },
+                    }
+                    for row in recent_evals
+                ]
+            else:
+                st.session_state["autopilot_ideas"] = []
+
         ideas_list = st.session_state.get("autopilot_ideas", [])
         if ideas_list:
             st.write(f"**{tr('Generated Ideas')} ({len(ideas_list)})**")
 
-            col_toggle, _ = st.columns([0.3, 0.7])
+            col_toggle, col_q_filter = st.columns([0.45, 0.55], vertical_alignment="center")
             with col_toggle:
                 all_checked = all(
                     st.session_state.get(f"autopilot_sel_{i}", item.get("selected", True))
@@ -8721,6 +8785,14 @@ def _render_autopilot_section(
                         st.session_state[f"autopilot_sel_{i}"] = new_val
                         item["selected"] = new_val
                     st.rerun()
+
+            with col_q_filter:
+                quality_filter_choice = st.selectbox(
+                    tr("Quality Filter"),
+                    options=["all", "55", "70", "85"],
+                    format_func=lambda o: tr("All Qualities") if o == "all" else f"≥ {o} ({'Review+' if o=='55' else ('Good+' if o=='70' else 'Strong')})",
+                    key="autopilot_quality_filter_select",
+                )
 
             current_selections = [
                 st.session_state.get(f"autopilot_sel_{i}", item.get("selected", True))
@@ -8739,7 +8811,37 @@ def _render_autopilot_section(
             for rank, orig_i in enumerate(selected_indices):
                 plan_map[orig_i] = distribution_plan[rank]
 
+            label_icons = {
+                quality_score.LABEL_STRONG: "🟢",
+                quality_score.LABEL_GOOD: "🔵",
+                quality_score.LABEL_REVIEW: "🟡",
+                quality_score.LABEL_WEAK: "🔴",
+            }
+
+            rendered_count = 0
             for idx, item in enumerate(ideas_list):
+                if item.get("quality_score") is None or "components" not in item:
+                    q_eval = autopilot.evaluate_idea_quality(
+                        topic=item.get("topic", ""),
+                        niche=item.get("niche") or niche,
+                        preset=selected_preset,
+                        trend_data=item,
+                        persist=True,
+                    )
+                    item["quality_score"] = q_eval["quality_score"]
+                    item["quality_label"] = q_eval["quality_label"]
+                    item["reasons"] = q_eval["reasons"]
+                    item["components"] = q_eval["components"]
+
+                q_score = item["quality_score"]
+                q_label = item["quality_label"]
+                reasons = item.get("reasons", [])
+                comps = item.get("components", {})
+
+                if quality_filter_choice != "all" and q_score < float(quality_filter_choice):
+                    continue
+
+                rendered_count += 1
                 item_cols = st.columns([0.08, 0.65, 0.27], vertical_alignment="center")
                 with item_cols[0]:
                     sel = st.checkbox(
@@ -8768,6 +8870,31 @@ def _render_autopilot_section(
                         st.caption(" + ".join(badges) if badges else "—")
                     else:
                         st.caption("—")
+
+                icon = label_icons.get(q_label, "⚪")
+                reasons_str = " • ".join(reasons[:3]) if reasons else ""
+                st.markdown(f"{icon} **Quality:** {q_score:.0f} — **{q_label}**" + (f" | {reasons_str}" if reasons_str else ""))
+
+                with st.expander(f"🔍 {tr('Quality Score Details')} (#{idx+1})", expanded=False):
+                    c_det1, c_det2 = st.columns(2)
+                    with c_det1:
+                        st.markdown(f"- **{tr('Hook Strength')}:** {comps.get('hook_strength', '—')}")
+                        st.markdown(f"- **{tr('Originality')}:** {comps.get('originality', '—')}")
+                        st.markdown(f"- **{tr('Trend Strength')}:** {comps.get('trend_strength') or '—'}")
+                        st.markdown(f"- **{tr('Niche Relevance')}:** {comps.get('niche_relevance', '—')}")
+                        st.markdown(f"- **Confiança de Fonte:** {comps.get('source_confidence') or '—'}")
+                    with c_det2:
+                        st.markdown(f"- **{tr('Repetition Risk')}:** {comps.get('repetition_risk', '—')}")
+                        st.markdown(f"- **{tr('Narrative Fit')}:** {comps.get('narrative_fit') or '—'}")
+                        st.markdown(f"- **{tr('Duration Fit')}:** {comps.get('duration_fit') or '—'}")
+                        st.markdown(f"- **{tr('Historical Performance')}:** {comps.get('historical_performance') or '—'}")
+                        st.markdown(f"- **{tr('Visual Match')}:** {comps.get('visual_match', '—')}")
+
+            if rendered_count == 0 and ideas_list:
+                st.info(tr("No ideas match quality filter"))
+        else:
+            st.info("Nenhuma ideia na fila do Autopilot no momento. Gere ideias com o botão acima ou envie temas aprovados do Trend Radar para avaliar o Quality Score.")
+
 
             queue_locked = bool(
                 webui_task.has_active_generation_tasks() or _has_active_generation()
@@ -8862,7 +8989,25 @@ def _render_autopilot_section(
                             narrative_structure=item_params.narrative_structure,
                         )
                         scheduler.save_task_platforms(task_id, assigned)
+                        orig_item = ideas_list[orig_i] if orig_i < len(ideas_list) else {}
+                        try:
+                            quality_score.evaluate_quality(
+                                topic=topic,
+                                niche=niche,
+                                preset=selected_preset,
+                                narrative_structure=item_params.narrative_structure,
+                                trend_id=orig_item.get("trend_id"),
+                                trend_score=orig_item.get("trend_score"),
+                                opportunity_score=orig_item.get("opportunity_score"),
+                                relevance_score=orig_item.get("relevance_score"),
+                                source_confidence=orig_item.get("source_confidence"),
+                                task_id=task_id,
+                                persist=True,
+                            )
+                        except Exception as q_exc:
+                            logger.warning(f"Could not persist quality score for task {task_id}: {q_exc}")
                         submitted_task_ids.append(task_id)
+
                     except Exception as exc:
                         logger.error(
                             f"Failed to submit autopilot task {task_id} for topic '{topic}': {exc}"

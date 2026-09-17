@@ -302,3 +302,52 @@ def assign_batch_narrative_structures(
         current_history = [struct] + current_history[:5]
 
     return assigned
+
+
+def evaluate_idea_quality(
+    topic: str,
+    niche: Optional[str] = None,
+    preset: Optional[str] = None,
+    narrative_structure: Optional[str] = None,
+    trend_data: Optional[Dict[str, Any]] = None,
+    persist: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Avalia o potencial de qualidade de uma ideia de tema do Autopilot."""
+    from app.services import quality_score
+
+    t_id = None
+    t_score = None
+    opp_score = None
+    rel_score = None
+    src_conf = None
+    source = None
+    source_count = 1
+    verification = None
+
+    if trend_data:
+        t_id = trend_data.get("trend_id")
+        t_score = trend_data.get("trend_score")
+        opp_score = trend_data.get("opportunity_score")
+        rel_score = trend_data.get("relevance_score")
+        src_conf = trend_data.get("source_confidence")
+        source = trend_data.get("source")
+        source_count = trend_data.get("source_count") or 1
+        verification = trend_data.get("verification")
+
+    return quality_score.evaluate_quality(
+        topic=topic,
+        niche=niche,
+        preset=preset,
+        narrative_structure=narrative_structure,
+        trend_id=t_id,
+        trend_score=t_score,
+        opportunity_score=opp_score,
+        relevance_score=rel_score,
+        source_confidence=src_conf,
+        source=source,
+        source_count=source_count,
+        verification=verification,
+        persist=persist,
+        db_path=db_path,
+    )

@@ -711,6 +711,19 @@
     "Completion Rate % (0-100)": "Completion Rate % (0-100)",
     "Subscribers Gained (YouTube)": "Subscribers Gained (YouTube)",
     "Save Snapshot": "Save Snapshot",
-    "Task ID is required": "Task ID is required"
+    "Task ID is required": "Task ID is required",
+    "Quality Filter": "Quality Filter",
+    "All Qualities": "All Qualities",
+    "Quality Score Details": "Quality Score Details",
+    "Hook Strength": "Hook Strength",
+    "Originality": "Originality",
+    "Trend Strength": "Trend Strength",
+    "Niche Relevance": "Niche Relevance",
+    "Repetition Risk": "Anti-Repetition",
+    "Narrative Fit": "Narrative Fit",
+    "Duration Fit": "Duration Fit",
+    "Historical Performance": "Historical Signal",
+    "Visual Match": "Visual Potential",
+    "No ideas match quality filter": "No ideas meet the minimum score of the selected quality filter."
   }
 }

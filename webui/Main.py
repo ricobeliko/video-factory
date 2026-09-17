@@ -56,6 +56,7 @@ from app.services import (
     metaso_minimax,
     ofox,
     scheduler,
+    trend_radar,
     video,
     volcengine_seedance,
     voice,
@@ -8143,6 +8144,185 @@ def _render_publication_schedule():
         else:
             st.caption(tr("No Planned Posts Available to Reschedule"))
 
+def _render_trend_radar_section():
+    with st.expander(f"📡 {tr('Trend Radar')}", expanded=False):
+        st.caption(tr("Trend Radar Description"))
+
+        # Controles
+        c1, c2, c3, c4 = st.columns([1.5, 0.8, 0.8, 0.8])
+        with c1:
+            radar_niche = st.text_input(
+                tr("Niche"),
+                value=st.session_state.get("trend_radar_niche", "Curiosidades"),
+                placeholder=tr("Niche Placeholder"),
+                key="trend_radar_niche_input",
+            )
+        with c2:
+            radar_lang = st.selectbox(
+                tr("Language"),
+                options=["pt-BR", "en-US", "es-ES"],
+                index=0,
+                key="trend_radar_lang_sb",
+            )
+        with c3:
+            radar_region = st.selectbox(
+                tr("Region"),
+                options=["BR", "US", "GLOBAL"],
+                index=0,
+                key="trend_radar_region_sb",
+            )
+        with c4:
+            radar_limit = st.number_input(
+                tr("Limit"),
+                min_value=5,
+                max_value=50,
+                value=15,
+                step=5,
+                key="trend_radar_limit_input",
+            )
+
+        col_btn_refresh, col_btn_send, _ = st.columns([0.3, 0.4, 0.3])
+        with col_btn_refresh:
+            if st.button(f"🔄 {tr('Refresh Radar')}", key="trend_radar_refresh_btn", use_container_width=True):
+                with st.spinner(tr("Refreshing Trend Radar...")):
+                    try:
+                        items = trend_radar.refresh_trend_radar(
+                            niche=radar_niche,
+                            language=radar_lang,
+                            region=radar_region,
+                            limit=int(radar_limit),
+                            force_refresh=True,
+                        )
+                        msg = tr("Radar updated with {count} trends").format(count=len(items))
+                        st.success(msg)
+                        st.toast(msg, icon="📡")
+                    except Exception as exc:
+                        logger.error(f"Error refreshing trend radar: {exc}")
+                        st.error(f"Erro ao atualizar radar: {exc}")
+                st.rerun()
+
+        with col_btn_send:
+            if st.button(f"🚀 {tr('Send Approved to Autopilot')}", key="trend_radar_send_autopilot_btn", use_container_width=True):
+                sent_topics = trend_radar.send_trends_to_autopilot()
+                if sent_topics:
+                    existing_ideas = st.session_state.get("autopilot_ideas", [])
+                    existing_topic_set = {
+                        (it.get("topic") or "").strip().lower() for it in existing_ideas
+                    }
+                    added = 0
+                    for sent in sent_topics:
+                        top = (sent.get("topic") or "").strip()
+                        if top and top.lower() not in existing_topic_set:
+                            existing_ideas.append(sent)
+                            existing_topic_set.add(top.lower())
+                            added += 1
+                    st.session_state["autopilot_ideas"] = existing_ideas
+                    msg = tr("{count} topics sent to Autopilot").format(count=added or len(sent_topics))
+                    st.success(msg)
+                    st.toast(msg, icon="💡")
+                    st.rerun()
+                else:
+                    st.info(tr("No approved trends to send"))
+
+        radar_items = trend_radar.get_trend_items(
+            niche=radar_niche,
+            language=radar_lang,
+            region=radar_region,
+            limit=int(radar_limit),
+        )
+
+        if not radar_items:
+            st.info(tr("No trends in radar"))
+            return
+
+        col_f1, col_f2 = st.columns([0.65, 0.35], vertical_alignment="center")
+        with col_f1:
+            status_filter = st.radio(
+                tr("Status"),
+                options=["ALL", trend_radar.STATUS_NEW, trend_radar.STATUS_APPROVED, trend_radar.STATUS_REJECTED, trend_radar.STATUS_USED],
+                format_func=lambda s: tr("All") if s == "ALL" else s,
+                horizontal=True,
+                key="trend_radar_status_filter",
+            )
+        with col_f2:
+            only_qualified = st.checkbox(
+                "Apenas Relevância ≥ 60",
+                value=True,
+                key="trend_radar_only_qualified_cb",
+                help="Prioriza recomendações de alta qualidade aderentes ao nicho",
+            )
+
+        display_items = [
+            it for it in radar_items
+            if (status_filter == "ALL" or it.get("status") == status_filter)
+            and (not only_qualified or it.get("relevance_score", 0) >= 60.0)
+        ]
+
+        if not display_items and only_qualified:
+            st.info("Nenhum tema com relevância ≥ 60 no momento. Desmarque o filtro 'Apenas Relevância ≥ 60' para visualizar todas as tendências brutas.")
+            return
+
+        st.caption(f"{len(display_items)} oportunidades listadas (Heurística interna: Opportunity Score não é garantia viral)")
+
+        for it in display_items:
+            item_id = it.get("id")
+            title = it.get("title", "")
+            source = it.get("source", "")
+            source_url = it.get("source_url")
+            trend_sc = it.get("trend_score", 0)
+            nov_sc = it.get("novelty_score", 0)
+            rel_sc = it.get("relevance_score", 0)
+            opp_sc = it.get("opportunity_score", 0)
+            conf = it.get("source_confidence", "LOW")
+            verif = it.get("verification", "single_source")
+            verif_label = tr("Multi Source") if verif == "multi_source" else tr("Single Source")
+            status = it.get("status", "NEW")
+
+            status_colors = {
+                "NEW": "🔵",
+                "REVIEW": "🟡",
+                "APPROVED": "🟢",
+                "REJECTED": "🔴",
+                "USED": "⚪",
+            }
+            badge = status_colors.get(status, "⚪")
+
+            with st.container():
+                row_cols = st.columns([2.5, 1.0, 1.5, 1.2, 1.2, 1.6], vertical_alignment="center")
+                with row_cols[0]:
+                    if source_url:
+                        st.markdown(f"**[{title}]({source_url})**")
+                    else:
+                        st.markdown(f"**{title}**")
+                    st.caption(f"{source.upper()} • {verif_label} • Conf: {conf}")
+
+                with row_cols[1]:
+                    st.metric("Opportunity", opp_sc)
+
+                with row_cols[2]:
+                    st.write(f"📈 Trend: **{trend_sc}**")
+                    st.write(f"✨ Nov: **{nov_sc}** | 🎯 Rel: **{rel_sc}**")
+
+                with row_cols[3]:
+                    st.write(f"{badge} **{status}**")
+
+                with row_cols[4]:
+                    if status != trend_radar.STATUS_APPROVED and status != trend_radar.STATUS_USED:
+                        if st.button(tr("Approve"), key=f"tr_app_{item_id}", use_container_width=True):
+                            trend_radar.update_trend_item_status(item_id, trend_radar.STATUS_APPROVED)
+                            st.rerun()
+                    elif status == trend_radar.STATUS_APPROVED:
+                        st.caption("Aprovado")
+
+                with row_cols[5]:
+                    if status != trend_radar.STATUS_REJECTED and status != trend_radar.STATUS_USED:
+                        if st.button(tr("Reject"), key=f"tr_rej_{item_id}", use_container_width=True):
+                            trend_radar.update_trend_item_status(item_id, trend_radar.STATUS_REJECTED)
+                            st.rerun()
+                    elif status == trend_radar.STATUS_REJECTED:
+                        st.caption("Rejeitado")
+                st.divider()
+
 
 def _render_autopilot_section(
     params,
@@ -8993,6 +9173,8 @@ def _render_generation_controls(
                     )
                 )
             st.rerun(scope="app")
+
+    _render_trend_radar_section()
 
     _render_autopilot_section(
         params=params,

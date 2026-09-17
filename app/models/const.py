@@ -67,3 +67,40 @@ NARRATIVE_STRUCTURES = [
 SAFETY_STATUS_PASS = "PASS"
 SAFETY_STATUS_REVIEW = "REVIEW"
 SAFETY_STATUS_BLOCK = "BLOCK"
+
+# Growth Modes (V3.1 Account Warm-Up / Ramp-Up Control)
+GROWTH_MODE_WARMUP = "warmup"
+GROWTH_MODE_CONSERVATIVE = "conservative"
+GROWTH_MODE_NORMAL = "normal"
+GROWTH_MODE_SCALE = "scale"
+DEFAULT_GROWTH_MODE = GROWTH_MODE_WARMUP
+
+GROWTH_MODES = [
+    GROWTH_MODE_WARMUP,
+    GROWTH_MODE_CONSERVATIVE,
+    GROWTH_MODE_NORMAL,
+    GROWTH_MODE_SCALE,
+]
+
+GROWTH_MODE_LIMITS = {
+    GROWTH_MODE_WARMUP: {
+        "youtube": 1,
+        "tiktok": 1,
+        "min_interval_hours": 8,
+    },
+    GROWTH_MODE_CONSERVATIVE: {
+        "youtube": 2,
+        "tiktok": 2,
+        "min_interval_hours": 6,
+    },
+    GROWTH_MODE_NORMAL: {
+        "youtube": 3,
+        "tiktok": 3,
+        "min_interval_hours": 4,
+    },
+    GROWTH_MODE_SCALE: {
+        "youtube": None,
+        "tiktok": None,
+        "min_interval_hours": 0,
+    },
+}

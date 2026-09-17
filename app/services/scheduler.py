@@ -174,9 +174,158 @@ def set_setting(key: str, value: Any, db_path: Optional[str] = None) -> None:
         )
 
 
+def get_growth_mode(platform: Optional[str] = None, db_path: Optional[str] = None) -> str:
+    """Retorna o modo de crescimento configurado (global ou por plataforma).
+
+    Default para conta nova: WARMUP ('warmup').
+    """
+    if platform:
+        clean_plat = platform.lower().strip()
+        plat_val = get_setting(f"growth_mode_{clean_plat}", None, db_path)
+        if plat_val and str(plat_val).lower().strip() in const.GROWTH_MODES:
+            return str(plat_val).lower().strip()
+
+    val = get_setting("growth_mode", const.DEFAULT_GROWTH_MODE, db_path)
+    if val and str(val).lower().strip() in const.GROWTH_MODES:
+        return str(val).lower().strip()
+    return const.DEFAULT_GROWTH_MODE
+
+
+def set_growth_mode(mode: str, platform: Optional[str] = None, db_path: Optional[str] = None) -> None:
+    """Define e persiste o modo de crescimento (global ou por plataforma)."""
+    clean_mode = str(mode).lower().strip()
+    if clean_mode not in const.GROWTH_MODES:
+        raise ValueError(f"Modo de crescimento inválido: '{mode}'. Opções: {const.GROWTH_MODES}")
+
+    if platform:
+        clean_plat = platform.lower().strip()
+        set_setting(f"growth_mode_{clean_plat}", clean_mode, db_path)
+    else:
+        set_setting("growth_mode", clean_mode, db_path)
+
+    try:
+        replan_future_schedule_for_growth_mode(db_path=db_path)
+    except Exception as exc:
+        logger.warning(f"[SCHEDULER] Falha ao replanejar após alterar growth_mode: {exc}")
+
+
+def get_growth_mode_info(platform: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna informações operacionais completas do modo de crescimento para a plataforma."""
+    mode = get_growth_mode(platform, db_path)
+    clean_plat = platform.lower().strip()
+    limits_map = const.GROWTH_MODE_LIMITS.get(mode, const.GROWTH_MODE_LIMITS[const.DEFAULT_GROWTH_MODE])
+    return {
+        "platform": clean_plat,
+        "growth_mode": mode,
+        "max_posts_24h": limits_map.get(clean_plat),
+        "min_interval_hours": limits_map.get("min_interval_hours", 0),
+    }
+
+
+def get_effective_limit(
+    platform: str,
+    technical_limit: int,
+    mode: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> int:
+    """Calcula o limite efetivo de publicações para a plataforma.
+
+    Regra Central: O menor limite sempre prevalece entre o teto técnico
+    do Scheduler e o limite operacional do modo de crescimento ativo.
+    """
+    if mode is None:
+        mode = get_growth_mode(platform, db_path)
+    else:
+        mode = str(mode).lower().strip()
+        if mode not in const.GROWTH_MODES:
+            mode = const.DEFAULT_GROWTH_MODE
+
+    clean_plat = platform.lower().strip()
+    limits_map = const.GROWTH_MODE_LIMITS.get(mode, {})
+    mode_limit = limits_map.get(clean_plat)
+    if mode_limit is None:
+        return technical_limit
+    return min(technical_limit, mode_limit)
+
+
+def replan_future_schedule_for_growth_mode(
+    db_path: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> int:
+    """Replaneja com segurança os posts futuros agendados para respeitar o modo atual.
+
+    Regra: Posts futuros que excederem o limite ou violarem o intervalo mínimo
+    NUNCA são apagados nem marcados como failed; são reorganizados cronologicamente.
+    """
+    init_db(db_path)
+    current_time = _normalize_utc(now)
+    total_adjusted = 0
+
+    for platform in ("tiktok", "youtube"):
+        rate_info = get_platform_rate_limits(platform, db_path, now=current_time)
+        min_interval_seconds = rate_info.get("min_interval_hours", 0) * 3600
+        effective_limit = rate_info.get("effective_limit", rate_info.get("limit", 1))
+        uniform_interval_seconds = max(60, int(86400 / max(1, effective_limit)))
+        step_seconds = max(min_interval_seconds, uniform_interval_seconds)
+
+        # Última publicação real
+        with get_connection(db_path) as conn:
+            last_pub_row = conn.execute(
+                """
+                SELECT MAX(published_at) AS max_pub FROM publication_events
+                WHERE platform = ? AND status = 'success';
+                """,
+                (platform,),
+            ).fetchone()
+
+        last_ref_dt = current_time
+        if last_pub_row and last_pub_row["max_pub"]:
+            try:
+                p_dt = _from_iso(last_pub_row["max_pub"])
+                last_ref_dt = max(last_ref_dt, p_dt + timedelta(seconds=min_interval_seconds))
+            except Exception:
+                pass
+
+        # Posts futuros em ordem cronológica
+        with get_connection(db_path) as conn:
+            posts = conn.execute(
+                """
+                SELECT id, scheduled_at FROM scheduled_posts
+                WHERE platform = ? AND status IN ('planned', 'ready')
+                ORDER BY scheduled_at ASC;
+                """,
+                (platform,),
+            ).fetchall()
+
+        if not posts:
+            continue
+
+        next_slot = last_ref_dt
+        for p in posts:
+            post_id = p["id"]
+            current_sched = _from_iso(p["scheduled_at"])
+            target_slot = max(current_sched, next_slot)
+            if target_slot != current_sched:
+                iso_target = _to_iso(target_slot)
+                with get_connection(db_path) as conn:
+                    conn.execute(
+                        """
+                        UPDATE scheduled_posts
+                        SET scheduled_at = ?, next_attempt_at = ?
+                        WHERE id = ?;
+                        """,
+                        (iso_target, iso_target, post_id),
+                    )
+                total_adjusted += 1
+            next_slot = target_slot + timedelta(seconds=step_seconds)
+
+    return total_adjusted
+
+
 def get_all_settings(db_path: Optional[str] = None) -> Dict[str, Any]:
     """Retorna todas as configurações com seus devidos tipos e defaults."""
     init_db(db_path)
+    growth_mode = get_growth_mode(db_path=db_path)
     return {
         "tiktok_enabled": get_setting("tiktok_enabled", "true", db_path).lower() == "true",
         "tiktok_limit_24h": int(get_setting("tiktok_limit_24h", str(DEFAULT_TIKTOK_LIMIT), db_path)),
@@ -186,14 +335,22 @@ def get_all_settings(db_path: Optional[str] = None) -> Dict[str, Any]:
         "scheduler_enabled": get_setting("scheduler_enabled", "false", db_path).lower() == "true",
         "auto_publish_enabled": get_setting("auto_publish_enabled", "false", db_path).lower() == "true",
         "dry_run": get_setting("dry_run", "true", db_path).lower() == "true",
+        "growth_mode": growth_mode,
+        "growth_mode_youtube": get_growth_mode("youtube", db_path=db_path),
+        "growth_mode_tiktok": get_growth_mode("tiktok", db_path=db_path),
     }
 
 
 def save_settings(settings: Dict[str, Any], db_path: Optional[str] = None) -> None:
     """Atualiza múltiplas configurações."""
     init_db(db_path)
+    mode_changed = False
     with get_connection(db_path) as conn:
         for k, v in settings.items():
+            if k == "growth_mode":
+                current_mode = get_growth_mode(db_path=db_path)
+                if current_mode != str(v).lower().strip():
+                    mode_changed = True
             conn.execute(
                 """
                 INSERT INTO autopilot_settings (key, value) VALUES (?, ?)
@@ -201,6 +358,11 @@ def save_settings(settings: Dict[str, Any], db_path: Optional[str] = None) -> No
                 """,
                 (k, str(v)),
             )
+    if mode_changed:
+        try:
+            replan_future_schedule_for_growth_mode(db_path=db_path)
+        except Exception as exc:
+            logger.warning(f"Erro ao replanejar agenda após alteração de growth_mode: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -415,40 +577,51 @@ def get_platform_rate_limits(
     platform: str,
     db_path: Optional[str] = None,
     now: Optional[datetime] = None,
+    current_time: Optional[datetime] = None,
+    growth_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calcula a janela móvel de 24 horas para uma plataforma específica.
     
-    Regra:
+    Regra V3.1:
+    - O menor limite sempre prevalece entre o teto técnico e o modo de crescimento operacional.
     - posts_publicados_ultimas_24h: publicações com status='success' nos últimos 24h (published_at >= now - 24h e <= now)
     - posts_agendados_proximas_24h: posts agendados ativos (status IN ('planned', 'ready')) agendados entre now e now + 24h
     - usados_janela: posts_publicados_ultimas_24h + posts_agendados_proximas_24h
-    - disponiveis: max(0, limite_configurado - usados_janela)
+    - disponiveis: max(0, limite_efetivo - usados_janela)
     """
     init_db(db_path)
-    current_time = _normalize_utc(now)
-    window_past = current_time - timedelta(hours=24)
-    window_future = current_time + timedelta(hours=24)
+    ref_time = now if now is not None else current_time
+    calc_now = _normalize_utc(ref_time)
+    window_past = calc_now - timedelta(hours=24)
+    window_future = calc_now + timedelta(hours=24)
 
     iso_past = _to_iso(window_past)
-    iso_now = _to_iso(current_time)
+    iso_now = _to_iso(calc_now)
     iso_future = _to_iso(window_future)
-
 
     settings = get_all_settings(db_path)
     clean_platform = platform.lower().strip()
 
     if clean_platform == "tiktok":
-        limit = settings["tiktok_limit_24h"]
+        technical_limit = settings["tiktok_limit_24h"]
         enabled = settings["tiktok_enabled"]
     elif clean_platform == "youtube":
-        limit = settings["youtube_limit_24h"]
+        technical_limit = settings["youtube_limit_24h"]
         enabled = settings["youtube_enabled"]
     else:
-        limit = 10
+        technical_limit = 10
         enabled = True
 
+    active_growth_mode = growth_mode or get_growth_mode(clean_platform, db_path)
+    effective_limit = get_effective_limit(clean_platform, technical_limit, mode=active_growth_mode, db_path=db_path)
+    mode_limits = const.GROWTH_MODE_LIMITS.get(active_growth_mode, {})
+    min_interval_hours = mode_limits.get("min_interval_hours", 0)
+
+    # O menor limite sempre prevalece como limite operacional de agendamento
+    limit = effective_limit
+
     with get_connection(db_path) as conn:
-        # Publicações das últimas 24h
+        # Publicações das últimas 24h (apenas status='success', Dry Run não gera publication_events)
         pub_row = conn.execute(
             """
             SELECT COUNT(*) AS cnt FROM publication_events
@@ -477,11 +650,16 @@ def get_platform_rate_limits(
         "platform": clean_platform,
         "enabled": enabled,
         "limit": limit,
+        "technical_limit": technical_limit,
+        "effective_limit": effective_limit,
+        "growth_mode": active_growth_mode,
+        "min_interval_hours": min_interval_hours,
         "used_past_24h": used_past,
         "scheduled_24h": scheduled_count,
         "total_used": total_used,
         "available_slots": available_slots,
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +735,7 @@ def plan_schedule(
     tasks: List[Dict[str, Any]],
     now: Optional[datetime] = None,
     db_path: Optional[str] = None,
+    growth_mode: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Gera o planejamento da agenda para vídeos concluídos ainda não agendados.
     
@@ -624,9 +803,9 @@ def plan_schedule(
 
     created_schedule: List[Dict[str, Any]] = []
 
-    # 2. Processa por plataforma para manter cadência individual uniforme
+    # 2. Processa por plataforma para manter cadência individual uniforme e anti-burst
     for platform in ("tiktok", "youtube"):
-        rate_info = get_platform_rate_limits(platform, db_path, current_time)
+        rate_info = get_platform_rate_limits(platform, db_path, now=current_time, growth_mode=growth_mode)
         if not rate_info["enabled"]:
             continue
 
@@ -635,27 +814,47 @@ def plan_schedule(
             continue
 
         limit_24h = rate_info["limit"]
-        # Intervalo uniforme: 24h (86400s) / limite diário
-        interval_seconds = max(60, int(86400 / max(1, limit_24h)))
+        min_interval_seconds = rate_info.get("min_interval_hours", 0) * 3600
+        uniform_interval_seconds = max(60, int(86400 / max(1, limit_24h)))
+        # Passo anti-burst: garante scheduled_at(next) >= last_post_or_planned + min_interval
+        step_seconds = max(min_interval_seconds, uniform_interval_seconds)
 
-        # Encontra o último horário agendado existente para essa plataforma
+        # Encontra a última publicação real e o último agendamento existente para essa plataforma
         with get_connection(db_path) as conn:
-            last_row = conn.execute(
+            last_sched_row = conn.execute(
                 """
                 SELECT MAX(scheduled_at) AS max_time FROM scheduled_posts
                 WHERE platform = ? AND status IN ('planned', 'ready');
                 """,
                 (platform,),
             ).fetchone()
+            last_pub_row = conn.execute(
+                """
+                SELECT MAX(published_at) AS max_pub FROM publication_events
+                WHERE platform = ? AND status = 'success';
+                """,
+                (platform,),
+            ).fetchone()
 
-        if last_row and last_row["max_time"]:
+        candidate_base = current_time
+        if last_pub_row and last_pub_row["max_pub"]:
             try:
-                last_dt = _from_iso(last_row["max_time"])
-                base_slot = max(current_time, last_dt + timedelta(seconds=interval_seconds))
+                p_dt = _from_iso(last_pub_row["max_pub"])
+                candidate_base = max(candidate_base, p_dt + timedelta(seconds=min_interval_seconds))
             except Exception:
-                base_slot = current_time + timedelta(seconds=interval_seconds)
+                pass
+
+        if last_sched_row and last_sched_row["max_time"]:
+            try:
+                s_dt = _from_iso(last_sched_row["max_time"])
+                candidate_base = max(candidate_base, s_dt + timedelta(seconds=step_seconds))
+            except Exception:
+                candidate_base = max(candidate_base, current_time + timedelta(seconds=step_seconds))
         else:
-            base_slot = current_time + timedelta(seconds=interval_seconds)
+            if candidate_base == current_time:
+                candidate_base = current_time + timedelta(seconds=min(300, step_seconds))
+
+        base_slot = candidate_base
 
         # Enfileira slots para as tasks elegíveis que possuem esta plataforma
         current_slot = base_slot
@@ -700,7 +899,7 @@ def plan_schedule(
             }
             created_schedule.append(record)
             available_slots -= 1
-            current_slot += timedelta(seconds=interval_seconds)
+            current_slot += timedelta(seconds=step_seconds)
 
     return created_schedule
 
@@ -997,8 +1196,8 @@ def run_scheduler_cycle(
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado por idempotência (já publicado)", db_path=db_path)
         return {"status": "skipped", "reason": "already_published", "task_id": task_id, "platform": platform}
 
-    # 6. Revalidação da Janela Móvel de 24 horas
-    rate_info = get_platform_rate_limits(platform, db_path, current_time)
+    # 6. Revalidação da Janela Móvel de 24 horas (Técnica + Growth Mode)
+    rate_info = get_platform_rate_limits(platform, db_path, now=current_time)
     if rate_info["available_slots"] <= 0:
         window_past = current_time - timedelta(hours=24)
         with get_connection(db_path) as conn:
@@ -1033,12 +1232,12 @@ def run_scheduler_cycle(
             )
         _set_executor_status(
             state="limit_blocked",
-            message=f"Limite de {platform} atingido ({rate_info['total_used']}/{rate_info['limit']})",
-            last_cycle_summary=f"Post {post_id} bloqueado por limite de {platform}",
+            message=f"Limite de {platform} atingido ({rate_info['total_used']}/{rate_info['limit']} no modo {rate_info.get('growth_mode')})",
+            last_cycle_summary=f"Post {post_id} bloqueado por limite de {platform} ({rate_info.get('growth_mode')})",
             db_path=db_path,
         )
         logger.warning(
-            f"[SCHEDULER][LIMIT] Limite da plataforma {platform} atingido ({rate_info['total_used']}/{rate_info['limit']}). "
+            f"[SCHEDULER][LIMIT] Limite da plataforma {platform} atingido ({rate_info['total_used']}/{rate_info['limit']} - {rate_info.get('growth_mode')}). "
             f"Post {post_id} postergado com segurança para {_to_iso(next_eligible)}"
         )
         return {
@@ -1047,6 +1246,52 @@ def run_scheduler_cycle(
             "platform": platform,
             "next_eligible": _to_iso(next_eligible),
         }
+
+    # 6.1 Revalidação de Intervalo Mínimo (Growth Mode Anti-Burst)
+    min_interval_hours = rate_info.get("min_interval_hours", 0)
+    if min_interval_hours > 0:
+        with get_connection(db_path) as conn:
+            last_pub = conn.execute(
+                """
+                SELECT MAX(published_at) AS last_pub FROM publication_events
+                WHERE platform = ? AND status = 'success';
+                """,
+                (platform,),
+            ).fetchone()
+        if last_pub and last_pub["last_pub"]:
+            try:
+                last_pub_dt = _from_iso(last_pub["last_pub"])
+                min_allowed = last_pub_dt + timedelta(hours=min_interval_hours)
+                if current_time < min_allowed:
+                    next_eligible = min_allowed
+                    with get_connection(db_path) as conn:
+                        conn.execute(
+                            """
+                            UPDATE scheduled_posts
+                            SET scheduled_at = ?, next_attempt_at = ?, status = 'ready'
+                            WHERE id = ?;
+                            """,
+                            (_to_iso(next_eligible), _to_iso(next_eligible), post_id),
+                        )
+                    _set_executor_status(
+                        state="interval_blocked",
+                        message=f"Intervalo mínimo de {platform} ({min_interval_hours}h) não atingido no modo {rate_info.get('growth_mode')}",
+                        last_cycle_summary=f"Post {post_id} adiado: intervalo mínimo de {platform} não atingido",
+                        db_path=db_path,
+                    )
+                    logger.warning(
+                        f"[SCHEDULER][GROWTH_MODE] Intervalo mínimo de {min_interval_hours}h para {platform} ({rate_info.get('growth_mode')}) não atingido. "
+                        f"Última publicação foi em {_to_iso(last_pub_dt)}. Post {post_id} reagendado com segurança para {_to_iso(next_eligible)}"
+                    )
+                    return {
+                        "status": "postponed",
+                        "reason": "min_interval_not_met",
+                        "platform": platform,
+                        "next_eligible": _to_iso(next_eligible),
+                    }
+            except Exception as exc:
+                logger.warning(f"Erro ao verificar intervalo mínimo para {platform}: {exc}")
+
 
     # 7. Modo Simulação (DRY RUN)
     if dry_run:

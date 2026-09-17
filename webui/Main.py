@@ -7903,27 +7903,67 @@ def _render_publication_schedule():
         if executor_info.get("last_cycle_summary"):
             st.caption(f"**{tr('Last Cycle')}:** {executor_info['last_cycle_summary']}")
 
+    # Controle de Modo de Crescimento (V3.1 Warm-Up / Ramp-Up)
+    st.markdown(f"#### 📈 {tr('Growth Mode')}")
+    growth_mode_options = [
+        const.GROWTH_MODE_WARMUP,
+        const.GROWTH_MODE_CONSERVATIVE,
+        const.GROWTH_MODE_NORMAL,
+        const.GROWTH_MODE_SCALE,
+    ]
+    growth_mode_labels = {
+        const.GROWTH_MODE_WARMUP: tr("Aquecimento"),
+        const.GROWTH_MODE_CONSERVATIVE: tr("Conservador"),
+        const.GROWTH_MODE_NORMAL: tr("Normal"),
+        const.GROWTH_MODE_SCALE: tr("Escala"),
+    }
+    current_growth_mode = current_settings.get("growth_mode", const.DEFAULT_GROWTH_MODE)
+    if current_growth_mode not in growth_mode_options:
+        current_growth_mode = const.DEFAULT_GROWTH_MODE
+
+    selected_growth_mode = st.selectbox(
+        tr("Modo de crescimento"),
+        options=growth_mode_options,
+        index=growth_mode_options.index(current_growth_mode),
+        format_func=lambda m: growth_mode_labels.get(m, m),
+        key="growth_mode_selector_sb",
+        help=tr("Controle operacional para aquecimento e crescimento seguro das contas"),
+    )
+    if selected_growth_mode != current_growth_mode:
+        scheduler.set_growth_mode(selected_growth_mode)
+        st.rerun(scope="fragment")
+
+    if selected_growth_mode == const.GROWTH_MODE_WARMUP:
+        st.info(f"🌱 {tr('Modo Aquecimento ativo: volume reduzido para crescimento gradual da conta.')}")
+
     # Exibir limites e uso na janela móvel de 24h
     tk_limits = scheduler.get_platform_rate_limits("tiktok")
     yt_limits = scheduler.get_platform_rate_limits("youtube")
 
     rate_col1, rate_col2 = st.columns(2)
     with rate_col1:
+        tk_mode_label = growth_mode_labels.get(tk_limits.get("growth_mode"), tk_limits.get("growth_mode"))
         st.markdown(
             f"**🎵 TikTok**\n\n"
-            f"- {tr('Limit')}: **{tk_limits['limit']}/24h**\n"
+            f"- {tr('Modo')}: **{tk_mode_label}**\n"
+            f"- {tr('Limite efetivo')}: **{tk_limits['limit']}/24h**\n"
+            f"- {tr('Intervalo mínimo')}: **{tk_limits.get('min_interval_hours', 0)}h**\n"
             f"- {tr('Used Last 24h')}: **{tk_limits['used_past_24h']}**\n"
             f"- {tr('Scheduled')}: **{tk_limits['scheduled_24h']}**\n"
             f"- {tr('Available')}: **{tk_limits['available_slots']}**"
         )
     with rate_col2:
+        yt_mode_label = growth_mode_labels.get(yt_limits.get("growth_mode"), yt_limits.get("growth_mode"))
         st.markdown(
             f"**▶️ YouTube**\n\n"
-            f"- {tr('Limit')}: **{yt_limits['limit']}/24h**\n"
+            f"- {tr('Modo')}: **{yt_mode_label}**\n"
+            f"- {tr('Limite efetivo')}: **{yt_limits['limit']}/24h**\n"
+            f"- {tr('Intervalo mínimo')}: **{yt_limits.get('min_interval_hours', 0)}h**\n"
             f"- {tr('Used Last 24h')}: **{yt_limits['used_past_24h']}**\n"
             f"- {tr('Scheduled')}: **{yt_limits['scheduled_24h']}**\n"
             f"- {tr('Available')}: **{yt_limits['available_slots']}**"
         )
+
 
     all_summaries = _collect_task_summaries(limit=1000)
 

@@ -623,6 +623,19 @@
     "Worker Active": "运行中",
     "Worker Stopped": "已停止",
     "Last Tick": "最后心跳",
-    "Last Cycle": "最后周期"
+    "Last Cycle": "最后周期",
+    "Content Preset": "内容预设",
+    "Monetization Preset": "变现预设",
+    "Preset voltado à monetização": "面向变现的预设",
+    "Safety checks": "安全检查",
+    "Risco de repetição": "重复风险",
+    "Compatibilidade de duração": "时长匹配",
+    "Narrative Structure": "叙事结构",
+    "Auto (Alternar)": "自动 (交替)",
+    "Mistério Investigativo": "悬疑调查",
+    "Explicador": "解说阐释",
+    "Fato + Contexto": "事实与背景",
+    "Mito vs Realidade": "流言揭秘",
+    "História Curta": "短篇故事"
   }
 }

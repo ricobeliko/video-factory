@@ -138,6 +138,12 @@ def init_db(db_path: Optional[str] = None) -> None:
 
         _run_migrations(conn)
 
+    try:
+        from app.services import safety_gate
+        safety_gate.init_safety_db(db_path)
+    except Exception as exc:
+        logger.warning(f"[SCHEDULER] Falha ao inicializar safety_gate db: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Configurações do Autopilot
@@ -594,6 +600,21 @@ def plan_schedule(
         # Obtém destinos planejados (do state da task ou do SQLite persistido)
         platforms = t.get("planned_platforms") or persisted_platforms_map.get(task_id, [])
         if not platforms:
+            continue
+
+        # Gate de Monetização: tarefas com safety_status BLOCK ou REVIEW não entram automaticamente no Scheduler
+        safety_status = t.get("safety_status")
+        if not safety_status:
+            try:
+                from app.services import safety_gate
+                safety_rec = safety_gate.get_safety_assessment(task_id, db_path=db_path)
+                if safety_rec:
+                    safety_status = safety_rec.get("safety_status")
+            except Exception:
+                safety_status = None
+
+        if safety_status and str(safety_status).upper() in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={safety_status}")
             continue
 
         eligible_tasks.append((task_id, t, [p.lower().strip() for p in platforms]))

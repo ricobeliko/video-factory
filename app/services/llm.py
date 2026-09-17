@@ -697,6 +697,8 @@ def build_script_prompt(
     paragraph_number: int = 1,
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
+    monetization_preset: str = "",
+    narrative_structure: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -726,6 +728,26 @@ def build_script_prompt(
             prompt += f"\n- language: {normalized_language} (Escreva em português brasileiro (pt-BR), com linguagem natural, fluida e adequada ao público brasileiro. Evite construções típicas do português europeu.)"
         else:
             prompt += f"\n- language: {normalized_language}"
+
+    if monetization_preset or narrative_structure:
+        from app.services import safety_gate
+
+        preset_spec = safety_gate.get_preset_spec(monetization_preset) if monetization_preset else None
+        struct_spec = safety_gate.get_structure_spec(narrative_structure) if narrative_structure else None
+        if preset_spec or struct_spec:
+            prompt += "\n\n# Monetization & Narrative Guidelines:"
+            if preset_spec:
+                prompt += f"\n- {preset_spec['prompt_pt']}"
+            if struct_spec:
+                prompt += f"\n- {struct_spec['prompt_pt']}"
+            prompt += """
+- Estilo: Português brasileiro natural, falável, ritmo envolvente, sem tom robótico de artigo lido.
+- Abertura: NUNCA comece com clichês como 'Você sabia que...', 'Hoje vamos falar sobre...' ou 'Neste vídeo...'. Crie uma abertura instigante e original.
+- Análise/Contexto: Não faça apenas resumo superficial; adicione contexto, explicação e interpretação própria.
+- Fatos e Números: NÃO invente fatos, números ou fontes falsas; mantenha rigor factual.
+- Fechamento: Varie o fechamento ou termine com reflexão/impacto (CTA não é obrigatório em todos os vídeos).
+""".rstrip()
+
     if video_script_prompt:
         prompt += f"""
 
@@ -743,6 +765,8 @@ def generate_script(
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
     app_config=None,
+    monetization_preset: str = "",
+    narrative_structure: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -757,6 +781,8 @@ def generate_script(
         paragraph_number=paragraph_number,
         video_script_prompt=video_script_prompt,
         custom_system_prompt=custom_system_prompt,
+        monetization_preset=monetization_preset,
+        narrative_structure=narrative_structure,
     )
     final_script = ""
     logger.info(

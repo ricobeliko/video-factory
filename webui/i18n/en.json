@@ -623,6 +623,19 @@
     "Worker Active": "Active",
     "Worker Stopped": "Stopped",
     "Last Tick": "Last tick",
-    "Last Cycle": "Last cycle"
+    "Last Cycle": "Last cycle",
+    "Content Preset": "Content Preset",
+    "Monetization Preset": "Monetization Preset",
+    "Preset voltado à monetização": "Monetization-focused preset",
+    "Safety checks": "Safety checks",
+    "Risco de repetição": "Repetition risk",
+    "Compatibilidade de duração": "Duration fit",
+    "Narrative Structure": "Narrative Structure",
+    "Auto (Alternar)": "Auto (alternate)",
+    "Mistério Investigativo": "Investigative Mystery",
+    "Explicador": "Explainer",
+    "Fato + Contexto": "Fact + Context",
+    "Mito vs Realidade": "Myth vs Reality",
+    "História Curta": "Short Story"
   }
 }

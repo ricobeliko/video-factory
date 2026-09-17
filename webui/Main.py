@@ -912,14 +912,17 @@ def _prepare_generation_task():
     _add_active_generation_task(task_id, subject=subject)
 
 
-def _has_active_generation() -> bool:
+def _has_active_generation(exclude_task_id: str | None = None) -> bool:
     """Check if there is any active video generation currently running or queued."""
     if webui_task.has_active_tasks():
         return True
-    if st.session_state.get("pending_generation_task_id"):
+    pending_id = st.session_state.get("pending_generation_task_id")
+    if pending_id and pending_id != exclude_task_id:
         return True
     active_tasks = _active_generation_tasks()
     for task_id in list(active_tasks.keys()):
+        if exclude_task_id and task_id == exclude_task_id:
+            continue
         try:
             task = sm.state.get_task(task_id)
             if task:
@@ -1334,6 +1337,29 @@ def _render_task_table(filtered_tasks, key_prefix):
                     if p_labels:
                         subject_text += f" [{', '.join(p_labels)}]"
                 row_cols[2].write(subject_text)
+
+                try:
+                    from app.services import safety_gate
+                    safety_info = safety_gate.get_safety_assessment(task_id)
+                    if safety_info:
+                        p_spec = safety_gate.get_preset_spec(safety_info.get("preset"))
+                        s_spec = safety_gate.get_structure_spec(safety_info.get("narrative_structure"))
+                        p_name = p_spec["name"]
+                        s_name = s_spec["name"] if s_spec else "—"
+                        d_val = safety_info.get("actual_duration") or safety_info.get("estimated_duration")
+                        d_str = f"{int(round(d_val))}s" if d_val else "—"
+                        s_stat = safety_info.get("safety_status") or const.SAFETY_STATUS_PASS
+                        reasons = safety_info.get("safety_reasons") or []
+
+                        icon = "🟢" if s_stat == const.SAFETY_STATUS_PASS else ("🟡" if s_stat == const.SAFETY_STATUS_REVIEW else "🔴")
+                        badge_line = f"**Preset:** {p_name} | **Estrutura:** {s_name} | **Duração:** {d_str} | **Safety:** {icon} `{s_stat}`"
+                        if reasons and s_stat in (const.SAFETY_STATUS_REVIEW, const.SAFETY_STATUS_BLOCK):
+                            motivo_text = "; ".join(reasons)
+                            badge_line += f"\n*Motivo:* {motivo_text}"
+                        row_cols[2].caption(badge_line)
+                except Exception:
+                    pass
+
                 row_cols[3].write(f"{task['progress']}%")
 
                 action_cols = row_cols[4].columns(
@@ -5140,6 +5166,46 @@ def _render_script_settings(panel, params):
             params.video_language = selected_language_code
             _set_runtime_config("ui", "video_language", params.video_language)
 
+            col_preset, col_struct = st.columns(2)
+            with col_preset:
+                preset_choices = [
+                    const.PRESET_CROSS_PLATFORM,
+                    const.PRESET_TIKTOK_REWARDS,
+                    const.PRESET_YOUTUBE_ORIGINAL,
+                ]
+                preset_labels = {
+                    const.PRESET_CROSS_PLATFORM: "YouTube + TikTok Monetization",
+                    const.PRESET_TIKTOK_REWARDS: "TikTok Rewards",
+                    const.PRESET_YOUTUBE_ORIGINAL: "YouTube Shorts Original",
+                }
+                params.monetization_preset = stable_selectbox(
+                    tr("Monetization Preset"),
+                    options=preset_choices,
+                    default_value=const.DEFAULT_MONETIZATION_PRESET,
+                    key="monetization_preset_select",
+                    format_func=lambda v: preset_labels.get(v, v),
+                    help=tr("Preset voltado à monetização"),
+                )
+            with col_struct:
+                struct_choices = ["auto"] + const.NARRATIVE_STRUCTURES
+                struct_labels = {
+                    "auto": tr("Auto (Alternar)"),
+                    const.STRUCTURE_MYSTERY: "Mistério Investigativo",
+                    const.STRUCTURE_EXPLAINER: "Explicador",
+                    const.STRUCTURE_FACT_CONTEXT: "Fato + Contexto",
+                    const.STRUCTURE_MYTH_REALITY: "Mito vs Realidade",
+                    const.STRUCTURE_SHORT_STORY: "História Curta",
+                }
+                chosen_struct = stable_selectbox(
+                    tr("Narrative Structure"),
+                    options=struct_choices,
+                    default_value="auto",
+                    key="narrative_structure_select",
+                    format_func=lambda v: struct_labels.get(v, v),
+                    help=tr("Variação de estrutura narrativa para retenção e originalidade"),
+                )
+                params.narrative_structure = None if chosen_struct == "auto" else chosen_struct
+
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。
             with st.container(key="advanced_settings_script"):
@@ -8079,11 +8145,32 @@ def _render_autopilot_section(
         st.divider()
 
         # 2. Configurações de Entrada
-        niche = st.text_input(
-            tr("Niche"),
-            placeholder=tr("Niche Placeholder"),
-            key="autopilot_niche_input",
-        )
+        col_niche, col_preset = st.columns([1.2, 1])
+        with col_niche:
+            niche = st.text_input(
+                tr("Niche"),
+                placeholder=tr("Niche Placeholder"),
+                key="autopilot_niche_input",
+            )
+        with col_preset:
+            autopilot_presets = [
+                const.PRESET_CROSS_PLATFORM,
+                const.PRESET_TIKTOK_REWARDS,
+                const.PRESET_YOUTUBE_ORIGINAL,
+            ]
+            autopilot_preset_labels = {
+                const.PRESET_CROSS_PLATFORM: "YouTube + TikTok Monetization",
+                const.PRESET_TIKTOK_REWARDS: "TikTok Rewards",
+                const.PRESET_YOUTUBE_ORIGINAL: "YouTube Shorts Original",
+            }
+            selected_preset = st.selectbox(
+                tr("Content Preset"),
+                options=autopilot_presets,
+                format_func=lambda p: autopilot_preset_labels.get(p, p),
+                index=0,
+                key="autopilot_content_preset_sb",
+                help=tr("Preset voltado à monetização"),
+            )
 
         col_count, col_tk, col_yt = st.columns([1, 1.2, 1.2])
         with col_count:
@@ -8278,12 +8365,29 @@ def _render_autopilot_section(
                     youtube_target=youtube_target,
                 )
 
+                from app.services import safety_gate
+
+                recent_safety = safety_gate.get_recent_safety_history(limit=5)
+                recent_structures = [
+                    h.get("narrative_structure")
+                    for h in recent_safety
+                    if h.get("narrative_structure")
+                ]
+                assigned_structures = autopilot.assign_batch_narrative_structures(
+                    len(selected_topics),
+                    recent_structures=recent_structures,
+                )
+
                 submitted_task_ids = []
                 for rank, (orig_i, topic) in enumerate(selected_topics):
                     task_id = str(uuid4())
                     item_params = params.model_copy(deep=True)
                     item_params.video_subject = topic
                     item_params.video_script = ""
+                    item_params.monetization_preset = selected_preset
+                    if rank < len(assigned_structures):
+                        item_params.narrative_structure = assigned_structures[rank]
+
                     _add_active_generation_task(task_id, subject=topic)
                     try:
                         webui_task.submit_generation(
@@ -8294,7 +8398,12 @@ def _render_autopilot_section(
                             loomloom_video_request=None,
                         )
                         assigned = final_plan[rank] if rank < len(final_plan) else []
-                        sm.state.update_task(task_id, planned_platforms=assigned)
+                        sm.state.update_task(
+                            task_id,
+                            planned_platforms=assigned,
+                            monetization_preset=selected_preset,
+                            narrative_structure=item_params.narrative_structure,
+                        )
                         scheduler.save_task_platforms(task_id, assigned)
                         submitted_task_ids.append(task_id)
                     except Exception as exc:
@@ -8387,7 +8496,8 @@ def _render_generation_controls(
     )
     render_onboarding_tour()
     if start_button:
-        if webui_task.has_active_generation_tasks() or _has_active_generation():
+        pending_task_id = st.session_state.get("pending_generation_task_id")
+        if webui_task.has_active_generation_tasks() or _has_active_generation(exclude_task_id=pending_task_id):
             st.warning(
                 tr(
                     "There is a generation in progress. Please wait for completion before starting another."
@@ -8395,7 +8505,7 @@ def _render_generation_controls(
             )
             st.stop()
         _save_runtime_config()
-        task_id = st.session_state.get("pending_generation_task_id") or str(uuid4())
+        task_id = pending_task_id or str(uuid4())
         _add_active_generation_task(
             task_id,
             subject=params.video_subject or params.video_script or task_id,
@@ -8711,10 +8821,22 @@ def _render_generation_controls(
                 st.session_state["loomloom_video_quote"] = None
                 st.session_state["loomloom_video_input_signature"] = ""
                 st.session_state["loomloom_video_client_request_id"] = ""
-        except Exception:
+        except Exception as exc:
+            if st.session_state.get("pending_generation_task_id") == task_id:
+                del st.session_state["pending_generation_task_id"]
             _remove_active_generation_task(task_id)
+            sm.state.update_task(
+                task_id,
+                state=const.TASK_STATE_FAILED,
+                progress=0,
+                failed_stage="webui_submission",
+                error=f"{type(exc).__name__}: {exc}",
+            )
             st.error(tr("Video Generation Failed"))
             st.stop()
+
+        if st.session_state.get("pending_generation_task_id") == task_id:
+            del st.session_state["pending_generation_task_id"]
 
         st.session_state["current_generation_task_id"] = task_id
         logger.info(f"WebUI generation task submitted: task_id={task_id}")
@@ -8779,12 +8901,27 @@ def _render_generation_controls(
             has_local_materials=has_local_materials,
         )
 
+        from app.services import safety_gate
+
+        recent_safety = safety_gate.get_recent_safety_history(limit=5)
+        recent_structures = [
+            h.get("narrative_structure")
+            for h in recent_safety
+            if h.get("narrative_structure")
+        ]
+        assigned_structures = autopilot.assign_batch_narrative_structures(
+            len(topics),
+            recent_structures=recent_structures,
+        )
+
         submitted_task_ids = []
-        for topic in topics:
+        for rank, topic in enumerate(topics):
             task_id = str(uuid4())
             item_params = params.model_copy(deep=True)
             item_params.video_subject = topic
             item_params.video_script = ""
+            if rank < len(assigned_structures):
+                item_params.narrative_structure = assigned_structures[rank]
             _add_active_generation_task(task_id, subject=topic)
             try:
                 webui_task.submit_generation(

@@ -254,3 +254,31 @@ def plan_distribution(
         plan.append(item_platforms)
 
     return plan
+
+
+def assign_batch_narrative_structures(
+    selected_count: int,
+    recent_structures: Optional[List[str]] = None,
+) -> List[str]:
+    """Distribui estruturas narrativas entre os itens do lote de forma variada.
+
+    Garante que itens consecutivos nunca usem a mesma estrutura e evita repetir
+    a última estrutura registrada no histórico.
+    """
+    if selected_count <= 0:
+        return []
+
+    from app.services import safety_gate
+
+    assigned: List[str] = []
+    current_history = list(recent_structures or [])
+
+    for i in range(selected_count):
+        struct = safety_gate.get_next_narrative_structure(
+            recent_structures=current_history,
+            current_index=i,
+        )
+        assigned.append(struct)
+        current_history = [struct] + current_history[:5]
+
+    return assigned

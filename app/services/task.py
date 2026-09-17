@@ -268,7 +268,7 @@ def _mark_task_failed(
 
     message = str(error or "unknown task error").strip()
     progress = int((existing_task or {}).get("progress", 0) or 0)
-    logger.error(f"task failed, task_id: {task_id}, stage: {stage}, error: {message}")
+    logger.error(f"[GEN][FAILED] task_id={task_id} stage={stage} error={message}")
     failure = {
         "task_id": task_id,
         "state": const.TASK_STATE_FAILED,
@@ -303,6 +303,8 @@ def generate_script(task_id, params):
             paragraph_number=params.paragraph_number,
             video_script_prompt=params.video_script_prompt,
             custom_system_prompt=params.custom_system_prompt,
+            monetization_preset=getattr(params, "monetization_preset", ""),
+            narrative_structure=getattr(params, "narrative_structure", ""),
         )
     else:
         logger.debug(f"video script: \n{video_script}")
@@ -1651,6 +1653,7 @@ def _run_pipeline(
     allow_server_file_input: bool = False,
 ):
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
+    logger.info(f"[GEN][START] task_id={task_id} preset={getattr(params, 'monetization_preset', None)} structure={getattr(params, 'narrative_structure', None)}")
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
 
     if (
@@ -1753,6 +1756,7 @@ def _run_pipeline(
         )
 
     # 1. Generate script
+    logger.info(f"[GEN][SCRIPT_START] task_id={task_id}")
     video_script = generate_script(task_id, params)
     if not video_script or "Error: " in video_script:
         error = (
@@ -1761,6 +1765,31 @@ def _run_pipeline(
             else "failed to generate video script"
         )
         return _mark_task_failed(task_id, "script", error)
+    logger.info(f"[GEN][SCRIPT_OK] task_id={task_id} script_length={len(video_script)}")
+
+    # Safety Gate V1: Avaliação pré-TTS (tópico, roteiro, anti-repetição, estimativa)
+    logger.info(f"[SAFETY][PRE_START] task_id={task_id}")
+    try:
+        from app.services import safety_gate
+        assessment = safety_gate.evaluate_script_safety(
+            task_id=task_id,
+            topic=params.video_subject,
+            script=video_script,
+            preset=getattr(params, "monetization_preset", None),
+            narrative_structure=getattr(params, "narrative_structure", None),
+        )
+        params.safety_status = assessment.get("safety_status")
+        params.safety_reasons = "; ".join(assessment.get("safety_reasons", []))
+        sm.state.update_task(
+            task_id,
+            safety_status=assessment.get("safety_status"),
+            safety_reasons=assessment.get("safety_reasons"),
+            monetization_preset=assessment.get("preset"),
+            narrative_structure=assessment.get("narrative_structure"),
+        )
+        logger.info(f"[SAFETY][PRE_RESULT] task_id={task_id} status={params.safety_status} reasons={params.safety_reasons}")
+    except Exception as exc:
+        logger.warning(f"[SafetyGate] Falha ao avaliar roteiro pré-TTS para {task_id}: {exc}")
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=10)
 
@@ -1782,6 +1811,7 @@ def _run_pipeline(
             )
 
     save_script_data(task_id, video_script, video_terms, params)
+    logger.info(f"[GEN][SCRIPT_SAVE_OK] task_id={task_id}")
 
     if stop_at == "terms":
         sm.state.update_task(
@@ -1792,6 +1822,7 @@ def _run_pipeline(
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=20)
 
     # 3. Generate audio
+    logger.info(f"[TTS][START] task_id={task_id}")
     audio_file, audio_duration, sub_maker = generate_audio(
         task_id,
         params,
@@ -1805,6 +1836,29 @@ def _run_pipeline(
             "audio",
             "failed to prepare narration audio",
         )
+    logger.info(f"[TTS][OK] task_id={task_id} duration={audio_duration:.2f}s")
+
+    # Safety Gate V1: Validação pós-TTS com duração real exata
+    try:
+        from app.services import safety_gate
+        dur_assessment = safety_gate.evaluate_duration_safety(
+            task_id=task_id,
+            actual_duration=audio_duration,
+            preset=getattr(params, "monetization_preset", None),
+        )
+        params.safety_status = dur_assessment.get("safety_status")
+        params.safety_reasons = "; ".join(dur_assessment.get("safety_reasons", []))
+        sm.state.update_task(
+            task_id,
+            safety_status=dur_assessment.get("safety_status"),
+            safety_reasons=dur_assessment.get("safety_reasons"),
+            audio_duration=audio_duration,
+        )
+        # Atualiza script.json com os parâmetros validados
+        save_script_data(task_id, video_script, video_terms, params)
+        logger.info(f"[SAFETY][POST_RESULT] task_id={task_id} status={params.safety_status} reasons={params.safety_reasons}")
+    except Exception as exc:
+        logger.warning(f"[SafetyGate] Falha ao avaliar duração pós-TTS para {task_id}: {exc}")
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=30)
 
@@ -1834,6 +1888,7 @@ def _run_pipeline(
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=40)
 
     # 5. Get video materials
+    logger.info(f"[MATERIAL][START] task_id={task_id}")
     downloaded_videos = get_video_materials(
         task_id,
         params,
@@ -1865,6 +1920,7 @@ def _run_pipeline(
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
 
     # 6. Generate final videos
+    logger.info(f"[RENDER][START] task_id={task_id}")
     final_video_paths, combined_video_paths, generation_warnings = (
         generate_final_videos(
             task_id,
@@ -1882,6 +1938,8 @@ def _run_pipeline(
             "video",
             "failed to generate final video",
         )
+
+    logger.info(f"[GEN][COMPLETE] task_id={task_id} final_videos={final_video_paths}")
 
     logger.success(
         f"task {task_id} finished, generated {len(final_video_paths)} videos."

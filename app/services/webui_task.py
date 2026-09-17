@@ -68,6 +68,8 @@ def _run_generation(
     """
     log_handler_id = None
     worker_thread_id = threading.get_ident()
+    from app.services import operator_console
+    operator_console.record_generation_heartbeat()
     sm.state.update_task(
         task_id,
         state=const.TASK_STATE_PROCESSING,
@@ -86,6 +88,7 @@ def _run_generation(
         # 完整任务仍使用原来的配置锁，防止另一个 WebUI 会话在生成中途修改
         # Provider、密钥等进程级配置，造成同一条视频前后使用不同设置。
         with config.runtime_config_lock():
+            operator_console.record_generation_heartbeat()
             return tm.start(
                 task_id=task_id,
                 params=params,
@@ -143,6 +146,11 @@ def submit_generation(
     浏览器刷新或 WebSocket 重连也不依赖旧页面内存中的占位符。
     """
     task_params = params.model_copy(deep=True)
+    from app.services import operator_console
+    if operator_console.is_factory_paused():
+        logger.warning(f"Rejeitando geração: fábrica pausada. task_id={task_id}")
+        raise ValueError("Fábrica pausada. A tarefa atual pode concluir; novas execuções estão bloqueadas.")
+
     # 预览载荷只包含不可变音频路径、参数快照和只读字幕时间轴。复制外层字典，
     # 避免页面后续 rerun 替换缓存字段时影响已经提交到后台队列的任务。
     voice_preview_snapshot = dict(voice_preview) if voice_preview else None
@@ -203,6 +211,18 @@ def has_active_generation_tasks() -> bool:
 
 
 has_active_tasks = has_active_generation_tasks
+
+
+def cancel_generation(task_id: str) -> bool:
+    """Solicita cancelamento seguro de uma tarefa de geração em andamento ou na fila."""
+    from app.services import operator_console
+    with _active_task_ids_lock:
+        if task_id in _active_task_ids:
+            # Se a tarefa ainda não começou a rodar (PENDING), remove dos ativos
+            task_info = sm.state.get_task(task_id)
+            if task_info and task_info.get("state") == const.TASK_STATE_PENDING:
+                _active_task_ids.remove(task_id)
+    return operator_console.request_task_cancel(task_id)
 
 
 def parse_batch_topics(

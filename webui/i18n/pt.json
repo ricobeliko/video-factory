@@ -632,6 +632,23 @@
     "Suggested Duration": "Duração Sugerida",
     "Topic Cluster": "Cluster Temático",
     "Diversity Score": "Score de Diversidade",
-    "No ideas match strategy filter": "Nenhuma ideia atingiu os filtros de estratégia/mix selecionados."
+    "No ideas match strategy filter": "Nenhuma ideia atingiu os filtros de estratégia/mix selecionados.",
+    "Operator Console": "Console Operacional",
+    "System Status": "Status do Sistema",
+    "Operational Controls": "Controles Operacionais",
+    "Pause Factory": "Pausar Fábrica",
+    "Resume Factory": "Retomar Fábrica",
+    "Emergency Pause": "PAUSAR TUDO",
+    "Factory Paused Notice": "Fábrica pausada. A tarefa atual pode concluir; novas execuções estão bloqueadas.",
+    "Factory Resumed Notice": "Fábrica retomada com sucesso.",
+    "Ready Stock": "Estoque de Vídeos Prontos",
+    "Provider Health": "Saúde dos Provedores",
+    "Recent Errors": "Últimos Erros",
+    "Queues": "Filas",
+    "Generation Queue": "Fila de Geração",
+    "Scheduler Queue": "Fila do Agendador",
+    "Cancel after current step": "Cancelar após etapa atual",
+    "Re-execute": "Reexecutar",
+    "Task Cancelled": "⚪ Cancelada"
   }
 }

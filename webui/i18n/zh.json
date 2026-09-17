@@ -647,6 +647,23 @@
     "Suggested Duration": "建议时长",
     "Topic Cluster": "主题聚类",
     "Diversity Score": "多样性评分",
-    "No ideas match strategy filter": "没有创意符合所选的策略/类型筛选。"
+    "No ideas match strategy filter": "没有创意符合所选的策略/类型筛选。",
+    "Operator Console": "控制台",
+    "System Status": "系统状态",
+    "Operational Controls": "操作控制",
+    "Pause Factory": "暂停工厂",
+    "Resume Factory": "恢复工厂",
+    "Emergency Pause": "全部暂停",
+    "Factory Paused Notice": "工厂已暂停。当前任务可完成；新执行已阻止。",
+    "Factory Resumed Notice": "工厂已成功恢复。",
+    "Ready Stock": "就绪视频库存",
+    "Provider Health": "服务商健康状态",
+    "Recent Errors": "最近错误",
+    "Queues": "队列",
+    "Generation Queue": "生成队列",
+    "Scheduler Queue": "调度队列",
+    "Cancel after current step": "在当前步骤后取消",
+    "Re-execute": "重新执行",
+    "Task Cancelled": "⚪ 已取消"
   }
 }

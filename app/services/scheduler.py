@@ -763,8 +763,8 @@ def plan_schedule(
         cross_post_state = t.get("cross_post_state")
         has_video = bool(t.get("video_file"))
 
-        # Ignora estados não concluídos
-        if state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING, const.TASK_STATE_FAILED):
+        # Ignora estados não concluídos ou cancelados
+        if state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING, const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED) or t.get("cancelled"):
             continue
 
         # Ignora tarefas já publicadas no MoneyPrinterTurbo
@@ -1090,6 +1090,17 @@ def run_scheduler_cycle(
         f"auto_publish_enabled={settings['auto_publish_enabled']} "
         f"dry_run={settings['dry_run']} db_path={get_db_path(db_path)}"
     )
+
+    from app.services import operator_console
+    if operator_console.is_factory_paused(db_path=db_path):
+        _set_executor_status(
+            state="paused",
+            message="Fábrica pausada: execuções de publicação bloqueadas",
+            last_cycle_summary="Fábrica pausada",
+            db_path=db_path,
+        )
+        logger.info("[SCHEDULER][CYCLE] skipped reason=factory_paused")
+        return {"status": "skipped", "reason": "factory_paused"}
 
     if not settings["scheduler_enabled"]:
         _set_executor_status(state="stopped", message="Scheduler desativado", last_cycle_summary="Scheduler desativado", db_path=db_path)

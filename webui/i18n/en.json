@@ -735,6 +735,23 @@
     "Suggested Duration": "Suggested Duration",
     "Topic Cluster": "Topic Cluster",
     "Diversity Score": "Diversity Score",
-    "No ideas match strategy filter": "No ideas match the selected strategy/bucket filter."
+    "No ideas match strategy filter": "No ideas match the selected strategy/bucket filter.",
+    "Operator Console": "Operator Console",
+    "System Status": "System Status",
+    "Operational Controls": "Operational Controls",
+    "Pause Factory": "Pause Factory",
+    "Resume Factory": "Resume Factory",
+    "Emergency Pause": "EMERGENCY PAUSE",
+    "Factory Paused Notice": "Factory paused. Current task can finish; new executions are blocked.",
+    "Factory Resumed Notice": "Factory resumed successfully.",
+    "Ready Stock": "Ready Stock",
+    "Provider Health": "Provider Health",
+    "Recent Errors": "Recent Errors",
+    "Queues": "Queues",
+    "Generation Queue": "Generation Queue",
+    "Scheduler Queue": "Scheduler Queue",
+    "Cancel after current step": "Cancel after current step",
+    "Re-execute": "Re-execute",
+    "Task Cancelled": "⚪ Cancelled"
   }
 }

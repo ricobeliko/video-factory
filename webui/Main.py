@@ -874,6 +874,7 @@ def _normalize_task_state(state):
         const.TASK_STATE_FAILED,
         const.TASK_STATE_PROCESSING,
         const.TASK_STATE_PENDING,
+        const.TASK_STATE_CANCELLED,
     ):
         return state
     try:
@@ -931,7 +932,7 @@ def _has_active_generation(exclude_task_id: str | None = None) -> bool:
             task = sm.state.get_task(task_id)
             if task:
                 state = _normalize_task_state(task.get("state"))
-                if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
+                if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED}:
                     _remove_active_generation_task(task_id)
                     continue
                 if state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
@@ -943,6 +944,8 @@ def _has_active_generation(exclude_task_id: str | None = None) -> bool:
 
 def _task_state_label(state, has_video):
     normalized_state = _normalize_task_state(state)
+    if normalized_state == const.TASK_STATE_CANCELLED:
+        return tr("Task Cancelled")
     if normalized_state == const.TASK_STATE_COMPLETE:
         return tr("Task Status Complete")
     if normalized_state == const.TASK_STATE_FAILED:
@@ -956,6 +959,8 @@ def _task_state_label(state, has_video):
 
 def _task_state_filter_key(task):
     normalized_state = _normalize_task_state(task.get("state"))
+    if normalized_state == const.TASK_STATE_CANCELLED:
+        return "cancelled"
     if normalized_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
         return "processing"
     if normalized_state == const.TASK_STATE_FAILED:
@@ -7683,6 +7688,7 @@ def _render_subtitle_settings(panel, params):
 parse_batch_topics = webui_task.parse_batch_topics
 
 
+
 def _validate_batch_prerequisites(
     params,
     voice_mode,
@@ -8146,6 +8152,15 @@ def _render_publication_schedule():
                 st.rerun(scope="fragment")
         else:
             st.caption(tr("No Planned Posts Available to Reschedule"))
+
+
+@st.fragment(run_every="4s")
+def _render_operator_console_section():
+    with st.expander(f"🛠️ {tr('Operator Console')}", expanded=True):
+        from webui.components.operator_console import render_operator_console
+        render_operator_console()
+
+
 
 def _render_trend_radar_section():
     with st.expander(f"📡 {tr('Trend Radar')}", expanded=False):
@@ -9723,6 +9738,7 @@ def _render_generation_controls(
                 )
             st.rerun(scope="app")
 
+    _render_operator_console_section()
     _render_trend_radar_section()
     _render_analytics_section()
 
@@ -9740,6 +9756,14 @@ def _render_generation_controls(
 
 def _render_application():
     """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
+    if "operator_reconciled" not in st.session_state:
+        try:
+            from app.services import operator_console
+            operator_console.reconcile_orphaned_tasks()
+            st.session_state["operator_reconciled"] = True
+        except Exception as exc:
+            logger.warning(f"Erro na reconciliação pós-restart: {exc}")
+
     _render_top_bar()
 
     if st.session_state.get("settings_dialog_open", False):

@@ -484,3 +484,236 @@ div[class*="st-key-task_row_"] button[kind="secondary"] p {
         min-width: 1.75rem !important;
     }
 }
+
+/* ==========================================================================
+   V8 OPERATOR CONSOLE DESIGN SYSTEM
+   ========================================================================== */
+
+/* Persistent Paused Banner */
+.op-paused-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(90deg, rgba(234, 179, 8, 0.22) 0%, rgba(202, 138, 4, 0.12) 100%);
+    border: 1px solid rgba(234, 179, 8, 0.55);
+    border-left: 6px solid #eab308;
+    border-radius: 8px;
+    padding: 12px 18px;
+    margin-bottom: 14px;
+    color: inherit;
+}
+.op-paused-banner-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #ca8a04;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.op-paused-banner-desc {
+    font-size: 0.88rem;
+    opacity: 0.9;
+    margin-top: 2px;
+}
+
+/* Macro Command Status Pill */
+.op-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 0.88rem;
+    letter-spacing: 0.03em;
+}
+.op-status-pill-running {
+    background: rgba(34, 197, 94, 0.18);
+    color: #16a34a;
+    border: 1px solid rgba(34, 197, 94, 0.4);
+}
+.op-status-pill-paused {
+    background: rgba(234, 179, 8, 0.18);
+    color: #ca8a04;
+    border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.op-status-pill-degraded {
+    background: rgba(249, 115, 22, 0.18);
+    color: #ea580c;
+    border: 1px solid rgba(249, 115, 22, 0.4);
+}
+.op-status-pill-error {
+    background: rgba(239, 68, 68, 0.18);
+    color: #dc2626;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+/* System Health Card */
+.op-health-card {
+    background: var(--secondary-background-color, rgba(128, 128, 128, 0.08));
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.op-health-card:hover {
+    border-color: rgba(128, 128, 128, 0.4);
+}
+.op-health-card-header {
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.75;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+.op-health-card-value {
+    font-size: 1.05rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.op-health-card-sub {
+    font-size: 0.78rem;
+    opacity: 0.7;
+    margin-top: 2px;
+}
+
+/* Semantic Badges */
+.op-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.op-badge-green {
+    background: rgba(34, 197, 94, 0.15);
+    color: #16a34a;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+.op-badge-yellow {
+    background: rgba(234, 179, 8, 0.15);
+    color: #ca8a04;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+.op-badge-red {
+    background: rgba(239, 68, 68, 0.15);
+    color: #dc2626;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.op-badge-blue {
+    background: rgba(59, 130, 246, 0.15);
+    color: #2563eb;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.op-badge-gray {
+    background: rgba(156, 163, 175, 0.15);
+    color: #6b7280;
+    border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
+/* Live Stepper */
+.op-stepper-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--secondary-background-color, rgba(128, 128, 128, 0.06));
+    border: 1px solid rgba(128, 128, 128, 0.18);
+    border-radius: 8px;
+    margin: 8px 0 12px 0;
+    overflow-x: auto;
+}
+.op-step-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 68px;
+    position: relative;
+    text-align: center;
+}
+.op-step-indicator {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    z-index: 2;
+}
+.op-step-indicator-done {
+    background: #16a34a;
+    color: #ffffff;
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+}
+.op-step-indicator-active {
+    background: #3b82f6;
+    color: #ffffff;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.35);
+    animation: op-pulse 2s infinite;
+}
+.op-step-indicator-pending {
+    background: rgba(156, 163, 175, 0.25);
+    color: #9ca3af;
+    border: 1px dashed rgba(156, 163, 175, 0.6);
+}
+.op-step-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+.op-step-label-done {
+    color: #16a34a;
+}
+.op-step-label-active {
+    color: #2563eb;
+    font-weight: 700;
+}
+.op-step-label-pending {
+    color: #9ca3af;
+    opacity: 0.8;
+}
+
+@keyframes op-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5);
+    }
+    70% {
+        box-shadow: 0 0 0 6px rgba(59, 130, 246, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    }
+}
+
+/* Danger Zone */
+.op-danger-zone {
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.04);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-top: 4px;
+}
+
+/* Provider Table Row */
+.op-provider-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+    font-size: 0.84rem;
+}
+.op-provider-row:last-child {
+    border-bottom: none;
+}

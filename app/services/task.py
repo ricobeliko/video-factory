@@ -1644,6 +1644,33 @@ def publish_task(
         return False, str(exc)
 
 
+def _check_cancellation(task_id: str, checkpoint: str, progress: int = 0) -> dict | None:
+    """Verifica se houve pedido de cancelamento seguro para a tarefa neste checkpoint."""
+    try:
+        from app.services import operator_console
+        if operator_console.is_cancel_requested(task_id):
+            logger.warning(f"[TASK][CANCEL] Tarefa {task_id} cancelada com sucesso no checkpoint '{checkpoint}'")
+            sm.state.update_task(
+                task_id,
+                state=const.TASK_STATE_CANCELLED,
+                progress=progress,
+                cancelled=True,
+                error=None,
+            )
+            operator_console.clear_task_cancel(task_id)
+            operator_console.log_operational_event(
+                component="task_manager",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="task_cancelled",
+                message=f"Tarefa cancelada com segurança no checkpoint '{checkpoint}'",
+                task_id=task_id,
+            )
+            return {"task_id": task_id, "state": const.TASK_STATE_CANCELLED, "cancelled": True}
+    except Exception as exc:
+        logger.warning(f"Erro ao verificar cancelamento seguro para {task_id}: {exc}")
+    return None
+
+
 def _run_pipeline(
     task_id,
     params: VideoParams,
@@ -1755,6 +1782,11 @@ def _run_pipeline(
             "in config.toml to a working ffmpeg executable",
         )
 
+    # Checkpoint 1: Antes do script
+    cancel_res = _check_cancellation(task_id, "before_script", progress=5)
+    if cancel_res:
+        return cancel_res
+
     # 1. Generate script
     logger.info(f"[GEN][SCRIPT_START] task_id={task_id}")
     video_script = generate_script(task_id, params)
@@ -1799,6 +1831,11 @@ def _run_pipeline(
         )
         return {"script": video_script}
 
+    # Checkpoint 2: Depois do script
+    cancel_res = _check_cancellation(task_id, "after_script", progress=15)
+    if cancel_res:
+        return cancel_res
+
     # 2. Generate terms
     video_terms = ""
     if params.video_source != "local":
@@ -1820,6 +1857,11 @@ def _run_pipeline(
         return {"script": video_script, "terms": video_terms}
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=20)
+
+    # Checkpoint 3: Antes do áudio/TTS
+    cancel_res = _check_cancellation(task_id, "before_audio", progress=20)
+    if cancel_res:
+        return cancel_res
 
     # 3. Generate audio
     logger.info(f"[TTS][START] task_id={task_id}")
@@ -1862,6 +1904,11 @@ def _run_pipeline(
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=30)
 
+    # Checkpoint 4: Depois do áudio/TTS
+    cancel_res = _check_cancellation(task_id, "after_audio", progress=30)
+    if cancel_res:
+        return cancel_res
+
     if stop_at == "audio":
         sm.state.update_task(
             task_id,
@@ -1886,6 +1933,11 @@ def _run_pipeline(
         return {"subtitle_path": subtitle_path}
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=40)
+
+    # Checkpoint 5: Antes de baixar materiais
+    cancel_res = _check_cancellation(task_id, "before_materials", progress=40)
+    if cancel_res:
+        return cancel_res
 
     # 5. Get video materials
     logger.info(f"[MATERIAL][START] task_id={task_id}")
@@ -1913,6 +1965,11 @@ def _run_pipeline(
         return {"materials": downloaded_videos}
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=50)
+
+    # Checkpoint 6: Antes do render final FFmpeg
+    cancel_res = _check_cancellation(task_id, "before_render", progress=50)
+    if cancel_res:
+        return cancel_res
 
     # 仅完整视频生成流程才需要处理视频拼接模式；
     # 这样可以避免 /subtitle 和 /audio 这类请求访问不存在的字段。

@@ -1753,6 +1753,12 @@ def publish_task(
                     or p_info.get("video_id")
                     or p_info.get("itemId")
                 )
+                platform_post_url = (
+                    p_info.get("url")
+                    or p_info.get("link")
+                    or p_info.get("video_url")
+                    or p_info.get("share_url")
+                )
                 scheduler.record_publication_event(
                     task_id=task_id,
                     platform=p,
@@ -1761,6 +1767,7 @@ def publish_task(
                     provider_request_id=str(provider_req_id) if provider_req_id else None,
                     channel_id=resolved_channel_id,
                     profile_id=task_profile_id,
+                    external_url=str(platform_post_url) if platform_post_url else None,
                     db_path=db_path,
                 )
         except Exception as e:

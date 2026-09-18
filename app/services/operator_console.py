@@ -1343,6 +1343,44 @@ def get_provider_health_summary(db_path: Optional[str] = None) -> Dict[str, Dict
             "last_checked": now_iso,
         }
 
+    # 9. YouTube Analytics Provider
+    try:
+        from app.services.analytics_providers import get_provider
+        yt_prov = get_provider("youtube")
+        yt_status = yt_prov.get_status(db_path=db_path)
+        summary["YouTube Analytics"] = {
+            "status": yt_status,
+            "details": "Chave YouTube Data API configurada" if yt_status == "CONFIGURED" else "Credencial YouTube não configurada",
+            "last_error": None,
+            "last_checked": now_iso,
+        }
+    except Exception as exc:
+        summary["YouTube Analytics"] = {
+            "status": PROVIDER_UNAVAILABLE,
+            "details": f"Erro do provedor: {exc}",
+            "last_error": str(exc),
+            "last_checked": now_iso,
+        }
+
+    # 10. TikTok Analytics Provider
+    try:
+        from app.services.analytics_providers import get_provider
+        tt_prov = get_provider("tiktok")
+        tt_status = tt_prov.get_status(db_path=db_path)
+        summary["TikTok Analytics"] = {
+            "status": tt_status,
+            "details": "Token TikTok API configurado" if tt_status == "CONFIGURED" else "Credencial TikTok não configurada",
+            "last_error": None,
+            "last_checked": now_iso,
+        }
+    except Exception as exc:
+        summary["TikTok Analytics"] = {
+            "status": PROVIDER_UNAVAILABLE,
+            "details": f"Erro do provedor: {exc}",
+            "last_error": str(exc),
+            "last_checked": now_iso,
+        }
+
     return summary
 
 

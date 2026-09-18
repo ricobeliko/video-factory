@@ -77,6 +77,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE publication_events ADD COLUMN profile_id TEXT;")
     if "channel_id" not in existing_pub_cols:
         conn.execute("ALTER TABLE publication_events ADD COLUMN channel_id TEXT;")
+    if "external_url" not in existing_pub_cols:
+        conn.execute("ALTER TABLE publication_events ADD COLUMN external_url TEXT;")
 
     # Idempotência aprimorada por task_id + channel_id + platform
     conn.execute("DROP INDEX IF EXISTS idx_active_schedule;")
@@ -113,15 +115,6 @@ def init_db(db_path: Optional[str] = None) -> None:
             """
         )
 
-        # Índice único para evitar agendamento duplicado da mesma tarefa, canal e plataforma
-        cursor.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
-            ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
-            WHERE status IN ('planned', 'ready', 'published');
-            """
-        )
-
         # 2. Histórico de publicações reais
         cursor.execute(
             """
@@ -135,7 +128,8 @@ def init_db(db_path: Optional[str] = None) -> None:
                 error_code TEXT,
                 provider_request_id TEXT,
                 profile_id TEXT,
-                channel_id TEXT
+                channel_id TEXT,
+                external_url TEXT
             );
             """
         )
@@ -764,6 +758,7 @@ def record_publication_event(
     provider_request_id: Optional[str] = None,
     channel_id: Optional[str] = None,
     profile_id: Optional[str] = None,
+    external_url: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Registra um evento de publicação (usado pelo publicador manual ou testes)."""
@@ -776,10 +771,10 @@ def record_publication_event(
         conn.execute(
             """
             INSERT INTO publication_events (
-                task_id, platform, published_at, status, external_id, error_code, provider_request_id, profile_id, channel_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                task_id, platform, published_at, status, external_id, error_code, provider_request_id, profile_id, channel_id, external_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            (task_id, clean_platform, iso_time, status, external_id, error_code, provider_request_id, profile_id, channel_id),
+            (task_id, clean_platform, iso_time, status, external_id, error_code, provider_request_id, profile_id, channel_id, external_url),
         )
         if status == "success":
             if channel_id:

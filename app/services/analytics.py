@@ -50,6 +50,24 @@ def get_connection(db_path: Optional[str] = None):
         conn.close()
 
 
+def _migrate_analytics_schema(conn: sqlite3.Connection) -> None:
+    """Migração aditiva e idempotente para a V10-A (Analytics Source, Identificadores Externos e Multi-Profile)."""
+    cursor = conn.execute("PRAGMA table_info(content_analytics);")
+    existing_cols = {row["name"] for row in cursor.fetchall()}
+    if "source" not in existing_cols:
+        conn.execute("ALTER TABLE content_analytics ADD COLUMN source TEXT DEFAULT 'manual';")
+    if "external_url" not in existing_cols:
+        conn.execute("ALTER TABLE content_analytics ADD COLUMN external_url TEXT;")
+    if "profile_id" not in existing_cols:
+        conn.execute("ALTER TABLE content_analytics ADD COLUMN profile_id TEXT;")
+    if "channel_id" not in existing_cols:
+        conn.execute("ALTER TABLE content_analytics ADD COLUMN channel_id TEXT;")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_source ON content_analytics(source);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_profile ON content_analytics(profile_id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_channel ON content_analytics(channel_id);")
+
+
 def init_analytics_db(db_path: Optional[str] = None) -> None:
     """Inicializa as tabelas de analytics de forma idempotente e segura."""
     with get_connection(db_path) as conn:
@@ -81,10 +99,17 @@ def init_analytics_db(db_path: Optional[str] = None) -> None:
                 engagement_rate REAL NOT NULL DEFAULT 0.0,
                 retention_score REAL,
                 performance_score REAL NOT NULL DEFAULT 0.0,
-                metadata_json TEXT
+                metadata_json TEXT,
+                source TEXT DEFAULT 'manual',
+                external_url TEXT,
+                profile_id TEXT,
+                channel_id TEXT
             );
             """
         )
+
+        # Migração aditiva para bancos existentes
+        _migrate_analytics_schema(conn)
 
         # Índices essenciais para consultas rápidas
         conn.execute(
@@ -289,6 +314,10 @@ def save_snapshot(
     published_at: Optional[Any] = None,
     collected_at: Optional[Any] = None,
     metadata_json: Optional[Dict[str, Any]] = None,
+    source: str = "manual",
+    external_url: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Valida, calcula scores e persiste um snapshot de analytics para o vídeo."""
@@ -320,29 +349,53 @@ def save_snapshot(
         p_iso = None
         if published_at:
             p_iso = _parse_iso_dt(published_at).isoformat()
-        else:
-            try:
-                pub_row = conn.execute(
-                    """
-                    SELECT id, published_at, external_id
-                    FROM publication_events
-                    WHERE task_id = ? AND platform = ? AND status = 'success'
-                    ORDER BY id DESC LIMIT 1;
-                    """,
-                    (task_id, clean_platform),
-                ).fetchone()
-                if pub_row:
-                    p_iso = pub_row["published_at"]
-                    if not external_id and pub_row["external_id"]:
-                        external_id = pub_row["external_id"]
-                    if not publication_event_id:
-                        publication_event_id = pub_row["id"]
-            except Exception:
-                pass
 
+        pub_row = None
+        try:
+            pub_query = """
+                SELECT id, published_at, external_id, profile_id, channel_id, external_url
+                FROM publication_events
+                WHERE task_id = ? AND platform = ? AND status = 'success'
+            """
+            pub_params = [task_id, clean_platform]
+            if channel_id:
+                pub_query += " AND channel_id = ?"
+                pub_params.append(channel_id)
+            pub_query += " ORDER BY id DESC LIMIT 1;"
+            pub_row = conn.execute(pub_query, tuple(pub_params)).fetchone()
+            if pub_row:
+                if not p_iso:
+                    p_iso = pub_row["published_at"]
+                if not external_id and pub_row["external_id"]:
+                    external_id = pub_row["external_id"]
+                if not publication_event_id:
+                    publication_event_id = pub_row["id"]
+                if not channel_id and "channel_id" in pub_row.keys() and pub_row["channel_id"]:
+                    channel_id = pub_row["channel_id"]
+                if not profile_id and "profile_id" in pub_row.keys() and pub_row["profile_id"]:
+                    profile_id = pub_row["profile_id"]
+                if not external_url and "external_url" in pub_row.keys() and pub_row["external_url"]:
+                    external_url = pub_row["external_url"]
+        except Exception:
+            pass
 
         if not p_iso:
             p_iso = collected_iso  # fallback se não houver histórico de publicação
+
+        if not profile_id:
+            try:
+                from app.services.profile_manager import get_task_profile_id
+                profile_id = get_task_profile_id(task_id, db_path=db_path)
+            except Exception:
+                profile_id = "default"
+
+        if not external_url and external_id:
+            if clean_platform == "youtube":
+                external_url = f"https://www.youtube.com/watch?v={external_id}"
+            elif clean_platform == "tiktok":
+                external_url = f"https://www.tiktok.com/video/{external_id}"
+
+        clean_source = (source or "manual").strip().lower()
 
         # Enriquecer com dados de monetization_safety caso não informados
         if not (topic and preset and narrative_structure and duration_seconds):
@@ -418,7 +471,8 @@ def save_snapshot(
                 average_view_duration, average_percentage_viewed,
                 completion_rate, subscribers_gained,
                 published_at, collected_at, age_bucket,
-                engagement_rate, retention_score, performance_score, metadata_json
+                engagement_rate, retention_score, performance_score, metadata_json,
+                source, external_url, profile_id, channel_id
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?,
@@ -426,6 +480,7 @@ def save_snapshot(
                 ?, ?,
                 ?, ?,
                 ?, ?, ?,
+                ?, ?, ?, ?,
                 ?, ?, ?, ?
             );
             """,
@@ -437,6 +492,7 @@ def save_snapshot(
                 completion_rate, subscribers_gained,
                 p_iso, collected_iso, age_bucket,
                 engagement_rate, retention_score, performance_score, meta_str,
+                clean_source, external_url, profile_id, channel_id,
             ),
         )
         record_id = cursor.lastrowid
@@ -467,6 +523,10 @@ def save_snapshot(
         "engagement_rate": engagement_rate,
         "retention_score": retention_score,
         "performance_score": performance_score,
+        "source": clean_source,
+        "external_url": external_url,
+        "profile_id": profile_id,
+        "channel_id": channel_id,
     }
 
 
@@ -474,6 +534,9 @@ def get_snapshots(
     task_id: Optional[str] = None,
     platform: Optional[str] = None,
     latest_only: bool = False,
+    source: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Recupera snapshots gravados com opção de filtrar pelo mais recente por (task_id, platform)."""
@@ -499,6 +562,15 @@ def get_snapshots(
             if platform:
                 conditions.append("ca.platform = ?")
                 params.append(platform.lower().strip())
+            if source:
+                conditions.append("ca.source = ?")
+                params.append(source.lower().strip())
+            if profile_id:
+                conditions.append("ca.profile_id = ?")
+                params.append(profile_id)
+            if channel_id:
+                conditions.append("ca.channel_id = ?")
+                params.append(channel_id)
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY ca.performance_score DESC, ca.collected_at DESC;"
@@ -513,12 +585,27 @@ def get_snapshots(
             if platform:
                 conditions.append("platform = ?")
                 params.append(platform.lower().strip())
+            if source:
+                conditions.append("source = ?")
+                params.append(source.lower().strip())
+            if profile_id:
+                conditions.append("profile_id = ?")
+                params.append(profile_id)
+            if channel_id:
+                conditions.append("channel_id = ?")
+                params.append(channel_id)
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY collected_at DESC;"
             rows = conn.execute(query, tuple(params)).fetchall()
 
-        return [dict(r) for r in rows]
+        results = []
+        for r in rows:
+            d = dict(r)
+            if not d.get("source"):
+                d["source"] = "manual"
+            results.append(d)
+        return results
 
 
 def get_content_performance_feedback(

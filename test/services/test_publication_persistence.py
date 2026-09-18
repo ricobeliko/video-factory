@@ -195,6 +195,40 @@ class TestPublicationPersistence(unittest.TestCase):
         self.assertEqual(row["external_id"], "legacy_ext_123")
         self.assertIsNone(row["provider_request_id"])
 
+    # 5. override de privacyStatus para unlisted na chamada de publicação
+    def test_05_youtube_privacy_status_override_unlisted(self):
+        task_id = "task_pub_yt_unlisted"
+        self._create_task(task_id)
+
+        captured_extra = {}
+
+        def fake_cross_post(*args, **kwargs):
+            nonlocal captured_extra
+            captured_extra = kwargs.get("youtube_extra") or {}
+            return {
+                "success": True,
+                "results": {
+                    "youtube": {
+                        "success": True,
+                        "post_id": "yt_unlisted_123",
+                        "url": "https://www.youtube.com/watch?v=yt_unlisted_123",
+                    }
+                },
+                "request_id": "req_unlisted_456",
+            }
+
+        with patch("app.services.upload_post.cross_post_video", side_effect=fake_cross_post):
+            success, err = task_module.publish_task(
+                task_id,
+                platforms=["youtube"],
+                synchronous=True,
+                youtube_privacy_status="unlisted",
+                db_path=self.db_path,
+            )
+
+        self.assertTrue(success)
+        self.assertEqual(captured_extra.get("privacyStatus"), "unlisted")
+
 
 if __name__ == "__main__":
     unittest.main()

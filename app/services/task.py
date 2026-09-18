@@ -1428,6 +1428,7 @@ def publish_task(
     channel_id: str | None = None,
     synchronous: bool = False,
     db_path: str | None = None,
+    youtube_privacy_status: str | None = None,
 ) -> tuple[bool, str]:
     """
     Manually or automatically publish an existing completed task's final video to configured platforms via Upload-Post.
@@ -1646,13 +1647,18 @@ def publish_task(
             cross_post_owner=_cross_post_process_owner,
         )
 
+        effective_youtube_privacy = (
+            youtube_privacy_status
+            or upload_post.upload_post_service.youtube_privacy_status
+        )
+
         scheduling_error = _schedule_cross_post(
             task_id=task_id,
             video_paths=video_paths,
             params=params_data,
             video_script=video_script,
             platforms=target_platforms,
-            youtube_privacy_status=upload_post.upload_post_service.youtube_privacy_status,
+            youtube_privacy_status=effective_youtube_privacy,
             youtube_made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
             channel_id=resolved_channel_id,
             external_profile_name=external_profile_name,
@@ -1694,11 +1700,15 @@ def publish_task(
             platform=social_platform,
         )
         if has_youtube:
+            effective_youtube_privacy = (
+                youtube_privacy_status
+                or upload_post.upload_post_service.youtube_privacy_status
+            )
             youtube_extra = {
                 "youtube_title": metadata.get("title", subject),
                 "youtube_description": metadata.get("caption", ""),
                 "tags": metadata.get("hashtags", []),
-                "privacyStatus": upload_post.upload_post_service.youtube_privacy_status,
+                "privacyStatus": effective_youtube_privacy,
                 "selfDeclaredMadeForKids": upload_post.upload_post_service.youtube_made_for_kids,
                 "containsSyntheticMedia": True,
             }

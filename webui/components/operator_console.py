@@ -195,6 +195,23 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
         ],
         "errors": [],
         "recoverable": [],
+        "instance": {
+            "local_role": "ROLE_PRIMARY",
+            "is_primary": True,
+            "node_name": "VIDEO-FACTORY-PROD",
+            "hostname": "PC-FORTE-PROD",
+            "pid": 4128,
+            "primary_node_id": "mock-node-1",
+            "primary_node_name": "VIDEO-FACTORY-PROD",
+            "primary_hostname": "PC-FORTE-PROD",
+            "primary_pid": 4128,
+            "primary_status": "ACTIVE",
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            "heartbeat_seconds_ago": 4,
+            "is_heartbeat_stale": False,
+            "uptime_str": "3h 45m",
+            "remote_access_url": "http://0.0.0.0:8501 (LAN / Tailscale)",
+        },
     }
 
     if scenario == "Factory PAUSED":
@@ -281,6 +298,30 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
                 "created_at": "02:10:15",
             }
         ]
+    elif scenario == "Secondary VIEW ONLY":
+        mock_data["instance"] = {
+            "local_role": "ROLE_SECONDARY_VIEW_ONLY",
+            "is_primary": False,
+            "node_name": "NOTEBOOK-REMOTO",
+            "hostname": "NOTEBOOK-DELL",
+            "pid": 9840,
+            "primary_node_id": "mock-node-1",
+            "primary_node_name": "VIDEO-FACTORY-PROD",
+            "primary_hostname": "PC-FORTE-PROD",
+            "primary_pid": 4128,
+            "primary_status": "ACTIVE",
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            "heartbeat_seconds_ago": 6,
+            "is_heartbeat_stale": False,
+            "uptime_str": "12m",
+            "remote_access_url": "http://0.0.0.0:8501 (LAN / Tailscale)",
+        }
+        mock_data["alerts"].append({
+            "severity": "WARNING",
+            "title": "Instância Secundária em Modo Somente Leitura",
+            "desc": "Conectado ao nó primário VIDEO-FACTORY-PROD (PC-FORTE-PROD).",
+            "time_ago": "agora",
+        })
 
     return mock_data
 
@@ -304,6 +345,7 @@ def render_operator_console():
                     "Cenário de Demonstração:",
                     options=[
                         "Factory RUNNING",
+                        "Secondary VIEW ONLY",
                         "Factory PAUSED",
                         "DEGRADED com Reddit 403",
                         "Ready Stock abaixo do mínimo",
@@ -423,6 +465,7 @@ def render_operator_console():
                 for e in recent_errs
             ],
             "recoverable": recoverable,
+            "instance": sys_status.get("instance") or operator_console.get_instance_info(),
         }
 
     # =========================================================================
@@ -430,6 +473,55 @@ def render_operator_console():
     # =========================================================================
     factory_state = data["factory_state"]
     is_paused = data["is_paused"]
+    inst_info = data.get("instance") or {}
+    is_primary = inst_info.get("is_primary", True)
+    node_name = inst_info.get("node_name") or "VIDEO-FACTORY-PROD"
+    hostname = inst_info.get("hostname") or "—"
+    pid = inst_info.get("pid") or 0
+    uptime_str = inst_info.get("uptime_str") or "—"
+    remote_url = inst_info.get("remote_access_url") or "http://0.0.0.0:8501 (LAN / Tailscale)"
+
+    # Persistent View Only Warning Banner
+    if not is_primary:
+        primary_name = inst_info.get("primary_node_name") or "VIDEO-FACTORY-PROD"
+        primary_host = inst_info.get("primary_hostname") or "—"
+        primary_pid = inst_info.get("primary_pid") or "—"
+        hb_sec = inst_info.get("heartbeat_seconds_ago")
+        hb_text = f"{hb_sec}s atrás" if hb_sec is not None else "recente"
+        st.markdown(
+            f"""
+            <div class="op-paused-banner" style="border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.08); margin-bottom: 12px;">
+                <div>
+                    <div class="op-paused-banner-title" style="color: #d97706;">🔒 INSTÂNCIA EM MODO VIEW ONLY</div>
+                    <div class="op-paused-banner-desc">
+                        Nó primário ativo: <b>{html.escape(str(primary_name))}</b> (Host: <code>{html.escape(str(primary_host))}</code>, PID <code>{primary_pid}</code>, Heartbeat: <code>{hb_text}</code>).<br/>
+                        Comandos de controle operacional (pausa, retomada, cancelamento, reexecução, geração e publicação) estão desabilitados nesta interface.
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Node Bar
+    role_badge_cls = "op-badge-green" if is_primary else "op-badge-yellow"
+    role_badge_txt = "🟢 PRIMARY" if is_primary else "🟠 SECONDARY — VIEW ONLY"
+    st.markdown(
+        f"""
+        <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; background: rgba(128, 128, 128, 0.08); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 6px; padding: 6px 14px; margin-bottom: 12px; font-size: 0.83rem;">
+            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                <span>🖥️ <b>Nó:</b> <code>{html.escape(str(node_name))}</code></span>
+                <span>🏷️ <b>Papel:</b> <span class="op-badge {role_badge_cls}">{role_badge_txt}</span></span>
+                <span>💻 <b>Host:</b> {html.escape(str(hostname))} (PID {pid})</span>
+                <span>⏱️ <b>Uptime:</b> {uptime_str}</span>
+            </div>
+            <div>
+                <span>🌐 <b>Acesso:</b> <code>{remote_url}</code></span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Persistent Paused Banner (Impossible to ignore)
     if is_paused or factory_state == "PAUSED":
@@ -447,7 +539,14 @@ def render_operator_console():
                 unsafe_allow_html=True,
             )
         with c_banner_btn:
-            if st.button("▶ Retomar Fábrica", key="op_banner_resume_btn", type="primary", use_container_width=True):
+            if st.button(
+                "▶ Retomar Fábrica",
+                key="op_banner_resume_btn",
+                type="primary",
+                use_container_width=True,
+                disabled=not is_primary,
+                help="Apenas o nó primário pode retomar a fábrica." if not is_primary else None,
+            ):
                 if not demo_enabled:
                     operator_console.resume_factory()
                     st.toast("Fábrica retomada!", icon="▶")
@@ -499,7 +598,13 @@ def render_operator_console():
         btn_c1, btn_c2 = st.columns(2)
         with btn_c1:
             if not is_paused:
-                if st.button("⏸ Pausar Fábrica", key="op_main_pause_btn", use_container_width=True):
+                if st.button(
+                    "⏸ Pausar Fábrica",
+                    key="op_main_pause_btn",
+                    use_container_width=True,
+                    disabled=not is_primary,
+                    help="Apenas o nó primário pode pausar a fábrica." if not is_primary else None,
+                ):
                     if not demo_enabled:
                         operator_console.pause_factory()
                         st.toast("Fábrica pausada com sucesso.", icon="⏸")
@@ -507,7 +612,13 @@ def render_operator_console():
                     else:
                         st.toast("Pausa simulada em modo demonstração.", icon="⏸")
             else:
-                if st.button("▶ Retomar Fábrica", key="op_main_resume_btn", use_container_width=True):
+                if st.button(
+                    "▶ Retomar Fábrica",
+                    key="op_main_resume_btn",
+                    use_container_width=True,
+                    disabled=not is_primary,
+                    help="Apenas o nó primário pode retomar a fábrica." if not is_primary else None,
+                ):
                     if not demo_enabled:
                         operator_console.resume_factory()
                         st.toast("Fábrica retomada com sucesso.", icon="▶")
@@ -520,7 +631,16 @@ def render_operator_console():
                 st.markdown("### 🛑 Parada Operacional de Emergência")
                 st.caption("Bloqueia novas gerações e publicações sem interromper processos já em etapa crítica.")
                 conf = st.checkbox("Confirmar bloqueio geral imediato", key="op_confirm_emergency_popover")
-                if st.button("Confirmar Parada Total", disabled=not conf, type="primary", use_container_width=True, key="op_confirm_emergency_btn"):
+                emergency_disabled = (not conf) or (not is_primary)
+                emergency_help = "Apenas o nó primário pode acionar a parada total." if not is_primary else None
+                if st.button(
+                    "Confirmar Parada Total",
+                    disabled=emergency_disabled,
+                    type="primary",
+                    use_container_width=True,
+                    key="op_confirm_emergency_btn",
+                    help=emergency_help,
+                ):
                     if not demo_enabled:
                         operator_console.emergency_pause()
                         st.toast("Parada total acionada com sucesso!", icon="🛑")
@@ -675,11 +795,14 @@ def render_operator_console():
                     f"**Strategy:** `{s_score} {s_label}`"
                 )
             with col_live_ctrl:
+                cancel_disabled = not is_primary
+                cancel_help = "Modo VIEW ONLY: Apenas o nó primário pode cancelar tarefas." if not is_primary else "Cancelamento seguro: será aplicado no próximo checkpoint sem matar o FFmpeg de forma brusca."
                 if st.button(
                     "🛑 Cancelar após etapa atual",
                     key=f"op_cancel_active_{task_id}",
                     use_container_width=True,
-                    help="Cancelamento seguro: será aplicado no próximo checkpoint sem matar o FFmpeg de forma brusca.",
+                    disabled=cancel_disabled,
+                    help=cancel_help,
                 ):
                     if not demo_enabled:
                         from app.services import webui_task
@@ -938,7 +1061,14 @@ def render_operator_console():
 
                     c_rec1, c_rec2, _ = st.columns([0.25, 0.35, 0.4])
                     with c_rec1:
-                        if st.button("🔄 Reexecutar", key=f"rec_exec_{r_id}", type="primary", use_container_width=True):
+                        if st.button(
+                            "🔄 Reexecutar",
+                            key=f"rec_exec_{r_id}",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=not is_primary,
+                            help="Modo VIEW ONLY: Apenas o nó primário pode reexecutar tarefas." if not is_primary else None,
+                        ):
                             if not demo_enabled:
                                 new_task_id = operator_console.reexecute_task(r_id)
                                 st.success(f"Nova execução criada sob ID: {new_task_id}")
@@ -946,7 +1076,13 @@ def render_operator_console():
                             else:
                                 st.success("Reexecução simulada em modo demonstração.")
                     with c_rec2:
-                        if st.button("✕ Marcar como cancelada", key=f"rec_canc_{r_id}", use_container_width=True):
+                        if st.button(
+                            "✕ Marcar como cancelada",
+                            key=f"rec_canc_{r_id}",
+                            use_container_width=True,
+                            disabled=not is_primary,
+                            help="Modo VIEW ONLY: Apenas o nó primário pode cancelar tarefas." if not is_primary else None,
+                        ):
                             if not demo_enabled:
                                 from app.services import state as sm
                                 sm.state.update_task(r_id, state=const.TASK_STATE_CANCELLED, progress=100)

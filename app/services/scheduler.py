@@ -487,10 +487,14 @@ def adopt_tasks_into_scheduler(
     Idempotente: não duplica registros existentes.
     NÃO chama Upload-Post, NÃO move arquivos, NÃO altera script.json.
     """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
     if not task_ids or not platforms:
         return 0
 
     init_db(db_path)
+
     count = 0
     for tid in task_ids:
         clean_id = (tid or "").strip()
@@ -747,7 +751,11 @@ def plan_schedule(
     - Idempotência: não duplica (task_id, platform) já agendada ou publicada
     - NÃO chama Upload-Post
     """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
     init_db(db_path)
+
     current_time = _normalize_utc(now)
     persisted_platforms_map = get_all_task_platforms(db_path)
     settings = get_all_settings(db_path)
@@ -1092,7 +1100,18 @@ def run_scheduler_cycle(
     )
 
     from app.services import operator_console
+    if not operator_console.is_primary_instance(db_path=db_path):
+        _set_executor_status(
+            state="idle",
+            message="Instância secundária (VIEW ONLY): execuções de publicação bloqueadas",
+            last_cycle_summary="Instância em modo leitura",
+            db_path=db_path,
+        )
+        logger.info("[SCHEDULER][CYCLE] skipped reason=secondary_view_only")
+        return {"status": "skipped", "reason": "secondary_view_only"}
+
     if operator_console.is_factory_paused(db_path=db_path):
+
         _set_executor_status(
             state="paused",
             message="Fábrica pausada: execuções de publicação bloqueadas",
@@ -1460,10 +1479,16 @@ def _scheduler_worker_loop(interval_seconds: int = 30) -> None:
 
 def start_scheduler_worker(interval_seconds: int = 30) -> None:
     """Inicia a thread daemon singleton do executor em segundo plano se ainda não estiver ativa."""
+    from app.services import operator_console
+    if not operator_console.is_primary_instance():
+        logger.info("[SCHEDULER] Worker daemon não iniciado: instância em modo VIEW ONLY.")
+        return
+
     global _worker_thread
     with _worker_lock:
         if _worker_thread is not None and _worker_thread.is_alive():
             return
+
         _worker_stop_event.clear()
         _worker_thread = threading.Thread(
             target=_scheduler_worker_loop,
@@ -1510,7 +1535,11 @@ def reschedule_post_for_test(
     - NÃO chama Upload-Post nem gera publication_events.
     - Não altera horários dos demais posts.
     """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
     if minutes_from_now not in ALLOWED_TEST_RESCHEDULE_MINUTES:
+
         return {
             "success": False,
             "error": "invalid_interval",

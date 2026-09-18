@@ -147,7 +147,9 @@ def submit_generation(
     """
     task_params = params.model_copy(deep=True)
     from app.services import operator_console
+    operator_console.require_primary_instance()
     if operator_console.is_factory_paused():
+
         logger.warning(f"Rejeitando geração: fábrica pausada. task_id={task_id}")
         raise ValueError("Fábrica pausada. A tarefa atual pode concluir; novas execuções estão bloqueadas.")
 
@@ -216,7 +218,9 @@ has_active_tasks = has_active_generation_tasks
 def cancel_generation(task_id: str) -> bool:
     """Solicita cancelamento seguro de uma tarefa de geração em andamento ou na fila."""
     from app.services import operator_console
+    operator_console.require_primary_instance()
     with _active_task_ids_lock:
+
         if task_id in _active_task_ids:
             # Se a tarefa ainda não começou a rodar (PENDING), remove dos ativos
             task_info = sm.state.get_task(task_id)

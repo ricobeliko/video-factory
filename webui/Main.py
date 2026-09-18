@@ -860,6 +860,10 @@ def _queue_task_restore(task_id):
 
 
 def _queue_task_publish(task_id):
+    from app.services import operator_console
+    if not operator_console.is_primary_instance():
+        st.warning("Publicação bloqueada: Esta instância opera em modo VIEW ONLY.")
+        return
     # 任务列表运行在 fragment 中，通过记录候选任务并触发整页 rerun 打开确认弹窗。
     st.session_state["task_publish_candidate_id"] = task_id
     st.session_state["task_manager_popover_nonce"] = (
@@ -1400,13 +1404,19 @@ def _render_task_table(filtered_tasks, key_prefix):
                         _open_task_path(task["task_path"])
 
                 with action_cols[2]:
+                    from app.services import operator_console
+                    is_inst_primary = operator_console.is_primary_instance()
+
                     publish_label = tr("Publish")
                     is_completed = (
-                        _task_state_filter_key(task) == "complete"
+                        is_inst_primary
+                        and _task_state_filter_key(task) == "complete"
                         and has_video
                         and not is_busy
                     )
-                    if is_busy:
+                    if not is_inst_primary:
+                        publish_help = f"{publish_label} (Modo VIEW ONLY - Desabilitado)"
+                    elif is_busy:
                         publish_help = f"{publish_label} ({tr('Task Status Processing')})"
                     elif not has_video or _task_state_filter_key(task) != "complete":
                         publish_help = f"{publish_label} ({tr('Task Status Failed')})"
@@ -1425,13 +1435,15 @@ def _render_task_table(filtered_tasks, key_prefix):
 
                 with action_cols[3]:
                     restore_label = tr("Regenerate Task")
+                    restore_disabled = (not is_inst_primary) or is_processing or not has_restore_data
+                    restore_help = f"{restore_label} (Modo VIEW ONLY - Desabilitado)" if not is_inst_primary else restore_label
                     if st.button(
                         restore_label,
                         key=f"restore_task_{key_prefix}_{task_id}",
                         use_container_width=True,
                         icon=":material/replay:",
-                        help=restore_label,
-                        disabled=is_processing or not has_restore_data,
+                        help=restore_help,
+                        disabled=restore_disabled,
                     ):
                         _queue_task_restore(task_id)
 
@@ -1888,6 +1900,12 @@ def _render_task_publish_dialog(task_id):
     elif cross_post_state == const.CROSS_POST_STATE_FAILED:
         st.info(tr("Previous Publish Failed Notice"))
 
+    from app.services import operator_console
+    is_inst_primary = operator_console.is_primary_instance()
+
+    if not is_inst_primary:
+        st.warning("⚠️ **Publicação Bloqueada**: Esta instância está operando em modo Somente Leitura (VIEW ONLY). Apenas o nó primário pode executar publicações.")
+
     cancel_col, confirm_col = st.columns(2)
     if cancel_col.button(
         tr("Cancel"),
@@ -1902,6 +1920,8 @@ def _render_task_publish_dialog(task_id):
         key="confirm_task_publish",
         type="primary",
         use_container_width=True,
+        disabled=not is_inst_primary,
+        help="Apenas a instância primária pode publicar vídeos." if not is_inst_primary else None,
     ):
         success, error_msg = tm.publish_task(task_id)
         _dismiss_task_publish_dialog()
@@ -9254,15 +9274,26 @@ def _render_generation_controls(
 
     _render_settings_transfer(params)
 
+    from app.services import operator_console
+    is_inst_primary = operator_console.is_primary_instance()
+
     generation_locked = bool(
-        webui_task.has_active_generation_tasks() or _has_active_generation()
+        not is_inst_primary or webui_task.has_active_generation_tasks() or _has_active_generation()
     )
-    if generation_locked:
+    if not is_inst_primary:
+        st.info("🔒 Modo Somente Leitura (VIEW ONLY): Novas gerações só podem ser iniciadas no nó primário.")
+    elif generation_locked:
         st.info(
             tr(
                 "There is a generation in progress. Please wait for completion before starting another."
             )
         )
+
+    start_help = None
+    if not is_inst_primary:
+        start_help = "Modo Somente Leitura (VIEW ONLY): Geração desabilitada nesta interface."
+    elif generation_locked:
+        start_help = tr("There is a generation in progress. Please wait for completion before starting another.")
 
     start_button = st.button(
         tr("Generate Video"),
@@ -9270,15 +9301,14 @@ def _render_generation_controls(
         type="primary",
         key="generate_video_button",
         disabled=generation_locked,
-        help=tr(
-            "There is a generation in progress. Please wait for completion before starting another."
-        )
-        if generation_locked
-        else None,
+        help=start_help,
         on_click=_prepare_generation_task,
     )
     render_onboarding_tour()
     if start_button:
+        if not operator_console.is_primary_instance():
+            st.error("Operação bloqueada: Esta instância está em modo VIEW ONLY.")
+            st.stop()
         pending_task_id = st.session_state.get("pending_generation_task_id")
         if webui_task.has_active_generation_tasks() or _has_active_generation(exclude_task_id=pending_task_id):
             st.warning(
@@ -9636,24 +9666,31 @@ def _render_generation_controls(
             help=tr("Batch Topics Help"),
         )
         batch_locked = bool(
-            webui_task.has_active_generation_tasks() or _has_active_generation()
+            not is_inst_primary
+            or webui_task.has_active_generation_tasks()
+            or _has_active_generation()
         )
+        batch_help = None
+        if not is_inst_primary:
+            batch_help = "Modo Somente Leitura (VIEW ONLY): Geração em lote desabilitada nesta interface."
+        elif batch_locked:
+            batch_help = tr("There is a generation in progress. Please wait for completion before starting another.")
+
         batch_button = st.button(
             tr("Generate Batch"),
             use_container_width=True,
             type="secondary",
             key="generate_batch_button",
             disabled=batch_locked,
-            help=tr(
-                "There is a generation in progress. Please wait for completion before starting another."
-            )
-            if batch_locked
-            else None,
+            help=batch_help,
             icon=":material/playlist_add:",
         )
 
     batch_submitted = False
     if batch_button:
+        if not operator_console.is_primary_instance():
+            st.error("Operação bloqueada: Esta instância está em modo VIEW ONLY.")
+            st.stop()
         if webui_task.has_active_generation_tasks() or _has_active_generation():
             st.warning(
                 tr(
@@ -9756,13 +9793,25 @@ def _render_generation_controls(
 
 def _render_application():
     """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
-    if "operator_reconciled" not in st.session_state:
+    from app.services import operator_console
+    operator_console.ensure_instance_initialized()
+    is_primary = operator_console.is_primary_instance()
+
+    if is_primary and "operator_reconciled" not in st.session_state:
         try:
-            from app.services import operator_console
             operator_console.reconcile_orphaned_tasks()
             st.session_state["operator_reconciled"] = True
         except Exception as exc:
             logger.warning(f"Erro na reconciliação pós-restart: {exc}")
+
+    if not is_primary:
+        st.warning(
+            "⚠️ **SECONDARY INSTANCE — VIEW ONLY**: "
+            "O nó principal da fábrica já está ativo em outro processo/dispositivo. "
+            "Esta instância opera exclusivamente em modo leitura. "
+            "Gerações, publicações e comandos de controle operacional estão bloqueados nesta interface.",
+            icon="🔒",
+        )
 
     _render_top_bar()
 

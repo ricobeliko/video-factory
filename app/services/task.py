@@ -1420,7 +1420,14 @@ def publish_task(
 
     Returns (True, "") on successful scheduling/execution, or (False, error_message) on failure.
     """
+    from app.services import operator_console
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError as exc:
+        return False, str(exc)
+
     if not upload_post.upload_post_service.enabled:
+
         return False, "Upload-Post integration is disabled in settings"
     if not upload_post.upload_post_service.is_configured():
         return False, "Upload-Post is not fully configured (missing API Key or username)"

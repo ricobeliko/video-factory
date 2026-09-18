@@ -12,10 +12,14 @@ Centraliza o monitoramento, governança e resiliência operacional da Video Fact
 - Telemetria de Heartbeats dos Workers
 """
 
+import atexit
 import json
 import os
+import platform
+import socket
 import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -29,6 +33,29 @@ from app.utils import utils
 FACTORY_STATE_RUNNING = "RUNNING"
 FACTORY_STATE_PAUSED = "PAUSED"
 FACTORY_STATES = {FACTORY_STATE_RUNNING, FACTORY_STATE_PAUSED}
+
+# Papéis de Instância (Fase V8.1)
+ROLE_PRIMARY = "PRIMARY"
+ROLE_SECONDARY_VIEW_ONLY = "SECONDARY_VIEW_ONLY"
+ROLES = {ROLE_PRIMARY, ROLE_SECONDARY_VIEW_ONLY}
+
+# Estados da Instância
+INSTANCE_STATUS_ACTIVE = "ACTIVE"
+INSTANCE_STATUS_STALE = "STALE"
+INSTANCE_STATUS_STOPPED = "STOPPED"
+INSTANCE_STATUSES = {INSTANCE_STATUS_ACTIVE, INSTANCE_STATUS_STALE, INSTANCE_STATUS_STOPPED}
+
+# Eventos Operacionais de Instância
+EVENT_INSTANCE_PRIMARY_ACQUIRED = "INSTANCE_PRIMARY_ACQUIRED"
+EVENT_INSTANCE_VIEW_ONLY_STARTED = "INSTANCE_VIEW_ONLY_STARTED"
+EVENT_INSTANCE_HEARTBEAT_STALE = "INSTANCE_HEARTBEAT_STALE"
+EVENT_INSTANCE_TAKEOVER = "INSTANCE_TAKEOVER"
+EVENT_INSTANCE_STOPPED = "INSTANCE_STOPPED"
+
+DEFAULT_INSTANCE_LOCK_KEY = "PRIMARY_FACTORY"
+DEFAULT_INSTANCE_TIMEOUT_SECONDS = 90
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 15
+DEFAULT_FACTORY_NODE_NAME = "VIDEO-FACTORY-PROD"
 
 # Níveis de Severidade de Eventos
 SEVERITY_INFO = "INFO"
@@ -46,6 +73,16 @@ PROVIDER_UNKNOWN = "UNKNOWN"
 # Configuração Padrão de Estoque Mínimo
 DEFAULT_MINIMUM_READY_STOCK = 3
 
+# Controle de Instância em Memória (Singleton por Processo)
+_instance_state_lock = threading.RLock()
+_instance_initialized: bool = False
+_current_node_id: Optional[str] = None
+_current_role: str = ROLE_PRIMARY
+_current_node_name: str = DEFAULT_FACTORY_NODE_NAME
+_current_started_at: Optional[datetime] = None
+_instance_heartbeat_thread: Optional[threading.Thread] = None
+_instance_heartbeat_stop_event = threading.Event()
+
 # Registro em memória de tarefas com cancelamento solicitado
 _cancel_lock = threading.RLock()
 _cancel_requested_tasks: Set[str] = set()
@@ -53,6 +90,7 @@ _cancel_requested_tasks: Set[str] = set()
 # Telemetria do Generation Worker
 _gen_heartbeat_lock = threading.RLock()
 _last_gen_heartbeat: Optional[datetime] = None
+
 
 
 def get_db_path(custom_path: Optional[str] = None) -> str:
@@ -96,8 +134,561 @@ def init_operator_db(db_path: Optional[str] = None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_op_events_comp ON operational_events(component);"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_op_events_sev ON operational_events(severity);"
+            """
+
+            CREATE TABLE IF NOT EXISTS instance_locks (
+                lock_key TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                pid INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                last_heartbeat TEXT NOT NULL,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL
+            );
+            """
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_inst_lock_status ON instance_locks(status);"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 0. Governança de Instância Única e Nó Primário (Fase V8.1)
+# ---------------------------------------------------------------------------
+
+def _is_local_pid_alive(pid: int) -> bool:
+    """Verifica se um processo com determinado PID ainda existe na máquina local."""
+    if pid <= 0:
+        return False
+
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                False,
+                pid,
+            )
+
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+
+            return ctypes.get_last_error() == 5
+
+        except Exception:
+            return False
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return False
+
+
+def _parse_iso_utc(ts: Optional[str]) -> Optional[datetime]:
+    """Converte string ISO para datetime UTC timezone-aware."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def acquire_instance_lock(
+    node_name: Optional[str] = None,
+    timeout_seconds: int = DEFAULT_INSTANCE_TIMEOUT_SECONDS,
+    db_path: Optional[str] = None,
+    force_node_id: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """Tenta adquirir ou renovar o lock de instância única da Video Factory.
+
+    Garante atomicidade estrita no SQLite (evitando corrida de takeover).
+    Se o lock for adquirido ou recuperado -> retorna (ROLE_PRIMARY, info).
+    Se outra instância estiver ativa e saudável -> retorna (ROLE_SECONDARY_VIEW_ONLY, info).
+    """
+    global _current_node_id, _current_role, _current_node_name, _current_started_at
+    init_operator_db(db_path)
+
+    now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.isoformat()
+    my_hostname = platform.node() or socket.gethostname() or "unknown_host"
+    my_pid = os.getpid()
+    chosen_node_name = (
+        node_name
+        or config.app.get("factory_node_name")
+        or DEFAULT_FACTORY_NODE_NAME
+    )
+    my_node_id = force_node_id or _current_node_id or str(uuid.uuid4())
+
+    events_to_log = []
+    outcome_role = None
+    outcome_dict = {}
+
+    with _instance_state_lock:
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                (DEFAULT_INSTANCE_LOCK_KEY,),
+            ).fetchone()
+
+            if row is None:
+                # Caso 1: Tabela vazia. Tenta INSERT atômico como PRIMARY.
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO instance_locks (
+                            lock_key, node_id, node_name, hostname, pid,
+                            started_at, last_heartbeat, role, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        """,
+                        (
+                            DEFAULT_INSTANCE_LOCK_KEY,
+                            my_node_id,
+                            chosen_node_name,
+                            my_hostname,
+                            my_pid,
+                            now_iso,
+                            now_iso,
+                            ROLE_PRIMARY,
+                            INSTANCE_STATUS_ACTIVE,
+                        ),
+                    )
+                    res_row = conn.execute(
+                        "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                        (DEFAULT_INSTANCE_LOCK_KEY,),
+                    ).fetchone()
+                    outcome_role = ROLE_PRIMARY
+                    outcome_dict = dict(res_row) if res_row else {}
+                    events_to_log.append({
+                        "severity": SEVERITY_INFO,
+                        "event_type": EVENT_INSTANCE_PRIMARY_ACQUIRED,
+                        "message": f"Nó primário '{chosen_node_name}' (PID {my_pid}) assumiu o controle da fábrica.",
+                        "metadata": {"node_id": my_node_id, "hostname": my_hostname, "pid": my_pid},
+                    })
+                except sqlite3.IntegrityError:
+                    # Outra instância inseriu concorrentemente! Re-lê o lock.
+                    row = conn.execute(
+                        "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                        (DEFAULT_INSTANCE_LOCK_KEY,),
+                    ).fetchone()
+
+            if outcome_role is None:
+                curr_dict = dict(row) if row else {}
+                curr_status = curr_dict.get("status")
+                curr_node_id = curr_dict.get("node_id")
+                curr_hostname = curr_dict.get("hostname")
+                curr_pid = int(curr_dict.get("pid") or 0)
+                curr_last_hb = _parse_iso_utc(curr_dict.get("last_heartbeat"))
+
+                # Caso 2: É o mesmo processo re-confirmando o lock
+                if (
+                    curr_status == INSTANCE_STATUS_ACTIVE
+                    and curr_hostname == my_hostname
+                    and curr_pid == my_pid
+                    and curr_node_id == my_node_id
+                ):
+                    conn.execute(
+                        """
+                        UPDATE instance_locks
+                        SET last_heartbeat = ?
+                        WHERE lock_key = ? AND node_id = ?;
+                        """,
+                        (now_iso, DEFAULT_INSTANCE_LOCK_KEY, curr_node_id),
+                    )
+                    res_row = conn.execute(
+                        "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                        (DEFAULT_INSTANCE_LOCK_KEY,),
+                    ).fetchone()
+                    outcome_role = ROLE_PRIMARY
+                    outcome_dict = dict(res_row) if res_row else curr_dict
+
+                # Caso 3: Lock liberado normalmente (status == STOPPED)
+                elif curr_status == INSTANCE_STATUS_STOPPED:
+                    cur = conn.execute(
+                        """
+                        UPDATE instance_locks
+                        SET node_id = ?, node_name = ?, hostname = ?, pid = ?,
+                            started_at = ?, last_heartbeat = ?, role = ?, status = ?
+                        WHERE lock_key = ? AND status = ?;
+                        """,
+                        (
+                            my_node_id,
+                            chosen_node_name,
+                            my_hostname,
+                            my_pid,
+                            now_iso,
+                            now_iso,
+                            ROLE_PRIMARY,
+                            INSTANCE_STATUS_ACTIVE,
+                            DEFAULT_INSTANCE_LOCK_KEY,
+                            INSTANCE_STATUS_STOPPED,
+                        ),
+                    )
+                    if cur.rowcount > 0:
+                        res_row = conn.execute(
+                            "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                            (DEFAULT_INSTANCE_LOCK_KEY,),
+                        ).fetchone()
+                        outcome_role = ROLE_PRIMARY
+                        outcome_dict = dict(res_row) if res_row else {}
+                        events_to_log.append({
+                            "severity": SEVERITY_INFO,
+                            "event_type": EVENT_INSTANCE_PRIMARY_ACQUIRED,
+                            "message": f"Nó primário '{chosen_node_name}' (PID {my_pid}) assumiu o lock após liberação limpa.",
+                            "metadata": {"node_id": my_node_id, "hostname": my_hostname, "pid": my_pid},
+                        })
+
+                # Caso 4: Verificar se o lock está stale ou se o processo local no mesmo host morreu
+                if outcome_role is None:
+                    is_stale = False
+                    stale_reason = ""
+                    if curr_last_hb:
+                        delta_sec = (now_utc - curr_last_hb).total_seconds()
+                        if delta_sec > timeout_seconds:
+                            is_stale = True
+                            stale_reason = f"heartbeat_timeout ({delta_sec:.1f}s > {timeout_seconds}s)"
+                    else:
+                        is_stale = True
+                        stale_reason = "missing_heartbeat"
+
+                    # Se no mesmo host, verifica se o PID local ainda está vivo
+                    if not is_stale and curr_hostname == my_hostname:
+                        if not _is_local_pid_alive(curr_pid):
+                            is_stale = True
+                            stale_reason = f"local_pid_dead (PID {curr_pid} não existe mais no host {my_hostname})"
+
+                    if is_stale:
+                        # Takeover Atômico no SQLite com WHERE last_heartbeat = ? (ou IS NULL)
+                        last_hb_val = curr_dict.get("last_heartbeat")
+                        if last_hb_val is None:
+                            cur = conn.execute(
+                                """
+                                UPDATE instance_locks
+                                SET node_id = ?, node_name = ?, hostname = ?, pid = ?,
+                                    started_at = ?, last_heartbeat = ?, role = ?, status = ?
+                                WHERE lock_key = ? AND last_heartbeat IS NULL;
+                                """,
+                                (
+                                    my_node_id,
+                                    chosen_node_name,
+                                    my_hostname,
+                                    my_pid,
+                                    now_iso,
+                                    now_iso,
+                                    ROLE_PRIMARY,
+                                    INSTANCE_STATUS_ACTIVE,
+                                    DEFAULT_INSTANCE_LOCK_KEY,
+                                ),
+                            )
+                        else:
+                            cur = conn.execute(
+                                """
+                                UPDATE instance_locks
+                                SET node_id = ?, node_name = ?, hostname = ?, pid = ?,
+                                    started_at = ?, last_heartbeat = ?, role = ?, status = ?
+                                WHERE lock_key = ? AND last_heartbeat = ?;
+                                """,
+                                (
+                                    my_node_id,
+                                    chosen_node_name,
+                                    my_hostname,
+                                    my_pid,
+                                    now_iso,
+                                    now_iso,
+                                    ROLE_PRIMARY,
+                                    INSTANCE_STATUS_ACTIVE,
+                                    DEFAULT_INSTANCE_LOCK_KEY,
+                                    last_hb_val,
+                                ),
+                            )
+                        if cur.rowcount > 0:
+                            res_row = conn.execute(
+                                "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                                (DEFAULT_INSTANCE_LOCK_KEY,),
+                            ).fetchone()
+                            outcome_role = ROLE_PRIMARY
+                            outcome_dict = dict(res_row) if res_row else {}
+                            events_to_log.append({
+                                "severity": SEVERITY_WARNING,
+                                "event_type": EVENT_INSTANCE_HEARTBEAT_STALE,
+                                "message": f"Lock da instância anterior identificado como stale ({stale_reason}). Nó anterior: {str(curr_node_id)[:8]}",
+                                "metadata": {"stale_reason": stale_reason, "previous_node": curr_node_id},
+                            })
+                            events_to_log.append({
+                                "severity": SEVERITY_WARNING,
+                                "event_type": EVENT_INSTANCE_TAKEOVER,
+                                "message": f"Nó '{chosen_node_name}' (PID {my_pid}) executou takeover atômico e assumiu como PRIMARY.",
+                                "metadata": {"node_id": my_node_id, "hostname": my_hostname, "pid": my_pid},
+                            })
+
+                # Caso 5: Se ainda não virou PRIMARY, lê o PRIMARY vencedor e vira SECONDARY
+                if outcome_role is None:
+                    fresh_row = conn.execute(
+                        "SELECT * FROM instance_locks WHERE lock_key = ?;",
+                        (DEFAULT_INSTANCE_LOCK_KEY,),
+                    ).fetchone()
+                    outcome_role = ROLE_SECONDARY_VIEW_ONLY
+                    outcome_dict = dict(fresh_row) if fresh_row else curr_dict
+
+        # Fim do bloco "with get_connection" -> transação SQLite commitada e liberada!
+        if outcome_role == ROLE_PRIMARY:
+            _current_node_id = outcome_dict.get("node_id") or my_node_id
+            _current_role = ROLE_PRIMARY
+            _current_node_name = outcome_dict.get("node_name") or chosen_node_name
+            _current_started_at = _parse_iso_utc(outcome_dict.get("started_at")) or now_utc
+
+            for ev in events_to_log:
+                log_operational_event(
+                    component="InstanceLock",
+                    severity=ev["severity"],
+                    event_type=ev["event_type"],
+                    message=ev["message"],
+                    metadata=ev.get("metadata"),
+                    db_path=db_path,
+                )
+            start_instance_heartbeat(db_path=db_path)
+            return ROLE_PRIMARY, outcome_dict
+        else:
+            return _enter_view_only(chosen_node_name, my_hostname, my_pid, outcome_dict, db_path)
+
+
+def _enter_view_only(
+    node_name: str,
+    hostname: str,
+    pid: int,
+    primary_dict: Dict[str, Any],
+    db_path: Optional[str],
+) -> Tuple[str, Dict[str, Any]]:
+    """Configura o processo atual para operar estritamente em SECONDARY_VIEW_ONLY."""
+    global _current_role, _current_node_name
+    _current_role = ROLE_SECONDARY_VIEW_ONLY
+    _current_node_name = node_name
+    stop_instance_heartbeat()
+
+    log_operational_event(
+        component="InstanceLock",
+        severity=SEVERITY_INFO,
+        event_type=EVENT_INSTANCE_VIEW_ONLY_STARTED,
+        message=f"Instância iniciada em modo SECONDARY_VIEW_ONLY (PID {pid}). PRIMARY ativo no nó '{primary_dict.get('node_name')}' (PID {primary_dict.get('pid')}).",
+        metadata_json=json.dumps({
+            "primary_node_id": primary_dict.get("node_id"),
+            "primary_hostname": primary_dict.get("hostname"),
+            "primary_pid": primary_dict.get("pid"),
+        }),
+        db_path=db_path,
+    )
+    return ROLE_SECONDARY_VIEW_ONLY, primary_dict
+
+
+def ensure_instance_initialized(
+    node_name: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """Garante a inicialização do estado da instância no processo (singleton).
+
+    Novas abas, sessões ou reruns do Streamlit NÃO executam novo acquire
+    nem renegociam o lock no SQLite.
+    """
+    global _instance_initialized, _current_role
+    with _instance_state_lock:
+        if _instance_initialized:
+            return _current_role, get_instance_info(db_path=db_path)
+        role, info = acquire_instance_lock(node_name=node_name, db_path=db_path)
+        _instance_initialized = True
+        return role, info
+
+
+def reset_instance_for_testing() -> None:
+    """Reseta o estado da instância em memória (exclusivo para testes unitários)."""
+    global _instance_initialized, _current_node_id, _current_role, _current_node_name, _current_started_at
+    stop_instance_heartbeat()
+    with _instance_state_lock:
+        _instance_initialized = False
+        _current_node_id = None
+        _current_role = ROLE_PRIMARY
+        _current_node_name = DEFAULT_FACTORY_NODE_NAME
+        _current_started_at = None
+
+
+def is_primary_instance(db_path: Optional[str] = None) -> bool:
+    """Retorna True se o processo atual for o PRIMARY da fábrica."""
+    with _instance_state_lock:
+        if not _instance_initialized:
+            ensure_instance_initialized(db_path=db_path)
+        return _current_role == ROLE_PRIMARY
+
+
+def require_primary_instance(db_path: Optional[str] = None) -> None:
+    """Valida se o processo atual é a instância primária operacional.
+
+    Levanta PermissionError se for SECONDARY_VIEW_ONLY.
+    """
+    if not is_primary_instance(db_path=db_path):
+        raise PermissionError(
+            "Operação bloqueada: Esta instância está operando em modo VIEW ONLY. "
+            "Apenas o nó primário pode executar gerações, agendamentos, publicações ou alterações de estado."
+        )
+
+
+def record_instance_heartbeat(db_path: Optional[str] = None) -> None:
+    """Atualiza o timestamp de heartbeat da instância primária atual."""
+    with _instance_state_lock:
+        if _current_role != ROLE_PRIMARY or not _current_node_id:
+            return
+        curr_node_id = _current_node_id
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_connection(db_path) as conn:
+            conn.execute(
+                """
+                UPDATE instance_locks
+                SET last_heartbeat = ?
+                WHERE lock_key = ? AND node_id = ? AND role = ? AND status = ?;
+                """,
+                (now_iso, DEFAULT_INSTANCE_LOCK_KEY, curr_node_id, ROLE_PRIMARY, INSTANCE_STATUS_ACTIVE),
+            )
+    except Exception as exc:
+        logger.warning(f"Erro ao registrar heartbeat de instância: {exc}")
+
+
+def _instance_heartbeat_worker_loop(interval_seconds: int, db_path: Optional[str]) -> None:
+    """Loop daemon em segundo plano que emite batimentos cardíacos periódicos do nó PRIMARY."""
+    while not _instance_heartbeat_stop_event.wait(interval_seconds):
+        with _instance_state_lock:
+            if _current_role != ROLE_PRIMARY:
+                break
+        record_instance_heartbeat(db_path=db_path)
+
+
+def start_instance_heartbeat(
+    interval_seconds: int = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+    db_path: Optional[str] = None,
+) -> None:
+    """Inicia a thread daemon de heartbeat para o nó primário."""
+    global _instance_heartbeat_thread
+    with _instance_state_lock:
+        if _current_role != ROLE_PRIMARY:
+            return
+        if _instance_heartbeat_thread is not None and _instance_heartbeat_thread.is_alive():
+            return
+        _instance_heartbeat_stop_event.clear()
+        _instance_heartbeat_thread = threading.Thread(
+            target=_instance_heartbeat_worker_loop,
+            args=(interval_seconds, db_path),
+            name="InstanceHeartbeatWorker",
+            daemon=True,
+        )
+        _instance_heartbeat_thread.start()
+
+
+def stop_instance_heartbeat() -> None:
+    """Para a thread de heartbeat de instância."""
+    global _instance_heartbeat_thread
+    _instance_heartbeat_stop_event.set()
+    _instance_heartbeat_thread = None
+
+
+def release_instance_lock(db_path: Optional[str] = None) -> None:
+    """Libera o lock de instância no encerramento limpo da aplicação."""
+    stop_instance_heartbeat()
+    with _instance_state_lock:
+        if _current_role == ROLE_PRIMARY and _current_node_id:
+            try:
+                with get_connection(db_path) as conn:
+                    conn.execute(
+                        """
+                        UPDATE instance_locks
+                        SET status = ?
+                        WHERE lock_key = ? AND node_id = ?;
+                        """,
+                        (INSTANCE_STATUS_STOPPED, DEFAULT_INSTANCE_LOCK_KEY, _current_node_id),
+                    )
+                log_operational_event(
+                    component="InstanceLock",
+                    severity=SEVERITY_INFO,
+                    event_type=EVENT_INSTANCE_STOPPED,
+                    message=f"Nó primário '{_current_node_name}' (PID {os.getpid()}) liberou o lock de instância.",
+                    db_path=db_path,
+                )
+            except Exception as exc:
+                logger.warning(f"Erro ao liberar instance lock: {exc}")
+
+
+atexit.register(release_instance_lock)
+
+
+def get_instance_info(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna detalhes completos do nó, role, saúde do heartbeat e status de acesso remoto."""
+    init_operator_db(db_path)
+    now_utc = datetime.now(timezone.utc)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM instance_locks WHERE lock_key = ?;",
+            (DEFAULT_INSTANCE_LOCK_KEY,),
+        ).fetchone()
+
+    with _instance_state_lock:
+        local_role = _current_role
+        local_name = _current_node_name
+        local_started = _current_started_at
+
+    info = {
+        "local_role": local_role,
+        "is_primary": (local_role == ROLE_PRIMARY),
+        "node_name": local_name,
+        "hostname": platform.node() or socket.gethostname() or "unknown_host",
+        "pid": os.getpid(),
+        "primary_node_id": None,
+        "primary_node_name": None,
+        "primary_hostname": None,
+        "primary_pid": None,
+        "primary_status": None,
+        "last_heartbeat": None,
+        "heartbeat_seconds_ago": None,
+        "is_heartbeat_stale": False,
+        "uptime_str": "—",
+        "remote_access_url": "http://0.0.0.0:8501 (LAN / Tailscale)",
+    }
+
+    if local_started:
+        up_sec = int((now_utc - local_started).total_seconds())
+        hours = up_sec // 3600
+        mins = (up_sec % 3600) // 60
+        info["uptime_str"] = f"{hours}h {mins:02d}m" if hours > 0 else f"{mins}m"
+
+    if row:
+        r = dict(row)
+        info["primary_node_id"] = r.get("node_id")
+        info["primary_node_name"] = r.get("node_name")
+        info["primary_hostname"] = r.get("hostname")
+        info["primary_pid"] = r.get("pid")
+        info["primary_status"] = r.get("status")
+        info["last_heartbeat"] = r.get("last_heartbeat")
+
+        hb_dt = _parse_iso_utc(r.get("last_heartbeat"))
+        if hb_dt:
+            diff = max(0, int((now_utc - hb_dt).total_seconds()))
+            info["heartbeat_seconds_ago"] = diff
+            info["is_heartbeat_stale"] = (diff > DEFAULT_INSTANCE_TIMEOUT_SECONDS)
+
+    return info
+
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +706,11 @@ def get_factory_state(db_path: Optional[str] = None) -> str:
 
 def set_factory_state(state: str, db_path: Optional[str] = None) -> None:
     """Define e persiste o estado operacional da fábrica no SQLite."""
+    require_primary_instance(db_path=db_path)
     clean_state = str(state).strip().upper()
     if clean_state not in FACTORY_STATES:
         raise ValueError(f"Estado de fábrica inválido: '{state}'. Opções: {FACTORY_STATES}")
+
     from app.services import scheduler
     scheduler.set_setting("factory_state", clean_state, db_path=db_path)
     log_operational_event(
@@ -178,6 +771,7 @@ def get_minimum_ready_stock(db_path: Optional[str] = None) -> int:
 
 def set_minimum_ready_stock(val: int, db_path: Optional[str] = None) -> None:
     """Define e persiste o limite mínimo de estoque pronto."""
+    require_primary_instance(db_path=db_path)
     from app.services import scheduler
     int_val = max(1, int(val))
     scheduler.set_setting("minimum_ready_stock", str(int_val), db_path=db_path)
@@ -189,9 +783,11 @@ def set_minimum_ready_stock(val: int, db_path: Optional[str] = None) -> None:
 
 def request_task_cancel(task_id: str, db_path: Optional[str] = None) -> bool:
     """Registra intenção de cancelamento seguro para a tarefa especificada."""
+    require_primary_instance(db_path=db_path)
     from app.services import state as sm
     with _cancel_lock:
         _cancel_requested_tasks.add(task_id)
+
 
     task_data = sm.state.get_task(task_id)
     if task_data:
@@ -242,6 +838,7 @@ def log_operational_event(
     message: str,
     task_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    metadata_json: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> int:
     """Registra um evento operacional no banco SQLite."""
@@ -251,7 +848,7 @@ def log_operational_event(
     if clean_sev not in SEVERITIES:
         clean_sev = SEVERITY_INFO
 
-    meta_str = json.dumps(metadata) if metadata else None
+    meta_str = metadata_json if metadata_json is not None else (json.dumps(metadata) if metadata else None)
 
     with get_connection(db_path) as conn:
         cur = conn.execute(
@@ -703,6 +1300,7 @@ def reconcile_orphaned_tasks(
     - Se o arquivo final de vídeo existe: reconcilia para COMPLETE.
     - Se a tarefa estava no meio do processo: marca FAILED com failed_stage='interrupted_by_restart'.
     """
+    require_primary_instance(db_path=db_path)
     from app.services import scheduler
     from app.services import state as sm
     from app.services import webui_task
@@ -765,8 +1363,10 @@ def reconcile_orphaned_tasks(
 
 def reexecute_task(task_id: str, task_base_dir: Optional[str] = None) -> Optional[str]:
     """Cria uma nova execução controlada reutilizando os parâmetros originais da tarefa."""
+    require_primary_instance()
     from app.models.schema import VideoParams
     from app.services import state as sm
+
     from app.services import webui_task
 
     task_data = sm.state.get_task(task_id)
@@ -872,6 +1472,12 @@ def get_system_status(db_path: Optional[str] = None) -> Dict[str, Any]:
         if prov_info.get("status") == PROVIDER_UNAVAILABLE:
             alerts.append(f"⚠ Provedor {prov_name} INDISPONÍVEL: {prov_info.get('last_error') or prov_info.get('details')}")
 
+    inst_info = get_instance_info(db_path=db_path)
+    if inst_info.get("is_heartbeat_stale"):
+        alerts.append(f"⚠ Nó primário sem heartbeat há {inst_info.get('heartbeat_seconds_ago')}s (stale)")
+    if not inst_info.get("is_primary"):
+        alerts.append(f"ℹ️ Instância secundária em modo VIEW ONLY (Primário: {inst_info.get('primary_node_name')})")
+
     return {
         "factory_state": consolidated_factory,
         "is_paused": factory_state == FACTORY_STATE_PAUSED,
@@ -885,4 +1491,5 @@ def get_system_status(db_path: Optional[str] = None) -> Dict[str, Any]:
         "last_publication": last_pub_info,
         "last_error": recent_errors[0] if recent_errors else None,
         "alerts": alerts,
+        "instance": inst_info,
     }

@@ -366,163 +366,91 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
     return mock_data
 
 
-def render_operator_console():
-    """Main renderer for V8 Operator Console."""
-    # Demo Mode Selector (Purely in-memory, without persisting to DB)
-    with st.expander("🛠️ Preferências & Demonstração Visual", expanded=False):
-        c_demo1, c_demo2 = st.columns([0.4, 0.6])
-        with c_demo1:
-            demo_enabled = st.checkbox(
-                "Modo Demonstração Visual (Homologação)",
-                value=False,
-                key="op_demo_mode_toggle",
-                help="Exibe cenários simulados na UI para validação visual estrita sem gravar mocks no SQLite.",
-            )
-        with c_demo2:
-            scenario_choice = "Factory RUNNING"
-            if demo_enabled:
-                scenario_choice = st.selectbox(
-                    "Cenário de Demonstração:",
-                    options=[
-                        "Factory RUNNING",
-                        "Secondary VIEW ONLY",
-                        "Factory PAUSED",
-                        "DEGRADED com Reddit 403",
-                        "Ready Stock abaixo do mínimo",
-                        "Item em Recovery",
-                        "Full Showcase (Todos os 7 Estados)",
-                    ],
-                    index=0,
-                    key="op_demo_scenario_sb",
-                )
+# ---------------------------------------------------------------------------
+# Data Loading Helpers
+# ---------------------------------------------------------------------------
 
+def _load_telemetry_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, Any]:
     if demo_enabled:
-        st.info(f"🎭 **Modo Demonstração Ativo:** Simulando `{scenario_choice}` (nenhum dado real é modificado).")
-        data = _get_mock_fixtures(scenario_choice)
-    else:
-        # Load real data from services
-        sys_status = operator_console.get_system_status()
-        g_summary = operator_console.get_generation_queue_summary()
-        s_summary = operator_console.get_scheduler_queue_summary()
-        stock = operator_console.get_ready_stock()
-        provs = operator_console.get_provider_health_summary()
-        recent_errs = operator_console.get_recent_errors(limit=10)
-        recent_events = operator_console.get_operational_events(limit=20)
-        profile_overview = operator_console.get_profile_operations_overview()
+        return _get_mock_fixtures(scenario_choice)
+    sys_status = operator_console.get_system_status()
+    inst_info = sys_status.get("instance") or operator_console.get_instance_info()
+    stock = operator_console.get_ready_stock()
+    provs = operator_console.get_provider_health_summary()
+    recent_errs = operator_console.get_recent_errors(limit=10)
+    return {
+        "factory_state": sys_status["factory_state"],
+        "is_paused": sys_status["is_paused"],
+        "generation_worker": sys_status["generation_worker"],
+        "scheduler_worker": sys_status["scheduler_worker"],
+        "auto_publish": sys_status["auto_publish"],
+        "dry_run": sys_status["dry_run"],
+        "growth_mode": sys_status["growth_mode"],
+        "heartbeats": sys_status["heartbeats"],
+        "last_publication": sys_status.get("last_publication"),
+        "stock": stock,
+        "providers": provs,
+        "errors": recent_errs,
+        "instance": inst_info,
+    }
 
-        # Recoverable tasks
-        from app.services import state as sm
-        all_tasks, _ = sm.state.get_all_tasks(1, 100)
-        recoverable = [
-            {
+
+def _load_live_task_data(demo_enabled: bool, scenario_choice: str) -> Optional[Dict[str, Any]]:
+    if demo_enabled:
+        return _get_mock_fixtures(scenario_choice).get("active_task")
+    from app.services import state as sm
+    all_tasks, _ = sm.state.get_all_tasks(1, 30)
+    for t in all_tasks:
+        if t.get("state") == const.TASK_STATE_PROCESSING:
+            from app.services import profile_manager
+            task_p_id = t.get("profile_id") or profile_manager.get_task_profile_id(t.get("task_id", ""))
+            task_p_obj = profile_manager.get_profile(task_p_id) if task_p_id else None
+            task_prof_name = task_p_obj.get("name") if task_p_obj else "Video Factory Default"
+            return {
                 "task_id": t.get("task_id"),
-                "topic": t.get("video_subject") or t.get("topic") or t.get("task_id", ""),
-                "problem": "Execução interrompida após reinício da aplicação.",
-                "last_stage": t.get("failed_stage") or "Desconhecido",
-                "created_at": t.get("created_at") or "",
+                "profile_id": task_p_id,
+                "profile_name": task_prof_name,
+                "topic": t.get("video_subject") or t.get("topic") or "Geração em andamento",
+                "stage": "Processando etapa do pipeline",
+                "stage_idx": 4,
+                "progress": int(t.get("progress") or 50),
+                "elapsed": "em andamento",
+                "preset": t.get("monetization_preset") or "Cross Platform",
+                "safety_status": t.get("safety_status") or "PASS",
+                "quality_score": t.get("quality_score") or 75,
+                "quality_label": t.get("quality_label") or "GOOD",
+                "strategy_score": t.get("strategy_score") or 80,
+                "strategy_label": t.get("strategy_label") or "PROMISING",
             }
-            for t in all_tasks
-            if t.get("failed_stage") == "interrupted_by_restart"
-        ]
+    return None
 
-        # Active generation task detection
-        active_task = None
-        for t in all_tasks:
-            if t.get("state") == const.TASK_STATE_PROCESSING:
-                from app.services import profile_manager
-                task_p_id = t.get("profile_id") or profile_manager.get_task_profile_id(t.get("task_id", ""))
-                task_p_obj = profile_manager.get_profile(task_p_id) if task_p_id else None
-                task_prof_name = task_p_obj.get("name") if task_p_obj else "Video Factory Default"
-                active_task = {
-                    "task_id": t.get("task_id"),
-                    "profile_id": task_p_id,
-                    "profile_name": task_prof_name,
-                    "topic": t.get("video_subject") or t.get("topic") or "Geração em andamento",
-                    "stage": "Processando etapa do pipeline",
-                    "stage_idx": 4,
-                    "progress": int(t.get("progress") or 50),
-                    "elapsed": "em andamento",
-                    "preset": t.get("monetization_preset") or "Cross Platform",
-                    "safety_status": t.get("safety_status") or "PASS",
-                    "quality_score": t.get("quality_score") or 75,
-                    "quality_label": t.get("quality_label") or "GOOD",
-                    "strategy_score": t.get("strategy_score") or 80,
-                    "strategy_label": t.get("strategy_label") or "PROMISING",
-                }
-                break
 
-        # Operational alerts
-        active_alerts = []
-        if stock.get("is_below_minimum"):
-            active_alerts.append({
-                "severity": "WARNING",
-                "title": "Ready Stock abaixo do mínimo operacional",
-                "desc": f"Estoque atual de {stock.get('total_ready', 0)} vídeos (meta: {stock.get('minimum_threshold', 3)}).",
-                "time_ago": "ativo",
-            })
-        for prov_name, p_data in provs.items():
-            if p_data.get("status") in ("DEGRADED", "UNAVAILABLE"):
-                active_alerts.append({
-                    "severity": "WARNING" if p_data.get("status") == "DEGRADED" else "ERROR",
-                    "title": f"Provedor {prov_name} com instabilidade ({p_data.get('status')})",
-                    "desc": _sanitize_text(p_data.get("last_error") or p_data.get("details", "")),
-                    "time_ago": "recente",
-                })
-
-        # Timeline formatting
-        timeline_list = []
-        for ev in recent_events[:15]:
-            sev = ev.get("severity", "INFO")
-            b_color = "green" if sev == "INFO" else ("yellow" if sev == "WARNING" else "red")
-            b_icon = "✓" if sev == "INFO" else ("⚠" if sev == "WARNING" else "✕")
-            time_raw = ev.get("timestamp", "")
-            t_short = time_raw[11:16] if len(time_raw) >= 16 else time_raw
-            timeline_list.append({
-                "time": t_short or "—",
-                "badge": b_icon,
-                "color": b_color,
-                "text": f"{ev.get('component', '')}: {ev.get('message', '')}",
-            })
-
-        data = {
-            "factory_state": sys_status["factory_state"],
-            "is_paused": sys_status["is_paused"],
-            "generation_worker": sys_status["generation_worker"],
-            "scheduler_worker": sys_status["scheduler_worker"],
-            "auto_publish": sys_status["auto_publish"],
-            "dry_run": sys_status["dry_run"],
-            "growth_mode": sys_status["growth_mode"],
-            "heartbeats": sys_status["heartbeats"],
-            "last_publication": sys_status.get("last_publication"),
-            "active_task": active_task,
-            "g_summary": g_summary,
-            "s_summary": s_summary,
-            "stock": stock,
-            "providers": provs,
-            "alerts": active_alerts,
-            "timeline": timeline_list,
-            "errors": [
-                {
-                    "time": e.get("timestamp", "")[:19],
-                    "component": e.get("component", ""),
-                    "severity": e.get("severity", "ERROR"),
-                    "task_id": e.get("task_id") or "—",
-                    "message": _sanitize_text(e.get("message", "")),
-                }
-                for e in recent_errs
-            ],
-            "recoverable": recoverable,
-            "instance": sys_status.get("instance") or operator_console.get_instance_info(),
-            "profile_overview": profile_overview,
+def _load_queues_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, Any]:
+    if demo_enabled:
+        d = _get_mock_fixtures(scenario_choice)
+        return {
+            "g_summary": d.get("g_summary", {}),
+            "s_summary": d.get("s_summary", {}),
+            "stock": d.get("stock", {}),
+            "growth_mode": d.get("growth_mode", "normal"),
         }
+    return {
+        "g_summary": operator_console.get_generation_queue_summary(),
+        "s_summary": operator_console.get_scheduler_queue_summary(),
+        "stock": operator_console.get_ready_stock(),
+        "growth_mode": operator_console.get_system_status().get("growth_mode", "normal"),
+    }
 
-    # =========================================================================
-    # 1. COMMAND HEADER
-    # =========================================================================
+
+# ---------------------------------------------------------------------------
+# Section 1 & 2: Command Header & Telemetry Cards
+# ---------------------------------------------------------------------------
+
+def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    data = _load_telemetry_data(demo_enabled, scenario_choice)
     factory_state = data["factory_state"]
     is_paused = data["is_paused"]
     inst_info = data.get("instance") or {}
-    is_primary = inst_info.get("is_primary", True)
     node_name = inst_info.get("node_name") or "VIDEO-FACTORY-PROD"
     hostname = inst_info.get("hostname") or "—"
     pid = inst_info.get("pid") or 0
@@ -579,7 +507,7 @@ def render_operator_console():
         unsafe_allow_html=True,
     )
 
-    # Persistent Paused Banner (Impossible to ignore)
+    # Persistent Paused Banner
     if is_paused or factory_state == "PAUSED":
         c_banner_text, c_banner_btn = st.columns([0.8, 0.2])
         with c_banner_text:
@@ -736,9 +664,7 @@ def render_operator_console():
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # 2. SYSTEM HEALTH (Faixa horizontal de cards compactos)
-    # =========================================================================
+    # Health Cards
     h_col1, h_col2, h_col3, h_col4, h_col5, h_col6 = st.columns(6)
 
     # Card 1: Generation Worker
@@ -850,11 +776,24 @@ def render_operator_console():
 
     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # 3. LIVE OPERATIONS (Painel de Operações em Tempo Real)
-    # =========================================================================
+
+@st.fragment(run_every="5s")
+def _render_command_header_and_telemetry_active(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_command_header_and_telemetry_content(demo_enabled, scenario_choice, is_primary)
+
+
+@st.fragment(run_every="15s")
+def _render_command_header_and_telemetry_idle(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_command_header_and_telemetry_content(demo_enabled, scenario_choice, is_primary)
+
+
+# ---------------------------------------------------------------------------
+# Section 3: Live Operations (Tempo Real)
+# ---------------------------------------------------------------------------
+
+def _render_live_operations_content(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     st.markdown("#### ⚡ Operações em Tempo Real")
-    active_task = data.get("active_task")
+    active_task = _load_live_task_data(demo_enabled, scenario_choice)
     if active_task:
         task_id = active_task["task_id"]
         topic = active_task["topic"]
@@ -915,10 +854,23 @@ def render_operator_console():
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # 4. QUEUES & READY STOCK (Duas Colunas Operacionais)
-    # =========================================================================
+
+@st.fragment(run_every="5s")
+def _render_live_operations_active(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_live_operations_content(demo_enabled, scenario_choice, is_primary)
+
+
+def _render_live_operations_idle(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_live_operations_content(demo_enabled, scenario_choice, is_primary)
+
+
+# ---------------------------------------------------------------------------
+# Section 4: Queues & Ready Stock
+# ---------------------------------------------------------------------------
+
+def _render_queues_content(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     st.markdown("#### 📋 Filas Operacionais & Estoque")
+    data = _load_queues_data(demo_enabled, scenario_choice)
     col_queue_a, col_queue_b = st.columns(2)
 
     # Coluna A: Generation Queue
@@ -1062,15 +1014,35 @@ def render_operator_console():
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # 4.5 MULTI-PROFILE & CHANNEL MANAGEMENT
-    # =========================================================================
+
+@st.fragment(run_every="10s")
+def _render_queues_active(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_queues_content(demo_enabled, scenario_choice, is_primary)
+
+
+@st.fragment(run_every="30s")
+def _render_queues_idle(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_queues_content(demo_enabled, scenario_choice, is_primary)
+
+
+# ---------------------------------------------------------------------------
+# Section 4.5: Multi-Profile & Channel Management (STATIC - Sem auto-refresh)
+# ---------------------------------------------------------------------------
+
+def _render_profile_management_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     st.markdown("#### 📁 Multi-Profile & Channel Management")
     st.caption("Gerenciamento operacional de perfis de conteúdo e canais de distribuição vinculados.")
 
-    prof_overview = data.get("profile_overview", [])
+    from app.services import profile_manager
+    active_prof = profile_manager.get_active_profile()
+    active_prof_id = active_prof.get("id") or "default"
+
+    if demo_enabled:
+        prof_overview = _get_mock_fixtures(scenario_choice).get("profile_overview", [])
+    else:
+        prof_overview = operator_console.get_profile_operations_overview()
+
     if not prof_overview:
-        from app.services import profile_manager
         raw_profs = profile_manager.list_profiles()
         prof_overview = [
             {
@@ -1150,7 +1122,6 @@ def render_operator_console():
                     use_container_width=True,
                 ):
                     if not demo_enabled:
-                        from app.services import profile_manager
                         profile_manager.set_active_profile(selected_m_prof_id)
                         st.toast(f"Perfil '{cur_selected_po.get('name')}' definido como ativo.", icon="⭐")
                         st.rerun()
@@ -1185,7 +1156,6 @@ def render_operator_console():
                     gw_idx = growth_opts.index(curr_gw) if curr_gw in growth_opts else 2
                     e_growth = st.selectbox("Growth Mode", options=growth_opts, index=gw_idx, key=f"edit_p_growth_{selected_m_prof_id}", disabled=not is_primary)
 
-                # Default profile cannot be deactivated
                 is_default_profile = (selected_m_prof_id == "default")
                 e_active = st.checkbox(
                     "Perfil Ativo",
@@ -1197,167 +1167,154 @@ def render_operator_console():
 
                 if st.button("Salvar Alterações do Perfil", key=f"btn_save_p_{selected_m_prof_id}", disabled=not is_primary, type="primary"):
                     if not demo_enabled:
-                        from app.services import profile_manager
                         try:
                             profile_manager.update_profile(
                                 profile_id=selected_m_prof_id,
-                                name=e_name,
-                                niche=e_niche,
-                                language=e_lang,
-                                region=e_reg,
+                                name=e_name.strip() or None,
+                                niche=e_niche.strip() or None,
+                                language=e_lang.strip() or None,
+                                region=e_reg.strip() or None,
                                 default_preset=e_preset,
                                 growth_mode=e_growth,
                                 is_active=e_active,
                             )
-                            st.toast(f"Perfil '{e_name}' atualizado com sucesso.", icon="✓")
+                            st.toast("Perfil atualizado com sucesso!", icon="💾")
                             st.rerun()
                         except Exception as p_err:
-                            st.error(f"Erro ao atualizar perfil: {p_err}")
+                            st.error(f"Erro ao salvar perfil: {p_err}")
                     else:
-                        st.toast("Edição de perfil simulada em modo demonstração.", icon="✓")
+                        st.toast("Perfil atualizado em modo demonstração.", icon="💾")
 
         with c_prof_create:
-            with st.expander("➕ Criar Novo Perfil", expanded=False):
+            with st.expander("➕ Criar Novo Perfil de Conteúdo", expanded=False):
                 if not is_primary:
-                    st.caption("🔒 View Only — alterações devem ser realizadas no PRIMARY.")
-                new_p_name = st.text_input("Nome do Perfil", key="new_p_name", placeholder="ex: Histórias & Mistérios", disabled=not is_primary)
-                new_p_niche = st.text_input("Nicho", key="new_p_niche", placeholder="ex: curiosidades_historicas", disabled=not is_primary)
+                    st.caption("🔒 View Only — novos perfis devem ser criados no PRIMARY.")
+                new_p_name = st.text_input("Nome do Perfil", placeholder="Ex: Curiosidades Brasil", key="new_p_name", disabled=not is_primary)
+                new_p_slug = st.text_input("Slug Identificador", placeholder="Ex: curiosidades-brasil", key="new_p_slug", disabled=not is_primary)
+                new_p_niche = st.text_input("Nicho Principal", placeholder="Ex: Curiosidades", key="new_p_niche", disabled=not is_primary)
 
-                c_n1, c_n2 = st.columns(2)
-                with c_n1:
+                c_np1, c_np2 = st.columns(2)
+                with c_np1:
                     new_p_lang = st.text_input("Idioma", value="pt-BR", key="new_p_lang", disabled=not is_primary)
-                with c_n2:
+                with c_np2:
                     new_p_reg = st.text_input("Região", value="BR", key="new_p_reg", disabled=not is_primary)
 
-                c_n3, c_n4 = st.columns(2)
-                with c_n3:
-                    new_p_preset = st.selectbox("Preset Padrão", options=["cross_platform", "youtube_shorts_original", "tiktok_rewards"], key="new_p_preset", disabled=not is_primary)
-                with c_n4:
-                    new_p_growth = st.selectbox("Growth Mode", options=["warmup", "conservative", "normal", "scale"], index=0, key="new_p_growth", disabled=not is_primary)
+                c_np3, c_np4 = st.columns(2)
+                with c_np3:
+                    new_p_preset = st.selectbox("Preset Inicial", options=["cross_platform", "youtube_shorts_original", "tiktok_rewards"], key="new_p_preset", disabled=not is_primary)
+                with c_np4:
+                    new_p_growth = st.selectbox("Growth Inicial", options=["warmup", "conservative", "normal", "scale"], index=2, key="new_p_growth", disabled=not is_primary)
 
-                if st.button("Criar Perfil", key="btn_create_new_p", disabled=not is_primary, type="primary"):
-                    if not new_p_name.strip():
-                        st.error("Nome do perfil é obrigatório.")
+                if st.button("Criar e Ativar Perfil", key="btn_create_p", disabled=not is_primary, type="primary"):
+                    if not new_p_name.strip() or not new_p_slug.strip():
+                        st.warning("Nome e Slug são obrigatórios para criar o perfil.")
                     elif not demo_enabled:
-                        from app.services import profile_manager
                         try:
-                            created_p = profile_manager.create_profile(
-                                name=new_p_name,
-                                niche=new_p_niche,
-                                language=new_p_lang,
-                                region=new_p_reg,
+                            new_p = profile_manager.create_profile(
+                                name=new_p_name.strip(),
+                                slug=new_p_slug.strip(),
+                                niche=new_p_niche.strip() or None,
+                                language=new_p_lang.strip() or "pt-BR",
+                                region=new_p_reg.strip() or "BR",
                                 default_preset=new_p_preset,
                                 growth_mode=new_p_growth,
                                 is_active=True,
                             )
-                            st.toast(f"Perfil '{created_p.get('name')}' criado com sucesso! (ID: {created_p.get('id')})", icon="🎉")
+                            st.toast(f"Perfil '{new_p['name']}' criado com sucesso!", icon="🎉")
                             st.rerun()
                         except Exception as c_err:
                             st.error(f"Erro ao criar perfil: {c_err}")
                     else:
-                        st.toast("Criação de perfil simulada em modo demonstração.", icon="🎉")
+                        st.toast("Perfil criado em modo demonstração.", icon="🎉")
 
-        # Canais de Publicação do Perfil Selecionado
-        st.markdown(f"##### 📺 Canais de Publicação — `{cur_selected_po.get('name')}`")
+        # Canais Vinculados ao Perfil Selecionado
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+        st.markdown(f"##### 📺 Canais de Publicação Vinculados — {cur_selected_po.get('name')}")
+
+        channels = []
         if not demo_enabled:
-            from app.services import profile_manager
-            cur_channels = profile_manager.list_channels(profile_id=selected_m_prof_id)
+            channels = profile_manager.list_channels(profile_id=selected_m_prof_id)
         else:
-            cur_channels = [
-                {"id": "ch-yt-mock", "channel_id": "ch-yt-mock", "platform": "youtube", "display_name": "Canal YouTube Principal", "channel_name": "Canal YouTube Principal", "external_profile_name": "UploadPost_YT", "is_enabled": True},
-                {"id": "ch-tt-mock", "channel_id": "ch-tt-mock", "platform": "tiktok", "display_name": "Conta TikTok Oficial", "channel_name": "Conta TikTok Oficial", "external_profile_name": "UploadPost_TT", "is_enabled": True},
+            channels = [
+                {
+                    "id": "mock_ch_yt",
+                    "profile_id": selected_m_prof_id,
+                    "platform": "youtube",
+                    "display_name": f"{cur_selected_po.get('name')} Oficial",
+                    "external_profile_name": "@canal_oficial",
+                    "is_enabled": 1,
+                    "created_at": "2026-09-18 10:00:00",
+                },
+                {
+                    "id": "mock_ch_tk",
+                    "profile_id": selected_m_prof_id,
+                    "platform": "tiktok",
+                    "display_name": f"{cur_selected_po.get('name')} Shorts",
+                    "external_profile_name": "@tiktok_oficial",
+                    "is_enabled": 1,
+                    "created_at": "2026-09-18 10:00:00",
+                }
             ]
 
-        # Multi-channel warning
-        plat_counts = {}
-        for c in cur_channels:
-            p_clean = c.get("platform", "").lower().strip()
-            plat_counts[p_clean] = plat_counts.get(p_clean, 0) + 1
+        if channels:
+            ch_rows = []
+            for ch in channels:
+                ch_status = "🟢 Habilitado" if ch.get("is_enabled") else "⚪ Desabilitado"
+                plat_icon = "▶️ YouTube" if ch.get("platform") == "youtube" else ("🎵 TikTok" if ch.get("platform") == "tiktok" else ch.get("platform"))
+                ch_rows.append({
+                    "ID": ch["id"],
+                    "Plataforma": plat_icon,
+                    "Nome de Exibição": ch.get("display_name"),
+                    "Identificador Externo": ch.get("external_profile_name") or "—",
+                    "Status": ch_status,
+                })
+            st.dataframe(ch_rows, use_container_width=True, hide_index=True)
 
-        multi_plats = [p for p, cnt in plat_counts.items() if cnt > 1]
-        if multi_plats:
-            st.info(f"ℹ️ **Canais Múltiplos Detectados:** Este perfil possui mais de um canal para: `{'`, `'.join(multi_plats)}`. Na publicação agendada ou manual, cada destino operará com especificidade por `channel_id`.")
-
-        if cur_channels:
-            for ch in cur_channels:
-                cid = ch.get("channel_id") or ch.get("id")
-                c_name = ch.get("display_name") or ch.get("channel_name") or "Canal Sem Nome"
-                c_plat = ch.get("platform", "").upper()
-                c_ext = ch.get("external_profile_name") or "Padrão / Global"
-                c_en = bool(ch.get("is_enabled"))
-                en_badge = "<span class='op-badge op-badge-green'>🟢 Ativo</span>" if c_en else "<span class='op-badge op-badge-gray'>⚪ Desabilitado</span>"
-
-                with st.container(border=True):
-                    c_col1, c_col2, c_col3 = st.columns([0.65, 0.2, 0.15])
-                    with c_col1:
-                        st.markdown(f"**{c_plat}** — {c_name} &nbsp; {en_badge}", unsafe_allow_html=True)
-                        st.caption(f"ID: `...{cid[-8:]}` | Upload-Post Destino: `...{c_ext}` (sem segredos)")
-                    with c_col2:
-                        btn_txt = "Desabilitar" if c_en else "Habilitar"
-                        if st.button(
-                            btn_txt,
-                            key=f"toggle_ch_{cid}",
-                            disabled=not is_primary,
-                            help="Apenas o nó primário pode alterar o status do canal." if not is_primary else None,
-                            use_container_width=True,
-                        ):
-                            if not demo_enabled:
-                                from app.services import profile_manager
-                                profile_manager.set_channel_enabled(cid, not c_en)
-                                st.toast(f"Canal '{c_name}' {'desabilitado' if c_en else 'habilitado'}.", icon="📺")
-                                st.rerun()
-                            else:
-                                st.toast("Alternância de canal simulada em modo demonstração.", icon="📺")
-                    with c_col3:
-                        with st.popover("Editar", use_container_width=True):
-                            if not is_primary:
-                                st.caption("🔒 View Only")
-                            edit_c_name = st.text_input("Nome de Exibição", value=c_name, key=f"edit_c_name_{cid}", disabled=not is_primary)
-                            edit_c_ext = st.text_input("Identificador Upload-Post (opcional)", value=ch.get("external_profile_name") or "", key=f"edit_c_ext_{cid}", disabled=not is_primary, help="Apenas identificador não sensível de destino.")
-                            if st.button("Salvar Canal", key=f"btn_save_ch_{cid}", disabled=not is_primary, type="primary"):
-                                if not demo_enabled:
-                                    from app.services import profile_manager
-                                    try:
-                                        profile_manager.update_channel(
-                                            channel_id=cid,
-                                            display_name=edit_c_name,
-                                            external_profile_name=edit_c_ext or None,
-                                        )
-                                        st.toast("Canal atualizado com sucesso.", icon="✓")
-                                        st.rerun()
-                                    except Exception as ce_err:
-                                        st.error(f"Erro: {ce_err}")
-                                else:
-                                    st.toast("Canal atualizado em demonstração.", icon="✓")
+            c_ch_sel, c_ch_btn = st.columns([0.7, 0.3])
+            with c_ch_sel:
+                ch_opts = [ch["id"] for ch in channels]
+                ch_lbls = {ch["id"]: f"{ch.get('platform').upper()} — {ch.get('display_name')}" for ch in channels}
+                sel_ch_act = st.selectbox("Selecionar Canal para Ação:", options=ch_opts, format_func=lambda cid: ch_lbls.get(cid, cid), key="op_ch_act_sel")
+            with c_ch_btn:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                cur_ch_obj = next((ch for ch in channels if ch["id"] == sel_ch_act), None)
+                if cur_ch_obj:
+                    ch_is_en = bool(cur_ch_obj.get("is_enabled"))
+                    ch_btn_lbl = "Desabilitar Canal" if ch_is_en else "Habilitar Canal"
+                    if st.button(ch_btn_lbl, key=f"btn_toggle_ch_{sel_ch_act}", disabled=not is_primary, use_container_width=True):
+                        if not demo_enabled:
+                            profile_manager.toggle_channel(sel_ch_act, is_enabled=not ch_is_en)
+                            st.toast(f"Canal alterado para {'habilitado' if not ch_is_en else 'desabilitado'}.", icon="📺")
+                            st.rerun()
+                        else:
+                            st.toast("Canal alterado em demonstração.", icon="📺")
         else:
-            st.caption("Nenhum canal de publicação configurado para este perfil.")
+            st.info(f"Nenhum canal de publicação vinculado a este perfil. Adicione abaixo.")
 
-        # Adicionar Canal
-        with st.expander(f"➕ Adicionar Canal ao Perfil '{cur_selected_po.get('name')}'", expanded=False):
+        with st.expander("➕ Vincular Novo Canal ao Perfil", expanded=False):
             if not is_primary:
-                st.caption("🔒 View Only — alterações devem ser realizadas no PRIMARY.")
-            c_add1, c_add2 = st.columns(2)
-            with c_add1:
-                new_ch_plat = st.selectbox("Plataforma", options=["youtube", "tiktok"], key=f"new_ch_plat_{selected_m_prof_id}", disabled=not is_primary)
-                new_ch_name = st.text_input("Nome do Canal (ex: Curiosidades BR)", key=f"new_ch_name_{selected_m_prof_id}", disabled=not is_primary)
-            with c_add2:
-                new_ch_ext = st.text_input("Identificador Upload-Post (opcional)", key=f"new_ch_ext_{selected_m_prof_id}", placeholder="ex: perfil_uploadpost_01", disabled=not is_primary, help="Identificador não confidencial do destino configurado no Upload-Post.")
-                new_ch_en = st.checkbox("Canal Habilitado", value=True, key=f"new_ch_en_{selected_m_prof_id}", disabled=not is_primary)
+                st.caption("🔒 View Only — novos canais devem ser vinculados no PRIMARY.")
+            col_nc1, col_nc2 = st.columns(2)
+            with col_nc1:
+                new_ch_plat = st.selectbox("Plataforma", options=["youtube", "tiktok"], key="new_ch_plat", disabled=not is_primary)
+                new_ch_name = st.text_input("Nome de Exibição", placeholder="Ex: Canal Principal Brasil", key="new_ch_name", disabled=not is_primary)
+            with col_nc2:
+                new_ch_ext = st.text_input("Identificador Externo / Handle (opcional)", placeholder="Ex: @meucanal", key="new_ch_ext", disabled=not is_primary)
+                new_ch_en = st.checkbox("Canal Habilitado para Publicação", value=True, key="new_ch_en", disabled=not is_primary)
 
-            if st.button("Vincular Novo Canal", key=f"btn_add_ch_{selected_m_prof_id}", disabled=not is_primary, type="primary"):
+            if st.button("Vincular Canal", key="btn_create_ch", disabled=not is_primary, type="primary"):
                 if not new_ch_name.strip():
-                    st.error("Nome do canal é obrigatório.")
+                    st.warning("O nome de exibição é obrigatório.")
                 elif not demo_enabled:
-                    from app.services import profile_manager
                     try:
                         profile_manager.create_channel(
                             profile_id=selected_m_prof_id,
                             platform=new_ch_plat,
-                            display_name=new_ch_name,
-                            external_profile_name=new_ch_ext or None,
+                            display_name=new_ch_name.strip(),
+                            external_profile_name=new_ch_ext.strip() or None,
                             is_enabled=new_ch_en,
                         )
-                        st.toast(f"Canal '{new_ch_name}' vinculado com sucesso ao perfil!", icon="📺")
+                        st.toast("Canal vinculado com sucesso!", icon="📺")
                         st.rerun()
                     except Exception as ch_err:
                         st.error(f"Erro ao vincular canal: {ch_err}")
@@ -1366,20 +1323,26 @@ def render_operator_console():
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # 5. PROVIDER HEALTH (Saúde dos 8 Provedores)
-    # =========================================================================
+
+# ---------------------------------------------------------------------------
+# Section 5: Provider Health & Analytics Providers (STATIC - Sem auto-refresh)
+# ---------------------------------------------------------------------------
+
+def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     st.markdown("#### 🩺 Saúde dos Provedores (Provider Health)")
     st.caption("Telemetria passiva e estática baseada em eventos reais. Nenhuma chamada externa desnecessária é realizada.")
 
-    providers = data.get("providers", {})
+    if demo_enabled:
+        providers = _get_mock_fixtures(scenario_choice).get("providers", {})
+    else:
+        providers = operator_console.get_provider_health_summary()
+
     p_cols = st.columns(4)
 
     for idx, (p_name, p_val) in enumerate(providers.items()):
         col_idx = idx % 4
         with p_cols[col_idx]:
             p_status = p_val.get("status", "UNKNOWN")
-            # Strict allowed statuses check
             if p_status not in ("CONFIGURED", "NOT CONFIGURED", "NOT_CONFIGURED", "HEALTHY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"):
                 p_status = "UNKNOWN"
 
@@ -1453,9 +1416,79 @@ def render_operator_console():
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-    # =========================================================================
-    # 6. ALERTS, TIMELINE, ERRORS & RECOVERY
-    # =========================================================================
+
+# ---------------------------------------------------------------------------
+# Section 6: Alerts, Timeline, Errors & Recovery (STATIC - Sem auto-refresh)
+# ---------------------------------------------------------------------------
+
+def _render_tabs_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    if demo_enabled:
+        d = _get_mock_fixtures(scenario_choice)
+        alerts = d.get("alerts", [])
+        timeline = d.get("timeline", [])
+        errs = d.get("errors", [])
+        recoverable = d.get("recoverable", [])
+    else:
+        stock = operator_console.get_ready_stock()
+        provs = operator_console.get_provider_health_summary()
+        recent_errs = operator_console.get_recent_errors(limit=10)
+        recent_events = operator_console.get_operational_events(limit=20)
+        from app.services import state as sm
+        all_tasks, _ = sm.state.get_all_tasks(1, 100)
+        recoverable = [
+            {
+                "task_id": t.get("task_id"),
+                "topic": t.get("video_subject") or t.get("topic") or t.get("task_id", ""),
+                "problem": "Execução interrompida após reinício da aplicação.",
+                "last_stage": t.get("failed_stage") or "Desconhecido",
+                "created_at": t.get("created_at") or "",
+            }
+            for t in all_tasks
+            if t.get("failed_stage") == "interrupted_by_restart"
+        ]
+
+        alerts = []
+        if stock.get("is_below_minimum"):
+            alerts.append({
+                "severity": "WARNING",
+                "title": "Ready Stock abaixo do mínimo operacional",
+                "desc": f"Estoque atual de {stock.get('total_ready', 0)} vídeos (meta: {stock.get('minimum_threshold', 3)}).",
+                "time_ago": "ativo",
+            })
+        for prov_name, p_data in provs.items():
+            if p_data.get("status") in ("DEGRADED", "UNAVAILABLE"):
+                alerts.append({
+                    "severity": "WARNING" if p_data.get("status") == "DEGRADED" else "ERROR",
+                    "title": f"Provedor {prov_name} com instabilidade ({p_data.get('status')})",
+                    "desc": _sanitize_text(p_data.get("last_error") or p_data.get("details", "")),
+                    "time_ago": "recente",
+                })
+
+        timeline = []
+        for ev in recent_events[:15]:
+            sev = ev.get("severity", "INFO")
+            b_color = "green" if sev == "INFO" else ("yellow" if sev == "WARNING" else "red")
+            b_icon = "✓" if sev == "INFO" else ("⚠" if sev == "WARNING" else "✕")
+            time_raw = ev.get("timestamp", "")
+            t_short = time_raw[11:16] if len(time_raw) >= 16 else time_raw
+            timeline.append({
+                "time": t_short or "—",
+                "badge": b_icon,
+                "color": b_color,
+                "text": f"{ev.get('component', '')}: {ev.get('message', '')}",
+            })
+
+        errs = [
+            {
+                "time": e.get("timestamp", "")[:19],
+                "component": e.get("component", ""),
+                "severity": e.get("severity", "ERROR"),
+                "task_id": e.get("task_id") or "—",
+                "message": _sanitize_text(e.get("message", "")),
+            }
+            for e in recent_errs
+        ]
+
     tab_alerts, tab_timeline, tab_errors, tab_recovery = st.tabs([
         "⚠️ Alert Center",
         "🕘 Linha do Tempo",
@@ -1463,9 +1496,8 @@ def render_operator_console():
         "🧯 Central de Recuperação",
     ])
 
-    # Tab 1: Alert Center (Active alerts only)
+    # Tab 1: Alert Center
     with tab_alerts:
-        alerts = data.get("alerts", [])
         if not alerts:
             st.success("✓ Nenhum alerta operacional ativo no momento.")
         else:
@@ -1485,7 +1517,6 @@ def render_operator_console():
 
     # Tab 2: Operational Timeline
     with tab_timeline:
-        timeline = data.get("timeline", [])
         if not timeline:
             st.caption("Nenhum evento registrado recentemente.")
         else:
@@ -1503,7 +1534,6 @@ def render_operator_console():
 
     # Tab 3: Error Center
     with tab_errors:
-        errs = data.get("errors", [])
         if not errs:
             st.success("✓ Nenhum erro recente na Central de Erros.")
         else:
@@ -1517,7 +1547,6 @@ def render_operator_console():
 
     # Tab 4: Recovery Center
     with tab_recovery:
-        recoverable = data.get("recoverable", [])
         if not recoverable:
             st.info("✓ Nenhuma tarefa requer recuperação no momento.")
         else:
@@ -1559,3 +1588,101 @@ def render_operator_console():
                             else:
                                 st.toast("Cancelamento simulado em modo demonstração.", icon="❌")
 
+
+# ---------------------------------------------------------------------------
+# Main Entry Point
+# ---------------------------------------------------------------------------
+
+def render_operator_console():
+    """Main renderer for V8 Operator Console.
+
+    Modular UX Architecture:
+    - Top bar: Visual Demo preferences + discrete 'Atualizar agora' button.
+    - Command Header & Telemetry: Auto-refresh 5s (active) or 15s (idle).
+    - Live Operations: Auto-refresh 5s (when task is processing) or static (idle).
+    - Queues & Stock: Auto-refresh 10s (when items in queue) or 30s (idle).
+    - Multi-Profile & Channel Management: STATIC (no background auto-refresh).
+    - Provider Health: STATIC (no background auto-refresh; test and manual fetch remain stable).
+    - Tabs (Alerts, Timeline, Errors, Recovery): STATIC.
+    """
+    c_pref, c_refresh = st.columns([0.78, 0.22])
+    with c_pref:
+        with st.expander("🛠️ Preferências & Demonstração Visual", expanded=False):
+            c_demo1, c_demo2 = st.columns([0.4, 0.6])
+            with c_demo1:
+                demo_enabled = st.checkbox(
+                    "Modo Demonstração Visual (Homologação)",
+                    value=False,
+                    key="op_demo_mode_toggle",
+                    help="Exibe cenários simulados na UI para validação visual estrita sem gravar mocks no SQLite.",
+                )
+            with c_demo2:
+                scenario_choice = "Factory RUNNING"
+                if demo_enabled:
+                    scenario_choice = st.selectbox(
+                        "Cenário de Demonstração:",
+                        options=[
+                            "Factory RUNNING",
+                            "Secondary VIEW ONLY",
+                            "Factory PAUSED",
+                            "DEGRADED com Reddit 403",
+                            "Ready Stock abaixo do mínimo",
+                            "Item em Recovery",
+                            "Full Showcase (Todos os 7 Estados)",
+                        ],
+                        index=0,
+                        key="op_demo_scenario_sb",
+                    )
+    with c_refresh:
+        st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Atualizar agora", key="op_btn_manual_refresh", use_container_width=True, help="Recarrega todos os dados do Operator Console imediatamente"):
+            st.toast("Console operacional atualizado.", icon="🔄")
+            st.rerun()
+
+    if demo_enabled:
+        st.info(f"🎭 **Modo Demonstração Ativo:** Simulando `{scenario_choice}` (nenhum dado real é modificado).")
+        is_primary = (scenario_choice != "Secondary VIEW ONLY")
+        has_active_gen = (scenario_choice in ("Factory RUNNING", "Full Showcase (Todos os 7 Estados)"))
+        has_active_sched = has_active_gen
+        has_active_work = has_active_gen
+    else:
+        is_primary = operator_console.is_primary_instance()
+        try:
+            from app.services import webui_task
+            has_active_gen = webui_task.has_active_generation_tasks()
+        except Exception:
+            has_active_gen = False
+        try:
+            from app.services import scheduler
+            exec_st = scheduler.get_executor_status()
+            has_active_sched = (exec_st.get("state") == "processing")
+        except Exception:
+            has_active_sched = False
+        has_active_work = has_active_gen or has_active_sched
+
+    # 1 & 2. Command Header & Telemetry Cards (5s active / 15s idle)
+    if has_active_work:
+        _render_command_header_and_telemetry_active(demo_enabled, scenario_choice, is_primary)
+    else:
+        _render_command_header_and_telemetry_idle(demo_enabled, scenario_choice, is_primary)
+
+    # 3. Live Operations (5s when active / static when idle)
+    if has_active_gen:
+        _render_live_operations_active(demo_enabled, scenario_choice, is_primary)
+    else:
+        _render_live_operations_idle(demo_enabled, scenario_choice, is_primary)
+
+    # 4. Queues & Ready Stock (10s active / 30s idle)
+    if has_active_work:
+        _render_queues_active(demo_enabled, scenario_choice, is_primary)
+    else:
+        _render_queues_idle(demo_enabled, scenario_choice, is_primary)
+
+    # 4.5 Multi-Profile & Channel Management (STATIC)
+    _render_profile_management_section(demo_enabled, scenario_choice, is_primary)
+
+    # 5. Provider Health (STATIC)
+    _render_provider_health_section(demo_enabled, scenario_choice, is_primary)
+
+    # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
+    _render_tabs_section(demo_enabled, scenario_choice, is_primary)

@@ -1531,12 +1531,7 @@ def _render_task_video_preview():
     st.video(preview_file)
 
 
-@st.fragment(run_every="1.5s")
-def _render_task_manager_entry():
-    # 任务可能由当前页面或其它页面触发生成。入口单独用 fragment 定时刷新，
-    # 只更新任务数量和 popover 内容，不打断主页面表单输入。
-    task_summaries = _collect_task_summaries()
-    processing_task_count = _count_processing_tasks(task_summaries)
+def _render_task_manager_popover_body(task_summaries, processing_task_count):
     with st.container(key="task_manager_entry", width="content"):
         with st.popover(
             _task_manager_label(processing_task_count),
@@ -1547,6 +1542,30 @@ def _render_task_manager_entry():
             ),
         ):
             _render_task_manager_panel(task_summaries)
+
+
+@st.fragment(run_every="5s")
+def _render_task_manager_entry_active():
+    task_summaries = _collect_task_summaries()
+    processing_task_count = _count_processing_tasks(task_summaries)
+    _render_task_manager_popover_body(task_summaries, processing_task_count)
+
+
+@st.fragment(run_every="30s")
+def _render_task_manager_entry_idle():
+    task_summaries = _collect_task_summaries()
+    processing_task_count = _count_processing_tasks(task_summaries)
+    _render_task_manager_popover_body(task_summaries, processing_task_count)
+
+
+def _render_task_manager_entry():
+    # Detecta se ha tarefas ativas para escolher fragmento ativo (5s) ou idle (30s), evitando polling rapido desnecessario
+    task_summaries = _collect_task_summaries()
+    processing_task_count = _count_processing_tasks(task_summaries)
+    if processing_task_count > 0:
+        _render_task_manager_entry_active()
+    else:
+        _render_task_manager_entry_idle()
 
 
 def _load_task_restore_payload(task_id):
@@ -2369,7 +2388,7 @@ def _get_next_active_generation_task_id(current_task_id=None):
     return ""
 
 
-@st.fragment(run_every="1.5s")
+@st.fragment(run_every="5s")
 def _render_running_generation_task(task_id):
     """只在任务运行期间轮询；结束后切回静态结果，停止不必要的定时刷新。"""
     try:
@@ -7854,7 +7873,7 @@ def _validate_batch_prerequisites(
             st.stop()
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every="10s")
 def _render_publication_schedule():
     st.divider()
     st.write(f"### 📅 {tr('Publication Schedule')}")
@@ -8182,7 +8201,6 @@ def _render_publication_schedule():
             st.caption(tr("No Planned Posts Available to Reschedule"))
 
 
-@st.fragment(run_every="4s")
 def _render_operator_console_section():
     with st.expander(f"🛠️ {tr('Operator Console')}", expanded=True):
         from webui.components.operator_console import render_operator_console

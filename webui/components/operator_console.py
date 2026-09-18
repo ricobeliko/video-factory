@@ -214,6 +214,44 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
             "uptime_str": "3h 45m",
             "remote_access_url": "http://0.0.0.0:8501 (LAN / Tailscale)",
         },
+        "profile_overview": [
+            {
+                "profile_id": "default",
+                "name": "Video Factory Default",
+                "slug": "default",
+                "niche": "curiosidades",
+                "language": "pt-BR",
+                "region": "BR",
+                "default_preset": "cross_platform",
+                "growth_mode": "normal",
+                "is_active": True,
+                "is_active_profile": False,
+                "channels_count": 2,
+                "channels_enabled": 2,
+                "ready_stock": 2,
+                "pending_processing": 1,
+                "scheduled": 2,
+                "failed": 0,
+            },
+            {
+                "profile_id": "curiosidades-brasil",
+                "name": "Curiosidades Brasil",
+                "slug": "curiosidades-brasil",
+                "niche": "curiosidades_brasil",
+                "language": "pt-BR",
+                "region": "BR",
+                "default_preset": "cross_platform",
+                "growth_mode": "warmup",
+                "is_active": True,
+                "is_active_profile": True,
+                "channels_count": 2,
+                "channels_enabled": 2,
+                "ready_stock": 3,
+                "pending_processing": 0,
+                "scheduled": 2,
+                "failed": 0,
+            },
+        ],
     }
 
     if scenario == "Factory PAUSED":
@@ -370,6 +408,7 @@ def render_operator_console():
         provs = operator_console.get_provider_health_summary()
         recent_errs = operator_console.get_recent_errors(limit=10)
         recent_events = operator_console.get_operational_events(limit=20)
+        profile_overview = operator_console.get_profile_operations_overview()
 
         # Recoverable tasks
         from app.services import state as sm
@@ -474,6 +513,7 @@ def render_operator_console():
             ],
             "recoverable": recoverable,
             "instance": sys_status.get("instance") or operator_console.get_instance_info(),
+            "profile_overview": profile_overview,
         }
 
     # =========================================================================
@@ -936,35 +976,64 @@ def render_operator_console():
             )
 
             st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-            st.markdown("##### Próxima Publicação Agendada")
+            st.markdown("##### Próximas Publicações Agendadas")
             upcoming = s_sum.get("upcoming_posts", [])
-            if upcoming:
-                nxt = upcoming[0]
-                nxt_plat = nxt.get("platform", "YouTube").capitalize()
-                nxt_time = nxt.get("scheduled_at", "—")
-                nxt_top = nxt.get("topic") or f"Task {nxt.get('task_id', '')[:8]}"
-                nxt_mode = nxt.get("growth_mode", data["growth_mode"])
-                nxt_prof = nxt.get("profile_name")
-                nxt_chan = nxt.get("channel_name")
 
-                profile_channel_html = ""
-                if nxt_prof:
-                    profile_channel_html += f"<b>Perfil:</b> {nxt_prof}<br>"
-                if nxt_chan:
-                    profile_channel_html += f"<b>Canal:</b> {nxt_plat} — {nxt_chan}<br>"
+            all_queue_profs = sorted(list({str(p.get("profile_name") or "Default/Legacy") for p in upcoming}))
+            all_queue_plats = sorted(list({str(p.get("platform") or "YouTube").capitalize() for p in upcoming}))
+            all_queue_stats = sorted(list({str(p.get("status") or "planned").lower() for p in upcoming}))
 
-                st.markdown(
-                    f"""
-                    <div style="background: rgba(59, 130, 246, 0.08); border-left: 4px solid #3b82f6; padding: 8px 12px; border-radius: 4px; font-size: 0.86rem; margin-bottom: 8px;">
-                        <b>🚀 {nxt_plat.upper()}</b> &nbsp;|&nbsp; <b>Horário:</b> {nxt_time}<br>
-                        {profile_channel_html}<b>Tema:</b> {nxt_top[:42]}<br>
-                        <span style="opacity: 0.8; font-size: 0.8rem;">Growth Mode: {nxt_mode}</span>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            with st.expander("🔍 Filtros da Fila", expanded=False):
+                q_f1, q_f2, q_f3 = st.columns(3)
+                with q_f1:
+                    filter_prof = st.selectbox("Perfil:", options=["Todos"] + all_queue_profs, key="op_q_filt_prof")
+                with q_f2:
+                    filter_plat = st.selectbox("Plataforma:", options=["Todas"] + all_queue_plats, key="op_q_filt_plat")
+                with q_f3:
+                    filter_stat = st.selectbox("Status:", options=["Todos"] + all_queue_stats, key="op_q_filt_stat")
+
+            filtered_upcoming = []
+            for post in upcoming:
+                p_name = post.get("profile_name") or "Default/Legacy"
+                plat = str(post.get("platform") or "YouTube").capitalize()
+                stat = str(post.get("status") or "planned").lower()
+
+                if filter_prof != "Todos" and p_name != filter_prof:
+                    continue
+                if filter_plat != "Todas" and plat.lower() != filter_plat.lower():
+                    continue
+                if filter_stat != "Todos" and stat != filter_stat.lower():
+                    continue
+                filtered_upcoming.append(post)
+
+            if filtered_upcoming:
+                for post_item in filtered_upcoming[:5]:
+                    p_plat = str(post_item.get("platform") or "YouTube").capitalize()
+                    p_time = post_item.get("scheduled_at") or "—"
+                    p_top = post_item.get("topic") or f"Task {str(post_item.get('task_id', ''))[:8]}"
+                    p_prof = post_item.get("profile_name") or "Default/Legacy"
+                    p_chan = post_item.get("channel_name") or "Legacy"
+                    p_stat = post_item.get("status") or "planned"
+                    p_mode = post_item.get("growth_mode") or data.get("growth_mode", "normal")
+
+                    stat_badge = "🟢 Planned" if p_stat == "planned" else ("🔵 Ready" if p_stat == "ready" else f"⚪ {p_stat}")
+
+                    st.markdown(
+                        f"""
+                        <div style="background: rgba(59, 130, 246, 0.08); border-left: 4px solid #3b82f6; padding: 6px 10px; border-radius: 4px; font-size: 0.84rem; margin-bottom: 6px;">
+                            <div style="display: flex; justify-content: space-between;">
+                                <b>🚀 {p_plat.upper()}</b>
+                                <span>{stat_badge} &nbsp;|&nbsp; <b>{p_time}</b></span>
+                            </div>
+                            <b>Perfil:</b> {html.escape(str(p_prof))} &nbsp;|&nbsp; <b>Canal:</b> {html.escape(str(p_chan))}<br>
+                            <b>Tema:</b> {html.escape(str(p_top[:42]))}<br>
+                            <span style="opacity: 0.8; font-size: 0.78rem;">Growth Mode: {html.escape(str(p_mode))}</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
             else:
-                st.caption("Nenhuma publicação agendada na fila.")
+                st.caption("Nenhum agendamento encontrado para os filtros selecionados.")
 
     # Ready Stock Panel
     stk_info = data["stock"]
@@ -990,6 +1059,310 @@ def render_operator_console():
 
         if stk_info.get("is_below_minimum"):
             st.warning("⚠ Estoque pronto abaixo do mínimo operacional. Recomenda-se planejar novas gerações pelo Autopilot.")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+    # =========================================================================
+    # 4.5 MULTI-PROFILE & CHANNEL MANAGEMENT
+    # =========================================================================
+    st.markdown("#### 📁 Multi-Profile & Channel Management")
+    st.caption("Gerenciamento operacional de perfis de conteúdo e canais de distribuição vinculados.")
+
+    prof_overview = data.get("profile_overview", [])
+    if not prof_overview:
+        from app.services import profile_manager
+        raw_profs = profile_manager.list_profiles()
+        prof_overview = [
+            {
+                "profile_id": p["id"],
+                "name": p.get("name"),
+                "slug": p.get("slug"),
+                "niche": p.get("niche") or "—",
+                "language": p.get("language") or "pt-BR",
+                "region": p.get("region") or "BR",
+                "default_preset": p.get("default_preset") or "cross_platform",
+                "growth_mode": p.get("growth_mode") or "normal",
+                "is_active": bool(p.get("is_active")),
+                "is_active_profile": (p["id"] == active_prof_id),
+                "channels_count": 0,
+                "channels_enabled": 0,
+                "ready_stock": 0,
+                "pending_processing": 0,
+                "scheduled": 0,
+                "failed": 0,
+            }
+            for p in raw_profs
+        ]
+
+    # Operations Overview per Profile
+    with st.container(border=True):
+        st.markdown("##### 📊 Visão Geral Operacional por Perfil")
+        p_table_rows = []
+        for po in prof_overview:
+            act_badge = "🟢 Ativo" if po.get("is_active") else "⚪ Inativo"
+            is_cur_active = " ⭐ [ATIVO]" if po.get("is_active_profile") else ""
+            p_table_rows.append({
+                "Perfil": f"{po.get('name')}{is_cur_active}",
+                "Slug": po.get("slug"),
+                "Nicho": po.get("niche"),
+                "Idioma/Região": f"{po.get('language')}/{po.get('region')}",
+                "Preset": po.get("default_preset"),
+                "Modo": po.get("growth_mode"),
+                "Canais": f"{po.get('channels_enabled')}/{po.get('channels_count')}",
+                "Estoque": po.get("ready_stock", 0),
+                "Em Andamento": po.get("pending_processing", 0),
+                "Agendados": po.get("scheduled", 0),
+                "Falhas": po.get("failed", 0),
+                "Status": act_badge,
+            })
+        st.dataframe(p_table_rows, use_container_width=True, hide_index=True)
+
+    # Detalhes e Gestão de Perfil Selecionado
+    with st.container(border=True):
+        prof_ids = [po["profile_id"] for po in prof_overview]
+        prof_labels = {po["profile_id"]: f"{po.get('name')} ({po.get('slug')})" + (" ⭐ [ATIVO]" if po.get("is_active_profile") else "") for po in prof_overview}
+
+        sel_p_idx = 0
+        if active_prof_id in prof_ids:
+            sel_p_idx = prof_ids.index(active_prof_id)
+
+        col_sel_p, col_p_actions = st.columns([0.65, 0.35])
+        with col_sel_p:
+            selected_m_prof_id = st.selectbox(
+                "Selecionar Perfil para Detalhes / Gestão de Canais:",
+                options=prof_ids,
+                index=sel_p_idx,
+                format_func=lambda pid: prof_labels.get(pid, pid),
+                key="op_m_prof_selector",
+            )
+
+        cur_selected_po = next((po for po in prof_overview if po["profile_id"] == selected_m_prof_id), prof_overview[0] if prof_overview else {})
+        is_sel_active = cur_selected_po.get("is_active_profile", False)
+
+        with col_p_actions:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            if not is_sel_active and cur_selected_po.get("is_active"):
+                if st.button(
+                    "⭐ Ativar como Perfil Atual",
+                    key=f"op_set_active_btn_{selected_m_prof_id}",
+                    disabled=not is_primary,
+                    help="Apenas o nó primário pode alternar perfis." if not is_primary else "Torna este o perfil operacional ativo para novas gerações.",
+                    use_container_width=True,
+                ):
+                    if not demo_enabled:
+                        from app.services import profile_manager
+                        profile_manager.set_active_profile(selected_m_prof_id)
+                        st.toast(f"Perfil '{cur_selected_po.get('name')}' definido como ativo.", icon="⭐")
+                        st.rerun()
+                    else:
+                        st.toast("Perfil ativo simulado em modo demonstração.", icon="⭐")
+
+        # Visualizar/Editar Perfil e Criar Novo Perfil em Colunas/Expanders
+        c_prof_edit, c_prof_create = st.columns(2)
+
+        with c_prof_edit:
+            with st.expander(f"✏️ Editar Perfil: {cur_selected_po.get('name')}", expanded=False):
+                if not is_primary:
+                    st.caption("🔒 View Only — alterações devem ser realizadas no PRIMARY.")
+                e_name = st.text_input("Nome do Perfil", value=cur_selected_po.get("name") or "", key=f"edit_p_name_{selected_m_prof_id}", disabled=not is_primary)
+                e_niche = st.text_input("Nicho", value=cur_selected_po.get("niche") or "", key=f"edit_p_niche_{selected_m_prof_id}", disabled=not is_primary)
+
+                c_e1, c_e2 = st.columns(2)
+                with c_e1:
+                    e_lang = st.text_input("Idioma", value=cur_selected_po.get("language") or "pt-BR", key=f"edit_p_lang_{selected_m_prof_id}", disabled=not is_primary)
+                with c_e2:
+                    e_reg = st.text_input("Região", value=cur_selected_po.get("region") or "BR", key=f"edit_p_reg_{selected_m_prof_id}", disabled=not is_primary)
+
+                c_e3, c_e4 = st.columns(2)
+                with c_e3:
+                    preset_opts = ["cross_platform", "youtube_shorts_original", "tiktok_rewards"]
+                    curr_pr = cur_selected_po.get("default_preset") or "cross_platform"
+                    pr_idx = preset_opts.index(curr_pr) if curr_pr in preset_opts else 0
+                    e_preset = st.selectbox("Preset Padrão", options=preset_opts, index=pr_idx, key=f"edit_p_preset_{selected_m_prof_id}", disabled=not is_primary)
+                with c_e4:
+                    growth_opts = ["warmup", "conservative", "normal", "scale"]
+                    curr_gw = cur_selected_po.get("growth_mode") or "normal"
+                    gw_idx = growth_opts.index(curr_gw) if curr_gw in growth_opts else 2
+                    e_growth = st.selectbox("Growth Mode", options=growth_opts, index=gw_idx, key=f"edit_p_growth_{selected_m_prof_id}", disabled=not is_primary)
+
+                # Default profile cannot be deactivated
+                is_default_profile = (selected_m_prof_id == "default")
+                e_active = st.checkbox(
+                    "Perfil Ativo",
+                    value=cur_selected_po.get("is_active", True),
+                    key=f"edit_p_active_{selected_m_prof_id}",
+                    disabled=(not is_primary or is_default_profile),
+                    help="O perfil 'default' é a base do sistema e não pode ser desativado." if is_default_profile else None,
+                )
+
+                if st.button("Salvar Alterações do Perfil", key=f"btn_save_p_{selected_m_prof_id}", disabled=not is_primary, type="primary"):
+                    if not demo_enabled:
+                        from app.services import profile_manager
+                        try:
+                            profile_manager.update_profile(
+                                profile_id=selected_m_prof_id,
+                                name=e_name,
+                                niche=e_niche,
+                                language=e_lang,
+                                region=e_reg,
+                                default_preset=e_preset,
+                                growth_mode=e_growth,
+                                is_active=e_active,
+                            )
+                            st.toast(f"Perfil '{e_name}' atualizado com sucesso.", icon="✓")
+                            st.rerun()
+                        except Exception as p_err:
+                            st.error(f"Erro ao atualizar perfil: {p_err}")
+                    else:
+                        st.toast("Edição de perfil simulada em modo demonstração.", icon="✓")
+
+        with c_prof_create:
+            with st.expander("➕ Criar Novo Perfil", expanded=False):
+                if not is_primary:
+                    st.caption("🔒 View Only — alterações devem ser realizadas no PRIMARY.")
+                new_p_name = st.text_input("Nome do Perfil", key="new_p_name", placeholder="ex: Histórias & Mistérios", disabled=not is_primary)
+                new_p_niche = st.text_input("Nicho", key="new_p_niche", placeholder="ex: curiosidades_historicas", disabled=not is_primary)
+
+                c_n1, c_n2 = st.columns(2)
+                with c_n1:
+                    new_p_lang = st.text_input("Idioma", value="pt-BR", key="new_p_lang", disabled=not is_primary)
+                with c_n2:
+                    new_p_reg = st.text_input("Região", value="BR", key="new_p_reg", disabled=not is_primary)
+
+                c_n3, c_n4 = st.columns(2)
+                with c_n3:
+                    new_p_preset = st.selectbox("Preset Padrão", options=["cross_platform", "youtube_shorts_original", "tiktok_rewards"], key="new_p_preset", disabled=not is_primary)
+                with c_n4:
+                    new_p_growth = st.selectbox("Growth Mode", options=["warmup", "conservative", "normal", "scale"], index=0, key="new_p_growth", disabled=not is_primary)
+
+                if st.button("Criar Perfil", key="btn_create_new_p", disabled=not is_primary, type="primary"):
+                    if not new_p_name.strip():
+                        st.error("Nome do perfil é obrigatório.")
+                    elif not demo_enabled:
+                        from app.services import profile_manager
+                        try:
+                            created_p = profile_manager.create_profile(
+                                name=new_p_name,
+                                niche=new_p_niche,
+                                language=new_p_lang,
+                                region=new_p_reg,
+                                default_preset=new_p_preset,
+                                growth_mode=new_p_growth,
+                                is_active=True,
+                            )
+                            st.toast(f"Perfil '{created_p.get('name')}' criado com sucesso! (ID: {created_p.get('id')})", icon="🎉")
+                            st.rerun()
+                        except Exception as c_err:
+                            st.error(f"Erro ao criar perfil: {c_err}")
+                    else:
+                        st.toast("Criação de perfil simulada em modo demonstração.", icon="🎉")
+
+        # Canais de Publicação do Perfil Selecionado
+        st.markdown(f"##### 📺 Canais de Publicação — `{cur_selected_po.get('name')}`")
+        if not demo_enabled:
+            from app.services import profile_manager
+            cur_channels = profile_manager.list_channels(profile_id=selected_m_prof_id)
+        else:
+            cur_channels = [
+                {"id": "ch-yt-mock", "channel_id": "ch-yt-mock", "platform": "youtube", "display_name": "Canal YouTube Principal", "channel_name": "Canal YouTube Principal", "external_profile_name": "UploadPost_YT", "is_enabled": True},
+                {"id": "ch-tt-mock", "channel_id": "ch-tt-mock", "platform": "tiktok", "display_name": "Conta TikTok Oficial", "channel_name": "Conta TikTok Oficial", "external_profile_name": "UploadPost_TT", "is_enabled": True},
+            ]
+
+        # Multi-channel warning
+        plat_counts = {}
+        for c in cur_channels:
+            p_clean = c.get("platform", "").lower().strip()
+            plat_counts[p_clean] = plat_counts.get(p_clean, 0) + 1
+
+        multi_plats = [p for p, cnt in plat_counts.items() if cnt > 1]
+        if multi_plats:
+            st.info(f"ℹ️ **Canais Múltiplos Detectados:** Este perfil possui mais de um canal para: `{'`, `'.join(multi_plats)}`. Na publicação agendada ou manual, cada destino operará com especificidade por `channel_id`.")
+
+        if cur_channels:
+            for ch in cur_channels:
+                cid = ch.get("channel_id") or ch.get("id")
+                c_name = ch.get("display_name") or ch.get("channel_name") or "Canal Sem Nome"
+                c_plat = ch.get("platform", "").upper()
+                c_ext = ch.get("external_profile_name") or "Padrão / Global"
+                c_en = bool(ch.get("is_enabled"))
+                en_badge = "<span class='op-badge op-badge-green'>🟢 Ativo</span>" if c_en else "<span class='op-badge op-badge-gray'>⚪ Desabilitado</span>"
+
+                with st.container(border=True):
+                    c_col1, c_col2, c_col3 = st.columns([0.65, 0.2, 0.15])
+                    with c_col1:
+                        st.markdown(f"**{c_plat}** — {c_name} &nbsp; {en_badge}", unsafe_allow_html=True)
+                        st.caption(f"ID: `...{cid[-8:]}` | Upload-Post Destino: `...{c_ext}` (sem segredos)")
+                    with c_col2:
+                        btn_txt = "Desabilitar" if c_en else "Habilitar"
+                        if st.button(
+                            btn_txt,
+                            key=f"toggle_ch_{cid}",
+                            disabled=not is_primary,
+                            help="Apenas o nó primário pode alterar o status do canal." if not is_primary else None,
+                            use_container_width=True,
+                        ):
+                            if not demo_enabled:
+                                from app.services import profile_manager
+                                profile_manager.set_channel_enabled(cid, not c_en)
+                                st.toast(f"Canal '{c_name}' {'desabilitado' if c_en else 'habilitado'}.", icon="📺")
+                                st.rerun()
+                            else:
+                                st.toast("Alternância de canal simulada em modo demonstração.", icon="📺")
+                    with c_col3:
+                        with st.popover("Editar", use_container_width=True):
+                            if not is_primary:
+                                st.caption("🔒 View Only")
+                            edit_c_name = st.text_input("Nome de Exibição", value=c_name, key=f"edit_c_name_{cid}", disabled=not is_primary)
+                            edit_c_ext = st.text_input("Identificador Upload-Post (opcional)", value=ch.get("external_profile_name") or "", key=f"edit_c_ext_{cid}", disabled=not is_primary, help="Apenas identificador não sensível de destino.")
+                            if st.button("Salvar Canal", key=f"btn_save_ch_{cid}", disabled=not is_primary, type="primary"):
+                                if not demo_enabled:
+                                    from app.services import profile_manager
+                                    try:
+                                        profile_manager.update_channel(
+                                            channel_id=cid,
+                                            display_name=edit_c_name,
+                                            external_profile_name=edit_c_ext or None,
+                                        )
+                                        st.toast("Canal atualizado com sucesso.", icon="✓")
+                                        st.rerun()
+                                    except Exception as ce_err:
+                                        st.error(f"Erro: {ce_err}")
+                                else:
+                                    st.toast("Canal atualizado em demonstração.", icon="✓")
+        else:
+            st.caption("Nenhum canal de publicação configurado para este perfil.")
+
+        # Adicionar Canal
+        with st.expander(f"➕ Adicionar Canal ao Perfil '{cur_selected_po.get('name')}'", expanded=False):
+            if not is_primary:
+                st.caption("🔒 View Only — alterações devem ser realizadas no PRIMARY.")
+            c_add1, c_add2 = st.columns(2)
+            with c_add1:
+                new_ch_plat = st.selectbox("Plataforma", options=["youtube", "tiktok"], key=f"new_ch_plat_{selected_m_prof_id}", disabled=not is_primary)
+                new_ch_name = st.text_input("Nome do Canal (ex: Curiosidades BR)", key=f"new_ch_name_{selected_m_prof_id}", disabled=not is_primary)
+            with c_add2:
+                new_ch_ext = st.text_input("Identificador Upload-Post (opcional)", key=f"new_ch_ext_{selected_m_prof_id}", placeholder="ex: perfil_uploadpost_01", disabled=not is_primary, help="Identificador não confidencial do destino configurado no Upload-Post.")
+                new_ch_en = st.checkbox("Canal Habilitado", value=True, key=f"new_ch_en_{selected_m_prof_id}", disabled=not is_primary)
+
+            if st.button("Vincular Novo Canal", key=f"btn_add_ch_{selected_m_prof_id}", disabled=not is_primary, type="primary"):
+                if not new_ch_name.strip():
+                    st.error("Nome do canal é obrigatório.")
+                elif not demo_enabled:
+                    from app.services import profile_manager
+                    try:
+                        profile_manager.create_channel(
+                            profile_id=selected_m_prof_id,
+                            platform=new_ch_plat,
+                            display_name=new_ch_name,
+                            external_profile_name=new_ch_ext or None,
+                            is_enabled=new_ch_en,
+                        )
+                        st.toast(f"Canal '{new_ch_name}' vinculado com sucesso ao perfil!", icon="📺")
+                        st.rerun()
+                    except Exception as ch_err:
+                        st.error(f"Erro ao vincular canal: {ch_err}")
+                else:
+                    st.toast("Canal vinculado em demonstração.", icon="📺")
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 

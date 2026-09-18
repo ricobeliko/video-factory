@@ -326,6 +326,10 @@ def update_profile(
     operator_console.require_primary_instance(db_path=db_path)
 
     init_profile_db(db_path)
+    clean_id = str(profile_id or "").strip()
+    if clean_id == DEFAULT_PROFILE_ID and is_active is False:
+        raise ValueError("O perfil padrão 'default' é a base de segurança do sistema e não pode ser desativado.")
+
     existing = get_profile(profile_id, db_path=db_path)
     if not existing:
         raise ValueError(f"Perfil com ID '{profile_id}' não encontrado.")
@@ -412,12 +416,16 @@ def set_profile_active(profile_id: str, is_active: bool, db_path: Optional[str] 
     from app.services import operator_console
     operator_console.require_primary_instance(db_path=db_path)
 
+    clean_id = str(profile_id or "").strip()
+    if clean_id == DEFAULT_PROFILE_ID and not is_active:
+        raise ValueError("O perfil padrão 'default' é a base de segurança do sistema e não pode ser desativado.")
+
     init_profile_db(db_path)
     now_iso = datetime.now(timezone.utc).isoformat()
     with get_connection(db_path) as conn:
         cur = conn.execute(
             "UPDATE content_profiles SET is_active = ?, updated_at = ? WHERE id = ?;",
-            (1 if is_active else 0, now_iso, profile_id),
+            (1 if is_active else 0, now_iso, clean_id),
         )
         return cur.rowcount > 0
 

@@ -970,8 +970,11 @@ def get_generation_queue_summary() -> Dict[str, Any]:
     return summary
 
 
-def get_scheduler_queue_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
-    """Retorna o resumo da fila do Scheduler no SQLite."""
+def get_scheduler_queue_summary(
+    db_path: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """Retorna o resumo da fila do Scheduler no SQLite com suporte a enriquecimento de perfil/canal."""
     from app.services import scheduler
     scheduler.init_db(db_path)
 
@@ -1002,33 +1005,110 @@ def get_scheduler_queue_summary(db_path: Optional[str] = None) -> Dict[str, Any]
                 summary[st] = cnt
             summary["total"] += cnt
 
-        # Próximos posts planejados ou prontos
+        # Próximos posts agendados
         upcoming = conn.execute(
             """
             SELECT id, task_id, platform, scheduled_at, status, attempts, profile_id, channel_id
             FROM scheduled_posts
-            WHERE status IN ('planned', 'ready')
             ORDER BY scheduled_at ASC
-            LIMIT 5;
-            """
+            LIMIT ?;
+            """,
+            (max(5, limit),),
         ).fetchall()
         from app.services import profile_manager
+        all_profs = {p["id"]: p for p in profile_manager.list_profiles(db_path=db_path)}
+        all_chans = {c["id"]: c for c in profile_manager.list_channels(db_path=db_path)}
         enriched_upcoming = []
         for r in upcoming:
             d = dict(r)
             pid = d.get("profile_id")
             cid = d.get("channel_id")
-            if pid:
-                prof = profile_manager.get_profile(pid, db_path=db_path)
-                if prof:
-                    d["profile_name"] = prof.get("name")
-            if cid:
-                ch = profile_manager.get_channel(cid, db_path=db_path)
-                if ch:
-                    d["channel_name"] = ch.get("channel_name")
+            if pid and pid in all_profs:
+                d["profile_name"] = all_profs[pid].get("name")
+            if cid and cid in all_chans:
+                d["channel_name"] = all_chans[cid].get("channel_name")
             enriched_upcoming.append(d)
         summary["upcoming_posts"] = enriched_upcoming
         return summary
+
+
+def get_profile_operations_overview(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retorna visão operacional resumida e leve por perfil (canais, estoque, tarefas e agendamentos)."""
+    init_operator_db(db_path)
+    from app.services import profile_manager, scheduler
+    from app.services import state as sm
+
+    profile_manager.init_profile_db(db_path)
+    scheduler.init_db(db_path)
+
+    profiles = profile_manager.list_profiles(db_path=db_path)
+    channels = profile_manager.list_channels(db_path=db_path)
+
+    enabled_ch_map = {}
+    total_ch_map = {}
+    for c in channels:
+        pid = c.get("profile_id")
+        total_ch_map[pid] = total_ch_map.get(pid, 0) + 1
+        if c.get("is_enabled"):
+            enabled_ch_map[pid] = enabled_ch_map.get(pid, 0) + 1
+
+    sched_map = {}
+    with get_connection(db_path) as conn:
+        s_rows = conn.execute(
+            """
+            SELECT COALESCE(profile_id, 'default') AS pid, status, COUNT(*) AS cnt
+            FROM scheduled_posts
+            GROUP BY COALESCE(profile_id, 'default'), status;
+            """
+        ).fetchall()
+        for r in s_rows:
+            sched_map.setdefault(r["pid"], {})[r["status"]] = r["cnt"]
+
+        tp_rows = conn.execute("SELECT task_id, profile_id FROM task_profiles;").fetchall()
+        task_prof_map = {r["task_id"]: r["profile_id"] for r in tp_rows}
+
+    all_tasks, _ = sm.state.get_all_tasks(1, 200)
+    task_counts = {}
+    for t in all_tasks:
+        tid = t.get("task_id")
+        pid = t.get("profile_id") or task_prof_map.get(tid, profile_manager.DEFAULT_PROFILE_ID)
+        st = t.get("state")
+        tc = task_counts.setdefault(pid, {"pending_processing": 0, "failed": 0, "ready_stock": 0})
+        if st in (const.TASK_STATE_PENDING, const.TASK_STATE_PROCESSING):
+            tc["pending_processing"] += 1
+        elif st == const.TASK_STATE_FAILED:
+            tc["failed"] += 1
+        elif st == const.TASK_STATE_COMPLETE:
+            if t.get("safety_status") != "FAIL":
+                tc["ready_stock"] += 1
+
+    active_id = profile_manager.get_active_profile_id(db_path=db_path)
+    overview = []
+    for p in profiles:
+        pid = p["id"]
+        s_counts = sched_map.get(pid, {})
+        t_counts = task_counts.get(pid, {})
+
+        overview.append({
+            "profile_id": pid,
+            "name": p.get("name"),
+            "slug": p.get("slug"),
+            "niche": p.get("niche") or "—",
+            "language": p.get("language") or "pt-BR",
+            "region": p.get("region") or "BR",
+            "default_preset": p.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET,
+            "growth_mode": p.get("growth_mode") or const.DEFAULT_GROWTH_MODE,
+            "is_active": bool(p.get("is_active")),
+            "is_active_profile": (pid == active_id),
+            "channels_count": total_ch_map.get(pid, 0),
+            "channels_enabled": enabled_ch_map.get(pid, 0),
+            "ready_stock": t_counts.get("ready_stock", 0),
+            "pending_processing": t_counts.get("pending_processing", 0),
+            "scheduled": s_counts.get("planned", 0) + s_counts.get("ready", 0),
+            "failed": t_counts.get("failed", 0) + s_counts.get("failed", 0),
+        })
+
+    return overview
 
 
 # ---------------------------------------------------------------------------

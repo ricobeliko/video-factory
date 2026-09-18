@@ -512,6 +512,7 @@ def render_operator_console():
             <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
                 <span>🖥️ <b>Nó:</b> <code>{html.escape(str(node_name))}</code></span>
                 <span>🏷️ <b>Papel:</b> <span class="op-badge {role_badge_cls}">{role_badge_txt}</span></span>
+                <span>📁 <b>Perfil Ativo:</b> <code>Video Factory Default</code></span>
                 <span>💻 <b>Host:</b> {html.escape(str(hostname))} (PID {pid})</span>
                 <span>⏱️ <b>Uptime:</b> {uptime_str}</span>
             </div>

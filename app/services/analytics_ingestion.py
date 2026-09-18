@@ -17,6 +17,7 @@ from loguru import logger
 from app.services import analytics
 from app.services.analytics_providers import (
     AnalyticsProviderError,
+    ERR_AUTH,
     ERR_NOT_FOUND,
     get_provider,
 )

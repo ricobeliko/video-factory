@@ -120,6 +120,8 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
             "progress": 72,
             "elapsed": "07:31",
             "preset": "Cross Platform",
+            "profile_id": "curiosidades-brasil",
+            "profile_name": "Curiosidades Brasil",
             "safety_status": "PASS",
             "quality_score": 78,
             "quality_label": "GOOD",
@@ -388,8 +390,14 @@ def render_operator_console():
         active_task = None
         for t in all_tasks:
             if t.get("state") == const.TASK_STATE_PROCESSING:
+                from app.services import profile_manager
+                task_p_id = t.get("profile_id") or profile_manager.get_task_profile_id(t.get("task_id", ""))
+                task_p_obj = profile_manager.get_profile(task_p_id) if task_p_id else None
+                task_prof_name = task_p_obj.get("name") if task_p_obj else "Video Factory Default"
                 active_task = {
                     "task_id": t.get("task_id"),
+                    "profile_id": task_p_id,
+                    "profile_name": task_prof_name,
                     "topic": t.get("video_subject") or t.get("topic") or "Geração em andamento",
                     "stage": "Processando etapa do pipeline",
                     "stage_idx": 4,
@@ -503,6 +511,13 @@ def render_operator_console():
             unsafe_allow_html=True,
         )
 
+    # Active Profile
+    from app.services import profile_manager
+    active_prof = profile_manager.get_active_profile()
+    active_prof_id = active_prof.get("id") or "default"
+    active_prof_name = active_prof.get("name") or "Video Factory Default"
+    active_prof_slug = active_prof.get("slug") or "default"
+
     # Node Bar
     role_badge_cls = "op-badge-green" if is_primary else "op-badge-yellow"
     role_badge_txt = "🟢 PRIMARY" if is_primary else "🟠 SECONDARY — VIEW ONLY"
@@ -512,7 +527,7 @@ def render_operator_console():
             <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
                 <span>🖥️ <b>Nó:</b> <code>{html.escape(str(node_name))}</code></span>
                 <span>🏷️ <b>Papel:</b> <span class="op-badge {role_badge_cls}">{role_badge_txt}</span></span>
-                <span>📁 <b>Perfil Ativo:</b> <code>Video Factory Default</code></span>
+                <span>📁 <b>Perfil Ativo:</b> <code>{html.escape(str(active_prof_name))}</code> (<code>{html.escape(str(active_prof_slug))}</code>)</span>
                 <span>💻 <b>Host:</b> {html.escape(str(hostname))} (PID {pid})</span>
                 <span>⏱️ <b>Uptime:</b> {uptime_str}</span>
             </div>
@@ -570,7 +585,7 @@ def render_operator_console():
         "ERROR": "🔴 FACTORY ERROR",
     }.get(factory_state, factory_state)
 
-    col_title, col_actions = st.columns([0.62, 0.38])
+    col_title, col_prof_sel, col_actions = st.columns([0.46, 0.28, 0.26])
     with col_title:
         st.markdown(
             f"""
@@ -594,6 +609,36 @@ def render_operator_console():
             """,
             unsafe_allow_html=True,
         )
+
+    with col_prof_sel:
+        active_profiles = [p for p in profile_manager.list_profiles() if p.get("is_active")]
+        if not active_profiles:
+            active_profiles = [profile_manager.get_default_profile()]
+        p_options = [p["id"] for p in active_profiles]
+        p_labels = {p["id"]: p["name"] for p in active_profiles}
+        if active_prof_id not in p_options:
+            p_options.insert(0, active_prof_id)
+            p_labels[active_prof_id] = active_prof_name
+
+        p_idx = p_options.index(active_prof_id) if active_prof_id in p_options else 0
+
+        selected_profile_id = st.selectbox(
+            "Perfil Ativo:",
+            options=p_options,
+            index=p_idx,
+            format_func=lambda pid: p_labels.get(pid, pid),
+            key="op_active_profile_selector",
+            disabled=not is_primary,
+            help="Modo VIEW ONLY: Apenas o nó primário pode alternar perfis." if not is_primary else "Perfil ativo orienta nicho, idioma, região e presets das tarefas.",
+        )
+
+        if is_primary and selected_profile_id != active_prof_id:
+            try:
+                profile_manager.set_active_profile(selected_profile_id)
+                st.toast(f"Perfil ativo alterado para '{p_labels.get(selected_profile_id, selected_profile_id)}'", icon="📁")
+                st.rerun()
+            except Exception as err:
+                st.error(f"Falha ao trocar perfil: {err}")
 
     with col_actions:
         btn_c1, btn_c2 = st.columns(2)
@@ -782,12 +827,14 @@ def render_operator_console():
         s_score = active_task.get("strategy_score", 80)
         s_label = active_task.get("strategy_label", "PROMISING")
 
+        task_prof_display = active_task.get("profile_name") or "Video Factory Default"
         with st.container(border=True):
             col_live_meta, col_live_ctrl = st.columns([0.75, 0.25])
             with col_live_meta:
                 st.markdown(f"**Tema:** {topic}")
                 st.caption(
                     f"**Task:** `{_truncate_id(task_id, 8, 4)}` &nbsp;|&nbsp; "
+                    f"**Profile:** `{task_prof_display}` &nbsp;|&nbsp; "
                     f"**Stage:** `{stage}` &nbsp;|&nbsp; "
                     f"**Elapsed:** `{elapsed}` &nbsp;|&nbsp; "
                     f"**Preset:** `{preset}` &nbsp;|&nbsp; "

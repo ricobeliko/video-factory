@@ -5179,13 +5179,16 @@ def _render_script_settings(panel, params):
                     label = tr(code)
                 video_languages.append((label, code))
 
+            from app.services import profile_manager
+            manual_prof_ctx = profile_manager.get_generation_profile_context()
+            prof_lang_default = manual_prof_ctx.get("language") or ""
             selected_language_code = stable_selectbox(
                 tr("Script Language"),
                 options=[value for _, value in video_languages],
                 default_value=_saved_ui_choice(
                     "video_language",
                     [value for _, value in video_languages],
-                    "",
+                    prof_lang_default,
                 ),
                 key="script_language_select",
                 format_func=lambda value: dict(
@@ -5207,10 +5210,15 @@ def _render_script_settings(panel, params):
                     const.PRESET_TIKTOK_REWARDS: "TikTok Rewards",
                     const.PRESET_YOUTUBE_ORIGINAL: "YouTube Shorts Original",
                 }
+                prof_preset_default = manual_prof_ctx.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET
                 params.monetization_preset = stable_selectbox(
                     tr("Monetization Preset"),
                     options=preset_choices,
-                    default_value=const.DEFAULT_MONETIZATION_PRESET,
+                    default_value=_saved_ui_choice(
+                        "monetization_preset",
+                        preset_choices,
+                        prof_preset_default,
+                    ),
                     key="monetization_preset_select",
                     format_func=lambda v: preset_labels.get(v, v),
                     help=tr("Preset voltado à monetização"),
@@ -8187,26 +8195,40 @@ def _render_trend_radar_section():
         st.caption(tr("Trend Radar Description"))
 
         # Controles
+        from app.services import profile_manager
+        radar_prof_ctx = profile_manager.get_generation_profile_context()
+        radar_niche_default = radar_prof_ctx.get("niche") or "Curiosidades"
+        radar_lang_default = radar_prof_ctx.get("language") or "pt-BR"
+        radar_reg_default = radar_prof_ctx.get("region") or "BR"
+
         c1, c2, c3, c4 = st.columns([1.5, 0.8, 0.8, 0.8])
         with c1:
             radar_niche = st.text_input(
                 tr("Niche"),
-                value=st.session_state.get("trend_radar_niche", "Curiosidades"),
+                value=st.session_state.get("trend_radar_niche", radar_niche_default),
                 placeholder=tr("Niche Placeholder"),
                 key="trend_radar_niche_input",
             )
         with c2:
+            radar_langs = ["pt-BR", "en-US", "es-ES"]
+            if radar_lang_default not in radar_langs:
+                radar_langs.append(radar_lang_default)
+            r_lang_idx = radar_langs.index(radar_lang_default) if radar_lang_default in radar_langs else 0
             radar_lang = st.selectbox(
                 tr("Language"),
-                options=["pt-BR", "en-US", "es-ES"],
-                index=0,
+                options=radar_langs,
+                index=r_lang_idx,
                 key="trend_radar_lang_sb",
             )
         with c3:
+            radar_regions = ["BR", "US", "GLOBAL"]
+            if radar_reg_default not in radar_regions:
+                radar_regions.append(radar_reg_default)
+            r_reg_idx = radar_regions.index(radar_reg_default) if radar_reg_default in radar_regions else 0
             radar_region = st.selectbox(
                 tr("Region"),
-                options=["BR", "US", "GLOBAL"],
-                index=0,
+                options=radar_regions,
+                index=r_reg_idx,
                 key="trend_radar_region_sb",
             )
         with c4:
@@ -8667,10 +8689,17 @@ def _render_autopilot_section(
         st.divider()
 
         # 2. Configurações de Entrada
+        from app.services import profile_manager
+        auto_prof_ctx = profile_manager.get_generation_profile_context()
+        default_auto_niche = auto_prof_ctx.get("niche") or ""
+        default_auto_preset = auto_prof_ctx.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET
+
         col_niche, col_preset = st.columns([1.2, 1])
         with col_niche:
+            niche_initial = st.session_state.get("autopilot_niche_input") or default_auto_niche
             niche = st.text_input(
                 tr("Niche"),
+                value=niche_initial,
                 placeholder=tr("Niche Placeholder"),
                 key="autopilot_niche_input",
             )
@@ -8685,11 +8714,16 @@ def _render_autopilot_section(
                 const.PRESET_TIKTOK_REWARDS: "TikTok Rewards",
                 const.PRESET_YOUTUBE_ORIGINAL: "YouTube Shorts Original",
             }
+            preset_default_idx = (
+                autopilot_presets.index(default_auto_preset)
+                if default_auto_preset in autopilot_presets
+                else 0
+            )
             selected_preset = st.selectbox(
                 tr("Content Preset"),
                 options=autopilot_presets,
                 format_func=lambda p: autopilot_preset_labels.get(p, p),
-                index=0,
+                index=preset_default_idx,
                 key="autopilot_content_preset_sb",
                 help=tr("Preset voltado à monetização"),
             )
@@ -9157,6 +9191,7 @@ def _render_autopilot_section(
                     item_params.video_subject = topic
                     item_params.video_script = ""
                     item_params.monetization_preset = selected_preset
+                    item_params.niche = niche
                     if rank < len(assigned_structures):
                         item_params.narrative_structure = assigned_structures[rank]
 

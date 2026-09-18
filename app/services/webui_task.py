@@ -138,6 +138,7 @@ def submit_generation(
     capture_logs: bool = True,
     voice_preview: dict | None = None,
     loomloom_video_request: LoomLoomConfirmedVideoRequest | None = None,
+    profile_id: str | None = None,
 ) -> None:
     """
     登记并提交 WebUI 视频生成任务，调用后立即返回。
@@ -146,12 +147,46 @@ def submit_generation(
     浏览器刷新或 WebSocket 重连也不依赖旧页面内存中的占位符。
     """
     task_params = params.model_copy(deep=True)
-    from app.services import operator_console
+    from app.services import operator_console, profile_manager
     operator_console.require_primary_instance()
     if operator_console.is_factory_paused():
-
         logger.warning(f"Rejeitando geração: fábrica pausada. task_id={task_id}")
         raise ValueError("Fábrica pausada. A tarefa atual pode concluir; novas execuções estão bloqueadas.")
+
+    # Resolução do Perfil Operacional e Hierarquia:
+    # manual override > profile value > fallback atual
+    assigned_profile_id = (
+        profile_id
+        or getattr(task_params, "profile_id", None)
+        or profile_manager.get_active_profile_id()
+    )
+    task_params.profile_id = assigned_profile_id
+    ctx = profile_manager.get_generation_profile_context(profile_id=assigned_profile_id)
+
+    explicit_fields = (
+        params.model_fields_set
+        if hasattr(params, "model_fields_set")
+        else getattr(params, "__fields_set__", set())
+    )
+
+    # 1. Niche
+    if "niche" not in explicit_fields or not getattr(task_params, "niche", None):
+        task_params.niche = ctx.get("niche")
+
+    # 2. Language
+    if "video_language" not in explicit_fields or not task_params.video_language:
+        task_params.video_language = ctx.get("language")
+
+    # 3. Region
+    if "region" not in explicit_fields or not getattr(task_params, "region", None):
+        task_params.region = ctx.get("region")
+
+    # 4. Monetization Preset
+    if "monetization_preset" not in explicit_fields or not task_params.monetization_preset:
+        task_params.monetization_preset = ctx.get("default_preset")
+
+    # Persistência imutável da associação task <-> profile
+    profile_manager.save_task_profile(task_id, assigned_profile_id)
 
     # 预览载荷只包含不可变音频路径、参数快照和只读字幕时间轴。复制外层字典，
     # 避免页面后续 rerun 替换缓存字段时影响已经提交到后台队列的任务。
@@ -168,7 +203,10 @@ def submit_generation(
         state=initial_state,
         progress=0,
         video_subject=task_params.video_subject or task_params.video_script or task_id,
+        profile_id=assigned_profile_id,
+        niche=task_params.niche,
     )
+
     with _active_task_ids_lock:
         if task_id not in _active_task_ids:
             _active_task_ids.append(task_id)

@@ -21,6 +21,7 @@ DEFAULT_PROFILE_ID = "default"
 DEFAULT_PROFILE_NAME = "Video Factory Default"
 DEFAULT_PROFILE_SLUG = "default"
 ALLOWED_PLATFORMS = {"youtube", "tiktok"}
+ACTIVE_PROFILE_SETTING_KEY = "active_profile_id"
 
 
 def get_db_path(custom_path: Optional[str] = None) -> str:
@@ -85,6 +86,16 @@ def init_profile_db(db_path: Optional[str] = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_content_profiles_slug ON content_profiles(slug);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_content_profiles_active ON content_profiles(is_active);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pub_channels_profile ON publishing_channels(profile_id);")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_profiles (
+                task_id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_profiles_pid ON task_profiles(profile_id);")
 
 
 def _validate_growth_mode(mode: str) -> str:
@@ -556,3 +567,147 @@ def set_channel_enabled(channel_id: str, is_enabled: bool, db_path: Optional[str
             (1 if is_enabled else 0, now_iso, channel_id),
         )
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Active Profile & Contexto de Geração (Fase V9-B)
+# ---------------------------------------------------------------------------
+
+
+def get_active_profile_id(db_path: Optional[str] = None) -> str:
+    """Retorna o ID do perfil operacional ativo (permitido em VIEW ONLY)."""
+    init_profile_db(db_path)
+    try:
+        with get_connection(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS autopilot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
+            row = conn.execute(
+                "SELECT value FROM autopilot_settings WHERE key = ?;",
+                (ACTIVE_PROFILE_SETTING_KEY,),
+            ).fetchone()
+            if row and row["value"]:
+                active_id = str(row["value"]).strip()
+                p = get_profile(active_id, db_path=db_path)
+                if p and p.get("is_active"):
+                    return active_id
+    except Exception:
+        pass
+    return DEFAULT_PROFILE_ID
+
+
+def get_active_profile(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna os dados completos do perfil ativo com fallback seguro para DEFAULT PROFILE."""
+    init_profile_db(db_path)
+    active_id = get_active_profile_id(db_path=db_path)
+    p = get_profile(active_id, db_path=db_path)
+    if not p or not p.get("is_active"):
+        return get_default_profile(db_path=db_path)
+    return p
+
+
+def set_active_profile(profile_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Define o perfil operacional ativo no SQLite (somente PRIMARY)."""
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    init_profile_db(db_path)
+    clean_id = str(profile_id or "").strip()
+    p = get_profile(clean_id, db_path=db_path)
+    if not p:
+        raise ValueError(f"Perfil com ID '{profile_id}' não encontrado.")
+    if not p.get("is_active"):
+        raise ValueError(f"Perfil '{p.get('name')}' está inativo e não pode ser definido como ativo.")
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS autopilot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO autopilot_settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """,
+            (ACTIVE_PROFILE_SETTING_KEY, clean_id),
+        )
+    return p
+
+
+def get_generation_profile_context(
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retorna o contexto operacional de geração para um perfil especificado ou para o perfil ativo."""
+    init_profile_db(db_path)
+    if profile_id:
+        profile = get_profile(profile_id, db_path=db_path)
+        if not profile or not profile.get("is_active"):
+            profile = get_active_profile(db_path=db_path)
+    else:
+        profile = get_active_profile(db_path=db_path)
+
+    # Fallbacks da aplicação / config.toml
+    fallback_niche = config.app.get("default_niche") or "curiosidades"
+    fallback_language = config.app.get("video_language") or "pt-BR"
+    fallback_region = config.app.get("default_region") or "BR"
+    fallback_preset = const.DEFAULT_MONETIZATION_PRESET
+    fallback_growth = const.DEFAULT_GROWTH_MODE
+
+    return {
+        "profile_id": profile.get("id") or DEFAULT_PROFILE_ID,
+        "profile_name": profile.get("name") or DEFAULT_PROFILE_NAME,
+        "profile_slug": profile.get("slug") or DEFAULT_PROFILE_SLUG,
+        "niche": profile.get("niche") or fallback_niche,
+        "language": profile.get("language") or fallback_language,
+        "region": profile.get("region") or fallback_region,
+        "default_preset": profile.get("default_preset") or fallback_preset,
+        "growth_mode": profile.get("growth_mode") or fallback_growth,
+    }
+
+
+def save_task_profile(task_id: str, profile_id: str, db_path: Optional[str] = None) -> None:
+    """Associa imutavelmente uma tarefa ao seu perfil de origem no SQLite."""
+    init_profile_db(db_path)
+    clean_tid = str(task_id or "").strip()
+    clean_pid = str(profile_id or "").strip() or DEFAULT_PROFILE_ID
+    if not clean_tid:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO task_profiles (task_id, profile_id, created_at)
+            VALUES (?, ?, ?);
+            """,
+            (clean_tid, clean_pid, now_iso),
+        )
+
+
+def get_task_profile_id(task_id: str, db_path: Optional[str] = None) -> str:
+    """Recupera o profile_id de uma tarefa (fallback seguro para 'default' se não associada)."""
+    init_profile_db(db_path)
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return DEFAULT_PROFILE_ID
+    try:
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT profile_id FROM task_profiles WHERE task_id = ?;",
+                (clean_tid,),
+            ).fetchone()
+            if row and row["profile_id"]:
+                return str(row["profile_id"])
+    except Exception:
+        pass
+    return DEFAULT_PROFILE_ID

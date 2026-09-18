@@ -164,6 +164,10 @@ class VideoParams(BaseModel):
     narrative_structure: Optional[str] = None
     safety_status: Optional[str] = None
     safety_reasons: Optional[str] = None
+    profile_id: Optional[str] = None
+    niche: Optional[str] = None
+    region: Optional[str] = None
+
 
 
 class SubtitleRequest(BaseModel):

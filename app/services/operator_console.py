@@ -866,6 +866,7 @@ def get_operational_events(
     limit: int = 50,
     component: Optional[str] = None,
     severity: Optional[str] = None,
+    event_type: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Recupera eventos operacionais recentes com filtros opcionais."""
@@ -879,6 +880,9 @@ def get_operational_events(
     if severity:
         query += " AND severity = ?"
         params.append(severity.upper())
+    if event_type:
+        query += " AND event_type = ?"
+        params.append(event_type)
 
     query += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
@@ -1001,14 +1005,29 @@ def get_scheduler_queue_summary(db_path: Optional[str] = None) -> Dict[str, Any]
         # Próximos posts planejados ou prontos
         upcoming = conn.execute(
             """
-            SELECT id, task_id, platform, scheduled_at, status, attempts
+            SELECT id, task_id, platform, scheduled_at, status, attempts, profile_id, channel_id
             FROM scheduled_posts
             WHERE status IN ('planned', 'ready')
             ORDER BY scheduled_at ASC
             LIMIT 5;
             """
         ).fetchall()
-        summary["upcoming_posts"] = [dict(r) for r in upcoming]
+        from app.services import profile_manager
+        enriched_upcoming = []
+        for r in upcoming:
+            d = dict(r)
+            pid = d.get("profile_id")
+            cid = d.get("channel_id")
+            if pid:
+                prof = profile_manager.get_profile(pid, db_path=db_path)
+                if prof:
+                    d["profile_name"] = prof.get("name")
+            if cid:
+                ch = profile_manager.get_channel(cid, db_path=db_path)
+                if ch:
+                    d["channel_name"] = ch.get("channel_name")
+            enriched_upcoming.append(d)
+        summary["upcoming_posts"] = enriched_upcoming
         return summary
 
 

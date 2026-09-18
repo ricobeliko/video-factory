@@ -64,11 +64,29 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE scheduled_posts ADD COLUMN last_error TEXT;")
     if "next_attempt_at" not in existing_cols:
         conn.execute("ALTER TABLE scheduled_posts ADD COLUMN next_attempt_at TEXT;")
+    if "profile_id" not in existing_cols:
+        conn.execute("ALTER TABLE scheduled_posts ADD COLUMN profile_id TEXT;")
+    if "channel_id" not in existing_cols:
+        conn.execute("ALTER TABLE scheduled_posts ADD COLUMN channel_id TEXT;")
 
     cursor_pub = conn.execute("PRAGMA table_info(publication_events);")
     existing_pub_cols = {row["name"] for row in cursor_pub.fetchall()}
     if "provider_request_id" not in existing_pub_cols:
         conn.execute("ALTER TABLE publication_events ADD COLUMN provider_request_id TEXT;")
+    if "profile_id" not in existing_pub_cols:
+        conn.execute("ALTER TABLE publication_events ADD COLUMN profile_id TEXT;")
+    if "channel_id" not in existing_pub_cols:
+        conn.execute("ALTER TABLE publication_events ADD COLUMN channel_id TEXT;")
+
+    # Idempotência aprimorada por task_id + channel_id + platform
+    conn.execute("DROP INDEX IF EXISTS idx_active_schedule;")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
+        ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
+        WHERE status IN ('planned', 'ready', 'published');
+        """
+    )
 
 
 def init_db(db_path: Optional[str] = None) -> None:
@@ -85,16 +103,21 @@ def init_db(db_path: Optional[str] = None) -> None:
                 platform TEXT NOT NULL,
                 scheduled_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'planned',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                profile_id TEXT,
+                channel_id TEXT,
+                attempts INTEGER DEFAULT 0,
+                last_error TEXT,
+                next_attempt_at TEXT
             );
             """
         )
 
-        # Índice único para evitar agendamento duplicado da mesma tarefa e plataforma
+        # Índice único para evitar agendamento duplicado da mesma tarefa, canal e plataforma
         cursor.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule
-            ON scheduled_posts(task_id, platform)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
+            ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
             WHERE status IN ('planned', 'ready', 'published');
             """
         )
@@ -110,7 +133,9 @@ def init_db(db_path: Optional[str] = None) -> None:
                 status TEXT NOT NULL,
                 external_id TEXT,
                 error_code TEXT,
-                provider_request_id TEXT
+                provider_request_id TEXT,
+                profile_id TEXT,
+                channel_id TEXT
             );
             """
         )
@@ -583,11 +608,12 @@ def get_platform_rate_limits(
     now: Optional[datetime] = None,
     current_time: Optional[datetime] = None,
     growth_mode: Optional[str] = None,
+    profile_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calcula a janela móvel de 24 horas para uma plataforma específica.
     
-    Regra V3.1:
-    - O menor limite sempre prevalece entre o teto técnico e o modo de crescimento operacional.
+    Regra V3.1 / V9-C:
+    - O menor limite sempre prevalece entre o teto técnico e o modo de crescimento operacional do perfil.
     - posts_publicados_ultimas_24h: publicações com status='success' nos últimos 24h (published_at >= now - 24h e <= now)
     - posts_agendados_proximas_24h: posts agendados ativos (status IN ('planned', 'ready')) agendados entre now e now + 24h
     - usados_janela: posts_publicados_ultimas_24h + posts_agendados_proximas_24h
@@ -616,6 +642,12 @@ def get_platform_rate_limits(
         technical_limit = 10
         enabled = True
 
+    if profile_id and not growth_mode:
+        from app.services import profile_manager
+        prof = profile_manager.get_profile(profile_id, db_path=db_path)
+        if prof and prof.get("growth_mode"):
+            growth_mode = prof.get("growth_mode")
+
     active_growth_mode = growth_mode or get_growth_mode(clean_platform, db_path)
     effective_limit = get_effective_limit(clean_platform, technical_limit, mode=active_growth_mode, db_path=db_path)
     mode_limits = const.GROWTH_MODE_LIMITS.get(active_growth_mode, {})
@@ -625,8 +657,8 @@ def get_platform_rate_limits(
     limit = effective_limit
 
     with get_connection(db_path) as conn:
-        # Publicações das últimas 24h (apenas status='success', Dry Run não gera publication_events)
-        pub_row = conn.execute(
+        # Publicações globais das últimas 24h (apenas status='success')
+        global_pub_row = conn.execute(
             """
             SELECT COUNT(*) AS cnt FROM publication_events
             WHERE platform = ? AND status = 'success'
@@ -634,10 +666,10 @@ def get_platform_rate_limits(
             """,
             (clean_platform, iso_past, iso_now),
         ).fetchone()
-        used_past = pub_row["cnt"] if pub_row else 0
+        global_used_past = global_pub_row["cnt"] if global_pub_row else 0
 
-        # Posts já agendados para a janela próxima de 24h
-        sched_row = conn.execute(
+        # Posts globais já agendados para a janela próxima de 24h
+        global_sched_row = conn.execute(
             """
             SELECT COUNT(*) AS cnt FROM scheduled_posts
             WHERE platform = ? AND status IN ('planned', 'ready')
@@ -645,10 +677,62 @@ def get_platform_rate_limits(
             """,
             (clean_platform, iso_now, iso_future),
         ).fetchone()
-        scheduled_count = sched_row["cnt"] if sched_row else 0
+        global_sched_count = global_sched_row["cnt"] if global_sched_row else 0
+        global_total_used = global_used_past + global_sched_count
+        global_slots = max(0, technical_limit - global_total_used) if enabled else 0
 
-    total_used = used_past + scheduled_count
-    available_slots = max(0, limit - total_used) if enabled else 0
+        if profile_id:
+            from app.services import profile_manager
+            prof_norm = profile_id.strip()
+            if prof_norm == profile_manager.DEFAULT_PROFILE_ID:
+                prof_pub_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM publication_events
+                    WHERE platform = ? AND status = 'success'
+                    AND (profile_id = ? OR profile_id IS NULL OR profile_id = '')
+                    AND published_at >= ? AND published_at <= ?;
+                    """,
+                    (clean_platform, prof_norm, iso_past, iso_now),
+                ).fetchone()
+                prof_sched_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM scheduled_posts
+                    WHERE platform = ? AND status IN ('planned', 'ready')
+                    AND (profile_id = ? OR profile_id IS NULL OR profile_id = '')
+                    AND scheduled_at >= ? AND scheduled_at <= ?;
+                    """,
+                    (clean_platform, prof_norm, iso_now, iso_future),
+                ).fetchone()
+            else:
+                prof_pub_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM publication_events
+                    WHERE platform = ? AND status = 'success' AND profile_id = ?
+                    AND published_at >= ? AND published_at <= ?;
+                    """,
+                    (clean_platform, prof_norm, iso_past, iso_now),
+                ).fetchone()
+                prof_sched_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM scheduled_posts
+                    WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ?
+                    AND scheduled_at >= ? AND scheduled_at <= ?;
+                    """,
+                    (clean_platform, prof_norm, iso_now, iso_future),
+                ).fetchone()
+
+            used_past = prof_pub_row["cnt"] if prof_pub_row else 0
+            scheduled_count = prof_sched_row["cnt"] if prof_sched_row else 0
+            total_used = used_past + scheduled_count
+            raw_mode_limit = mode_limits.get(clean_platform)
+            profile_mode_limit = technical_limit if raw_mode_limit is None else raw_mode_limit
+            profile_slots = max(0, profile_mode_limit - total_used) if enabled else 0
+            available_slots = min(global_slots, profile_slots)
+        else:
+            used_past = global_used_past
+            scheduled_count = global_sched_count
+            total_used = global_total_used
+            available_slots = max(0, limit - total_used) if enabled else 0
 
     return {
         "platform": clean_platform,
@@ -678,6 +762,8 @@ def record_publication_event(
     external_id: Optional[str] = None,
     error_code: Optional[str] = None,
     provider_request_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Registra um evento de publicação (usado pelo publicador manual ou testes)."""
@@ -689,20 +775,31 @@ def record_publication_event(
     with get_connection(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO publication_events (task_id, platform, published_at, status, external_id, error_code, provider_request_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO publication_events (
+                task_id, platform, published_at, status, external_id, error_code, provider_request_id, profile_id, channel_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            (task_id, clean_platform, iso_time, status, external_id, error_code, provider_request_id),
+            (task_id, clean_platform, iso_time, status, external_id, error_code, provider_request_id, profile_id, channel_id),
         )
         if status == "success":
-            conn.execute(
-                """
-                UPDATE scheduled_posts
-                SET status = 'published'
-                WHERE task_id = ? AND platform = ? AND status IN ('planned', 'ready');
-                """,
-                (task_id, clean_platform),
-            )
+            if channel_id:
+                conn.execute(
+                    """
+                    UPDATE scheduled_posts
+                    SET status = 'published'
+                    WHERE task_id = ? AND platform = ? AND channel_id = ? AND status IN ('planned', 'ready');
+                    """,
+                    (task_id, clean_platform, channel_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE scheduled_posts
+                    SET status = 'published'
+                    WHERE task_id = ? AND platform = ? AND status IN ('planned', 'ready');
+                    """,
+                    (task_id, clean_platform),
+                )
 
 
 def clear_future_schedule(db_path: Optional[str] = None) -> int:
@@ -719,12 +816,12 @@ def clear_future_schedule(db_path: Optional[str] = None) -> int:
 
 
 def get_upcoming_posts(limit: int = 50, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retorna os próximos posts agendados ativos ordenados cronologicamente."""
+    """Retorna os próximos posts agendados ativos ordenados cronologicamente com metadados de profile/channel."""
     init_db(db_path)
     with get_connection(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT id, task_id, platform, scheduled_at, status, created_at, attempts, last_error, next_attempt_at
+            SELECT id, task_id, platform, scheduled_at, status, created_at, attempts, last_error, next_attempt_at, profile_id, channel_id
             FROM scheduled_posts
             WHERE status IN ('planned', 'ready')
             ORDER BY scheduled_at ASC
@@ -732,7 +829,23 @@ def get_upcoming_posts(limit: int = 50, db_path: Optional[str] = None) -> List[D
             """,
             (limit,),
         ).fetchall()
-        return [dict(r) for r in rows]
+
+        from app.services import profile_manager
+        enriched = []
+        for r in rows:
+            d = dict(r)
+            pid = d.get("profile_id")
+            cid = d.get("channel_id")
+            if pid:
+                prof = profile_manager.get_profile(pid, db_path=db_path)
+                if prof:
+                    d["profile_name"] = prof.get("name")
+            if cid:
+                ch = profile_manager.get_channel(cid, db_path=db_path)
+                if ch:
+                    d["channel_name"] = ch.get("channel_name")
+            enriched.append(d)
+        return enriched
 
 
 def plan_schedule(
@@ -746,13 +859,16 @@ def plan_schedule(
     Regras estritas:
     - Apenas vídeos concluídos (state == TASK_STATE_COMPLETE ou has_video)
     - Não agenda PROCESSING, PENDING, FAILED ou já publicados
-    - Respeita os limites por rede na janela móvel de 24h
+    - Respeita o perfil imutável da task e os canais habilitados vinculados
+    - Respeita os limites por rede na janela móvel de 24h (teto técnico + growth mode do perfil)
     - Distribui horários uniformemente ao longo do período
-    - Idempotência: não duplica (task_id, platform) já agendada ou publicada
+    - Idempotência: não duplica (task_id, channel_id, platform) já agendada ou publicada
     - NÃO chama Upload-Post
     """
-    from app.services import operator_console
+    from app.services import operator_console, profile_manager
     operator_console.require_primary_instance(db_path=db_path)
+    if operator_console.is_factory_paused(db_path=db_path):
+        return []
 
     init_db(db_path)
 
@@ -760,8 +876,8 @@ def plan_schedule(
     persisted_platforms_map = get_all_task_platforms(db_path)
     settings = get_all_settings(db_path)
 
-    # 1. Filtra tarefas elegíveis
-    eligible_tasks: List[Tuple[str, Dict[str, Any], List[str]]] = []
+    # 1. Filtra tarefas elegíveis e resolve canais/destinos de acordo com o perfil imutável da task
+    eligible_tasks: List[Tuple[str, Dict[str, Any], List[Tuple[str, Optional[str], str]]]] = []
     for t in tasks:
         task_id = t.get("task_id", "")
         if not task_id:
@@ -804,7 +920,54 @@ def plan_schedule(
             logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={safety_status}")
             continue
 
-        eligible_tasks.append((task_id, t, [p.lower().strip() for p in platforms]))
+        # Resolução do perfil da task
+        task_profile_id = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+        prof = profile_manager.get_profile(task_profile_id, db_path=db_path)
+        if prof and not prof.get("is_active"):
+            operator_console.log_operational_event(
+                component="scheduler",
+                severity="WARNING",
+                event_type="PROFILE_DISABLED_BLOCK",
+                task_id=task_id,
+                message=f"Perfil '{task_profile_id}' está desativado. Agendamento ignorado.",
+                metadata={"profile_id": task_profile_id},
+                db_path=db_path,
+            )
+            continue
+
+        clean_platforms = [p.lower().strip() for p in platforms if p and p.strip()]
+        all_prof_channels = profile_manager.list_channels(profile_id=task_profile_id, db_path=db_path)
+
+        destinations: List[Tuple[str, Optional[str], str]] = []
+        if all_prof_channels:
+            for plat in clean_platforms:
+                plat_channels = [c for c in all_prof_channels if c.get("platform", "").lower().strip() == plat]
+                if plat_channels:
+                    enabled_plat = [c for c in plat_channels if c.get("is_enabled")]
+                    if not enabled_plat:
+                        operator_console.log_operational_event(
+                            component="scheduler",
+                            severity="WARNING",
+                            event_type="CHANNEL_DISABLED_BLOCK",
+                            task_id=task_id,
+                            message=f"Todos os canais de {plat} para o perfil {task_profile_id} estão desativados.",
+                            metadata={"profile_id": task_profile_id, "platform": plat},
+                            db_path=db_path,
+                        )
+                        continue
+                    for c in enabled_plat:
+                        destinations.append((task_profile_id, c["channel_id"], plat))
+                else:
+                    destinations.append((task_profile_id, None, plat))
+        else:
+            # Sem canais configurados no perfil -> fallback legado seguro
+            for plat in clean_platforms:
+                destinations.append((task_profile_id, None, plat))
+
+        if not destinations:
+            continue
+
+        eligible_tasks.append((task_id, t, destinations))
 
     if not eligible_tasks:
         return []
@@ -813,19 +976,21 @@ def plan_schedule(
 
     # 2. Processa por plataforma para manter cadência individual uniforme e anti-burst
     for platform in ("tiktok", "youtube"):
-        rate_info = get_platform_rate_limits(platform, db_path, now=current_time, growth_mode=growth_mode)
-        if not rate_info["enabled"]:
+        clean_plat = platform.lower().strip()
+        if clean_plat == "tiktok" and not settings["tiktok_enabled"]:
+            continue
+        if clean_plat == "youtube" and not settings["youtube_enabled"]:
             continue
 
-        available_slots = rate_info["available_slots"]
-        if available_slots <= 0:
-            continue
+        # Coleta candidatos para esta plataforma
+        candidates: List[Tuple[str, Dict[str, Any], str, Optional[str]]] = []
+        for task_id, task_data, destinations in eligible_tasks:
+            for pid, cid, plat in destinations:
+                if plat == clean_plat:
+                    candidates.append((task_id, task_data, pid, cid))
 
-        limit_24h = rate_info["limit"]
-        min_interval_seconds = rate_info.get("min_interval_hours", 0) * 3600
-        uniform_interval_seconds = max(60, int(86400 / max(1, limit_24h)))
-        # Passo anti-burst: garante scheduled_at(next) >= last_post_or_planned + min_interval
-        step_seconds = max(min_interval_seconds, uniform_interval_seconds)
+        if not candidates:
+            continue
 
         # Encontra a última publicação real e o último agendamento existente para essa plataforma
         with get_connection(db_path) as conn:
@@ -834,80 +999,131 @@ def plan_schedule(
                 SELECT MAX(scheduled_at) AS max_time FROM scheduled_posts
                 WHERE platform = ? AND status IN ('planned', 'ready');
                 """,
-                (platform,),
+                (clean_plat,),
             ).fetchone()
             last_pub_row = conn.execute(
                 """
                 SELECT MAX(published_at) AS max_pub FROM publication_events
                 WHERE platform = ? AND status = 'success';
                 """,
-                (platform,),
+                (clean_plat,),
             ).fetchone()
 
-        candidate_base = current_time
-        if last_pub_row and last_pub_row["max_pub"]:
-            try:
-                p_dt = _from_iso(last_pub_row["max_pub"])
-                candidate_base = max(candidate_base, p_dt + timedelta(seconds=min_interval_seconds))
-            except Exception:
-                pass
-
-        if last_sched_row and last_sched_row["max_time"]:
-            try:
-                s_dt = _from_iso(last_sched_row["max_time"])
-                candidate_base = max(candidate_base, s_dt + timedelta(seconds=step_seconds))
-            except Exception:
-                candidate_base = max(candidate_base, current_time + timedelta(seconds=step_seconds))
-        else:
-            if candidate_base == current_time:
-                candidate_base = current_time + timedelta(seconds=min(300, step_seconds))
-
-        base_slot = candidate_base
-
-        # Enfileira slots para as tasks elegíveis que possuem esta plataforma
-        current_slot = base_slot
-        for task_id, task_data, platforms in eligible_tasks:
-            if available_slots <= 0:
-                break
-            if platform not in platforms:
-                continue
-
-            # Verifica idempotência: se já existe para esta task_id e platform
+        # Enfileira slots para os candidatos
+        for task_id, task_data, task_profile_id, channel_id in candidates:
+            # 1. Verifica idempotência: já existe no scheduled_posts ou publication_events?
             with get_connection(db_path) as conn:
-                existing = conn.execute(
-                    """
-                    SELECT id FROM scheduled_posts
-                    WHERE task_id = ? AND platform = ?
-                    AND status IN ('planned', 'ready', 'published');
-                    """,
-                    (task_id, platform),
-                ).fetchone()
-                if existing:
+                if channel_id:
+                    existing = conn.execute(
+                        """
+                        SELECT id FROM scheduled_posts
+                        WHERE task_id = ? AND platform = ? AND channel_id = ?
+                        AND status IN ('planned', 'ready', 'published');
+                        """,
+                        (task_id, clean_plat, channel_id),
+                    ).fetchone()
+                    already_pub = conn.execute(
+                        """
+                        SELECT id FROM publication_events
+                        WHERE task_id = ? AND platform = ? AND channel_id = ?
+                        AND status = 'success';
+                        """,
+                        (task_id, clean_plat, channel_id),
+                    ).fetchone()
+                else:
+                    existing = conn.execute(
+                        """
+                        SELECT id FROM scheduled_posts
+                        WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
+                        AND status IN ('planned', 'ready', 'published');
+                        """,
+                        (task_id, clean_plat),
+                    ).fetchone()
+                    already_pub = conn.execute(
+                        """
+                        SELECT id FROM publication_events
+                        WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
+                        AND status = 'success';
+                        """,
+                        (task_id, clean_plat),
+                    ).fetchone()
+
+                if existing or already_pub:
                     continue
 
-                # Insere novo slot planejado
-                iso_slot = _to_iso(current_slot)
-                iso_created = _to_iso(current_time)
+            # 2. Consulta limites específicos do perfil no modo de crescimento ativo
+            rate_info = get_platform_rate_limits(
+                clean_plat,
+                db_path=db_path,
+                now=current_time,
+                growth_mode=growth_mode,
+                profile_id=task_profile_id,
+            )
+            if not rate_info["enabled"] or rate_info["available_slots"] <= 0:
+                operator_console.log_operational_event(
+                    component="scheduler",
+                    severity="INFO",
+                    event_type="PROFILE_GROWTH_LIMIT_BLOCK",
+                    task_id=task_id,
+                    message=f"Limite do modo {rate_info.get('growth_mode')} atingido para {clean_plat} no perfil {task_profile_id}.",
+                    metadata={"profile_id": task_profile_id, "platform": clean_plat, "growth_mode": rate_info.get("growth_mode")},
+                    db_path=db_path,
+                )
+                continue
+
+            limit_24h = rate_info["limit"]
+            min_interval_seconds = rate_info.get("min_interval_hours", 0) * 3600
+            uniform_interval_seconds = max(60, int(86400 / max(1, limit_24h)))
+            step_seconds = max(min_interval_seconds, uniform_interval_seconds)
+
+            candidate_base = current_time
+            if last_pub_row and last_pub_row["max_pub"]:
+                try:
+                    p_dt = _from_iso(last_pub_row["max_pub"])
+                    candidate_base = max(candidate_base, p_dt + timedelta(seconds=min_interval_seconds))
+                except Exception:
+                    pass
+
+            if last_sched_row and last_sched_row["max_time"]:
+                try:
+                    s_dt = _from_iso(last_sched_row["max_time"])
+                    candidate_base = max(candidate_base, s_dt + timedelta(seconds=step_seconds))
+                except Exception:
+                    candidate_base = max(candidate_base, current_time + timedelta(seconds=step_seconds))
+            else:
+                if candidate_base == current_time:
+                    candidate_base = current_time + timedelta(seconds=min(300, step_seconds))
+
+            target_slot = candidate_base
+
+            # 3. Insere novo slot planejado com profile_id e channel_id
+            iso_slot = _to_iso(target_slot)
+            iso_created = _to_iso(current_time)
+            with get_connection(db_path) as conn:
                 cursor = conn.execute(
                     """
-                    INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at)
-                    VALUES (?, ?, ?, 'planned', ?);
+                    INSERT INTO scheduled_posts (
+                        task_id, platform, scheduled_at, status, created_at, profile_id, channel_id
+                    ) VALUES (?, ?, ?, 'planned', ?, ?, ?);
                     """,
-                    (task_id, platform, iso_slot, iso_created),
+                    (task_id, clean_plat, iso_slot, iso_created, task_profile_id, channel_id),
                 )
                 new_id = cursor.lastrowid
 
             record = {
                 "id": new_id,
                 "task_id": task_id,
-                "platform": platform,
+                "platform": clean_plat,
+                "profile_id": task_profile_id,
+                "channel_id": channel_id,
                 "scheduled_at": iso_slot,
                 "status": STATUS_PLANNED,
                 "subject": task_data.get("subject", task_id),
             }
             created_schedule.append(record)
-            available_slots -= 1
-            current_slot += timedelta(seconds=step_seconds)
+
+            # Atualiza last_sched_row para o próximo candidato desta plataforma
+            last_sched_row = {"max_time": iso_slot}
 
     return created_schedule
 
@@ -1145,7 +1361,7 @@ def run_scheduler_cycle(
 
         due_row = conn.execute(
             """
-            SELECT id, task_id, platform, scheduled_at, status, created_at, attempts, last_error, next_attempt_at
+            SELECT id, task_id, platform, scheduled_at, status, created_at, attempts, last_error, next_attempt_at, profile_id, channel_id
             FROM scheduled_posts
             WHERE status IN ('planned', 'ready')
             AND scheduled_at <= ?
@@ -1169,9 +1385,68 @@ def run_scheduler_cycle(
     attempts = int(post.get("attempts") or 0)
     dry_run = settings["dry_run"]
 
-    logger.info(f"[SCHEDULER][CYCLE] candidate id={post_id} task_id={task_id} platform={platform} scheduled_at={post['scheduled_at']}")
+    from app.services import profile_manager
+    profile_id = post.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)
+    channel_id = post.get("channel_id")
 
-    # 2. Revalidação: Plataforma habilitada nas configurações
+    logger.info(f"[SCHEDULER][CYCLE] candidate id={post_id} task_id={task_id} platform={platform} profile_id={profile_id} channel_id={channel_id} scheduled_at={post['scheduled_at']}")
+
+    # 2. Revalidação: Perfil da task ativo
+    prof = profile_manager.get_profile(profile_id, db_path=db_path)
+    if prof and not prof.get("is_active"):
+        postpone_time = current_time + timedelta(minutes=30)
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
+            )
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="WARNING",
+            event_type="PROFILE_DISABLED_BLOCK",
+            task_id=task_id,
+            message=f"Publicação bloqueada: perfil '{profile_id}' está inativo.",
+            metadata={"profile_id": profile_id, "post_id": post_id},
+            db_path=db_path,
+        )
+        _set_executor_status(
+            state="idle",
+            message=f"Post {post_id} postergado: perfil {profile_id} desativado",
+            last_cycle_summary=f"Post {post_id} adiado: perfil {profile_id} desativado",
+            db_path=db_path,
+        )
+        logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: perfil '{profile_id}' desativado.")
+        return {"status": "postponed", "reason": "profile_disabled", "profile_id": profile_id}
+
+    # 3. Revalidação: Canal de publicação ativo (se channel_id especificado)
+    if channel_id:
+        ch = profile_manager.get_channel(channel_id, db_path=db_path)
+        if not ch or not ch.get("is_enabled"):
+            postpone_time = current_time + timedelta(minutes=30)
+            with get_connection(db_path) as conn:
+                conn.execute(
+                    "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                    (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
+                )
+            operator_console.log_operational_event(
+                component="scheduler",
+                severity="WARNING",
+                event_type="CHANNEL_DISABLED_BLOCK",
+                task_id=task_id,
+                message=f"Publicação bloqueada: canal '{channel_id}' está desabilitado.",
+                metadata={"channel_id": channel_id, "post_id": post_id},
+                db_path=db_path,
+            )
+            _set_executor_status(
+                state="idle",
+                message=f"Post {post_id} postergado: canal {channel_id} desativado",
+                last_cycle_summary=f"Post {post_id} adiado: canal {channel_id} desativado",
+                db_path=db_path,
+            )
+            logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: canal '{channel_id}' desabilitado.")
+            return {"status": "postponed", "reason": "channel_disabled", "channel_id": channel_id}
+
+    # 4. Revalidação: Plataforma habilitada nas configurações
     if platform == "tiktok" and not settings["tiktok_enabled"]:
         logger.info(f"[SCHEDULER][CYCLE] skipped reason=platform_disabled (tiktok)")
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado: tiktok desativado", db_path=db_path)
@@ -1181,9 +1456,9 @@ def run_scheduler_cycle(
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado: youtube desativado", db_path=db_path)
         return {"status": "skipped", "reason": "platform_disabled", "platform": platform}
 
-    # 3. Revalidação: Plataforma planejada para a tarefa
+    # 5. Revalidação: Plataforma planejada para a tarefa
     planned_platforms = get_task_platforms(task_id, db_path)
-    if platform not in planned_platforms:
+    if planned_platforms and platform not in planned_platforms:
         with get_connection(db_path) as conn:
             conn.execute(
                 "UPDATE scheduled_posts SET status = 'failed', last_error = ? WHERE id = ?;",
@@ -1193,7 +1468,7 @@ def run_scheduler_cycle(
         _set_executor_status(last_cycle_summary=f"Post {post_id} falhou: plataforma não planejada", db_path=db_path)
         return {"status": "failed", "reason": "platform_not_planned", "task_id": task_id, "platform": platform}
 
-    # 4. Revalidação: Arquivo de vídeo final existente em disco
+    # 6. Revalidação: Arquivo de vídeo final existente em disco
     video_file = get_task_final_video(task_id, task_base_dir=task_base_dir)
     if not video_file or not os.path.isfile(video_file):
         with get_connection(db_path) as conn:
@@ -1205,16 +1480,26 @@ def run_scheduler_cycle(
         _set_executor_status(last_cycle_summary=f"Post {post_id} falhou: vídeo não encontrado", db_path=db_path)
         return {"status": "failed", "reason": "video_not_found", "task_id": task_id}
 
-    # 5. Idempotência: Checa se já existe publicação concluída com sucesso
+    # 7. Idempotência: Checa se já existe publicação concluída com sucesso
     with get_connection(db_path) as conn:
-        pub_event = conn.execute(
-            "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND status = 'success';",
-            (task_id, platform),
-        ).fetchone()
-        other_pub = conn.execute(
-            "SELECT id FROM scheduled_posts WHERE task_id = ? AND platform = ? AND status = 'published' AND id != ?;",
-            (task_id, platform, post_id),
-        ).fetchone()
+        if channel_id:
+            pub_event = conn.execute(
+                "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND channel_id = ? AND status = 'success';",
+                (task_id, platform, channel_id),
+            ).fetchone()
+            other_pub = conn.execute(
+                "SELECT id FROM scheduled_posts WHERE task_id = ? AND platform = ? AND channel_id = ? AND status = 'published' AND id != ?;",
+                (task_id, platform, channel_id, post_id),
+            ).fetchone()
+        else:
+            pub_event = conn.execute(
+                "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND status = 'success';",
+                (task_id, platform),
+            ).fetchone()
+            other_pub = conn.execute(
+                "SELECT id FROM scheduled_posts WHERE task_id = ? AND platform = ? AND status = 'published' AND id != ?;",
+                (task_id, platform, post_id),
+            ).fetchone()
 
     if pub_event or other_pub:
         with get_connection(db_path) as conn:
@@ -1226,18 +1511,27 @@ def run_scheduler_cycle(
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado por idempotência (já publicado)", db_path=db_path)
         return {"status": "skipped", "reason": "already_published", "task_id": task_id, "platform": platform}
 
-    # 6. Revalidação da Janela Móvel de 24 horas (Técnica + Growth Mode)
-    rate_info = get_platform_rate_limits(platform, db_path, now=current_time)
+    # 8. Revalidação da Janela Móvel de 24 horas (Técnica + Growth Mode do perfil)
+    rate_info = get_platform_rate_limits(platform, db_path, now=current_time, profile_id=profile_id)
     if rate_info["available_slots"] <= 0:
         window_past = current_time - timedelta(hours=24)
         with get_connection(db_path) as conn:
-            oldest_row = conn.execute(
-                """
-                SELECT MIN(published_at) AS oldest_pub FROM publication_events
-                WHERE platform = ? AND status = 'success' AND published_at >= ?;
-                """,
-                (platform, _to_iso(window_past)),
-            ).fetchone()
+            if profile_id and profile_id != profile_manager.DEFAULT_PROFILE_ID:
+                oldest_row = conn.execute(
+                    """
+                    SELECT MIN(published_at) AS oldest_pub FROM publication_events
+                    WHERE platform = ? AND profile_id = ? AND status = 'success' AND published_at >= ?;
+                    """,
+                    (platform, profile_id, _to_iso(window_past)),
+                ).fetchone()
+            else:
+                oldest_row = conn.execute(
+                    """
+                    SELECT MIN(published_at) AS oldest_pub FROM publication_events
+                    WHERE platform = ? AND status = 'success' AND published_at >= ?;
+                    """,
+                    (platform, _to_iso(window_past)),
+                ).fetchone()
 
         if oldest_row and oldest_row["oldest_pub"]:
             try:
@@ -1260,6 +1554,17 @@ def run_scheduler_cycle(
                 """,
                 (_to_iso(next_eligible), _to_iso(next_eligible), post_id),
             )
+
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="INFO",
+            event_type="PROFILE_GROWTH_LIMIT_BLOCK",
+            task_id=task_id,
+            message=f"Limite de {platform} atingido ({rate_info['total_used']}/{rate_info['limit']} no modo {rate_info.get('growth_mode')}) para perfil {profile_id}.",
+            metadata={"profile_id": profile_id, "platform": platform, "growth_mode": rate_info.get("growth_mode")},
+            db_path=db_path,
+        )
+
         _set_executor_status(
             state="limit_blocked",
             message=f"Limite de {platform} atingido ({rate_info['total_used']}/{rate_info['limit']} no modo {rate_info.get('growth_mode')})",
@@ -1277,17 +1582,26 @@ def run_scheduler_cycle(
             "next_eligible": _to_iso(next_eligible),
         }
 
-    # 6.1 Revalidação de Intervalo Mínimo (Growth Mode Anti-Burst)
+    # 8.1 Revalidação de Intervalo Mínimo (Growth Mode Anti-Burst do perfil)
     min_interval_hours = rate_info.get("min_interval_hours", 0)
     if min_interval_hours > 0:
         with get_connection(db_path) as conn:
-            last_pub = conn.execute(
-                """
-                SELECT MAX(published_at) AS last_pub FROM publication_events
-                WHERE platform = ? AND status = 'success';
-                """,
-                (platform,),
-            ).fetchone()
+            if profile_id and profile_id != profile_manager.DEFAULT_PROFILE_ID:
+                last_pub = conn.execute(
+                    """
+                    SELECT MAX(published_at) AS last_pub FROM publication_events
+                    WHERE platform = ? AND profile_id = ? AND status = 'success';
+                    """,
+                    (platform, profile_id),
+                ).fetchone()
+            else:
+                last_pub = conn.execute(
+                    """
+                    SELECT MAX(published_at) AS last_pub FROM publication_events
+                    WHERE platform = ? AND status = 'success';
+                    """,
+                    (platform,),
+                ).fetchone()
         if last_pub and last_pub["last_pub"]:
             try:
                 last_pub_dt = _from_iso(last_pub["last_pub"])
@@ -1382,7 +1696,13 @@ def run_scheduler_cycle(
     logger.info(f"[SCHEDULER][PUBLISH] Iniciando publicação automática para {task_id} no {platform}")
 
     from app.services import task as task_module
-    success, err_msg = task_module.publish_task(task_id, platforms=[platform], synchronous=True, db_path=db_path)
+    success, err_msg = task_module.publish_task(
+        task_id,
+        platforms=[platform],
+        channel_id=channel_id,
+        synchronous=True,
+        db_path=db_path,
+    )
 
     pub_now_iso = _to_iso(datetime.now(timezone.utc))
     _set_executor_status(current_post=None, last_run_at=pub_now_iso, db_path=db_path)

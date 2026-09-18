@@ -940,16 +940,24 @@ def render_operator_console():
             upcoming = s_sum.get("upcoming_posts", [])
             if upcoming:
                 nxt = upcoming[0]
-                nxt_plat = nxt.get("platform", "YouTube").upper()
+                nxt_plat = nxt.get("platform", "YouTube").capitalize()
                 nxt_time = nxt.get("scheduled_at", "—")
                 nxt_top = nxt.get("topic") or f"Task {nxt.get('task_id', '')[:8]}"
                 nxt_mode = nxt.get("growth_mode", data["growth_mode"])
+                nxt_prof = nxt.get("profile_name")
+                nxt_chan = nxt.get("channel_name")
+
+                profile_channel_html = ""
+                if nxt_prof:
+                    profile_channel_html += f"<b>Perfil:</b> {nxt_prof}<br>"
+                if nxt_chan:
+                    profile_channel_html += f"<b>Canal:</b> {nxt_plat} — {nxt_chan}<br>"
 
                 st.markdown(
                     f"""
                     <div style="background: rgba(59, 130, 246, 0.08); border-left: 4px solid #3b82f6; padding: 8px 12px; border-radius: 4px; font-size: 0.86rem; margin-bottom: 8px;">
-                        <b>🚀 {nxt_plat}</b> &nbsp;|&nbsp; <b>Horário:</b> {nxt_time}<br>
-                        <b>Tema:</b> {nxt_top[:42]}<br>
+                        <b>🚀 {nxt_plat.upper()}</b> &nbsp;|&nbsp; <b>Horário:</b> {nxt_time}<br>
+                        {profile_channel_html}<b>Tema:</b> {nxt_top[:42]}<br>
                         <span style="opacity: 0.8; font-size: 0.8rem;">Growth Mode: {nxt_mode}</span>
                     </div>
                     """,

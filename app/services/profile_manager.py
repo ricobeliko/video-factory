@@ -422,14 +422,26 @@ def set_profile_active(profile_id: str, is_active: bool, db_path: Optional[str] 
         return cur.rowcount > 0
 
 
+def _normalize_channel_dict(row_dict: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not row_dict:
+        return None
+    d = dict(row_dict)
+    if "channel_id" not in d:
+        d["channel_id"] = d.get("id")
+    if "channel_name" not in d:
+        d["channel_name"] = d.get("display_name")
+    return d
+
+
 def create_channel(
     profile_id: str,
     platform: str,
-    display_name: str,
+    display_name: Optional[str] = None,
     external_profile_name: Optional[str] = None,
     is_enabled: bool = True,
     channel_id: Optional[str] = None,
     db_path: Optional[str] = None,
+    channel_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cria um canal de publicação associado a um perfil."""
     from app.services import operator_console
@@ -437,7 +449,7 @@ def create_channel(
 
     init_profile_db(db_path)
     clean_platform = _validate_platform(platform)
-    clean_display = str(display_name or "").strip()
+    clean_display = str(display_name or channel_name or "").strip()
     if not clean_display:
         raise ValueError("Display name do canal não pode ser vazio.")
 
@@ -469,7 +481,7 @@ def create_channel(
             ),
         )
         row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (cid,)).fetchone()
-        return dict(row)
+        return _normalize_channel_dict(dict(row))
 
 
 def update_channel(
@@ -518,7 +530,7 @@ def update_channel(
             tuple(params),
         )
         row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (channel_id,)).fetchone()
-        return dict(row)
+        return _normalize_channel_dict(dict(row))
 
 
 def get_channel(channel_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -526,7 +538,7 @@ def get_channel(channel_id: str, db_path: Optional[str] = None) -> Optional[Dict
     init_profile_db(db_path)
     with get_connection(db_path) as conn:
         row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (channel_id,)).fetchone()
-        return dict(row) if row else None
+        return _normalize_channel_dict(dict(row)) if row else None
 
 
 def list_channels(
@@ -551,7 +563,7 @@ def list_channels(
 
     with get_connection(db_path) as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
-        return [dict(r) for r in rows]
+        return [_normalize_channel_dict(dict(r)) for r in rows]
 
 
 def set_channel_enabled(channel_id: str, is_enabled: bool, db_path: Optional[str] = None) -> bool:
@@ -644,6 +656,9 @@ def set_active_profile(profile_id: str, db_path: Optional[str] = None) -> Dict[s
     return p
 
 
+set_active_profile_id = set_active_profile
+
+
 def get_generation_profile_context(
     profile_id: Optional[str] = None,
     db_path: Optional[str] = None,
@@ -694,6 +709,9 @@ def save_task_profile(task_id: str, profile_id: str, db_path: Optional[str] = No
         )
 
 
+set_task_profile_id = save_task_profile
+
+
 def get_task_profile_id(task_id: str, db_path: Optional[str] = None) -> str:
     """Recupera o profile_id de uma tarefa (fallback seguro para 'default' se não associada)."""
     init_profile_db(db_path)
@@ -711,3 +729,37 @@ def get_task_profile_id(task_id: str, db_path: Optional[str] = None) -> str:
     except Exception:
         pass
     return DEFAULT_PROFILE_ID
+
+
+def resolve_task_channels(
+    task_id: str,
+    platforms: Optional[List[str]] = None,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Resolve os canais de publicação habilitados vinculados ao perfil imutável da task.
+
+    Fluxo:
+    1. Descobre o profile_id da task (imutável)
+    2. Fallback para 'default' se task antiga
+    3. Verifica se o perfil está ativo (se inativo, retorna vazio)
+    4. Lista publishing_channels desse profile
+    5. Opcionalmente filtra pelas platforms solicitadas
+    6. Retorna apenas canais habilitados (is_enabled == 1)
+    """
+    init_profile_db(db_path)
+    profile_id = get_task_profile_id(task_id, db_path=db_path)
+    prof = get_profile(profile_id, db_path=db_path)
+    if prof and not prof.get("is_active"):
+        return []
+
+    channels = list_channels(profile_id=profile_id, db_path=db_path)
+    enabled_channels = [c for c in channels if c.get("is_enabled")]
+
+    if platforms:
+        norm_platforms = {p.lower().strip() for p in platforms if p and p.strip()}
+        enabled_channels = [
+            c for c in enabled_channels
+            if c.get("platform", "").lower().strip() in norm_platforms
+        ]
+
+    return enabled_channels

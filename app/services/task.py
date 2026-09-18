@@ -1161,6 +1161,10 @@ def _run_cross_post(
     platforms: tuple[str, ...],
     youtube_privacy_status: str,
     youtube_made_for_kids: bool = False,
+    channel_id: str | None = None,
+    external_profile_name: str | None = None,
+    profile_id: str | None = None,
+    db_path: str | None = None,
 ) -> None:
     """后台执行跨平台发布，并只补充发布相关的任务字段。"""
     results = []
@@ -1223,6 +1227,7 @@ def _run_cross_post(
                 title=post_title,
                 platforms=list(platforms),
                 youtube_extra=youtube_extra,
+                external_profile_name=external_profile_name,
             )
             if not isinstance(result, dict):
                 result = {
@@ -1252,11 +1257,19 @@ def _run_cross_post(
                 from app.services import scheduler
                 req_id = results[0].get("request_id") if results and isinstance(results[0], dict) else None
                 for p in platforms:
-                    scheduler.record_publication_event(task_id, p, status="success", external_id=req_id)
+                    scheduler.record_publication_event(
+                        task_id,
+                        p,
+                        status="success",
+                        external_id=req_id,
+                        channel_id=channel_id,
+                        profile_id=profile_id,
+                        db_path=db_path,
+                    )
             except Exception as e:
                 logger.warning(f"failed to record publication event in scheduler: {e}")
 
-            if are_all_task_platforms_published(task_id, list(platforms)):
+            if are_all_task_platforms_published(task_id, list(platforms), db_path=db_path):
                 cross_post_state = const.CROSS_POST_STATE_COMPLETE
             else:
                 cross_post_state = getattr(const, "CROSS_POST_STATE_PARTIAL", "partial")
@@ -1344,6 +1357,10 @@ def _schedule_cross_post(
     platforms: list[str],
     youtube_privacy_status: str,
     youtube_made_for_kids: bool = False,
+    channel_id: str | None = None,
+    external_profile_name: str | None = None,
+    profile_id: str | None = None,
+    db_path: str | None = None,
 ) -> str | None:
     """提交后台发布任务；成功返回 None，调度失败返回可查询的错误原因。"""
     if not _cross_post_slots.acquire(blocking=False):
@@ -1381,6 +1398,10 @@ def _schedule_cross_post(
             tuple(platforms),
             youtube_privacy_status,
             youtube_made_for_kids,
+            channel_id,
+            external_profile_name,
+            profile_id,
+            db_path,
         )
         _register_cross_post_future(task_id, future)
         future.add_done_callback(partial(_finalize_cross_post_future, task_id))
@@ -1404,41 +1425,157 @@ def _schedule_cross_post(
 def publish_task(
     task_id: str,
     platforms: list[str] | None = None,
+    channel_id: str | None = None,
     synchronous: bool = False,
     db_path: str | None = None,
 ) -> tuple[bool, str]:
     """
     Manually or automatically publish an existing completed task's final video to configured platforms via Upload-Post.
+    Respeita o perfil imutável da task e os canais vinculados ao perfil correspondente.
 
     Args:
         task_id: The ID of the task to publish.
         platforms: Optional list of target platforms (e.g. ["tiktok"]).
-                   If None, uses upload_post_service.platforms.
+                   If None, uses upload_post_service.platforms or resolved channel platform.
+        channel_id: Optional specific publishing channel ID to use.
         synchronous: If True, executes publishing synchronously in caller thread.
                      If False, schedules publishing asynchronously in background.
         db_path: Optional custom SQLite DB path (useful for testing and execution engine isolation).
 
     Returns (True, "") on successful scheduling/execution, or (False, error_message) on failure.
     """
-    from app.services import operator_console
+    from app.services import operator_console, profile_manager
     try:
         operator_console.require_primary_instance(db_path=db_path)
     except PermissionError as exc:
         return False, str(exc)
 
-    if not upload_post.upload_post_service.enabled:
+    if operator_console.is_factory_paused(db_path=db_path):
+        return False, "Factory is paused: publishing blocked"
 
+    if not upload_post.upload_post_service.enabled:
         return False, "Upload-Post integration is disabled in settings"
     if not upload_post.upload_post_service.is_configured():
         return False, "Upload-Post is not fully configured (missing API Key or username)"
 
-    if platforms is None:
-        target_platforms = list(upload_post.upload_post_service.platforms)
+    # 1. Resolução do perfil da task (imutável)
+    task_profile_id = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+    prof = profile_manager.get_profile(task_profile_id, db_path=db_path)
+    if prof and not prof.get("is_active"):
+        operator_console.log_operational_event(
+            component="task",
+            severity="WARNING",
+            event_type="PROFILE_DISABLED_BLOCK",
+            task_id=task_id,
+            message=f"Publicação bloqueada: perfil '{task_profile_id}' está desativado.",
+            metadata={"profile_id": task_profile_id},
+            db_path=db_path,
+        )
+        return False, f"Cannot publish: profile '{task_profile_id}' is disabled"
+
+    # 2. Resolução do canal de publicação
+    resolved_channel_id = channel_id
+    external_profile_name = None
+
+    if resolved_channel_id:
+        ch = profile_manager.get_channel(resolved_channel_id, db_path=db_path)
+        if not ch:
+            return False, f"Channel '{resolved_channel_id}' not found"
+        if ch.get("profile_id") != task_profile_id:
+            return False, f"Channel '{resolved_channel_id}' does not belong to profile '{task_profile_id}'"
+        if not ch.get("is_enabled"):
+            operator_console.log_operational_event(
+                component="task",
+                severity="WARNING",
+                event_type="CHANNEL_DISABLED_BLOCK",
+                task_id=task_id,
+                message=f"Publicação bloqueada: canal '{resolved_channel_id}' está desabilitado.",
+                metadata={"channel_id": resolved_channel_id, "profile_id": task_profile_id},
+                db_path=db_path,
+            )
+            return False, f"Cannot publish: channel '{resolved_channel_id}' is disabled"
+
+        ch_plat = ch.get("platform", "").lower().strip()
+        if platforms:
+            req_plats = [p.lower().strip() for p in platforms if p and p.strip()]
+            if ch_plat not in req_plats:
+                return False, f"Channel '{resolved_channel_id}' is for platform '{ch_plat}', which does not match requested platforms {req_plats}"
+        target_platforms = [ch_plat]
+        external_profile_name = ch.get("external_profile_name")
     else:
-        target_platforms = [p.lower().strip() for p in platforms if p and p.strip()]
+        req_plats = [p.lower().strip() for p in platforms if p and p.strip()] if platforms else list(upload_post.upload_post_service.platforms)
+        enabled_channels = profile_manager.resolve_task_channels(task_id, platforms=req_plats, db_path=db_path)
+        all_channels = profile_manager.list_channels(profile_id=task_profile_id, db_path=db_path)
+
+        if not enabled_channels:
+            has_disabled_for_plat = False
+            if all_channels:
+                for c in all_channels:
+                    if c.get("platform", "").lower().strip() in req_plats:
+                        has_disabled_for_plat = True
+                        break
+            if has_disabled_for_plat:
+                operator_console.log_operational_event(
+                    component="task",
+                    severity="WARNING",
+                    event_type="CHANNEL_DISABLED_BLOCK",
+                    task_id=task_id,
+                    message=f"Todos os canais para as plataformas {req_plats} no perfil '{task_profile_id}' estão desabilitados.",
+                    metadata={"profile_id": task_profile_id, "platforms": req_plats},
+                    db_path=db_path,
+                )
+                return False, f"All channels for profile '{task_profile_id}' on platforms {req_plats} are disabled"
+
+            # Fallback legado seguro (sem canais configurados no perfil)
+            operator_console.log_operational_event(
+                component="task",
+                severity="INFO",
+                event_type="CHANNEL_RESOLUTION_FALLBACK",
+                task_id=task_id,
+                message=f"Nenhum canal customizado configurado para o perfil '{task_profile_id}'. Usando fallback legado.",
+                metadata={"profile_id": task_profile_id, "platforms": req_plats},
+                db_path=db_path,
+            )
+            target_platforms = req_plats
+            resolved_channel_id = None
+            external_profile_name = None
+        else:
+            # Proteção contra ambiguidade: múltiplos canais para a mesma plataforma
+            by_plat: dict[str, list[dict]] = {}
+            for c in enabled_channels:
+                by_plat.setdefault(c.get("platform", "").lower().strip(), []).append(c)
+            for plat, ch_list in by_plat.items():
+                if len(ch_list) > 1:
+                    return False, f"Multiple active channels found for platform '{plat}' in profile '{task_profile_id}'. Explicit channel_id required to avoid ambiguity."
+
+            if len(enabled_channels) == 1:
+                resolved_channel_id = enabled_channels[0]["channel_id"]
+                external_profile_name = enabled_channels[0].get("external_profile_name")
+                target_platforms = [enabled_channels[0]["platform"].lower().strip()]
+            else:
+                target_platforms = [c["platform"].lower().strip() for c in enabled_channels]
+                resolved_channel_id = None
+                external_profile_name = None
 
     if not target_platforms:
         return False, "No target platforms selected for publishing"
+
+    # 3. Idempotência preventiva
+    from app.services import scheduler
+    with scheduler.get_connection(db_path) as conn:
+        for p in target_platforms:
+            if resolved_channel_id:
+                pub_row = conn.execute(
+                    "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND channel_id = ? AND status = 'success';",
+                    (task_id, p, resolved_channel_id),
+                ).fetchone()
+            else:
+                pub_row = conn.execute(
+                    "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND status = 'success';",
+                    (task_id, p),
+                ).fetchone()
+            if pub_row and len(target_platforms) == 1:
+                return False, f"Task '{task_id}' already published on platform '{p}'"
 
     task = sm.state.get_task(task_id) or {}
     task_path = os.path.join(utils.task_dir(), task_id)
@@ -1517,6 +1654,10 @@ def publish_task(
             platforms=target_platforms,
             youtube_privacy_status=upload_post.upload_post_service.youtube_privacy_status,
             youtube_made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
+            channel_id=resolved_channel_id,
+            external_profile_name=external_profile_name,
+            profile_id=task_profile_id,
+            db_path=db_path,
         )
         if scheduling_error:
             return False, scheduling_error
@@ -1575,6 +1716,7 @@ def publish_task(
                 title=post_title,
                 platforms=list(target_platforms),
                 youtube_extra=youtube_extra,
+                external_profile_name=external_profile_name,
             )
             if not isinstance(res, dict):
                 res = {"success": False, "error": "Upload-Post returned an invalid response"}
@@ -1596,7 +1738,6 @@ def publish_task(
             return False, err_str
 
         try:
-            from app.services import scheduler
             first_res = results[0] if results and isinstance(results[0], dict) else {}
             provider_req_id = first_res.get("request_id")
             sub_results = first_res.get("results", {}) if isinstance(first_res.get("results"), dict) else {}
@@ -1618,6 +1759,8 @@ def publish_task(
                     status="success",
                     external_id=str(platform_post_id) if platform_post_id else None,
                     provider_request_id=str(provider_req_id) if provider_req_id else None,
+                    channel_id=resolved_channel_id,
+                    profile_id=task_profile_id,
                     db_path=db_path,
                 )
         except Exception as e:

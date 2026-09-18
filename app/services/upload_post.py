@@ -55,6 +55,7 @@ class UploadPostService:
         platforms: Optional[list] = None,
         privacy_level: str = "PUBLIC_TO_EVERYONE",
         youtube_extra: Optional[dict] = None,
+        external_profile_name: Optional[str] = None,
     ) -> dict:
         if not self.is_configured():
             logger.warning("Upload-Post is not configured. Skipping cross-post.")
@@ -80,12 +81,15 @@ class UploadPostService:
 
         logger.info(f"Cross-posting video to {', '.join(platforms)} via Upload-Post...")
 
+        # Destino/perfil: external_profile_name do canal ou fallback legado self.username
+        upload_user = (external_profile_name or "").strip() or self.username
+
         try:
             with open(video_path, 'rb') as video_file:
                 files = {'video': video_file}
 
                 data = [
-                    ('user', self.username),
+                    ('user', upload_user),
                     ('title', title[:2200]),
                     ('privacy_level', privacy_level),
                 ]
@@ -172,5 +176,12 @@ def cross_post_video(
     title: str,
     platforms: Optional[list] = None,
     youtube_extra: Optional[dict] = None,
+    external_profile_name: Optional[str] = None,
 ) -> dict:
-    return upload_post_service.upload_video(video_path, title, platforms, youtube_extra=youtube_extra)
+    return upload_post_service.upload_video(
+        video_path,
+        title,
+        platforms,
+        youtube_extra=youtube_extra,
+        external_profile_name=external_profile_name,
+    )

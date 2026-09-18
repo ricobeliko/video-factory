@@ -1380,7 +1380,7 @@ def render_operator_console():
         with p_cols[col_idx]:
             p_status = p_val.get("status", "UNKNOWN")
             # Strict allowed statuses check
-            if p_status not in ("CONFIGURED", "NOT CONFIGURED", "HEALTHY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"):
+            if p_status not in ("CONFIGURED", "NOT CONFIGURED", "NOT_CONFIGURED", "HEALTHY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"):
                 p_status = "UNKNOWN"
 
             if p_status == "HEALTHY":
@@ -1391,6 +1391,8 @@ def render_operator_console():
                 badge_html = "<span class='op-badge op-badge-red'>🔴 UNAVAILABLE</span>"
             elif p_status == "CONFIGURED":
                 badge_html = "<span class='op-badge op-badge-blue'>🔵 CONFIGURED</span>"
+            elif p_status in ("NOT CONFIGURED", "NOT_CONFIGURED"):
+                badge_html = "<span class='op-badge op-badge-gray'>⚪ NOT CONFIGURED</span>"
             else:
                 badge_html = "<span class='op-badge op-badge-gray'>⚪ UNKNOWN</span>"
 
@@ -1411,6 +1413,43 @@ def render_operator_console():
                     st.markdown(f"**Informação:** {clean_details}")
                     if p_status == "DEGRADED":
                         st.info("Impacto operacional: Sistema continua funcionando pelas fontes secundárias/locais.")
+
+                    if p_name in ("YouTube Analytics", "TikTok Analytics"):
+                        plat = "youtube" if "youtube" in p_name.lower() else "tiktok"
+                        if st.button(f"🔍 Testar Configuração", key=f"op_test_cfg_{plat}", use_container_width=True):
+                            res = operator_console.test_analytics_provider_configuration(plat)
+                            if res.get("configured"):
+                                st.success(f"✓ Configuração do {p_name} válida e pronta para uso.")
+                            else:
+                                st.warning(f"⚠ Configuração incompleta. Campo(s) ausente(s): {res.get('missing_fields')}")
+
+                        with st.popover(f"📥 Coleta Manual ({plat.upper()})", use_container_width=True):
+                            st.markdown(f"**Coleta Manual Controlada — {p_name}**")
+                            st.caption("Executa coleta pontual de UMA publicação por vez. Nenhuma coleta em lote ou polling.")
+                            fetch_task_id = st.text_input(f"Task ID da publicação ({plat}):", key=f"op_fetch_tid_{plat}")
+                            fetch_persist = st.checkbox(
+                                "Persistir snapshot no histórico (requer PRIMARY)",
+                                value=False,
+                                key=f"op_fetch_persist_{plat}",
+                                disabled=not is_primary,
+                            )
+                            if not is_primary and fetch_persist:
+                                st.caption(":red[Modo VIEW ONLY: apenas consulta sem persistência permitida.]")
+                            st.markdown("**Confirmação explícita:**")
+                            st.markdown(f"- Plataforma: `{plat}`")
+                            st.markdown(f"- Task: `{fetch_task_id or '(não informada)'}`")
+                            st.markdown(f"- Modo: `{'Persistir snapshot' if fetch_persist else 'Consulta apenas (sem gravar)'}`")
+                            if st.button("Confirmar e Buscar Métricas", key=f"op_fetch_btn_{plat}", disabled=not fetch_task_id):
+                                try:
+                                    f_res = operator_console.fetch_real_metrics_for_publication_op(
+                                        task_id=fetch_task_id.strip(),
+                                        platform=plat,
+                                        persist=fetch_persist,
+                                    )
+                                    st.success(f"✓ Coleta concluída com sucesso! (Persistido: {f_res.get('persisted')})")
+                                    st.json(f_res.get("metrics") or f_res.get("snapshot", {}))
+                                except Exception as f_err:
+                                    st.error(f"Erro na coleta: {f_err}")
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 

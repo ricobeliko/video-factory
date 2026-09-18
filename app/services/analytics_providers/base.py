@@ -89,3 +89,32 @@ class AnalyticsProvider(ABC):
     ) -> NormalizedAnalytics:
         """Converte dados brutos da API para o modelo normalizado padronizado."""
         pass
+
+    def get_missing_fields(self) -> list:
+        """Retorna lista de nomes dos campos faltantes na configuração."""
+        return []
+
+    def validate_configuration(self, db_path: Optional[str] = None) -> Dict[str, Any]:
+        """Retorna validação estruturada da configuração sem expor segredos."""
+        status = self.get_status(db_path=db_path)
+        is_configured = status == STATUS_CONFIGURED
+        missing = self.get_missing_fields() if not is_configured else []
+        return {
+            "provider": self.provider_name,
+            "platform": self.platform,
+            "configured": is_configured,
+            "missing_fields": missing,
+            "status": status,
+        }
+
+    def validate_external_id(self, external_post_id: str) -> str:
+        """Valida que o ID externo tem formato plausível antes de requisições externas."""
+        if not external_post_id or not str(external_post_id).strip():
+            raise AnalyticsProviderError("external_post_id não informado ou vazio.", code=ERR_NOT_FOUND)
+        clean_id = str(external_post_id).strip()
+        if any(c in clean_id for c in (" ", "\t", "\n", "/", "?", "&", "=")):
+            raise AnalyticsProviderError(
+                f"external_post_id inválido ('{clean_id}'). Deve ser o ID bruto da publicação e não uma URL.",
+                code=ERR_NOT_FOUND,
+            )
+        return clean_id

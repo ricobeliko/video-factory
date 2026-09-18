@@ -217,3 +217,137 @@ def ingest_analytics_for_publication(
         f"({ref.platform}, provider={provider.provider_name}, score={snapshot.get('performance_score')})"
     )
     return snapshot
+
+
+def fetch_real_metrics_for_publication(
+    task_id: str,
+    platform: str,
+    channel_id: Optional[str] = None,
+    persist: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Executa a coleta REAL, manual e controlada de UMA publicação por vez.
+    Garante todas as validações de segurança antes de disparar requisição HTTP.
+
+    REQUISITOS (Fase V10-B):
+    - chamada manual e controlada
+    - UMA publicação por vez
+    - requer external_post_id válido
+    - sem loop / sem batch / sem cron / sem background worker
+    - persist=False: obtém métricas reais, normaliza e retorna SEM gravar no SQLite.
+    - persist=True: exige PRIMARY role (VIEW ONLY é bloqueado), normaliza e persiste snapshot.
+    """
+    clean_tid = str(task_id or "").strip()
+    clean_platform = str(platform or "").strip().lower()
+
+    if not clean_tid:
+        raise ValueError("task_id must be provided")
+    if not clean_platform:
+        raise ValueError("platform must be provided")
+
+    # 1. Resolver provedor e validar plataforma
+    provider = get_provider(clean_platform)
+
+    # 2. Validar configuração do provedor antes de qualquer chamada
+    config_validation = provider.validate_configuration(db_path=db_path)
+    if not config_validation.get("configured"):
+        missing = config_validation.get("missing_fields", [])
+        raise AnalyticsProviderError(
+            f"Provedor '{clean_platform}' não está configurado. Campo(s) ausente(s): {missing}.",
+            code=ERR_AUTH,
+        )
+
+    # 3. Resolver publicação histórica
+    ref = get_published_content_reference(
+        task_id=clean_tid,
+        platform=clean_platform,
+        channel_id=channel_id,
+        db_path=db_path,
+    )
+
+    if not ref.external_post_id:
+        raise AnalyticsProviderError(
+            f"Publicação da task '{ref.task_id}' na plataforma '{ref.platform}' não possui external_post_id.",
+            code=ERR_NOT_FOUND,
+        )
+
+    # 4. Validar formato do external_post_id
+    clean_post_id = provider.validate_external_id(ref.external_post_id)
+
+    # 5. Guarda de Single-Instance: se persist=True, exige PRIMARY
+    if persist:
+        from app.services import operator_console
+        operator_console.require_primary_instance(db_path=db_path)
+
+    # 6. Executar coleta real através da API oficial (dry_run=False)
+    raw_data = provider.fetch_metrics(
+        external_post_id=clean_post_id,
+        dry_run=False,
+    )
+
+    # 7. Normalizar dados brutos para modelo padronizado
+    normalized = provider.normalize_metrics(
+        raw_data,
+        external_post_id=clean_post_id,
+        external_url=ref.external_url,
+    )
+
+    # 8. Fluxo SEM persistência (persist=False)
+    if not persist:
+        logger.info(
+            f"[ANALYTICS][REAL_FETCH] Coleta real concluída (sem persistência) para task '{ref.task_id}' "
+            f"({ref.platform}, views={normalized.views}, likes={normalized.likes})"
+        )
+        return {
+            "success": True,
+            "persisted": False,
+            "platform": ref.platform,
+            "task_id": ref.task_id,
+            "profile_id": ref.profile_id,
+            "channel_id": ref.channel_id,
+            "external_post_id": clean_post_id,
+            "external_url": ref.external_url,
+            "metrics": normalized.to_dict(),
+        }
+
+    # 9. Fluxo COM persistência (persist=True)
+    snapshot = analytics.save_snapshot(
+        task_id=ref.task_id,
+        platform=ref.platform,
+        views=normalized.views,
+        likes=normalized.likes,
+        comments=normalized.comments,
+        shares=normalized.shares,
+        favorites=normalized.favorites,
+        average_view_duration=normalized.average_view_duration_seconds,
+        average_percentage_viewed=normalized.average_view_percentage,
+        completion_rate=normalized.retention_rate,
+        subscribers_gained=normalized.followers_gained,
+        external_id=clean_post_id,
+        external_url=ref.external_url,
+        publication_event_id=ref.publication_event_id,
+        published_at=ref.published_at,
+        collected_at=normalized.collected_at,
+        source=provider.provider_name,
+        profile_id=ref.profile_id,
+        channel_id=ref.channel_id,
+        metadata_json=normalized.raw_metadata,
+        db_path=db_path,
+    )
+
+    logger.info(
+        f"[ANALYTICS][REAL_FETCH] Coleta real persistida com sucesso para task '{ref.task_id}' "
+        f"({ref.platform}, score={snapshot.get('performance_score')})"
+    )
+    return {
+        "success": True,
+        "persisted": True,
+        "platform": ref.platform,
+        "task_id": ref.task_id,
+        "profile_id": ref.profile_id,
+        "channel_id": ref.channel_id,
+        "external_post_id": clean_post_id,
+        "external_url": ref.external_url,
+        "snapshot": snapshot,
+    }

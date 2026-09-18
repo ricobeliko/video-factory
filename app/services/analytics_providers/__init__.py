@@ -2,7 +2,7 @@
 Analytics Providers Package.
 V10-A — Automatic Analytics Provider Foundation.
 """
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from app.services.analytics_providers.base import (
     AnalyticsProvider,
@@ -56,6 +56,12 @@ def get_all_providers_status(db_path: Optional[str] = None) -> Dict[str, str]:
     }
 
 
+def validate_provider_configuration(platform: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna validação estruturada do provedor sem expor segredos ou tokens."""
+    provider = get_provider(platform)
+    return provider.validate_configuration(db_path=db_path)
+
+
 __all__ = [
     "AnalyticsProvider",
     "AnalyticsProviderError",
@@ -65,6 +71,7 @@ __all__ = [
     "get_provider",
     "register_provider",
     "get_all_providers_status",
+    "validate_provider_configuration",
     "STATUS_CONFIGURED",
     "STATUS_NOT_CONFIGURED",
     "STATUS_HEALTHY",

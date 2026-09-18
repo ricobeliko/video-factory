@@ -44,6 +44,12 @@ class YouTubeAnalyticsProvider(AnalyticsProvider):
             return STATUS_CONFIGURED
         return STATUS_NOT_CONFIGURED
 
+    def get_missing_fields(self) -> list:
+        """Retorna campos ausentes na configuração do YouTube."""
+        if not self._get_api_key():
+            return ["youtube_api_key"]
+        return []
+
     def fetch_metrics(
         self,
         external_post_id: str,
@@ -51,10 +57,7 @@ class YouTubeAnalyticsProvider(AnalyticsProvider):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Consulta as estatísticas do vídeo via YouTube Data API v3."""
-        if not external_post_id or not str(external_post_id).strip():
-            raise AnalyticsProviderError("external_post_id inválido ou vazio.", code=ERR_NOT_FOUND)
-
-        clean_post_id = str(external_post_id).strip()
+        clean_post_id = self.validate_external_id(external_post_id)
 
         if dry_run:
             logger.info(f"[ANALYTICS][YOUTUBE] Dry run fetch para video_id={clean_post_id}")

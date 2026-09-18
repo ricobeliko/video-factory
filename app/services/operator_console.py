@@ -1630,3 +1630,39 @@ def get_system_status(db_path: Optional[str] = None) -> Dict[str, Any]:
         "alerts": alerts,
         "instance": inst_info,
     }
+
+
+# ---------------------------------------------------------------------------
+# 11. Operações de Provedores de Analytics (Fase V10-B)
+# ---------------------------------------------------------------------------
+
+def test_analytics_provider_configuration(platform: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Testa estaticamente a configuração de um provedor de analytics sem chamadas externas.
+    Permitido tanto em PRIMARY quanto em SECONDARY_VIEW_ONLY.
+    """
+    from app.services.analytics_providers import validate_provider_configuration
+    return validate_provider_configuration(platform, db_path=db_path)
+
+
+def fetch_real_metrics_for_publication_op(
+    task_id: str,
+    platform: str,
+    channel_id: Optional[str] = None,
+    persist: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Executa coleta manual e controlada de métricas para uma publicação.
+    Exige PRIMARY se persist=True. Em VIEW ONLY permite apenas persist=False.
+    """
+    if persist:
+        require_primary_instance(db_path=db_path)
+    from app.services.analytics_ingestion import fetch_real_metrics_for_publication
+    return fetch_real_metrics_for_publication(
+        task_id=task_id,
+        platform=platform,
+        channel_id=channel_id,
+        persist=persist,
+        db_path=db_path,
+    )

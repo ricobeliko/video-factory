@@ -75,6 +75,9 @@ from app.services.analytics_providers import (
     ERR_TEMPORARY,
     ERR_UNAVAILABLE,
     NormalizedAnalytics,
+    YouTubeAnalyticsProvider,
+    TikTokAnalyticsProvider,
+    get_provider,
     register_provider,
 )
 
@@ -185,6 +188,10 @@ class TestAnalyticsScheduler(unittest.TestCase):
         # Fábrica em RUNNING
         operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
 
+        # Salva provedores originais para restauração
+        self._orig_yt = get_provider("youtube")
+        self._orig_tt = get_provider("tiktok")
+
         # Provedores mockados
         self.mock_yt = MockAnalyticsProvider(platform="youtube", configured=True)
         self.mock_tt = MockAnalyticsProvider(platform="tiktok", configured=True)
@@ -194,6 +201,9 @@ class TestAnalyticsScheduler(unittest.TestCase):
         self.base_time = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self):
+        # Restaura provedores originais
+        register_provider("youtube", self._orig_yt)
+        register_provider("tiktok", self._orig_tt)
         operator_console.reset_instance_for_testing()
         self.tmp_dir.cleanup()
 

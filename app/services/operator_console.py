@@ -1815,3 +1815,58 @@ def update_clip_segment_status_op(
         status=status,
         db_path=db_path,
     )
+
+
+def transcribe_clip_source_op(
+    source_id: str,
+    language: str = "auto",
+    model_name: str = "small",
+    provider_name: str = "faster_whisper",
+    force: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Executa transcrição de áudio de uma fonte autorizada (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_transcription
+    return clip_transcription.transcribe_clip_source(
+        source_id=source_id,
+        language=language,
+        model_name=model_name,
+        provider_name=provider_name,
+        force=force,
+        db_path=db_path,
+    )
+
+
+def get_latest_transcript_op(
+    source_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recupera transcrição concluída mais recente de uma fonte (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_transcription
+    return clip_transcription.get_latest_successful_transcript(source_id=source_id, db_path=db_path)
+
+
+def list_clip_transcript_segments_op(
+    transcript_id: str,
+    limit: Optional[int] = None,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lista segmentos temporais da transcrição (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_transcription
+    return clip_transcription.list_clip_transcript_segments(transcript_id=transcript_id, limit=limit, db_path=db_path)
+
+
+def discover_clip_candidates_op(
+    transcript_id: str,
+    max_candidates: int = 10,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Descobre e persiste cortes candidatos heuristicamente a partir de transcript (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_discovery
+    return clip_discovery.discover_clip_candidates(
+        transcript_id=transcript_id,
+        max_candidates=max_candidates,
+        db_path=db_path,
+    )

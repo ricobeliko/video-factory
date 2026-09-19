@@ -1532,9 +1532,10 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
         segments = operator_console.list_clip_segments_op()
         profiles = profile_manager.list_profiles()
 
-    tab_library, tab_import, tab_segments = st.tabs([
+    tab_library, tab_import, tab_transcripts, tab_segments = st.tabs([
         "📚 Biblioteca de Fontes (Source Library)",
         "📥 Importar Mídia Autorizada (Import Source)",
+        "📜 Transcrições (Transcripts)",
         "✂️ Segmentos e Cortes (Segments)",
     ])
 
@@ -1550,17 +1551,67 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                 dur_min = (src.get("duration_seconds") or 0.0) / 60.0
                 audio_str = "🔊 Com Áudio" if src.get("has_audio") else "🔇 Sem Áudio"
 
+                # Consulta transcrição mais recente de forma estática (SQLite)
+                if demo_enabled:
+                    tr_info = {"status": "COMPLETED", "language": "pt", "model_name": "small", "provider": "faster_whisper", "created_at": "2026-09-18T20:02:00+00:00"}
+                else:
+                    tr_info = operator_console.get_latest_transcript_op(s_id)
+
+                tr_status = tr_info.get("status") if tr_info else "SEM TRANSCRIÇÃO"
+                tr_color = "green" if tr_status == "COMPLETED" else ("yellow" if tr_status == "PROCESSING" else ("red" if tr_status == "FAILED" else "gray"))
+                tr_badge = f"<span class='op-badge op-badge-{tr_color}'>{tr_status}</span>"
+
                 with st.container(border=True):
-                    c1, c2, c3 = st.columns([0.5, 0.35, 0.15])
+                    c1, c2, c3 = st.columns([0.45, 0.35, 0.2])
                     with c1:
                         st.markdown(f"**{src.get('original_filename')}** &nbsp; {badge_html}", unsafe_allow_html=True)
                         st.caption(f"ID: `{s_id}` | Perfil: `{src.get('profile_id')}` | Criado: `{src.get('created_at', '')[:19]}`")
+                        st.markdown(f"Transcrição: {tr_badge}", unsafe_allow_html=True)
+                        if tr_info:
+                            st.caption(f"Modelo: `{tr_info.get('model_name')}` | Idioma: `{tr_info.get('language')}` | Provedor: `{tr_info.get('provider')}`")
                     with c2:
                         st.markdown(f"⏱️ **{dur_min:.1f} min** ({src.get('duration_seconds', 0):.1f}s) &nbsp;|&nbsp; 📐 **{src.get('width')}x{src.get('height')}** ({src.get('fps', 30):.0f} fps)")
                         st.caption(f"{audio_str} | Origem: `{src.get('source_origin')}` ({'✓ Autorizado' if src.get('authorization_confirmed') else 'Não confirmado'})")
                     with c3:
                         if src.get("status") == "READY":
-                            if st.button("Desativar", key=f"op_deact_src_{s_id}", use_container_width=True, disabled=not is_primary):
+                            if not tr_info or tr_info.get("status") != "COMPLETED":
+                                if st.button("Transcrever", key=f"op_tr_btn_{s_id}", use_container_width=True, disabled=not is_primary or not src.get("has_audio")):
+                                    if not demo_enabled:
+                                        with st.spinner("Transcrevendo áudio com Whisper local..."):
+                                            try:
+                                                operator_console.transcribe_clip_source_op(s_id)
+                                                st.toast(f"Transcrição de {s_id} concluída!", icon="✓")
+                                                st.rerun()
+                                            except Exception as tr_err:
+                                                st.error(f"Erro na transcrição: {tr_err}")
+                                    else:
+                                        st.toast("Transcrição simulada no modo demo.", icon="✓")
+                            else:
+                                if st.button("Descobrir Cortes", key=f"op_disc_btn_{s_id}", type="primary", use_container_width=True, disabled=not is_primary):
+                                    if not demo_enabled:
+                                        with st.spinner("Calculando cortes heurísticos determinísticos..."):
+                                            try:
+                                                cands = operator_console.discover_clip_candidates_op(tr_info.get("id"))
+                                                st.toast(f"{len(cands)} cortes candidatos descobertos!", icon="✂️")
+                                                st.rerun()
+                                            except Exception as disc_err:
+                                                st.error(f"Erro na descoberta de cortes: {disc_err}")
+                                    else:
+                                        st.toast("Descoberta simulada no modo demo.", icon="✂️")
+
+                                if st.button("Reprocessar Transcrição", key=f"op_re_tr_btn_{s_id}", use_container_width=True, disabled=not is_primary):
+                                    if not demo_enabled:
+                                        with st.spinner("Reprocessando transcrição..."):
+                                            try:
+                                                operator_console.transcribe_clip_source_op(s_id, force=True)
+                                                st.toast("Transcrição reprocessada!", icon="🔄")
+                                                st.rerun()
+                                            except Exception as rtr_err:
+                                                st.error(f"Erro ao reprocessar: {rtr_err}")
+                                    else:
+                                        st.toast("Reprocessamento simulado.", icon="🔄")
+
+                            if st.button("Desativar Fonte", key=f"op_deact_src_{s_id}", use_container_width=True, disabled=not is_primary):
                                 if not demo_enabled:
                                     operator_console.deactivate_clip_source_op(s_id)
                                     st.toast(f"Fonte {s_id} desativada.", icon="⏸️")
@@ -1633,9 +1684,46 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                         except Exception as imp_err:
                             st.error(f"Erro na importação: {imp_err}")
 
-    # 3. Segments
+    # 3. Transcripts View
+    with tab_transcripts:
+        st.markdown("**Visualização Leve de Transcrições**")
+        ready_with_tr = []
+        for s in sources:
+            if demo_enabled:
+                ready_with_tr.append((s, {"id": "tr_demo_001", "full_text": "Transcrição simulada de demonstração..."}))
+            else:
+                tr = operator_console.get_latest_transcript_op(s.get("id"))
+                if tr and tr.get("status") == "COMPLETED":
+                    ready_with_tr.append((s, tr))
+
+        if not ready_with_tr:
+            st.info("ℹ️ Nenhuma transcrição concluída disponível para visualização.")
+        else:
+            tr_choices = {f"{s.get('original_filename')} ({tr.get('id')})": (s, tr) for s, tr in ready_with_tr}
+            sel_label = st.selectbox("Selecione a Transcrição:", options=list(tr_choices.keys()))
+            chosen_src, chosen_tr = tr_choices[sel_label]
+
+            with st.expander("📝 Texto Completo (Full Text)", expanded=False):
+                st.write(chosen_tr.get("full_text") or "(Sem texto)")
+
+            # Lista primeiros 100 segmentos de forma leve
+            if demo_enabled:
+                tsegs = [
+                    {"sequence": 0, "start_seconds": 0.0, "end_seconds": 15.0, "text": "Você sabia que inteligência artificial pode acelerar sua criação?"},
+                    {"sequence": 1, "start_seconds": 15.0, "end_seconds": 38.0, "text": "O segredo é estruturar o conteúdo em tópicos objetivos e manter a narrativa coesa."},
+                ]
+            else:
+                tsegs = operator_console.list_clip_transcript_segments_op(chosen_tr.get("id"), limit=100)
+
+            st.caption(f"Mostrando até 100 segmentos temporais ({len(tsegs)} carregados):")
+            for tseg in tsegs:
+                st.markdown(
+                    f"`[{tseg.get('start_seconds', 0):.1f}s ➔ {tseg.get('end_seconds', 0):.1f}s]` &nbsp; {tseg.get('text', '')}"
+                )
+
+    # 4. Segments & Cuts
     with tab_segments:
-        st.markdown("**Segmentos e Cortes Manuais**")
+        st.markdown("**Segmentos e Cortes (Manuais & Descoberta Heurística)**")
         ready_sources = [s for s in sources if s.get("status") == "READY"]
 
         if not ready_sources:
@@ -1657,7 +1745,7 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                     with s_col3:
                         seg_title = st.text_input("Título / Rótulo do Segmento (opcional):", placeholder="Ex: Introdução ou Destaque 1")
 
-                    create_seg_btn = st.form_submit_button("✂️ Criar Segmento", disabled=not is_primary)
+                    create_seg_btn = st.form_submit_button("✂️ Criar Segmento Manual", disabled=not is_primary)
 
                     if create_seg_btn:
                         if demo_enabled:
@@ -1679,23 +1767,28 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                             except Exception as seg_err:
                                 st.error(f"Erro ao criar segmento: {seg_err}")
 
-        # Listagem de Segmentos
+        # Listagem de Segmentos (Heurísticos e Manuais)
         if not segments:
             st.info("ℹ️ Nenhum segmento cadastrado até o momento.")
         else:
             for seg in segments:
                 seg_id = seg.get("id", "")
                 dur_s = seg.get("duration_seconds", 0.0)
-                seg_badge = f"<span class='op-badge op-badge-blue'>{seg.get('status')}</span>"
+                st_cls = "blue" if seg.get("status") == "CANDIDATE" else ("green" if seg.get("status") == "SELECTED" else "red")
+                seg_badge = f"<span class='op-badge op-badge-{st_cls}'>{seg.get('status')}</span>"
+                method_badge = "<span class='op-badge op-badge-purple'>🤖 Heurística</span>" if seg.get("selection_method") == "heuristic" else "<span class='op-badge op-badge-gray'>👤 Manual</span>"
+
                 with st.container(border=True):
                     sc1, sc2, sc3 = st.columns([0.45, 0.35, 0.2])
                     with sc1:
                         title_str = seg.get("title") or "(Sem título)"
-                        st.markdown(f"**{title_str}** &nbsp; {seg_badge}", unsafe_allow_html=True)
+                        st.markdown(f"**{title_str}** &nbsp; {seg_badge} {method_badge}", unsafe_allow_html=True)
                         st.caption(f"ID: `{seg_id}` | Fonte: `{seg.get('source_id')}` | Perfil: `{seg.get('profile_id')}`")
+                        if seg.get("selection_reason"):
+                            st.caption(f"💡 *{seg.get('selection_reason')}*")
                     with sc2:
                         st.markdown(f"⏱️ **{seg.get('start_seconds', 0):.1f}s ➔ {seg.get('end_seconds', 0):.1f}s** (Duração: **{dur_s:.1f}s**)")
-                        st.caption(f"Método: `{seg.get('selection_method')}` | Criado: `{seg.get('created_at', '')[:19]}`")
+                        st.caption(f"Criado: `{seg.get('created_at', '')[:19]}`")
                     with sc3:
                         if is_primary:
                             curr_st = seg.get("status")
@@ -1709,8 +1802,14 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                                     if not demo_enabled:
                                         operator_console.update_clip_segment_status_op(seg_id, "REJECTED")
                                         st.rerun()
+                            elif curr_st == "REJECTED":
+                                if st.button("Reativar", key=f"op_reac_seg_{seg_id}", use_container_width=True):
+                                    if not demo_enabled:
+                                        operator_console.update_clip_segment_status_op(seg_id, "CANDIDATE")
+                                        st.rerun()
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
 
 
 # ---------------------------------------------------------------------------

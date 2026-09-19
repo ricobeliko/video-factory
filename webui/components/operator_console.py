@@ -1418,6 +1418,73 @@ def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is
 
 
 # ---------------------------------------------------------------------------
+# Section 5.5: Automatic Analytics Scheduler (Fase V10-C)
+# ---------------------------------------------------------------------------
+
+def _render_automatic_analytics_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    st.markdown("#### ⏱️ Coleta Automática de Analytics (Automatic Analytics)")
+    st.caption("Ciclo periódico conservador com política de cooldown por idade, rate limits globais e backoff.")
+
+    status_data = operator_console.get_analytics_scheduler_status()
+    enabled = status_data.get("auto_collection_enabled", False)
+    last_cycle = status_data.get("last_cycle_at") or "—"
+    last_success = status_data.get("last_success_at") or "—"
+    has_eligible = status_data.get("has_eligible_now", False)
+    next_eligible_str = "Agora (candidato disponível)" if has_eligible else "Nenhum candidato no momento"
+    backoffs = status_data.get("provider_backoffs", {})
+    snapshots_today = status_data.get("snapshots_today", 0)
+
+    status_badge = "<span class='op-badge op-badge-green'>🟢 Ativado (Enabled)</span>" if enabled else "<span class='op-badge op-badge-gray'>⚪ Desativado (Disabled)</span>"
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"**Status:** {status_badge}", unsafe_allow_html=True)
+            st.caption(f"Teto por ciclo: `{status_data.get('max_fetches_per_cycle', 3)}` coletas")
+        with c2:
+            st.markdown(f"**Último Ciclo:** `{last_cycle}`")
+            st.markdown(f"**Último Sucesso:** `{last_success}`")
+        with c3:
+            st.markdown(f"**Snapshots Hoje:** `{snapshots_today}`")
+            st.markdown(f"**Próxima Coleta:** `{next_eligible_str}`")
+
+        if backoffs:
+            st.markdown("**Backoff ativo por provider:**")
+            for plat, binfo in backoffs.items():
+                st.warning(f"⚠ Provider **{plat.upper()}** em backoff até `{binfo.get('until')}` (Motivo: `{binfo.get('reason')}`, restante: {binfo.get('remaining_seconds')}s)")
+
+        if is_primary:
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                if not enabled:
+                    if st.button("▶️ Ativar Coleta Automática (Enable)", key="op_enable_auto_analytics", use_container_width=True):
+                        operator_console.set_analytics_auto_collection_enabled_op(True)
+                        st.success("Coleta automática ativada!")
+                        st.rerun()
+                else:
+                    if st.button("⏸️ Desativar Coleta Automática (Disable)", key="op_disable_auto_analytics", use_container_width=True):
+                        operator_console.set_analytics_auto_collection_enabled_op(False)
+                        st.info("Coleta automática desativada.")
+                        st.rerun()
+            with b2:
+                if st.button("⚡ Executar Um Ciclo Agora (Run One Cycle Now)", key="op_run_one_cycle_now", use_container_width=True):
+                    res = operator_console.run_analytics_collection_cycle_op()
+                    if res.get("status") == "completed":
+                        st.success(f"✓ Ciclo executado com sucesso! ({res.get('processed_count')}/{res.get('candidates_count')} processados)")
+                    elif res.get("status") == "idle":
+                        st.info(f"ℹ️ Ciclo concluído: {res.get('message')}")
+                    else:
+                        st.warning(f"⚠ Ciclo ignorado: {res.get('reason')} ({res.get('message')})")
+                    st.rerun()
+            with b3:
+                st.caption("Ações restritas ao nó PRIMARY. Em SECONDARY_VIEW_ONLY os controles são desativados.")
+        else:
+            st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
 # Section 6: Alerts, Timeline, Errors & Recovery (STATIC - Sem auto-refresh)
 # ---------------------------------------------------------------------------
 
@@ -1683,6 +1750,9 @@ def render_operator_console():
 
     # 5. Provider Health (STATIC)
     _render_provider_health_section(demo_enabled, scenario_choice, is_primary)
+
+    # 5.5. Automatic Analytics Scheduler (STATIC)
+    _render_automatic_analytics_section(demo_enabled, scenario_choice, is_primary)
 
     # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
     _render_tabs_section(demo_enabled, scenario_choice, is_primary)

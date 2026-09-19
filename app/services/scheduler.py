@@ -1786,6 +1786,13 @@ def _scheduler_worker_loop(interval_seconds: int = 30) -> None:
             set_setting("executor_last_tick", now_iso)
             logger.info(f"[SCHEDULER][WORKER] tick (now={now_iso})")
             run_scheduler_cycle()
+
+            # Fase V10-C: Ciclo leve de analytics reutilizando o Scheduler existente
+            try:
+                from app.services import analytics_scheduler
+                analytics_scheduler.run_analytics_collection_cycle()
+            except Exception as a_exc:
+                logger.warning(f"[SCHEDULER][WORKER] Erro no ciclo de analytics (não fatal): {a_exc}")
         except Exception as exc:
             logger.exception(f"[SCHEDULER][WORKER] Erro inesperado no ciclo de execução: {exc}")
             _set_executor_status(state="error", message=f"Erro no worker: {exc}")

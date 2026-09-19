@@ -1666,3 +1666,48 @@ def fetch_real_metrics_for_publication_op(
         persist=persist,
         db_path=db_path,
     )
+
+
+# ---------------------------------------------------------------------------
+# 12. Operações do Agendador de Analytics (Fase V10-C)
+# ---------------------------------------------------------------------------
+
+def get_analytics_scheduler_status(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Retorna o status operacional do agendador automático de analytics.
+    Permitido tanto no PRIMARY quanto no SECONDARY_VIEW_ONLY (somente leitura).
+    """
+    from app.services import analytics_scheduler
+    return analytics_scheduler.get_analytics_scheduler_status(db_path=db_path)
+
+
+def set_analytics_auto_collection_enabled_op(
+    enabled: bool,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Ativa ou desativa a coleta automática de analytics.
+    Exige estritamente PRIMARY role (VIEW ONLY rejeita).
+    """
+    require_primary_instance(db_path=db_path)
+    from app.services import analytics_scheduler
+    analytics_scheduler.set_analytics_auto_collection_enabled(enabled, db_path=db_path)
+    log_operational_event(
+        component="analytics",
+        severity=SEVERITY_INFO,
+        event_type="ANALYTICS_AUTO_COLLECTION_TOGGLED",
+        message=f"Coleta automática de analytics {'ativada' if enabled else 'desativada'} pelo operador.",
+        metadata={"enabled": bool(enabled)},
+        db_path=db_path,
+    )
+    return {"success": True, "enabled": bool(enabled)}
+
+
+def run_analytics_collection_cycle_op(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Executa sob demanda exatamente um ciclo leve de coleta de analytics.
+    Exige estritamente PRIMARY role. Respeita limite unitário de coletas e rate-limit.
+    """
+    require_primary_instance(db_path=db_path)
+    from app.services import analytics_scheduler
+    return analytics_scheduler.run_analytics_collection_cycle(db_path=db_path, force=True)

@@ -4,7 +4,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from loguru import logger
 
 from app.models import const
@@ -24,6 +24,7 @@ STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
 ACTIVE_SCHEDULE_STATUSES = (STATUS_PLANNED, STATUS_READY)
+PLANNER_BLOCKING_STATUSES = (STATUS_PLANNED, STATUS_READY, STATUS_PUBLISHED, STATUS_CANCELLED)
 
 _FINAL_VIDEO_PATTERN = re.compile(r"^final-(?P<index>\d+)\.mp4$")
 
@@ -1013,7 +1014,7 @@ def plan_schedule(
                         """
                         SELECT id FROM scheduled_posts
                         WHERE task_id = ? AND platform = ? AND channel_id = ?
-                        AND status IN ('planned', 'ready', 'published');
+                        AND status IN ('planned', 'ready', 'published', 'cancelled');
                         """,
                         (task_id, clean_plat, channel_id),
                     ).fetchone()
@@ -1030,7 +1031,7 @@ def plan_schedule(
                         """
                         SELECT id FROM scheduled_posts
                         WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
-                        AND status IN ('planned', 'ready', 'published');
+                        AND status IN ('planned', 'ready', 'published', 'cancelled');
                         """,
                         (task_id, clean_plat),
                     ).fetchone()
@@ -2026,3 +2027,237 @@ def reschedule_post_for_test(
             "new_scheduled_at_dt": new_dt,
             "new_scheduled_at_local": local_dt,
         }
+
+
+def cancel_scheduled_post(
+    scheduled_post_id: int,
+    reason: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cancela de forma segura, persistente e terminal um post agendado.
+
+    Regras estritas de segurança:
+    - Apenas posts com status 'planned' ou 'ready' podem ser transicionados para 'cancelled';
+    - Posts com status 'published' NUNCA podem ser alterados (rejeição estrita);
+    - Posts com status 'processing' são rejeitados para evitar concorrência com publicação ativa;
+    - Posts já em 'cancelled' ou 'failed' são idempotentes (retornam sucesso sem alteração);
+    - Preserva scheduled_at e attempts no registro para integridade de histórico e auditoria;
+    - Limpa next_attempt_at (NULL);
+    - Armazena motivo sanitizado no campo last_error existente;
+    - Registra operational_event estruturado.
+    """
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        post = conn.execute(
+            """
+            SELECT id, task_id, platform, scheduled_at, status, attempts, next_attempt_at, profile_id, channel_id
+            FROM scheduled_posts
+            WHERE id = ?;
+            """,
+            (scheduled_post_id,),
+        ).fetchone()
+
+        if not post:
+            return {
+                "success": False,
+                "id": scheduled_post_id,
+                "error": "not_found",
+                "message": f"Post agendado id={scheduled_post_id} não encontrado",
+            }
+
+        curr_status = post["status"]
+        task_id = post["task_id"]
+        platform = post["platform"]
+
+        # 1. 'published' nunca pode ser alterado
+        if curr_status == STATUS_PUBLISHED:
+            return {
+                "success": False,
+                "id": scheduled_post_id,
+                "task_id": task_id,
+                "platform": platform,
+                "status": STATUS_PUBLISHED,
+                "error": "cannot_cancel_published",
+                "message": f"Post id={scheduled_post_id} já foi publicado com sucesso e não pode ser cancelado",
+            }
+
+        # 2. 'processing' em andamento deve ser rejeitado
+        if curr_status == STATUS_PROCESSING:
+            return {
+                "success": False,
+                "id": scheduled_post_id,
+                "task_id": task_id,
+                "platform": platform,
+                "status": STATUS_PROCESSING,
+                "error": "cannot_cancel_processing",
+                "message": f"Post id={scheduled_post_id} está atualmente em processamento e não pode ser cancelado",
+            }
+
+        # 3. 'cancelled' é idempotente
+        if curr_status == STATUS_CANCELLED:
+            return {
+                "success": True,
+                "id": scheduled_post_id,
+                "task_id": task_id,
+                "platform": platform,
+                "status": STATUS_CANCELLED,
+                "already_cancelled": True,
+                "message": f"Post id={scheduled_post_id} já estava cancelado",
+            }
+
+        # 4. 'failed' é terminal e idempotente
+        if curr_status == STATUS_FAILED:
+            return {
+                "success": True,
+                "id": scheduled_post_id,
+                "task_id": task_id,
+                "platform": platform,
+                "status": STATUS_FAILED,
+                "already_terminal": True,
+                "message": f"Post id={scheduled_post_id} já está em estado terminal 'failed'",
+            }
+
+        # 5. Apenas 'planned' e 'ready' são transicionados para 'cancelled'
+        if curr_status not in (STATUS_PLANNED, STATUS_READY):
+            return {
+                "success": False,
+                "id": scheduled_post_id,
+                "task_id": task_id,
+                "platform": platform,
+                "status": curr_status,
+                "error": "unsupported_status",
+                "message": f"Post id={scheduled_post_id} possui status '{curr_status}' incompatível com cancelamento",
+            }
+
+        sanitized_reason = str(reason).strip() if reason and str(reason).strip() else "Cancelado pelo operador"
+        cancel_msg = f"Cancelled: {sanitized_reason}"
+
+        conn.execute(
+            """
+            UPDATE scheduled_posts
+            SET status = 'cancelled',
+                next_attempt_at = NULL,
+                last_error = ?
+            WHERE id = ? AND status IN ('planned', 'ready');
+            """,
+            (cancel_msg, scheduled_post_id),
+        )
+
+        logger.info(
+            f"[SCHEDULER][CANCEL] Post {scheduled_post_id} ({task_id} - {platform}) "
+            f"cancelado com sucesso. Status anterior: {curr_status}. Motivo: {sanitized_reason}"
+        )
+
+    try:
+        from app.services import operator_console
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="INFO",
+            event_type="SCHEDULE_CANCELLED",
+            task_id=task_id,
+            message=f"Post agendado #{scheduled_post_id} cancelado: {sanitized_reason}",
+            metadata={
+                "scheduled_post_id": scheduled_post_id,
+                "platform": platform,
+                "previous_status": curr_status,
+                "reason": sanitized_reason,
+            },
+            db_path=db_path,
+        )
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "id": scheduled_post_id,
+        "task_id": task_id,
+        "platform": platform,
+        "previous_status": curr_status,
+        "status": STATUS_CANCELLED,
+        "reason": sanitized_reason,
+    }
+
+
+def cancel_scheduled_posts(
+    post_ids: Sequence[int],
+    reason: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cancela em lote múltiplos posts agendados de forma controlada.
+
+    - Não interrompe a execução com IDs inexistentes;
+    - Atualiza apenas registros elegíveis ('planned' e 'ready');
+    - Preserva registros 'published' e 'processing' intactos;
+    - Retorna resumo discriminado por status de cancelamento.
+    """
+    results: List[Dict[str, Any]] = []
+    cancelled_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    for pid in post_ids:
+        try:
+            res = cancel_scheduled_post(scheduled_post_id=pid, reason=reason, db_path=db_path)
+            results.append(res)
+            if res.get("success"):
+                if res.get("already_cancelled") or res.get("already_terminal"):
+                    skipped_count += 1
+                else:
+                    cancelled_count += 1
+            else:
+                failed_count += 1
+        except Exception as exc:
+            failed_count += 1
+            results.append({
+                "success": False,
+                "id": pid,
+                "error": "exception",
+                "message": str(exc),
+            })
+
+    return {
+        "total": len(post_ids),
+        "cancelled": cancelled_count,
+        "skipped": skipped_count,
+        "failed": failed_count,
+        "results": results,
+    }
+
+
+def main():
+    """Ponto de entrada CLI para cancelamento terminal e utilitários do scheduler."""
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(description="MoneyPrinterTurbo - Scheduler Management CLI")
+    parser.add_argument("--cancel", nargs="+", type=int, help="Lista de IDs de scheduled_posts para cancelar")
+    parser.add_argument("--reason", type=str, default="Cancelado pelo operador", help="Motivo do cancelamento")
+    parser.add_argument("--db-path", type=str, default=None, help="Caminho alternativo para o banco SQLite")
+    parser.add_argument("--json", action="store_true", help="Imprimir saída estritamente em formato JSON")
+    args = parser.parse_args()
+
+    if args.cancel:
+        summary = cancel_scheduled_posts(post_ids=args.cancel, reason=args.reason, db_path=args.db_path)
+        if args.json:
+            print(json.dumps(summary, indent=2))
+        else:
+            print("======================================================")
+            print(" MoneyPrinterTurbo - Cancelamento de Agendamentos")
+            print("======================================================")
+            print(f"Total informados : {summary['total']}")
+            print(f"Cancelados       : {summary['cancelled']}")
+            print(f"Ignorados/Term   : {summary['skipped']}")
+            print(f"Falhas/Bloq      : {summary['failed']}")
+            print("Detalhes:")
+            for item in summary["results"]:
+                status_label = "OK" if item.get("success") else "ERRO"
+                print(f"  [ID {item.get('id')}] {status_label}: status={item.get('status')} - {item.get('message', item.get('error', ''))}")
+        sys.exit(0 if summary["failed"] == 0 else 1)
+    else:
+        parser.print_help()
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

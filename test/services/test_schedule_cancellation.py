@@ -1,8 +1,11 @@
 """
-Testes unitários e de integração para cancelamento terminal de scheduled_posts (Hotfix V12-D).
+Testes unitários e de integração para cancelamento terminal de scheduled_posts com PRIMARY Guard (Hotfix V12-D.1).
 """
+import io
+import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -17,8 +20,11 @@ class TestScheduleCancellation(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp(prefix="test_sched_cancel_")
         self.db_path = os.path.join(self.temp_dir, "test_factory.db")
         scheduler.init_db(self.db_path)
+        operator_console.init_operator_db(self.db_path)
+        operator_console.reset_instance_for_testing()
 
     def tearDown(self):
+        operator_console.reset_instance_for_testing()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _insert_post(
@@ -45,8 +51,8 @@ class TestScheduleCancellation(unittest.TestCase):
             )
             return cur.lastrowid
 
-    def test_01_planned_to_cancelled(self):
-        """1. planned -> cancelled com preservação de scheduled_at e attempts."""
+    def test_01_planned_to_cancelled_as_primary(self):
+        """1. PRIMARY pode cancelar planned com preservação de scheduled_at e attempts."""
         post_id = self._insert_post("task-1", "youtube", status="planned", attempts=2, scheduled_at="2026-09-21T10:00:00+00:00")
         res = scheduler.cancel_scheduled_post(post_id, reason="Old test", db_path=self.db_path)
 
@@ -62,8 +68,8 @@ class TestScheduleCancellation(unittest.TestCase):
             self.assertIsNone(row["next_attempt_at"])
             self.assertIn("Old test", row["last_error"])
 
-    def test_02_ready_to_cancelled(self):
-        """2. ready -> cancelled."""
+    def test_02_ready_to_cancelled_as_primary(self):
+        """2. PRIMARY pode cancelar ready."""
         post_id = self._insert_post("task-2", "tiktok", status="ready")
         res = scheduler.cancel_scheduled_post(post_id, reason="Cancel ready", db_path=self.db_path)
 
@@ -77,7 +83,7 @@ class TestScheduleCancellation(unittest.TestCase):
             self.assertIsNone(row["next_attempt_at"])
 
     def test_03_published_cannot_be_cancelled(self):
-        """3. published nunca pode ser alterado."""
+        """3. published nunca pode ser alterado mesmo por PRIMARY."""
         post_id = self._insert_post("task-3", "youtube", status="published")
         res = scheduler.cancel_scheduled_post(post_id, reason="Try cancel pub", db_path=self.db_path)
 
@@ -158,8 +164,7 @@ class TestScheduleCancellation(unittest.TestCase):
         ]
 
         with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": "ch-1", "platform": "youtube", "is_enabled": True}]):
-            with patch("app.services.operator_console.require_primary_instance", return_value=None):
-                new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
 
         # Deve ser ignorado pelo planner porque já existe registro cancelado!
         self.assertEqual(len(new_posts), 0)
@@ -175,11 +180,9 @@ class TestScheduleCancellation(unittest.TestCase):
         pub_id = self._insert_post("task-9", "youtube", status="published")
         plan_id = self._insert_post("task-9b", "tiktok", status="planned")
 
-        # Cancela o agendamento planejado
         res = scheduler.cancel_scheduled_post(plan_id, db_path=self.db_path)
         self.assertTrue(res["success"])
 
-        # Confirma que o post publicado não foi tocado
         with scheduler.get_connection(self.db_path) as conn:
             pub_row = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (pub_id,)).fetchone()
             self.assertEqual(pub_row["status"], "published")
@@ -223,7 +226,7 @@ class TestScheduleCancellation(unittest.TestCase):
 
         self.assertEqual(summary["total"], 3)
         self.assertEqual(summary["cancelled"], 1)
-        self.assertEqual(summary["failed"], 2)  # 2 IDs not found
+        self.assertEqual(summary["failed"], 2)
 
         with scheduler.get_connection(self.db_path) as conn:
             row = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (id_planned,)).fetchone()
@@ -238,6 +241,108 @@ class TestScheduleCancellation(unittest.TestCase):
 
         state = operator_console.get_factory_state(db_path=self.db_path)
         self.assertEqual(state, operator_console.FACTORY_STATE_PAUSED)
+
+    def test_13_secondary_view_only_blocks_cancellation(self):
+        """13. SECONDARY_VIEW_ONLY não pode cancelar e levanta PermissionError."""
+        post_id = self._insert_post("task-13", "youtube", status="planned")
+
+        with patch("app.services.operator_console.is_primary_instance", return_value=False):
+            with self.assertRaises(PermissionError):
+                scheduler.cancel_scheduled_post(post_id, db_path=self.db_path)
+
+        # Garante que o registro no banco não foi modificado
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
+            self.assertEqual(row["status"], "planned")
+
+    def test_14_bulk_cancellation_blocks_on_secondary_before_processing(self):
+        """14. bulk cancellation em SECONDARY bloqueia ANTES de processar IDs (sem cancelamento parcial)."""
+        id_planned_1 = self._insert_post("task-14-1", "youtube", status="planned")
+        id_planned_2 = self._insert_post("task-14-2", "tiktok", status="planned")
+
+        with patch("app.services.operator_console.is_primary_instance", return_value=False):
+            with self.assertRaises(PermissionError):
+                scheduler.cancel_scheduled_posts([id_planned_1, id_planned_2], db_path=self.db_path)
+
+        # Garante que nenhum dos dois IDs sofreu mutação
+        with scheduler.get_connection(self.db_path) as conn:
+            s_map = {
+                r["id"]: r["status"]
+                for r in conn.execute("SELECT id, status FROM scheduled_posts;").fetchall()
+            }
+            self.assertEqual(s_map[id_planned_1], "planned")
+            self.assertEqual(s_map[id_planned_2], "planned")
+
+    def test_15_cli_blocks_and_returns_error_when_secondary(self):
+        """15. CLI retorna erro (código 2) e mensagem sanitizada quando é SECONDARY."""
+        post_id = self._insert_post("task-15", "youtube", status="planned")
+
+        test_args = [
+            "scheduler.py",
+            "--cancel", str(post_id),
+            "--reason", "CLI secondary test",
+            "--db-path", self.db_path,
+        ]
+
+        stderr_buf = io.StringIO()
+        with patch.object(sys, "argv", test_args):
+            with patch("sys.stderr", stderr_buf):
+                with patch("app.services.operator_console.is_primary_instance", return_value=False):
+                    with self.assertRaises(SystemExit) as ctx:
+                        scheduler.main()
+
+                    self.assertEqual(ctx.exception.code, 2)
+                    self.assertIn("Operação bloqueada", stderr_buf.getvalue())
+
+        # Confirma que o post não foi modificado
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
+            self.assertEqual(row["status"], "planned")
+
+    def test_16_cli_succeeds_when_lock_stopped(self):
+        """16. CLI adquire PRIMARY legitimamente quando o lock está STOPPED e depois libera."""
+        post_id = self._insert_post("task-16", "youtube", status="planned")
+
+        # Configura o lock no banco como STOPPED
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO instance_locks (
+                    lock_key, node_id, node_name, hostname, pid, started_at, last_heartbeat, role, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    operator_console.DEFAULT_INSTANCE_LOCK_KEY,
+                    "old-node-id",
+                    "old-node-name",
+                    "old-host",
+                    1234,
+                    now_iso,
+                    now_iso,
+                    operator_console.ROLE_PRIMARY,
+                    operator_console.INSTANCE_STATUS_STOPPED,
+                ),
+            )
+
+        test_args = [
+            "scheduler.py",
+            "--cancel", str(post_id),
+            "--reason", "CLI legitimate stopped lock test",
+            "--db-path", self.db_path,
+        ]
+
+        with patch.object(sys, "argv", test_args):
+            with self.assertRaises(SystemExit) as ctx:
+                scheduler.main()
+
+            self.assertEqual(ctx.exception.code, 0)
+
+        # Confirma que o post foi cancelado
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute("SELECT status, last_error FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
+            self.assertEqual(row["status"], "cancelled")
+            self.assertIn("CLI legitimate stopped lock test", row["last_error"])
 
 
 if __name__ == "__main__":

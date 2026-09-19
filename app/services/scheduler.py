@@ -2037,6 +2037,7 @@ def cancel_scheduled_post(
     """Cancela de forma segura, persistente e terminal um post agendado.
 
     Regras estritas de segurança:
+    - Exige explicitamente papel PRIMARY (bloqueia SECONDARY_VIEW_ONLY com PermissionError);
     - Apenas posts com status 'planned' ou 'ready' podem ser transicionados para 'cancelled';
     - Posts com status 'published' NUNCA podem ser alterados (rejeição estrita);
     - Posts com status 'processing' são rejeitados para evitar concorrência com publicação ativa;
@@ -2046,6 +2047,9 @@ def cancel_scheduled_post(
     - Armazena motivo sanitizado no campo last_error existente;
     - Registra operational_event estruturado.
     """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
     init_db(db_path)
     with get_connection(db_path) as conn:
         post = conn.execute(
@@ -2185,11 +2189,15 @@ def cancel_scheduled_posts(
 ) -> Dict[str, Any]:
     """Cancela em lote múltiplos posts agendados de forma controlada.
 
+    - Exige explicitamente papel PRIMARY antes de iniciar o lote (evita mutações parciais em SECONDARY);
     - Não interrompe a execução com IDs inexistentes;
     - Atualiza apenas registros elegíveis ('planned' e 'ready');
     - Preserva registros 'published' e 'processing' intactos;
     - Retorna resumo discriminado por status de cancelamento.
     """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
     results: List[Dict[str, Any]] = []
     cancelled_count = 0
     skipped_count = 0
@@ -2229,6 +2237,7 @@ def main():
     import argparse
     import json
     import sys
+    from app.services import operator_console
 
     parser = argparse.ArgumentParser(description="MoneyPrinterTurbo - Scheduler Management CLI")
     parser.add_argument("--cancel", nargs="+", type=int, help="Lista de IDs de scheduled_posts para cancelar")
@@ -2238,7 +2247,23 @@ def main():
     args = parser.parse_args()
 
     if args.cancel:
-        summary = cancel_scheduled_posts(post_ids=args.cancel, reason=args.reason, db_path=args.db_path)
+        try:
+            summary = cancel_scheduled_posts(post_ids=args.cancel, reason=args.reason, db_path=args.db_path)
+        except PermissionError as exc:
+            if args.json:
+                print(json.dumps({"success": False, "error": "permission_denied", "message": str(exc)}, indent=2))
+            else:
+                print(f"ERRO: Operação bloqueada - {exc}", file=sys.stderr)
+            sys.exit(2)
+        except Exception as exc:
+            if args.json:
+                print(json.dumps({"success": False, "error": "unexpected_error", "message": str(exc)}, indent=2))
+            else:
+                print(f"ERRO CRÍTICO: {exc}", file=sys.stderr)
+            sys.exit(1)
+        finally:
+            operator_console.release_instance_lock(db_path=args.db_path)
+
         if args.json:
             print(json.dumps(summary, indent=2))
         else:

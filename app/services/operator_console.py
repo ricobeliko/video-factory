@@ -1711,3 +1711,107 @@ def run_analytics_collection_cycle_op(db_path: Optional[str] = None) -> Dict[str
     require_primary_instance(db_path=db_path)
     from app.services import analytics_scheduler
     return analytics_scheduler.run_analytics_collection_cycle(db_path=db_path, force=True)
+
+
+# ---------------------------------------------------------------------------
+# 13. Operações de Clip Mode (Fase V11-A)
+# ---------------------------------------------------------------------------
+
+def list_clip_sources_op(
+    profile_id: Optional[str] = None,
+    status: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lista fontes de clip cadastradas (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_mode
+    return clip_mode.list_clip_sources(profile_id=profile_id, status=status, db_path=db_path)
+
+
+def get_clip_source_op(source_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Recupera detalhes de uma fonte de clip por ID (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_mode
+    return clip_mode.get_clip_source(source_id=source_id, db_path=db_path)
+
+
+def import_clip_source_op(
+    file_path: str,
+    source_origin: str,
+    authorization_confirmed: bool,
+    profile_id: Optional[str] = None,
+    authorization_note: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Importa vídeo-fonte local (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_mode
+    return clip_mode.import_clip_source(
+        file_path=file_path,
+        source_origin=source_origin,
+        authorization_confirmed=authorization_confirmed,
+        profile_id=profile_id,
+        authorization_note=authorization_note,
+        db_path=db_path,
+    )
+
+
+def deactivate_clip_source_op(source_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Desativa fonte de clip (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_mode
+    return clip_mode.deactivate_clip_source(source_id=source_id, db_path=db_path)
+
+
+def list_clip_segments_op(
+    source_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    status: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lista segmentos de corte (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_mode
+    return clip_mode.list_clip_segments(
+        source_id=source_id,
+        profile_id=profile_id,
+        status=status,
+        db_path=db_path,
+    )
+
+
+def create_clip_segment_op(
+    source_id: str,
+    start_seconds: float,
+    end_seconds: float,
+    title: Optional[str] = None,
+    selection_method: str = "manual",
+    selection_reason: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cria segmento de corte manual para fonte (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_mode
+    return clip_mode.create_clip_segment(
+        source_id=source_id,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        title=title,
+        selection_method=selection_method,
+        selection_reason=selection_reason,
+        profile_id=profile_id,
+        db_path=db_path,
+    )
+
+
+def update_clip_segment_status_op(
+    segment_id: str,
+    status: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Atualiza status de segmento de corte (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_mode
+    return clip_mode.update_clip_segment_status(
+        segment_id=segment_id,
+        status=status,
+        db_path=db_path,
+    )

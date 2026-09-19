@@ -1485,8 +1485,238 @@ def _render_automatic_analytics_section(demo_enabled: bool, scenario_choice: str
 
 
 # ---------------------------------------------------------------------------
+# Section 5.6: Clip Mode Foundation (Fase V11-A - STATIC - Sem auto-refresh)
+# ---------------------------------------------------------------------------
+
+def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    st.markdown("#### 🎬 Clip Mode (Reaproveitamento de Vídeos Longos)")
+    st.caption("Biblioteca de mídias longas autorizadas e cadastro de segmentos para cortes verticais.")
+
+    from app.services import profile_manager, clip_mode
+
+    # Busca dados no banco local (zero FFmpeg / zero probe / zero hash na abertura)
+    if demo_enabled:
+        sources = [
+            {
+                "id": "src_demo_001",
+                "original_filename": "podcast_ep42_autorizado.mp4",
+                "profile_id": "default",
+                "duration_seconds": 1845.0,
+                "width": 1920,
+                "height": 1080,
+                "fps": 30.0,
+                "has_audio": 1,
+                "source_origin": "owned",
+                "authorization_confirmed": 1,
+                "status": "READY",
+                "created_at": "2026-09-18T20:00:00+00:00",
+            }
+        ]
+        segments = [
+            {
+                "id": "seg_demo_001",
+                "source_id": "src_demo_001",
+                "profile_id": "default",
+                "start_seconds": 120.0,
+                "end_seconds": 175.0,
+                "duration_seconds": 55.0,
+                "title": "Momento Chave Podcast",
+                "status": "CANDIDATE",
+                "selection_method": "manual",
+                "created_at": "2026-09-18T20:05:00+00:00",
+            }
+        ]
+        profiles = [{"id": "default", "name": "Video Factory Default"}]
+    else:
+        sources = operator_console.list_clip_sources_op()
+        segments = operator_console.list_clip_segments_op()
+        profiles = profile_manager.list_profiles()
+
+    tab_library, tab_import, tab_segments = st.tabs([
+        "📚 Biblioteca de Fontes (Source Library)",
+        "📥 Importar Mídia Autorizada (Import Source)",
+        "✂️ Segmentos e Cortes (Segments)",
+    ])
+
+    # 1. Source Library
+    with tab_library:
+        if not sources:
+            st.info("ℹ️ Nenhuma fonte cadastrada na biblioteca. Use a aba 'Importar Mídia' para adicionar vídeos autorizados.")
+        else:
+            for src in sources:
+                s_id = src.get("id", "")
+                st_color = "green" if src.get("status") == "READY" else ("gray" if src.get("status") == "INACTIVE" else "red")
+                badge_html = f"<span class='op-badge op-badge-{st_color}'>{src.get('status')}</span>"
+                dur_min = (src.get("duration_seconds") or 0.0) / 60.0
+                audio_str = "🔊 Com Áudio" if src.get("has_audio") else "🔇 Sem Áudio"
+
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([0.5, 0.35, 0.15])
+                    with c1:
+                        st.markdown(f"**{src.get('original_filename')}** &nbsp; {badge_html}", unsafe_allow_html=True)
+                        st.caption(f"ID: `{s_id}` | Perfil: `{src.get('profile_id')}` | Criado: `{src.get('created_at', '')[:19]}`")
+                    with c2:
+                        st.markdown(f"⏱️ **{dur_min:.1f} min** ({src.get('duration_seconds', 0):.1f}s) &nbsp;|&nbsp; 📐 **{src.get('width')}x{src.get('height')}** ({src.get('fps', 30):.0f} fps)")
+                        st.caption(f"{audio_str} | Origem: `{src.get('source_origin')}` ({'✓ Autorizado' if src.get('authorization_confirmed') else 'Não confirmado'})")
+                    with c3:
+                        if src.get("status") == "READY":
+                            if st.button("Desativar", key=f"op_deact_src_{s_id}", use_container_width=True, disabled=not is_primary):
+                                if not demo_enabled:
+                                    operator_console.deactivate_clip_source_op(s_id)
+                                    st.toast(f"Fonte {s_id} desativada.", icon="⏸️")
+                                    st.rerun()
+                                else:
+                                    st.toast("Desativação simulada em modo demo.", icon="⏸️")
+
+    # 2. Import Source
+    with tab_import:
+        st.markdown("**Importação de Mídia Local Autorizada**")
+        st.warning("⚠️ **Aviso de Conformidade Legal:** Importe apenas conteúdo próprio ou explicitamente autorizado para reutilização. Não utilize mídias de terceiros sem autorização comprovada.")
+
+        with st.form(key="op_clip_import_form", clear_on_submit=False):
+            file_path_input = st.text_input(
+                "Caminho do arquivo local de vídeo (.mp4, .mov, .mkv, .webm):",
+                placeholder="Exemplo: D:\\MeusVideos\\gravacao_podcast.mp4",
+                help="Informe o caminho absoluto ou relativo para o arquivo existente no disco.",
+            )
+
+            p_col1, p_col2 = st.columns(2)
+            with p_col1:
+                prof_opts = [p["id"] for p in profiles] if profiles else ["default"]
+                selected_profile = st.selectbox("Perfil de Destino (Profile):", options=prof_opts, index=0)
+            with p_col2:
+                origin_opts = ["owned", "licensed", "permission", "public_domain", "other_authorized"]
+                selected_origin = st.selectbox(
+                    "Origem Legal do Conteúdo:",
+                    options=origin_opts,
+                    format_func=lambda x: f"{x.upper()} — {clip_mode.SOURCE_ORIGIN_DESCRIPTIONS.get(x, x)}",
+                    index=0,
+                )
+
+            auth_check = st.checkbox(
+                "Declaro sob minha responsabilidade que este conteúdo é de minha autoria ou expressamente autorizado para reutilização.",
+                value=False,
+            )
+            auth_note_input = st.text_input("Nota de Autorização / Referência de Licença (opcional):", placeholder="Ex: Licença comercial número #12345 ou Vídeo gravado pelo operador")
+
+            submit_import = st.form_submit_button(
+                "📥 Validar e Importar Vídeo-Fonte",
+                disabled=not is_primary,
+                help="Apenas a instância PRIMARY pode importar vídeos." if not is_primary else None,
+            )
+
+            if submit_import:
+                if not file_path_input or not file_path_input.strip():
+                    st.error("Por favor, informe o caminho do arquivo de vídeo.")
+                elif not auth_check:
+                    st.error("A importação exige a confirmação explícita da declaração de autorização.")
+                else:
+                    if demo_enabled:
+                        st.success("Importação simulada com sucesso no modo demonstração.")
+                    else:
+                        try:
+                            res = operator_console.import_clip_source_op(
+                                file_path=file_path_input.strip(),
+                                source_origin=selected_origin,
+                                authorization_confirmed=auth_check,
+                                profile_id=selected_profile,
+                                authorization_note=auth_note_input.strip() or None,
+                            )
+                            if res.get("status") == "duplicate":
+                                st.warning(f"ℹ️ {res.get('message')} (Source ID: `{res.get('source_id')}`)")
+                            else:
+                                st.success(f"✓ Vídeo importado com sucesso! (Source ID: `{res.get('source_id')}`)")
+                                if res.get("warnings"):
+                                    for w in res.get("warnings"):
+                                        st.warning(f"Aviso: {w}")
+                            st.rerun()
+                        except Exception as imp_err:
+                            st.error(f"Erro na importação: {imp_err}")
+
+    # 3. Segments
+    with tab_segments:
+        st.markdown("**Segmentos e Cortes Manuais**")
+        ready_sources = [s for s in sources if s.get("status") == "READY"]
+
+        if not ready_sources:
+            st.info("ℹ️ Nenhuma fonte READY disponível para criação de segmentos.")
+        else:
+            with st.expander("➕ Novo Segmento de Corte Manual", expanded=False):
+                with st.form(key="op_clip_create_segment_form"):
+                    source_choices = {f"{s.get('original_filename')} ({s.get('id')})": s for s in ready_sources}
+                    chosen_label = st.selectbox("Selecione a Fonte de Vídeo:", options=list(source_choices.keys()))
+                    chosen_src = source_choices[chosen_label]
+
+                    s_col1, s_col2, s_col3 = st.columns(3)
+                    with s_col1:
+                        start_in = st.number_input("Início (segundos):", min_value=0.0, value=0.0, step=1.0, format="%.2f")
+                    with s_col2:
+                        max_dur = float(chosen_src.get("duration_seconds") or 60.0)
+                        default_end = min(30.0, max_dur)
+                        end_in = st.number_input("Fim (segundos):", min_value=0.1, max_value=max_dur, value=default_end, step=1.0, format="%.2f")
+                    with s_col3:
+                        seg_title = st.text_input("Título / Rótulo do Segmento (opcional):", placeholder="Ex: Introdução ou Destaque 1")
+
+                    create_seg_btn = st.form_submit_button("✂️ Criar Segmento", disabled=not is_primary)
+
+                    if create_seg_btn:
+                        if demo_enabled:
+                            st.success("Criação de segmento simulada no modo demonstração.")
+                        else:
+                            try:
+                                s_res = operator_console.create_clip_segment_op(
+                                    source_id=chosen_src.get("id"),
+                                    start_seconds=start_in,
+                                    end_seconds=end_in,
+                                    title=seg_title.strip() or None,
+                                    selection_method="manual",
+                                )
+                                st.success(f"✓ Segmento `{s_res.get('segment_id')}` criado com sucesso!")
+                                if s_res.get("warnings"):
+                                    for w in s_res.get("warnings"):
+                                        st.warning(f"Aviso: {w}")
+                                st.rerun()
+                            except Exception as seg_err:
+                                st.error(f"Erro ao criar segmento: {seg_err}")
+
+        # Listagem de Segmentos
+        if not segments:
+            st.info("ℹ️ Nenhum segmento cadastrado até o momento.")
+        else:
+            for seg in segments:
+                seg_id = seg.get("id", "")
+                dur_s = seg.get("duration_seconds", 0.0)
+                seg_badge = f"<span class='op-badge op-badge-blue'>{seg.get('status')}</span>"
+                with st.container(border=True):
+                    sc1, sc2, sc3 = st.columns([0.45, 0.35, 0.2])
+                    with sc1:
+                        title_str = seg.get("title") or "(Sem título)"
+                        st.markdown(f"**{title_str}** &nbsp; {seg_badge}", unsafe_allow_html=True)
+                        st.caption(f"ID: `{seg_id}` | Fonte: `{seg.get('source_id')}` | Perfil: `{seg.get('profile_id')}`")
+                    with sc2:
+                        st.markdown(f"⏱️ **{seg.get('start_seconds', 0):.1f}s ➔ {seg.get('end_seconds', 0):.1f}s** (Duração: **{dur_s:.1f}s**)")
+                        st.caption(f"Método: `{seg.get('selection_method')}` | Criado: `{seg.get('created_at', '')[:19]}`")
+                    with sc3:
+                        if is_primary:
+                            curr_st = seg.get("status")
+                            if curr_st == "CANDIDATE":
+                                if st.button("Selecionar", key=f"op_sel_seg_{seg_id}", use_container_width=True):
+                                    if not demo_enabled:
+                                        operator_console.update_clip_segment_status_op(seg_id, "SELECTED")
+                                        st.rerun()
+                            elif curr_st == "SELECTED":
+                                if st.button("Rejeitar", key=f"op_rej_seg_{seg_id}", use_container_width=True):
+                                    if not demo_enabled:
+                                        operator_console.update_clip_segment_status_op(seg_id, "REJECTED")
+                                        st.rerun()
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
 # Section 6: Alerts, Timeline, Errors & Recovery (STATIC - Sem auto-refresh)
 # ---------------------------------------------------------------------------
+
 
 def _render_tabs_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     if demo_enabled:
@@ -1753,6 +1983,9 @@ def render_operator_console():
 
     # 5.5. Automatic Analytics Scheduler (STATIC)
     _render_automatic_analytics_section(demo_enabled, scenario_choice, is_primary)
+
+    # 5.6. Clip Mode Foundation (STATIC)
+    _render_clip_mode_section(demo_enabled, scenario_choice, is_primary)
 
     # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
     _render_tabs_section(demo_enabled, scenario_choice, is_primary)

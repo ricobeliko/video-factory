@@ -1832,6 +1832,13 @@ def stop_scheduler_worker() -> None:
             logger.info("[SCHEDULER] Worker daemon do executor finalizado.")
 
 
+def is_worker_alive() -> bool:
+    """Informa se a thread do scheduler worker está em execução."""
+    global _worker_thread
+    with _worker_lock:
+        return _worker_thread is not None and _worker_thread.is_alive()
+
+
 # ---------------------------------------------------------------------------
 # Homologação & Teste Rápido (Apenas para ambiente de testes/validação)
 # ---------------------------------------------------------------------------

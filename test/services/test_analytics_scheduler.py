@@ -75,8 +75,6 @@ from app.services.analytics_providers import (
     ERR_TEMPORARY,
     ERR_UNAVAILABLE,
     NormalizedAnalytics,
-    YouTubeAnalyticsProvider,
-    TikTokAnalyticsProvider,
     get_provider,
     register_provider,
 )

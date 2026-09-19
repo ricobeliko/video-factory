@@ -1925,6 +1925,151 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                             elif r_status == "PROCESSING":
                                 st.info("⏳ Renderização em andamento no servidor...")
 
+                        # -----------------------------------------------------------
+                        # Fase V11-D: Legendas e Revisão Final
+                        # -----------------------------------------------------------
+                        if r_status == "COMPLETED":
+                            st.markdown("---")
+                            st.markdown("##### 🔤 Legendas Sincronizadas (Captions)")
+
+                            if demo_enabled:
+                                caption_tracks = []
+                            else:
+                                caption_tracks = operator_console.list_caption_tracks_for_segment_op(seg_id_chosen)
+
+                            latest_track = caption_tracks[0] if caption_tracks else None
+
+                            cap_col1, cap_col2 = st.columns([0.6, 0.4])
+                            with cap_col1:
+                                if latest_track:
+                                    t_style = latest_track.get("style", "CLEAN")
+                                    t_cues_cnt = latest_track.get("cue_count", 0)
+                                    t_status = latest_track.get("status", "")
+                                    st.caption(f"Faixa: `{latest_track.get('id')}` | Estilo: **{t_style}** | Cues: **{t_cues_cnt}** | Status: `{t_status}`")
+                                    if not demo_enabled:
+                                        cues = operator_console.get_caption_cues_op(latest_track.get("id"))
+                                        if cues:
+                                            with st.expander(f"Pré-visualização de Cues ({min(len(cues), 5)} de {len(cues)})", expanded=False):
+                                                for c in cues[:5]:
+                                                    st.text(f"{c.get('start_seconds', 0):.2f}s ➔ {c.get('end_seconds', 0):.2f}s: {c.get('text')}")
+                                else:
+                                    st.caption("Nenhuma faixa de legendas gerada para este segmento.")
+
+                            with cap_col2:
+                                cap_style_sel = st.selectbox(
+                                    "Estilo da Legenda:",
+                                    options=["CLEAN", "BOLD"],
+                                    format_func=lambda x: "CLEAN (Branco / Contorno Fino)" if x == "CLEAN" else "BOLD (Destaque / Negrito)",
+                                    key=f"cap_style_{r_id}",
+                                    disabled=not is_primary,
+                                )
+                                btn_cap_label = "Regerar Legendas" if latest_track else "Gerar Legendas"
+                                if st.button(f"🔤 {btn_cap_label}", key=f"btn_cap_{r_id}", use_container_width=True, disabled=not is_primary):
+                                    if not demo_enabled:
+                                        with st.spinner("Gerando legendas sincronizadas..."):
+                                            try:
+                                                operator_console.generate_clip_captions_op(
+                                                    segment_id=seg_id_chosen,
+                                                    style=cap_style_sel,
+                                                    force=bool(latest_track),
+                                                )
+                                                st.toast("Legendas geradas com sucesso!", icon="🔤")
+                                                st.rerun()
+                                            except Exception as cap_err:
+                                                st.error(f"Erro ao gerar legendas: {cap_err}")
+                                    else:
+                                        st.toast("Geração simulada no modo demo.", icon="🔤")
+
+                            # Revisão Final com Burn-In
+                            if latest_track and latest_track.get("status") == "COMPLETED":
+                                st.markdown("---")
+                                st.markdown("##### ✨ Revisão Final (Final Review Output com Burn-In)")
+
+                                if demo_enabled:
+                                    reviews_list = []
+                                else:
+                                    reviews_list = operator_console.list_clip_reviews_for_segment_op(seg_id_chosen)
+
+                                latest_rev = reviews_list[0] if reviews_list else None
+
+                                if not latest_rev:
+                                    st.caption("Nenhum vídeo final com burn-in gerado ainda.")
+                                    if st.button("🎬 Gerar Final Review (Burn-in)", key=f"btn_make_rev_{r_id}", use_container_width=True, disabled=not is_primary):
+                                        if not demo_enabled:
+                                            with st.spinner("Renderizando vídeo vertical com legendas burn-in..."):
+                                                try:
+                                                    operator_console.create_clip_review_output_op(
+                                                        render_id=r_id,
+                                                        caption_track_id=latest_track.get("id"),
+                                                        force=False,
+                                                    )
+                                                    st.toast("Review final gerado com sucesso!", icon="✨")
+                                                    st.rerun()
+                                                except Exception as rev_err:
+                                                    st.error(f"Erro no burn-in: {rev_err}")
+                                        else:
+                                            st.toast("Review simulado no modo demo.", icon="✨")
+                                else:
+                                    rev_id = latest_rev.get("id", "")
+                                    rev_st = latest_rev.get("status", "")
+                                    rev_app_st = latest_rev.get("review_status", "PENDING_REVIEW")
+
+                                    rev_col = "green" if rev_app_st == "APPROVED" else ("red" if rev_app_st == "REJECTED" else "yellow")
+                                    rev_badge = f"<span class='op-badge op-badge-{rev_col}'>{rev_app_st}</span>"
+
+                                    st.markdown(f"**Artefato `{rev_id}`** &nbsp; Status Render: `{rev_st}` &nbsp; Decisão: {rev_badge}", unsafe_allow_html=True)
+
+                                    rv_c1, rv_c2 = st.columns([0.5, 0.5])
+                                    with rv_c1:
+                                        st.caption(f"Resolução: **{latest_rev.get('width', 1080)}x{latest_rev.get('height', 1920)}** | Duração: **{latest_rev.get('duration_seconds', 0):.1f}s**")
+                                        rev_mb = (latest_rev.get("file_size_bytes") or 0) / (1024 * 1024)
+                                        st.caption(f"Tamanho: **{rev_mb:.2f} MB** | Estilo: **{latest_track.get('style', 'CLEAN')}**")
+                                        st.caption(f"Arquivo Final: `{latest_rev.get('output_path')}`")
+
+                                        b_col1, b_col2, b_col3 = st.columns(3)
+                                        with b_col1:
+                                            if st.button("✅ Aprovar", key=f"btn_app_{rev_id}", use_container_width=True, disabled=not is_primary or rev_app_st == "APPROVED"):
+                                                if not demo_enabled:
+                                                    operator_console.approve_clip_review_op(rev_id)
+                                                    st.toast("Artefato aprovado com sucesso!", icon="✅")
+                                                    st.rerun()
+                                        with b_col2:
+                                            if st.button("❌ Rejeitar", key=f"btn_rej_{rev_id}", use_container_width=True, disabled=not is_primary or rev_app_st == "REJECTED"):
+                                                if not demo_enabled:
+                                                    operator_console.reject_clip_review_op(rev_id)
+                                                    st.toast("Artefato rejeitado.", icon="❌")
+                                                    st.rerun()
+                                        with b_col3:
+                                            if st.button("🔄 Regerar", key=f"btn_regen_{rev_id}", use_container_width=True, disabled=not is_primary):
+                                                if not demo_enabled:
+                                                    with st.spinner("Regerando vídeo final com burn-in..."):
+                                                        try:
+                                                            operator_console.create_clip_review_output_op(
+                                                                render_id=r_id,
+                                                                caption_track_id=latest_track.get("id"),
+                                                                force=True,
+                                                            )
+                                                            st.toast("Vídeo final regerado!", icon="🔄")
+                                                            st.rerun()
+                                                        except Exception as regen_err:
+                                                            st.error(f"Erro ao regerar: {regen_err}")
+
+                                    with rv_c2:
+                                        rev_out_path = latest_rev.get("output_path", "")
+                                        if rev_st == "COMPLETED":
+                                            if not demo_enabled:
+                                                if rev_out_path and os.path.isfile(rev_out_path) and not os.path.islink(rev_out_path) and os.path.getsize(rev_out_path) > 0:
+                                                    st.video(rev_out_path)
+                                                else:
+                                                    st.warning("⚠️ Arquivo final de review não encontrado em disco.")
+                                            else:
+                                                st.info("🎬 Player final simulado.")
+                                        elif rev_st == "FAILED":
+                                            st.error(f"Erro no Burn-in: {latest_rev.get('error_code')} — {latest_rev.get('error_message')}")
+                                        elif rev_st == "PROCESSING":
+                                            st.info("⏳ Processando burn-in de legendas no servidor...")
+
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 

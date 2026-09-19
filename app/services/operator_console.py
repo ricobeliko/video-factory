@@ -1925,3 +1925,121 @@ def get_render_warnings_op(
     """Calcula warnings contextuais para renderização de clip."""
     from app.services import clip_rendering
     return clip_rendering.get_render_warnings(source=source, strategy=strategy)
+
+
+# ---------------------------------------------------------------------------
+# Operações de Legendas (Fase V11-D — Captions)
+# ---------------------------------------------------------------------------
+
+def generate_clip_captions_op(
+    segment_id: str,
+    style: str = "CLEAN",
+    force: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Gera faixa de legendas sincronizadas para um segmento SELECTED (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_captions
+    return clip_captions.generate_clip_captions(
+        segment_id=segment_id,
+        style=style,
+        force=force,
+        db_path=db_path,
+    )
+
+
+def get_caption_track_op(
+    track_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recupera faixa de legendas pelo ID (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_captions
+    return clip_captions.get_caption_track(track_id=track_id, db_path=db_path)
+
+
+def list_caption_tracks_for_segment_op(
+    segment_id: str,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lista faixas de legenda de um segmento (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_captions
+    return clip_captions.list_caption_tracks_for_segment(segment_id=segment_id, db_path=db_path)
+
+
+def get_caption_cues_op(
+    caption_track_id: str,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Recupera cues de uma faixa de legenda (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_captions
+    return clip_captions.get_caption_cues(caption_track_id=caption_track_id, db_path=db_path)
+
+
+# ---------------------------------------------------------------------------
+# Operações de Revisão Final e Burn-In (Fase V11-D — Review)
+# ---------------------------------------------------------------------------
+
+def create_clip_review_output_op(
+    render_id: str,
+    caption_track_id: str,
+    force: bool = False,
+    timeout_seconds: int = 180,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Gera arquivo final com legendas burn-in para revisão do operador (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_review
+    return clip_review.create_clip_review_output(
+        render_id=render_id,
+        caption_track_id=caption_track_id,
+        force=force,
+        timeout_seconds=timeout_seconds,
+        db_path=db_path,
+    )
+
+
+def approve_clip_review_op(
+    review_id: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Aprova artefato de revisão final (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_review
+    return clip_review.approve_clip_review(review_id=review_id, db_path=db_path)
+
+
+def reject_clip_review_op(
+    review_id: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Rejeita artefato de revisão final (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_review
+    return clip_review.reject_clip_review(review_id=review_id, db_path=db_path)
+
+
+def get_clip_review_op(
+    review_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recupera artefato de revisão pelo ID (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_review
+    return clip_review.get_clip_review(review_id=review_id, db_path=db_path)
+
+
+def list_clip_reviews_for_segment_op(
+    segment_id: str,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lista revisões associadas a um segmento (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_review
+    return clip_review.list_clip_reviews_for_segment(segment_id=segment_id, db_path=db_path)
+
+
+def get_approved_clip_artifact_op(
+    segment_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recupera o artefato aprovado ativo de um segmento (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_review
+    return clip_review.get_approved_clip_artifact(segment_id=segment_id, db_path=db_path)

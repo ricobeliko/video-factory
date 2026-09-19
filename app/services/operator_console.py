@@ -295,13 +295,13 @@ def acquire_instance_lock(
                 curr_pid = int(curr_dict.get("pid") or 0)
                 curr_last_hb = _parse_iso_utc(curr_dict.get("last_heartbeat"))
 
-                # Caso 2: É o mesmo processo re-confirmando o lock
+                # Caso 2: É o mesmo processo re-confirmando o lock ou recuperando após perda de estado em memória
                 if (
                     curr_status == INSTANCE_STATUS_ACTIVE
                     and curr_hostname == my_hostname
                     and curr_pid == my_pid
-                    and curr_node_id == my_node_id
                 ):
+                    my_node_id = curr_node_id
                     conn.execute(
                         """
                         UPDATE instance_locks

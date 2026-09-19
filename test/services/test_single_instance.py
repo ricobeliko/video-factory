@@ -480,6 +480,103 @@ class TestSingleInstanceSafety(unittest.TestCase):
         self.assertEqual(role, operator_console.ROLE_PRIMARY)
         self.assertEqual(info.get("node_name"), "RESCUE-LOCAL")
 
+    # 23. Mesmo processo recupera PRIMARY após perda/recriação de estado em memória
+    def test_same_process_recovers_primary_after_in_memory_state_loss(self):
+        # 1. PRIMARY adquirido normalmente
+        role1, info1 = operator_console.acquire_instance_lock(
+            node_name="ORIGINAL-PRIMARY-NODE",
+            db_path=self.db_path,
+        )
+        self.assertEqual(role1, operator_console.ROLE_PRIMARY)
+        persisted_node_id = info1.get("node_id")
+        persisted_started_at = info1.get("started_at")
+        persisted_hb = info1.get("last_heartbeat")
+        self.assertIsNotNone(persisted_node_id)
+        self.assertTrue(operator_console.is_primary_instance(db_path=self.db_path))
+
+        # Pequena pausa para garantir avanço temporal do timestamp de heartbeat
+        time.sleep(0.01)
+
+        # 2. Simula perda/recriação apenas do estado em memória (ex: nova sessão / rerun Streamlit)
+        # mantendo no SQLite o mesmo hostname, mesmo PID e node_id original
+        operator_console.reset_instance_for_testing()
+        self.assertFalse(operator_console._instance_initialized)
+        self.assertIsNone(operator_console._current_node_id)
+
+        # 3. ensure_instance_initialized no mesmo processo deve:
+        # - continuar PRIMARY;
+        # - adotar o node_id persistido;
+        # - NÃO virar SECONDARY;
+        # - renovar heartbeat;
+        # - restaurar node_name e started_at persistidos.
+        role2, info2 = operator_console.ensure_instance_initialized(
+            node_name="IRRELEVANT-NEW-NAME",
+            db_path=self.db_path,
+        )
+        self.assertEqual(role2, operator_console.ROLE_PRIMARY)
+        self.assertTrue(operator_console.is_primary_instance(db_path=self.db_path))
+        self.assertEqual(info2.get("node_id"), persisted_node_id)
+        self.assertEqual(info2.get("node_name"), "ORIGINAL-PRIMARY-NODE")
+        self.assertEqual(info2.get("started_at"), persisted_started_at)
+        self.assertGreaterEqual(info2.get("last_heartbeat"), persisted_hb)
+        self.assertEqual(operator_console._current_node_id, persisted_node_id)
+        self.assertEqual(operator_console._current_node_name, "ORIGINAL-PRIMARY-NODE")
+
+        # Nenhum evento espúrio de SECONDARY ou TAKEOVER
+        events = operator_console.get_operational_events(db_path=self.db_path)
+        view_only_evs = [
+            e for e in events
+            if e.get("event_type") == operator_console.EVENT_INSTANCE_VIEW_ONLY_STARTED
+        ]
+        self.assertEqual(len(view_only_evs), 0)
+        takeover_evs = [
+            e for e in events
+            if e.get("event_type") == operator_console.EVENT_INSTANCE_TAKEOVER
+        ]
+        self.assertEqual(len(takeover_evs), 0)
+
+        # Guards de execução continuam permitidos sem PermissionError
+        try:
+            operator_console.require_primary_instance(db_path=self.db_path)
+        except PermissionError:
+            self.fail("require_primary_instance levantou PermissionError inesperado após recuperação.")
+
+        # Re-inicialização direta via acquire_instance_lock após novo reset em memória também deve recuperar
+        operator_console.reset_instance_for_testing()
+        role3, info3 = operator_console.acquire_instance_lock(
+            node_name="ANOTHER-NAME",
+            db_path=self.db_path,
+        )
+        self.assertEqual(role3, operator_console.ROLE_PRIMARY)
+        self.assertEqual(info3.get("node_id"), persisted_node_id)
+        self.assertEqual(info3.get("node_name"), "ORIGINAL-PRIMARY-NODE")
+
+    # 24. Host diferente com lock ACTIVE saudável vira SECONDARY_VIEW_ONLY
+    def test_different_host_with_active_lock_enters_view_only(self):
+        # 1. Lock PRIMARY ativo criado no host atual
+        role1, info1 = operator_console.acquire_instance_lock(
+            node_name="PRIMARY-ON-DESKTOP",
+            db_path=self.db_path,
+        )
+        self.assertEqual(role1, operator_console.ROLE_PRIMARY)
+
+        # 2. Processo em host remoto tentando conectar no mesmo banco
+        operator_console.reset_instance_for_testing()
+        with patch("platform.node", return_value="NOTEBOOK-REMOTE"), \
+             patch("socket.gethostname", return_value="NOTEBOOK-REMOTE"):
+            role2, info2 = operator_console.acquire_instance_lock(
+                node_name="NOTEBOOK-NODE",
+                db_path=self.db_path,
+                timeout_seconds=90,
+            )
+            self.assertEqual(role2, operator_console.ROLE_SECONDARY_VIEW_ONLY)
+            self.assertFalse(operator_console.is_primary_instance(db_path=self.db_path))
+            self.assertEqual(info2.get("node_name"), "PRIMARY-ON-DESKTOP")
+
+        # Confere que o lock no SQLite permanece íntegro com PRIMARY-ON-DESKTOP
+        inst_info = operator_console.get_instance_info(db_path=self.db_path)
+        self.assertEqual(inst_info.get("primary_node_name"), "PRIMARY-ON-DESKTOP")
+
 
 if __name__ == "__main__":
     unittest.main()

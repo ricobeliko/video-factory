@@ -67,7 +67,7 @@ class TestProductionRecovery(unittest.TestCase):
             backup_file_path=self.valid_backup_path,
             target_db_path=self.target_db,
             safety_copy_dir=self.safety_dir,
-            check_active_server=False,
+            _check_active_server=False,
         )
         self.assertTrue(res["success"])
         self.assertEqual(res["integrity_check"], "ok")
@@ -92,7 +92,7 @@ class TestProductionRecovery(unittest.TestCase):
                 backup_file_path=corrupt_db,
                 target_db_path=self.target_db,
                 safety_copy_dir=self.safety_dir,
-                check_active_server=False,
+                _check_active_server=False,
             )
         self.assertIn("inválido ou corrompido", str(ctx.exception))
 
@@ -118,7 +118,7 @@ class TestProductionRecovery(unittest.TestCase):
                 backup_file_path=self.valid_backup_path,
                 target_db_path=self.target_db,
                 safety_copy_dir=self.safety_dir,
-                check_active_server=False,
+                _check_active_server=False,
             )
         self.assertIn("SHA-256 mismatch", str(ctx.exception))
 
@@ -128,7 +128,7 @@ class TestProductionRecovery(unittest.TestCase):
             backup_file_path=self.valid_backup_path,
             target_db_path=self.target_db,
             safety_copy_dir=self.safety_dir,
-            check_active_server=False,
+            _check_active_server=False,
         )
         safety_path = res["safety_copy"]
         self.assertIsNotNone(safety_path)
@@ -158,7 +158,7 @@ class TestProductionRecovery(unittest.TestCase):
                     backup_file_path=self.valid_backup_path,
                     target_db_path=self.target_db,
                     safety_copy_dir=self.safety_dir,
-                    check_active_server=False,
+                    _check_active_server=False,
                 )
             self.assertIn("SIMULATED_COPY_CORRUPTION", str(ctx.exception))
 
@@ -176,7 +176,7 @@ class TestProductionRecovery(unittest.TestCase):
             backup_file_path=self.valid_backup_path,
             target_db_path=self.target_db,
             safety_copy_dir=self.safety_dir,
-            check_active_server=False,
+            _check_active_server=False,
         )
         self.assertEqual(res["integrity_check"], "ok")
 
@@ -191,35 +191,49 @@ class TestProductionRecovery(unittest.TestCase):
             backup_file_path=self.valid_backup_path,
             target_db_path=self.target_db,
             safety_copy_dir=self.safety_dir,
-            check_active_server=False,
+            _check_active_server=False,
         )
         target_dir = os.path.dirname(self.target_db)
         temp_files = [f for f in os.listdir(target_dir) if "tmp_restore" in f]
         self.assertEqual(len(temp_files), 0, f"Arquivos temporários remanescentes: {temp_files}")
 
-    # 18. Proteção contra restauração com backend ativo
+    # 18. Proteção contra restauração com backend ativo bloqueia incondicionalmente
     def test_18_active_backend_protection_blocks_restore(self):
         # Simula backend ativo detectado
         with patch.object(production_recovery, "is_backend_active", return_value=(True, "Simulated active Streamlit server")):
+            # Backend ativo => restore SEMPRE bloqueado por RuntimeError
             with self.assertRaises(RuntimeError) as ctx:
                 production_recovery.restore_database_backup(
                     backup_file_path=self.valid_backup_path,
                     target_db_path=self.target_db,
                     safety_copy_dir=self.safety_dir,
-                    check_active_server=True,
-                    force=False,
+                    _check_active_server=True,
                 )
             self.assertIn("RESTAURAÇÃO BLOQUEADA POR SEGURANÇA", str(ctx.exception))
 
-            # Com flag force=True, a restauração é permitida (caso o operador decida forçar)
-            res_forced = production_recovery.restore_database_backup(
-                backup_file_path=self.valid_backup_path,
-                target_db_path=self.target_db,
-                safety_copy_dir=self.safety_dir,
-                check_active_server=True,
-                force=True,
-            )
-            self.assertTrue(res_forced["success"])
+            # Valida que parâmetro force foi removido e nenhuma tentativa de bypass é aceita
+            with self.assertRaises(TypeError):
+                production_recovery.restore_database_backup(
+                    backup_file_path=self.valid_backup_path,
+                    target_db_path=self.target_db,
+                    safety_copy_dir=self.safety_dir,
+                    _check_active_server=True,
+                    force=True,
+                )
+
+        # Valida que o CLI não expõe nem aceita flag --force
+        import subprocess
+        import sys
+        cmd = [
+            sys.executable,
+            "-m",
+            "app.services.production_recovery",
+            self.valid_backup_path,
+            "--force",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unrecognized arguments: --force", result.stderr.lower())
 
 
 if __name__ == "__main__":

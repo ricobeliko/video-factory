@@ -36,13 +36,18 @@ BACKUP_FILENAME_REGEX = re.compile(r"^video_factory_(\d{8})_(\d{6})\.db$")
 MANIFEST_FILENAME_REGEX = re.compile(r"^video_factory_(\d{8})_(\d{6})\.json$")
 
 
-def get_backup_dir(custom_dir: Optional[str] = None) -> str:
-    """Retorna e garante a existência do diretório padrão de backups de banco de dados."""
+def get_backup_dir(custom_dir: Optional[str] = None, create: bool = False) -> str:
+    """Retorna o caminho do diretório padrão de backups de banco de dados.
+
+    Cria o diretório em disco somente se create=True (operações de escrita).
+    Operações somente leitura/passivas utilizam create=False.
+    """
     if custom_dir:
         target_dir = os.path.abspath(custom_dir)
     else:
         target_dir = os.path.join(utils.root_dir(), DEFAULT_BACKUP_SUBDIR)
-    os.makedirs(target_dir, exist_ok=True)
+    if create:
+        os.makedirs(target_dir, exist_ok=True)
     return target_dir
 
 
@@ -163,7 +168,7 @@ def create_database_backup(
     if not os.path.isfile(target_db):
         raise FileNotFoundError(f"Banco de dados SQLite fonte não encontrado em: {target_db}")
 
-    dest_dir = get_backup_dir(backup_dir)
+    dest_dir = get_backup_dir(backup_dir, create=True)
 
     now_utc = datetime.now(timezone.utc)
     ts_str = now_utc.strftime("%Y%m%d_%H%M%S")
@@ -261,7 +266,7 @@ def create_database_backup(
 
 def list_database_backups(backup_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """Lista todos os backups oficiais de banco existentes, ordenados do mais recente ao mais antigo."""
-    dest_dir = get_backup_dir(backup_dir)
+    dest_dir = get_backup_dir(backup_dir, create=False)
     if not os.path.isdir(dest_dir):
         return []
 
@@ -329,7 +334,7 @@ def prune_database_backups(
     if retention_count <= 0:
         return []
 
-    dest_dir = get_backup_dir(backup_dir)
+    dest_dir = get_backup_dir(backup_dir, create=False)
     all_backups = list_database_backups(dest_dir)
 
     if len(all_backups) <= retention_count:
@@ -363,13 +368,13 @@ def get_latest_backup_info(backup_dir: Optional[str] = None) -> Dict[str, Any]:
 
     Não cria arquivos, não muta o banco e não executa prune.
     """
-    dest_dir = get_backup_dir(backup_dir)
+    dest_dir = get_backup_dir(backup_dir, create=False)
     now_utc = datetime.now(timezone.utc)
 
     if not os.path.isdir(dest_dir):
         return {
-            "status": "UNHEALTHY",
-            "error": "Diretório de backups não existe",
+            "status": "NONE",
+            "error": None,
             "latest_backup_at": None,
             "latest_backup_age_seconds": None,
             "valid_backups_count": 0,

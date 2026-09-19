@@ -226,7 +226,22 @@ class TestProductionHealth(unittest.TestCase):
             self.assertIn("backup", str(readiness["warnings"]).lower())
 
     def test_21_health_check_never_creates_or_modifies_backups(self):
-        """Garante que health e readiness operam em modo passivo e nunca criam backups."""
+        """Garante que health e readiness operam em modo passivo e nunca criam backups ou diretórios."""
+        # Cenário 1: Diretório de backups inexistente NÃO deve ser criado pelo health check
+        non_existent_b_dir = os.path.join(self.tmp_dir.name, "health_backup_dir_does_not_exist")
+        self.assertFalse(os.path.exists(non_existent_b_dir))
+
+        health_non_exist = production_health.get_production_health(
+            db_path=self.test_db_path,
+            backup_dir=non_existent_b_dir,
+        )
+        self.assertFalse(
+            os.path.exists(non_existent_b_dir),
+            "get_production_health() criou indevidamente o diretório de backups!",
+        )
+        self.assertEqual(health_non_exist["backup"]["status"], production_health.HEALTH_STATUS_DEGRADED)
+
+        # Cenário 2: Diretório existente deve permanecer estritamente intocado e vazio
         test_b_dir = os.path.join(self.tmp_dir.name, "health_backups_passive")
         os.makedirs(test_b_dir, exist_ok=True)
 

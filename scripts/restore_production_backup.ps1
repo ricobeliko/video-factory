@@ -13,8 +13,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [string]$BackupFile = "",
-    [switch]$Force = $false
+    [string]$BackupFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,21 +77,19 @@ try {
     # Conexão recusada = porta fechada = seguro
 }
 
-if ($PortOpen -and -not $Force) {
-    Write-Error "RESTAURAÇÃO BLOQUEADA: A porta 8501 está ativa. O backend do MoneyPrinterTurbo parece estar em execução.`nPor segurança, encerre a tarefa/serviço no Windows Task Scheduler antes de restaurar o banco."
+if ($PortOpen) {
+    Write-Error "RESTAURAÇÃO BLOQUEADA: A porta 8501 está ativa. O backend do MoneyPrinterTurbo está em execução.`nPor segurança, encerre a tarefa/serviço no Windows Task Scheduler antes de restaurar o banco."
     exit 1
 }
 
-# 7. Confirmação do Operador (se não for -Force)
-if (-not $Force) {
-    Write-Host "ATENÇÃO: Você está prestes a restaurar o banco de dados de produção." -ForegroundColor Yellow
-    Write-Host "Arquivo de Origem: $BackupFile" -ForegroundColor Cyan
-    Write-Host "Uma safety copy do banco atual será criada automaticamente antes da substituição."
-    $Confirmation = Read-Host "Deseja continuar com a restauração? (digite 'SIM' para confirmar)"
-    if ($Confirmation -ne "SIM") {
-        Write-Host "Operação de restauração cancelada pelo operador." -ForegroundColor Yellow
-        exit 0
-    }
+# 7. Confirmação Obrigatória do Operador
+Write-Host "ATENÇÃO: Você está prestes a restaurar o banco de dados de produção." -ForegroundColor Yellow
+Write-Host "Arquivo de Origem: $BackupFile" -ForegroundColor Cyan
+Write-Host "Uma safety copy do banco atual será criada automaticamente antes da substituição."
+$Confirmation = Read-Host "Deseja continuar com a restauração? (digite 'SIM' para confirmar)"
+if ($Confirmation -ne "SIM") {
+    Write-Host "Operação de restauração cancelada pelo operador." -ForegroundColor Yellow
+    exit 0
 }
 
 # 8. Execução da Restauração Segura
@@ -100,9 +97,6 @@ $RestoreArgs = @(
     "-m", "app.services.production_recovery",
     $BackupFile
 )
-if ($Force) {
-    $RestoreArgs += "--force"
-}
 
 Write-Host "Executando restauração controlada..." -ForegroundColor Cyan
 & $VenvPython $RestoreArgs

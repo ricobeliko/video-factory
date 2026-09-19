@@ -112,13 +112,12 @@ def restore_database_backup(
     backup_file_path: str,
     target_db_path: Optional[str] = None,
     safety_copy_dir: Optional[str] = None,
-    force: bool = False,
-    check_active_server: bool = True,
+    _check_active_server: bool = True,
 ) -> Dict[str, Any]:
     """Executa a restauração segura de um arquivo de backup para o banco SQLite destino.
 
     FLUXO:
-    1. Rejeita se backend estiver ativo (a menos que force=True).
+    1. Rejeita incondicionalmente se backend estiver ativo (sem bypass).
     2. Valida arquivo de backup (SHA256 manifesto + PRAGMA integrity_check).
     3. Cria safety copy do banco atual (se existente).
     4. Copia para arquivo temporário de restore e valida PRAGMA integrity_check.
@@ -130,7 +129,7 @@ def restore_database_backup(
     abs_target_db = os.path.abspath(target_db)
 
     # 1. Proteção contra restauração com backend ativo
-    if check_active_server and not force:
+    if _check_active_server:
         active, reason = is_backend_active(db_path=abs_target_db)
         if active:
             raise RuntimeError(
@@ -217,7 +216,6 @@ def main():
     parser.add_argument("backup_file", type=str, help="Caminho do arquivo .db de backup a restaurar")
     parser.add_argument("--target-db", type=str, default=None, help="Caminho do banco SQLite destino")
     parser.add_argument("--safety-dir", type=str, default=None, help="Diretório para salvar a safety copy")
-    parser.add_argument("--force", action="store_true", help="Força a restauração ignorando checagem de backend ativo (cuidado!)")
     parser.add_argument("--json", action="store_true", help="Formatar saída estritamente em JSON")
     args = parser.parse_args()
 
@@ -226,7 +224,6 @@ def main():
             backup_file_path=args.backup_file,
             target_db_path=args.target_db,
             safety_copy_dir=args.safety_dir,
-            force=args.force,
         )
         if args.json:
             print(json.dumps(res, indent=2))

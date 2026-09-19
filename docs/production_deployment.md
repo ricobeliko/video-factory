@@ -121,7 +121,8 @@ powershell -ExecutionPolicy Bypass -File scripts\backup_production.ps1
 > [!CAUTION]
 > **REGRA ABSOLUTA DE SEGURANÇA:**
 > **NUNCA** restaure um banco de dados com o backend do MoneyPrinterTurbo em execução.
-> O script e o serviço de recovery bloqueiam a restauração se detectarem a porta `8501` aberta ou processo com lock `PRIMARY` ativo.
+> O script e o serviço de recovery bloqueiam incondicionalmente a restauração se detectarem a porta `8501` aberta ou processo com lock `PRIMARY` ativo.
+> Não existe flag `--force` ou parâmetro de bypass operacional: o backend ativo sempre rejeita a restauração.
 
 ### Passo a Passo para Restauração:
 

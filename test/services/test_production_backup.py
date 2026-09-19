@@ -226,6 +226,30 @@ class TestProductionBackup(unittest.TestCase):
         for term in forbidden_tokens:
             self.assertNotIn(term, content.lower())
 
+    # 11. Operações somente leitura não criam diretórios em disco
+    def test_11_read_only_operations_do_not_create_directory(self):
+        non_existent_dir = os.path.join(self.tmp_dir.name, "strictly_non_existent_backup_folder")
+        self.assertFalse(os.path.exists(non_existent_dir))
+
+        # 1. get_backup_dir com create=False não deve criar
+        path = production_backup.get_backup_dir(custom_dir=non_existent_dir, create=False)
+        self.assertEqual(path, os.path.abspath(non_existent_dir))
+        self.assertFalse(os.path.exists(non_existent_dir))
+
+        # 2. list_database_backups em diretório inexistente retorna lista vazia e não cria
+        backups = production_backup.list_database_backups(backup_dir=non_existent_dir)
+        self.assertEqual(backups, [])
+        self.assertFalse(os.path.exists(non_existent_dir))
+
+        # 3. get_latest_backup_info em diretório inexistente retorna status NONE e não cria
+        info = production_backup.get_latest_backup_info(backup_dir=non_existent_dir)
+        self.assertEqual(info["status"], "NONE")
+        self.assertFalse(os.path.exists(non_existent_dir))
+
+        # 4. Operação de escrita garante/cria o diretório
+        created_path = production_backup.get_backup_dir(custom_dir=non_existent_dir, create=True)
+        self.assertTrue(os.path.isdir(created_path))
+
 
 if __name__ == "__main__":
     unittest.main()

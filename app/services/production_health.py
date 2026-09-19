@@ -32,7 +32,10 @@ HEALTH_STATUS_UNHEALTHY = "UNHEALTHY"
 MINIMUM_PYTHON_VERSION = (3, 11)
 
 
-def get_production_health(db_path: Optional[str] = None) -> Dict[str, Any]:
+def get_production_health(
+    db_path: Optional[str] = None,
+    backup_dir: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Avalia e agrega a saúde dos componentes operacionais críticos do backend.
 
@@ -197,6 +200,52 @@ def get_production_health(db_path: Optional[str] = None) -> Dict[str, Any]:
         providers_health = {"error": str(exc)}
         degraded_reasons.append(f"Falha ao obter sumário de provedores: {exc}")
 
+    # 7. Verificação Passiva de Backup de Produção (Fase V12-C)
+    from app.services import production_backup
+    try:
+        backup_info = production_backup.get_latest_backup_info(backup_dir=backup_dir)
+        b_status = backup_info.get("status")
+
+        if b_status == "HEALTHY":
+            age_sec = backup_info.get("latest_backup_age_seconds")
+            if age_sec is not None and age_sec > 86400:
+                backup_health_status = HEALTH_STATUS_DEGRADED
+                degraded_reasons.append(f"Último backup do SQLite tem mais de 24 horas ({age_sec // 3600}h atrás)")
+            else:
+                backup_health_status = HEALTH_STATUS_HEALTHY
+        elif b_status == "NONE":
+            backup_health_status = HEALTH_STATUS_DEGRADED
+            degraded_reasons.append("Nenhum backup do banco SQLite foi encontrado")
+        elif b_status == "CORRUPT":
+            backup_health_status = HEALTH_STATUS_UNHEALTHY
+            unhealthy_reasons.append(f"Último backup do SQLite está corrompido: {backup_info.get('error')}")
+        else:
+            backup_health_status = HEALTH_STATUS_UNHEALTHY
+            unhealthy_reasons.append(f"Falha ao inspecionar backups do SQLite: {backup_info.get('error')}")
+
+        backup_health = {
+            "status": backup_health_status,
+            "latest_backup_at": backup_info.get("latest_backup_at"),
+            "latest_backup_age_seconds": backup_info.get("latest_backup_age_seconds"),
+            "valid_backups_count": backup_info.get("valid_backups_count", 0),
+            "latest_integrity": backup_info.get("latest_integrity"),
+            "path": backup_info.get("path"),
+            "backup_dir": backup_info.get("backup_dir"),
+            "error": backup_info.get("error"),
+        }
+    except Exception as exc:
+        backup_health = {
+            "status": HEALTH_STATUS_DEGRADED,
+            "latest_backup_at": None,
+            "latest_backup_age_seconds": None,
+            "valid_backups_count": 0,
+            "latest_integrity": None,
+            "path": None,
+            "backup_dir": None,
+            "error": str(exc),
+        }
+        degraded_reasons.append(f"Falha ao consultar estado de backups: {exc}")
+
     # Determinação do Status Global
     if unhealthy_reasons:
         overall_status = HEALTH_STATUS_UNHEALTHY
@@ -215,6 +264,7 @@ def get_production_health(db_path: Optional[str] = None) -> Dict[str, Any]:
         "ffmpeg": ffmpeg_health,
         "scheduler": scheduler_health,
         "providers": providers_health,
+        "backup": backup_health,
         "degraded_reasons": degraded_reasons,
         "unhealthy_reasons": unhealthy_reasons,
     }
@@ -369,6 +419,16 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
         "tiktok_credentials": _check_secret_presence(config.app.get("tiktok_access_token") or os.path.exists(os.path.join(storage_folder, "tiktok_token.json"))),
     }
 
+    # 10. Verificação Passiva de Backup para Readiness (Apenas warning, nunca bloqueia boot)
+    from app.services import production_backup
+    try:
+        b_info = production_backup.get_latest_backup_info()
+        b_stat = b_info.get("status")
+        if b_stat in ("NONE", "CORRUPT"):
+            warnings.append("Nenhum backup válido de banco SQLite encontrado (recomendado gerar backup inicial)")
+    except Exception:
+        b_info = {"status": "UNKNOWN"}
+
     # Avaliação final
     is_ready = (len(missing_critical) == 0)
 
@@ -385,7 +445,73 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
             "single_instance": single_instance_check,
             "scheduler_infra": scheduler_infra_check,
             "credentials": credentials_status,
+            "backup": {"status": b_info.get("status", "UNKNOWN"), "passed": True},
         },
         "missing_critical_requirements": missing_critical,
         "warnings": warnings,
     }
+
+
+def main():
+    """Ponto de entrada CLI para diagnóstico operacional e sanitizado da instalação."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="MoneyPrinterTurbo - Production Health & Readiness")
+    parser.add_argument("--json", action="store_true", help="Formatar saída estritamente em JSON")
+    parser.add_argument("--readiness", action="store_true", help="Executar apenas readiness check")
+    parser.add_argument("--health", action="store_true", help="Executar apenas health check")
+    args = parser.parse_args()
+
+    health = get_production_health()
+    readiness = get_production_readiness()
+
+    if args.json:
+        if args.health:
+            print(json.dumps(health, indent=2))
+        elif args.readiness:
+            print(json.dumps(readiness, indent=2))
+        else:
+            print(json.dumps({"health": health, "readiness": readiness}, indent=2))
+        sys.exit(0 if health["status"] != HEALTH_STATUS_UNHEALTHY else 1)
+
+    print("======================================================")
+    print(" MoneyPrinterTurbo - Diagnóstico Operacional (V12-C)")
+    print("======================================================")
+    print(f"Health Global     : {health['status']}")
+    print(f"Readiness         : {readiness['status']} (Pronto: {readiness['ready']})")
+    print(f"Factory State     : {health['factory_state']}")
+    print(f"Instance Role     : {health['instance_role']}")
+    print("------------------------------------------------------")
+    print(f"Banco SQLite      : {health['database']['path']}")
+    print(f"Journal Mode      : {health['database']['journal_mode']}")
+    print(f"Storage Writable  : {health['storage']['writable']} (Livre: {health['storage']['free_bytes'] / (1024**3):.2f} GB)")
+    print(f"FFmpeg            : {'OK' if health['ffmpeg']['available'] else 'FALHA'}")
+    s = health['scheduler']
+    print(f"Scheduler         : Enabled={s.get('scheduler_enabled')}, WorkerAlive={s.get('worker_alive')}, AutoPublish={s.get('auto_publish_enabled')}, DryRun={s.get('dry_run')}")
+    print("------------------------------------------------------")
+    b = health.get("backup", {})
+    b_age_str = f"{b['latest_backup_age_seconds'] // 3600}h atrás" if b.get('latest_backup_age_seconds') is not None else "N/A"
+    print(f"Backup Status     : {b.get('status')} (Válidos: {b.get('valid_backups_count', 0)}, Último: {b.get('latest_backup_at') or 'Nenhum'} - {b_age_str})")
+    print("------------------------------------------------------")
+    print("Credenciais (Presença Sanitizada):")
+    for cred, c_status in readiness['checks']['credentials'].items():
+        print(f"  - {cred:<22}: {c_status}")
+
+    if health.get("degraded_reasons"):
+        print("------------------------------------------------------")
+        print("Avisos / Motivos de Degradação:")
+        for r in health["degraded_reasons"]:
+            print(f"  [!] {r}")
+
+    if health.get("unhealthy_reasons"):
+        print("------------------------------------------------------")
+        print("Problemas Críticos (UNHEALTHY):")
+        for r in health["unhealthy_reasons"]:
+            print(f"  [X] {r}")
+
+    sys.exit(0 if health["status"] != HEALTH_STATUS_UNHEALTHY else 1)
+
+
+if __name__ == "__main__":
+    main()

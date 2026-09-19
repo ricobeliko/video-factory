@@ -53,18 +53,30 @@ class TestProductionHealth(unittest.TestCase):
 
     def test_01_healthy_state(self):
         """Verifica que com todos os componentes operacionais o status é HEALTHY."""
+        mock_backup = {
+            "status": "HEALTHY",
+            "latest_backup_at": "2026-09-19T12:00:00Z",
+            "latest_backup_age_seconds": 300,
+            "valid_backups_count": 1,
+            "latest_integrity": "ok",
+            "path": "dummy.db",
+            "backup_dir": "storage/backups/database",
+            "error": None,
+        }
         with patch("app.services.scheduler.is_worker_alive", return_value=True):
             with patch("app.services.scheduler.get_all_settings", return_value={"scheduler_enabled": True, "auto_publish_enabled": True, "dry_run": False}):
                 with patch("app.utils.utils.check_ffmpeg_ready", return_value=True):
-                    health = production_health.get_production_health(db_path=self.test_db_path)
+                    with patch("app.services.production_backup.get_latest_backup_info", return_value=mock_backup):
+                        health = production_health.get_production_health(db_path=self.test_db_path)
 
-                    self.assertEqual(health["status"], production_health.HEALTH_STATUS_HEALTHY)
-                    self.assertEqual(health["instance_role"], operator_console.ROLE_PRIMARY)
-                    self.assertEqual(health["factory_state"], operator_console.FACTORY_STATE_RUNNING)
-                    self.assertTrue(health["database"]["accessible"])
-                    self.assertTrue(health["storage"]["writable"])
-                    self.assertTrue(health["ffmpeg"]["available"])
-                    self.assertEqual(len(health["unhealthy_reasons"]), 0)
+                        self.assertEqual(health["status"], production_health.HEALTH_STATUS_HEALTHY)
+                        self.assertEqual(health["instance_role"], operator_console.ROLE_PRIMARY)
+                        self.assertEqual(health["factory_state"], operator_console.FACTORY_STATE_RUNNING)
+                        self.assertTrue(health["database"]["accessible"])
+                        self.assertTrue(health["storage"]["writable"])
+                        self.assertTrue(health["ffmpeg"]["available"])
+                        self.assertEqual(health["backup"]["status"], production_health.HEALTH_STATUS_HEALTHY)
+                        self.assertEqual(len(health["unhealthy_reasons"]), 0)
 
     def test_02_database_missing(self):
         """Se o arquivo de banco não existir em disco, o status é UNHEALTHY."""
@@ -172,6 +184,82 @@ class TestProductionHealth(unittest.TestCase):
 
         self.assertEqual(mock_urlopen.call_count, 0)
         self.assertEqual(mock_subproc.call_count, 0)
+
+    def test_19_health_with_valid_recent_backup(self):
+        """Verifica que com backup válido recente o status de backup é HEALTHY."""
+        mock_b = {
+            "status": "HEALTHY",
+            "latest_backup_at": "2026-09-19T18:00:00Z",
+            "latest_backup_age_seconds": 600,
+            "valid_backups_count": 2,
+            "latest_integrity": "ok",
+            "path": "some_backup.db",
+            "backup_dir": "storage/backups/database",
+            "error": None,
+        }
+        with patch("app.services.production_backup.get_latest_backup_info", return_value=mock_b):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            self.assertEqual(health["backup"]["status"], production_health.HEALTH_STATUS_HEALTHY)
+            self.assertEqual(health["backup"]["valid_backups_count"], 2)
+
+    def test_20_health_without_backup_is_degraded_not_unhealthy(self):
+        """Ausência de backup marca DEGRADED sem marcar UNHEALTHY e sem quebrar readiness."""
+        mock_b = {
+            "status": "NONE",
+            "latest_backup_at": None,
+            "latest_backup_age_seconds": None,
+            "valid_backups_count": 0,
+            "latest_integrity": None,
+            "path": None,
+            "backup_dir": "storage/backups/database",
+            "error": None,
+        }
+        with patch("app.services.production_backup.get_latest_backup_info", return_value=mock_b):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            self.assertEqual(health["backup"]["status"], production_health.HEALTH_STATUS_DEGRADED)
+            self.assertTrue(any("Nenhum backup" in r for r in health["degraded_reasons"]))
+            self.assertEqual(len(health["unhealthy_reasons"]), 0)
+
+            # Readiness check não deve ser bloqueado por ausência de backup inicial
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertTrue(readiness["checks"]["backup"]["passed"])
+            self.assertIn("backup", str(readiness["warnings"]).lower())
+
+    def test_21_health_check_never_creates_or_modifies_backups(self):
+        """Garante que health e readiness operam em modo passivo e nunca criam backups."""
+        test_b_dir = os.path.join(self.tmp_dir.name, "health_backups_passive")
+        os.makedirs(test_b_dir, exist_ok=True)
+
+        health = production_health.get_production_health(db_path=self.test_db_path, backup_dir=test_b_dir)
+        readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+
+        # Diretório deve continuar estritamente vazio
+        files = os.listdir(test_b_dir)
+        self.assertEqual(len(files), 0, f"Health check criou arquivos indevidamente: {files}")
+
+    def test_22_status_sanitization_zero_secrets(self):
+        """Garante que o diagnóstico sanitizado de produção não expõe segredos ou chaves reais."""
+        import io
+        import json
+        from contextlib import redirect_stdout
+
+        secret_value = "SECRET_API_KEY_SUPER_CONFIDENTIAL_123456"
+        with patch.dict("app.config.config.app", {"gemini_api_key": secret_value}):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            creds = readiness["checks"]["credentials"]
+            self.assertEqual(creds["gemini_api_key"], "PRESENT")
+            self.assertNotIn(secret_value, json.dumps(readiness))
+
+            # Execução de CLI via main() com redirect de stdout
+            f = io.StringIO()
+            with redirect_stdout(f), patch("sys.argv", ["production_health", "--readiness"]):
+                try:
+                    production_health.main()
+                except SystemExit:
+                    pass
+            cli_output = f.getvalue()
+            self.assertNotIn(secret_value, cli_output)
+            self.assertIn("PRESENT", cli_output)
 
 
 if __name__ == "__main__":

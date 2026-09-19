@@ -89,32 +89,97 @@ O script:
 
 ---
 
-## 5. Estratégia de Backup Seguro do Banco de Dados
+---
 
-Como o SQLite opera em modo **WAL (`PRAGMA journal_mode=WAL;`)**, nunca faça cópias diretas de arquivos com o processo em execução usando ferramentas genéricas.
+## 5. Estratégia de Backup Seguro do Banco de Dados (Fase V12-C)
 
-O método oficial recomendado é o **SQLite Online Backup API** ou comando `VACUUM INTO`:
+Como o SQLite opera em modo **WAL (`PRAGMA journal_mode=WAL;`)**, **NUNCA** faça cópias diretas de arquivos (`.db`, `.db-wal`, `.db-shm`) enquanto a aplicação estiver em execução.
 
-```python
-import sqlite3
-from app.services import scheduler
+O MoneyPrinterTurbo utiliza a API oficial **`sqlite3.Connection.backup()`** através do serviço `app/services/production_backup.py`, garantindo snapshots atômicos e consistentes sem travar o processamento da fábrica.
 
-def safe_backup_database(backup_target_path: str):
-    source_db = scheduler.get_db_path()
-    with sqlite3.connect(source_db) as conn:
-        conn.execute(f"VACUUM INTO '{backup_target_path}';")
+### Localização e Nomenclatura dos Backups
+- **Diretório padrão:** `storage/backups/database/`
+- **Banco de Dados:** `video_factory_YYYYMMDD_HHMMSS.db` (timestamp determinístico em UTC)
+- **Manifesto Sidecar:** `video_factory_YYYYMMDD_HHMMSS.json` (SHA-256, tamanho, integridade e metadados)
+
+### Política de Retenção e Integridade
+1. Todo backup é gerado primeiramente em arquivo temporário (`.tmp`).
+2. É submetido obrigatoriamente a um `PRAGMA integrity_check;`. Somente se o retorno for estritamente `ok` o arquivo é renomeado atomicamente via `os.replace()`.
+3. É gerado um manifesto JSON com hash SHA-256.
+4. É aplicada a política de retenção (padrão: **últimos 24 backups** mantidos). Backups antigos além da cota são podados automaticamente junto com seus respectivos manifestos. Arquivos estranhos não são tocados.
+
+### Execução de Backup Manual ou Agendado
+```powershell
+# Execução direta via PowerShell a partir da raiz do projeto:
+powershell -ExecutionPolicy Bypass -File scripts\backup_production.ps1
 ```
-
-Isso garante um snapshot transacional 100% íntegro sem interromper as operações da fábrica.
 
 ---
 
-## 6. Diagnósticos de Produção
+## 6. Procedimento de Restauração Segura (Recovery)
 
-O serviço `app/services/production_health.py` oferece duas funções essenciais:
+> [!CAUTION]
+> **REGRA ABSOLUTA DE SEGURANÇA:**
+> **NUNCA** restaure um banco de dados com o backend do MoneyPrinterTurbo em execução.
+> O script e o serviço de recovery bloqueiam a restauração se detectarem a porta `8501` aberta ou processo com lock `PRIMARY` ativo.
 
-1. `get_production_health()`:
-   Retorna `HEALTHY`, `DEGRADED` ou `UNHEALTHY` com status de SQLite, storage (espaço livre e gravação), FFmpeg, scheduler e provedores configurados.
+### Passo a Passo para Restauração:
 
-2. `get_production_readiness()`:
-   Retorna se a máquina e dependências estão prontas para produção (Python >= 3.11, venv presente, binário FFmpeg, tabelas SQLite e presença de credenciais sem expor segredos).
+1. **Parar o Servidor:**
+   No Windows Task Scheduler ou console interativo, encerre a tarefa/processo do servidor antes de restaurar.
+   *(Nota: O script de restauração não encerra processos automaticamente por segurança; o operador deve realizar a parada manual).*
+
+2. **Listar Backups Disponíveis:**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\restore_production_backup.ps1
+   ```
+
+3. **Executar a Restauração:**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\restore_production_backup.ps1 -BackupFile storage\backups\database\video_factory_YYYYMMDD_HHMMSS.db
+   ```
+
+4. **Garantias Automáticas do Processo de Restauração:**
+   - Validação prévia de integridade e conferência de SHA-256 contra o manifesto sidecar.
+   - Criação automática de **Safety Copy** do banco atual em `storage/backups/recovery_safety/video_factory_pre_restore_YYYYMMDD_HHMMSS.db`.
+   - Limpeza obrigatória de arquivos companheiros `-wal` e `-shm` obsoletos do destino (evitando corrupção por replay de transações antigas).
+   - Execução de `PRAGMA integrity_check;` final no banco restaurado.
+
+---
+
+## 7. Observabilidade, Logs e Diagnóstico Operacional
+
+### Logs Operacionais Persistentes do Launcher
+Quando executado em segundo plano pelo Windows Task Scheduler (conta SYSTEM), o script `scripts/start_production.ps1` mantém registros estruturados com rotação automática limitada (bounded em 5 MB):
+
+- `storage/logs/production/production_startup.log`: Registros de boot, PID, porta, diretório, interpretador Python e exit code de encerramento.
+- `storage/logs/production/production_error.log`: Falhas críticas e exceções de inicialização.
+
+### Diagnóstico Rápido e Sanitizado do Servidor
+Para consultar o status em tempo real sem expor chaves de API:
+
+```powershell
+# Relatório legível no console:
+powershell -ExecutionPolicy Bypass -File scripts\production_status.ps1
+
+# Ou em formato JSON:
+powershell -ExecutionPolicy Bypass -File scripts\production_status.ps1 -Json
+```
+
+O diagnóstico reporta:
+- **Health Global:** `HEALTHY`, `DEGRADED` ou `UNHEALTHY` (incluindo idade e integridade do último backup).
+- **Readiness Técnica:** Verificação de Python 3.11+, venv, integridade do SQLite, permissões de storage e FFmpeg.
+- **Factory & Scheduler:** Estado (PAUSED/RUNNING), workers vivos e modo dry-run.
+- **Credenciais:** Reportadas exclusivamente como `PRESENT` ou `MISSING` (zero segredos expostos).
+
+---
+
+## 8. Política de Isolamento de Segredos e Réplicas Externas
+
+1. **Separação entre Banco de Dados e Segredos:**
+   - O arquivo `config.toml` e os arquivos de tokens OAuth (`youtube_token.json`, etc.) **NÃO** são incluídos nos backups automáticos do SQLite para evitar vazamento acidental de credenciais.
+   - O operador deve manter uma cópia segura e criptografada (ex: cofre de senhas ou pendrive seguro) do `config.toml` e credenciais.
+
+2. **Cópia para Armazenamento Externo / Nuvem:**
+   - Os arquivos de backup em `storage/backups/database/` podem ser copiados periodicamente para HDs externos, NAS ou serviços de nuvem (ex: Rclone, OneDrive).
+   - **IMPORTANTE:** O banco de produção ativo (`storage/video_factory.db`) **SEMPRE** deve residir em disco local SSD/NVMe da máquina host. **NUNCA** configure pastas sincronizadas por nuvem ou compartilhamentos de rede SMB como diretório do banco ao vivo.

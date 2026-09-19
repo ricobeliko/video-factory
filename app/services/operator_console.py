@@ -1870,3 +1870,58 @@ def discover_clip_candidates_op(
         max_candidates=max_candidates,
         db_path=db_path,
     )
+
+
+def render_clip_segment_op(
+    segment_id: str,
+    strategy: str = "fit_blur",
+    force: bool = False,
+    timeout_seconds: int = 300,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Renderiza segmento SELECTED em vídeo vertical 9:16 (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import clip_rendering
+    return clip_rendering.render_clip_segment(
+        segment_id=segment_id,
+        strategy=strategy,
+        force=force,
+        timeout_seconds=timeout_seconds,
+        db_path=db_path,
+    )
+
+
+def get_clip_render_op(
+    render_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recupera render pelo ID (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_rendering
+    return clip_rendering.get_clip_render(render_id=render_id, db_path=db_path)
+
+
+def list_clip_renders_for_segment_op(
+    segment_id: str,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Lista renders associados a um segmento (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_rendering
+    return clip_rendering.list_clip_renders_for_segment(segment_id=segment_id, db_path=db_path)
+
+
+def get_latest_completed_render_op(
+    segment_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Recupera render COMPLETED mais recente de um segmento (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import clip_rendering
+    return clip_rendering.get_latest_completed_render(segment_id=segment_id, db_path=db_path)
+
+
+def get_render_warnings_op(
+    source: Dict[str, Any],
+    strategy: str,
+) -> List[str]:
+    """Calcula warnings contextuais para renderização de clip."""
+    from app.services import clip_rendering
+    return clip_rendering.get_render_warnings(source=source, strategy=strategy)

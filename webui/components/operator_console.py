@@ -1532,11 +1532,12 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
         segments = operator_console.list_clip_segments_op()
         profiles = profile_manager.list_profiles()
 
-    tab_library, tab_import, tab_transcripts, tab_segments = st.tabs([
+    tab_library, tab_import, tab_transcripts, tab_segments, tab_renders = st.tabs([
         "📚 Biblioteca de Fontes (Source Library)",
         "📥 Importar Mídia Autorizada (Import Source)",
         "📜 Transcrições (Transcripts)",
         "✂️ Segmentos e Cortes (Segments)",
+        "🎬 Renders & Review (Clips Verticais)",
     ])
 
     # 1. Source Library
@@ -1771,42 +1772,158 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
         if not segments:
             st.info("ℹ️ Nenhum segmento cadastrado até o momento.")
         else:
+            source_map = {s.get("id"): s for s in sources}
             for seg in segments:
                 seg_id = seg.get("id", "")
+                s_id = seg.get("source_id", "")
+                src = source_map.get(s_id, {})
                 dur_s = seg.get("duration_seconds", 0.0)
-                st_cls = "blue" if seg.get("status") == "CANDIDATE" else ("green" if seg.get("status") == "SELECTED" else "red")
-                seg_badge = f"<span class='op-badge op-badge-{st_cls}'>{seg.get('status')}</span>"
+                curr_st = seg.get("status")
+                st_cls = "blue" if curr_st == "CANDIDATE" else ("green" if curr_st == "SELECTED" else "red")
+                seg_badge = f"<span class='op-badge op-badge-{st_cls}'>{curr_st}</span>"
                 method_badge = "<span class='op-badge op-badge-purple'>🤖 Heurística</span>" if seg.get("selection_method") == "heuristic" else "<span class='op-badge op-badge-gray'>👤 Manual</span>"
 
+                # Consulta de Render mais recente para este segmento (estático SQLite)
+                latest_rnd = None
+                if not demo_enabled:
+                    latest_rnd = operator_console.get_latest_completed_render_op(seg_id)
+                rnd_badge = "<span class='op-badge op-badge-green'>🎬 RENDER COMPLETED</span>" if latest_rnd else "<span class='op-badge op-badge-gray'>SEM RENDER</span>"
+
                 with st.container(border=True):
-                    sc1, sc2, sc3 = st.columns([0.45, 0.35, 0.2])
+                    sc1, sc2, sc3 = st.columns([0.42, 0.33, 0.25])
                     with sc1:
                         title_str = seg.get("title") or "(Sem título)"
-                        st.markdown(f"**{title_str}** &nbsp; {seg_badge} {method_badge}", unsafe_allow_html=True)
-                        st.caption(f"ID: `{seg_id}` | Fonte: `{seg.get('source_id')}` | Perfil: `{seg.get('profile_id')}`")
+                        st.markdown(f"**{title_str}** &nbsp; {seg_badge} {method_badge} {rnd_badge}", unsafe_allow_html=True)
+                        st.caption(f"ID: `{seg_id}` | Fonte: `{s_id}` | Perfil: `{seg.get('profile_id')}`")
                         if seg.get("selection_reason"):
                             st.caption(f"💡 *{seg.get('selection_reason')}*")
                     with sc2:
                         st.markdown(f"⏱️ **{seg.get('start_seconds', 0):.1f}s ➔ {seg.get('end_seconds', 0):.1f}s** (Duração: **{dur_s:.1f}s**)")
                         st.caption(f"Criado: `{seg.get('created_at', '')[:19]}`")
+                        if latest_rnd:
+                            st.caption(f"Último Render: `{latest_rnd.get('id')}` ({latest_rnd.get('render_strategy')})")
                     with sc3:
-                        if is_primary:
-                            curr_st = seg.get("status")
-                            if curr_st == "CANDIDATE":
-                                if st.button("Selecionar", key=f"op_sel_seg_{seg_id}", use_container_width=True):
+                        if curr_st == "CANDIDATE":
+                            if st.button("Selecionar", key=f"op_sel_seg_{seg_id}", use_container_width=True, disabled=not is_primary):
+                                if not demo_enabled:
+                                    operator_console.update_clip_segment_status_op(seg_id, "SELECTED")
+                                    st.rerun()
+                        elif curr_st == "SELECTED":
+                            if is_primary:
+                                r_strat = st.selectbox(
+                                    "Estratégia 9:16:",
+                                    options=["fit_blur", "center_crop"],
+                                    format_func=lambda x: "FIT & BLUR (Mais Seguro)" if x == "fit_blur" else "CENTER CROP (Pode Cortar Laterais)",
+                                    key=f"strat_sel_{seg_id}",
+                                )
+                                if r_strat == "center_crop":
+                                    st.caption("⚠️ *Center Crop pode cortar laterais.*")
+
+                                btn_label = "Re-renderizar 9:16" if latest_rnd else "Renderizar 9:16"
+                                if st.button(f"🎬 {btn_label}", key=f"op_rnd_btn_{seg_id}", use_container_width=True):
                                     if not demo_enabled:
-                                        operator_console.update_clip_segment_status_op(seg_id, "SELECTED")
-                                        st.rerun()
-                            elif curr_st == "SELECTED":
-                                if st.button("Rejeitar", key=f"op_rej_seg_{seg_id}", use_container_width=True):
-                                    if not demo_enabled:
-                                        operator_console.update_clip_segment_status_op(seg_id, "REJECTED")
-                                        st.rerun()
-                            elif curr_st == "REJECTED":
-                                if st.button("Reativar", key=f"op_reac_seg_{seg_id}", use_container_width=True):
-                                    if not demo_enabled:
-                                        operator_console.update_clip_segment_status_op(seg_id, "CANDIDATE")
-                                        st.rerun()
+                                        with st.spinner(f"Renderizando segmento em 9:16 ({r_strat})..."):
+                                            try:
+                                                operator_console.render_clip_segment_op(
+                                                    segment_id=seg_id,
+                                                    strategy=r_strat,
+                                                    force=bool(latest_rnd),
+                                                )
+                                                st.toast("Vídeo vertical renderizado com sucesso!", icon="🎬")
+                                                st.rerun()
+                                            except Exception as rnd_err:
+                                                st.error(f"Erro na renderização: {rnd_err}")
+                                    else:
+                                        st.toast("Render simulado no modo demo.", icon="🎬")
+                            else:
+                                st.button("🎬 Renderizar 9:16", key=f"op_rnd_btn_dis_{seg_id}", use_container_width=True, disabled=True, help="Operação restrita ao nó PRIMÁRIO.")
+
+                            if st.button("Rejeitar", key=f"op_rej_seg_{seg_id}", use_container_width=True, disabled=not is_primary):
+                                if not demo_enabled:
+                                    operator_console.update_clip_segment_status_op(seg_id, "REJECTED")
+                                    st.rerun()
+                        elif curr_st == "REJECTED":
+                            if st.button("Reativar", key=f"op_reac_seg_{seg_id}", use_container_width=True, disabled=not is_primary):
+                                if not demo_enabled:
+                                    operator_console.update_clip_segment_status_op(seg_id, "CANDIDATE")
+                                    st.rerun()
+
+    # 5. Renders & Review
+    with tab_renders:
+        st.markdown("**Revisão de Vídeos Verticais Renderizados (9:16 MP4)**")
+        selected_segs = [s for s in segments if s.get("status") == "SELECTED"]
+        if not selected_segs:
+            st.info("ℹ️ Nenhum segmento SELECTED disponível para revisão de renders. Selecione segmentos na aba anterior.")
+        else:
+            seg_choices = {f"{s.get('title') or s.get('id')} ({s.get('id')})": s for s in selected_segs}
+            chosen_seg_lbl = st.selectbox("Selecione o Segmento para Revisão:", options=list(seg_choices.keys()), key="rev_seg_sel")
+            chosen_seg = seg_choices[chosen_seg_lbl]
+            seg_id_chosen = chosen_seg.get("id")
+
+            if demo_enabled:
+                renders_list = [{
+                    "id": "rend_demo_001",
+                    "segment_id": seg_id_chosen,
+                    "source_id": chosen_seg.get("source_id"),
+                    "render_strategy": "fit_blur",
+                    "width": 1080,
+                    "height": 1920,
+                    "fps": 30.0,
+                    "status": "COMPLETED",
+                    "duration_seconds": chosen_seg.get("duration_seconds", 30.0),
+                    "file_size_bytes": 15420000,
+                    "output_path": "storage/clip_sources/demo/renders/rend_demo_001/clip.mp4",
+                    "created_at": "2026-09-18T20:10:00+00:00",
+                }]
+            else:
+                renders_list = operator_console.list_clip_renders_for_segment_op(seg_id_chosen)
+
+            if not renders_list:
+                st.info(f"ℹ️ Nenhum render executado para o segmento `{seg_id_chosen}`. Dispare o render na aba 'Segmentos e Cortes'.")
+            else:
+                for rnd in renders_list:
+                    r_id = rnd.get("id", "")
+                    r_status = rnd.get("status", "")
+                    r_col = "green" if r_status == "COMPLETED" else ("yellow" if r_status == "PROCESSING" else "red")
+                    r_badge = f"<span class='op-badge op-badge-{r_col}'>{r_status}</span>"
+                    dur_val = rnd.get("duration_seconds") or 0.0
+                    size_mb = (rnd.get("file_size_bytes") or 0) / (1024 * 1024)
+
+                    with st.container(border=True):
+                        st.markdown(f"**Render `{r_id}`** &nbsp; {r_badge} &nbsp; Estratégia: `{rnd.get('render_strategy')}`", unsafe_allow_html=True)
+                        rc1, rc2 = st.columns([0.5, 0.5])
+                        with rc1:
+                            st.caption(f"Resolução: **{rnd.get('width', 1080)}x{rnd.get('height', 1920)}** (9:16) | FPS: **{rnd.get('fps', 30.0):.1f}**")
+                            st.caption(f"Duração: **{dur_val:.1f}s** | Tamanho: **{size_mb:.2f} MB**")
+                            st.caption(f"Codecs: Vídeo `{rnd.get('video_codec')}` | Áudio `{rnd.get('audio_codec')}`")
+                            st.caption(f"Criado em: `{rnd.get('created_at', '')[:19]}`")
+                            out_path = rnd.get("output_path", "")
+                            st.caption(f"Arquivo: `{out_path}`")
+
+                            # Warnings contextuais
+                            src_for_w = next((s for s in sources if s.get("id") == rnd.get("source_id")), {})
+                            warns = operator_console.get_render_warnings_op(src_for_w, rnd.get("render_strategy", "fit_blur"))
+                            for w in warns:
+                                if w == "NO_AUDIO":
+                                    st.warning("⚠️ Fonte sem áudio original (render gerado sem trilha de áudio).")
+                                elif w == "LOW_SOURCE_RESOLUTION":
+                                    st.warning("⚠️ Resolução da fonte original abaixo de 720p.")
+                                elif w == "CENTER_CROP_MAY_CUT_SIDES":
+                                    st.info("ℹ️ Render gerado com Center Crop (pode cortar laterais do vídeo original).")
+
+                        with rc2:
+                            if r_status == "COMPLETED":
+                                if not demo_enabled:
+                                    if out_path and os.path.isfile(out_path) and not os.path.islink(out_path) and os.path.getsize(out_path) > 0:
+                                        st.video(out_path)
+                                    else:
+                                        st.warning("⚠️ Arquivo renderizado não encontrado em disco ou inválido.")
+                                else:
+                                    st.info("🎬 Player de demonstração simulado.")
+                            elif r_status == "FAILED":
+                                st.error(f"Erro no Render: {rnd.get('error_code')} — {rnd.get('error_message')}")
+                            elif r_status == "PROCESSING":
+                                st.info("⏳ Renderização em andamento no servidor...")
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 

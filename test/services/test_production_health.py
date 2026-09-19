@@ -21,6 +21,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from app.services import (
@@ -275,6 +276,98 @@ class TestProductionHealth(unittest.TestCase):
             cli_output = f.getvalue()
             self.assertNotIn(secret_value, cli_output)
             self.assertIn("PRESENT", cli_output)
+
+    def test_23_worker_health_in_process_thread(self):
+        """1. is_worker_alive() True => worker_alive True / source in_process_thread."""
+        with patch("app.services.scheduler.is_worker_alive", return_value=True):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            s = health["scheduler"]
+            self.assertTrue(s["worker_alive"])
+            self.assertEqual(s["worker_health_source"], scheduler.WORKER_SOURCE_IN_PROCESS_THREAD)
+
+    def test_24_worker_health_persisted_heartbeat_recent(self):
+        """2. is_worker_alive() False + executor_last_tick recente => worker_alive True / source persisted_heartbeat."""
+        now_utc = datetime.now(timezone.utc)
+        recent_iso = (now_utc - timedelta(seconds=15)).isoformat()
+        scheduler.set_setting("executor_last_tick", recent_iso, db_path=self.test_db_path)
+        scheduler.set_setting("scheduler_enabled", "true", db_path=self.test_db_path)
+
+        with patch("app.services.scheduler.is_worker_alive", return_value=False):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            s = health["scheduler"]
+            self.assertTrue(s["worker_alive"])
+            self.assertEqual(s["worker_health_source"], scheduler.WORKER_SOURCE_PERSISTED_HEARTBEAT)
+            self.assertEqual(s["worker_last_tick"], recent_iso)
+            self.assertIsNotNone(s["worker_last_tick_age_seconds"])
+            self.assertLessEqual(s["worker_last_tick_age_seconds"], 25)
+            self.assertNotIn("Thread do scheduler worker inativa na instância primária", health["degraded_reasons"])
+
+    def test_25_worker_health_heartbeat_stale_exceeds_threshold(self):
+        """3. Heartbeat maior que threshold (>90s) => worker_alive False / source unavailable."""
+        now_utc = datetime.now(timezone.utc)
+        stale_iso = (now_utc - timedelta(seconds=120)).isoformat()
+        scheduler.set_setting("executor_last_tick", stale_iso, db_path=self.test_db_path)
+        scheduler.set_setting("scheduler_enabled", "true", db_path=self.test_db_path)
+
+        with patch("app.services.scheduler.is_worker_alive", return_value=False):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            s = health["scheduler"]
+            self.assertFalse(s["worker_alive"])
+            self.assertEqual(s["worker_health_source"], scheduler.WORKER_SOURCE_UNAVAILABLE)
+            self.assertEqual(s["worker_last_tick"], stale_iso)
+            self.assertGreaterEqual(s["worker_last_tick_age_seconds"], 120)
+            self.assertIn("Thread do scheduler worker inativa na instância primária", health["degraded_reasons"])
+
+    def test_26_worker_health_heartbeat_missing(self):
+        """4. Heartbeat ausente => worker_alive False / source unavailable."""
+        with scheduler.get_connection(self.test_db_path) as conn:
+            conn.execute("DELETE FROM autopilot_settings WHERE key = 'executor_last_tick';")
+
+        with patch("app.services.scheduler.is_worker_alive", return_value=False):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            s = health["scheduler"]
+            self.assertFalse(s["worker_alive"])
+            self.assertEqual(s["worker_health_source"], scheduler.WORKER_SOURCE_UNAVAILABLE)
+            self.assertIsNone(s["worker_last_tick"])
+            self.assertIsNone(s["worker_last_tick_age_seconds"])
+
+    def test_27_worker_health_heartbeat_invalid_no_crash(self):
+        """5. Heartbeat inválido => worker_alive False sem crash."""
+        scheduler.set_setting("executor_last_tick", "NOT_A_VALID_ISO_TIMESTAMP_GARBAGE", db_path=self.test_db_path)
+
+        with patch("app.services.scheduler.is_worker_alive", return_value=False):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            s = health["scheduler"]
+            self.assertFalse(s["worker_alive"])
+            self.assertEqual(s["worker_health_source"], scheduler.WORKER_SOURCE_UNAVAILABLE)
+            self.assertEqual(s["worker_last_tick"], "NOT_A_VALID_ISO_TIMESTAMP_GARBAGE")
+            self.assertIsNone(s["worker_last_tick_age_seconds"])
+
+    def test_28_factory_paused_with_recent_heartbeat(self):
+        """6. Factory PAUSED + heartbeat recente => DEGRADED por factory PAUSED mas NÃO por worker inativo."""
+        operator_console.pause_factory(db_path=self.test_db_path)
+        scheduler.set_setting("scheduler_enabled", "true", db_path=self.test_db_path)
+        recent_iso = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        scheduler.set_setting("executor_last_tick", recent_iso, db_path=self.test_db_path)
+
+        with patch("app.services.scheduler.is_worker_alive", return_value=False):
+            health = production_health.get_production_health(db_path=self.test_db_path)
+            self.assertEqual(health["factory_state"], operator_console.FACTORY_STATE_PAUSED)
+            self.assertTrue(health["scheduler"]["worker_alive"])
+            self.assertEqual(health["scheduler"]["worker_health_source"], scheduler.WORKER_SOURCE_PERSISTED_HEARTBEAT)
+            self.assertEqual(health["status"], production_health.HEALTH_STATUS_DEGRADED)
+            self.assertTrue(any("PAUSED" in r for r in health["degraded_reasons"]))
+            self.assertFalse(any("worker inativ" in r.lower() for r in health["degraded_reasons"]))
+
+    def test_29_health_check_read_only_passivity_with_nonexistent_db(self):
+        """7. Health permanece 100% read-only mesmo quando o banco ou tabelas não existem."""
+        non_existent_db = os.path.join(self.tmp_dir.name, "strictly_missing_health_test.db")
+        self.assertFalse(os.path.exists(non_existent_db))
+
+        health = production_health.get_production_health(db_path=non_existent_db)
+        self.assertFalse(os.path.exists(non_existent_db), "get_production_health() criou o banco indevidamente!")
+        self.assertFalse(health["scheduler"]["worker_alive"])
+        self.assertEqual(health["scheduler"]["worker_health_source"], scheduler.WORKER_SOURCE_UNAVAILABLE)
 
 
 if __name__ == "__main__":

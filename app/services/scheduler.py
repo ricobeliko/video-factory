@@ -1839,6 +1839,101 @@ def is_worker_alive() -> bool:
         return _worker_thread is not None and _worker_thread.is_alive()
 
 
+WORKER_HEARTBEAT_STALE_SECONDS = 90
+WORKER_SOURCE_IN_PROCESS_THREAD = "in_process_thread"
+WORKER_SOURCE_PERSISTED_HEARTBEAT = "persisted_heartbeat"
+WORKER_SOURCE_UNAVAILABLE = "unavailable"
+
+
+def _read_persisted_heartbeat_readonly(
+    db_path: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Tuple[Optional[str], Optional[int]]:
+    """Lê de forma estritamente somente leitura o último tick do worker no SQLite e calcula a idade em segundos.
+
+    Não cria arquivos, tabelas ou conexões de escrita.
+    Retorna (last_tick_iso, age_seconds).
+    """
+    target_db = get_db_path(db_path)
+    if not os.path.isfile(target_db):
+        return None, None
+
+    last_tick_str = None
+    try:
+        uri = f"file:{os.path.abspath(target_db)}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+        try:
+            cur = conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='autopilot_settings';"
+            )
+            if cur.fetchone()[0] > 0:
+                row = conn.execute(
+                    "SELECT value FROM autopilot_settings WHERE key = 'executor_last_tick';"
+                ).fetchone()
+                if row:
+                    last_tick_str = row[0]
+        finally:
+            conn.close()
+    except Exception:
+        return None, None
+
+    if not last_tick_str:
+        return None, None
+
+    now_utc = _normalize_utc(now)
+    try:
+        dt = _from_iso(last_tick_str)
+        diff_sec = (now_utc - dt).total_seconds()
+        age_seconds = max(0, int(diff_sec))
+        return last_tick_str, age_seconds
+    except Exception:
+        # Timestamp corrompido ou inválido
+        return last_tick_str, None
+
+
+def get_worker_health(
+    db_path: Optional[str] = None,
+    stale_threshold_seconds: int = WORKER_HEARTBEAT_STALE_SECONDS,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Avalia a saúde e vivacidade do worker do scheduler tanto in-process quanto via persisted heartbeat.
+
+    Regra de avaliação:
+    1. IN-PROCESS: Se is_worker_alive() == True -> worker_alive = True (source: 'in_process_thread').
+    2. EXTERNAL / FALLBACK: Se thread inativa em memória, lê executor_last_tick do SQLite.
+       Se age_seconds <= stale_threshold_seconds -> worker_alive = True (source: 'persisted_heartbeat').
+    3. Caso ausente, antigo (> threshold) ou inválido -> worker_alive = False (source: 'unavailable').
+
+    Operação estritamente passiva e somente leitura.
+    """
+    # 1. Checagem In-Process
+    if is_worker_alive():
+        last_tick_iso, age_sec = _read_persisted_heartbeat_readonly(db_path, now=now)
+        return {
+            "worker_alive": True,
+            "worker_health_source": WORKER_SOURCE_IN_PROCESS_THREAD,
+            "worker_last_tick": last_tick_iso,
+            "worker_last_tick_age_seconds": age_sec,
+        }
+
+    # 2. Fallback Externo (persisted heartbeat)
+    last_tick_iso, age_sec = _read_persisted_heartbeat_readonly(db_path, now=now)
+    if last_tick_iso is not None and age_sec is not None and age_sec <= stale_threshold_seconds:
+        return {
+            "worker_alive": True,
+            "worker_health_source": WORKER_SOURCE_PERSISTED_HEARTBEAT,
+            "worker_last_tick": last_tick_iso,
+            "worker_last_tick_age_seconds": age_sec,
+        }
+
+    return {
+        "worker_alive": False,
+        "worker_health_source": WORKER_SOURCE_UNAVAILABLE,
+        "worker_last_tick": last_tick_iso,
+        "worker_last_tick_age_seconds": age_sec,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Homologação & Teste Rápido (Apenas para ambiente de testes/validação)
 # ---------------------------------------------------------------------------

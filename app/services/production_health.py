@@ -160,8 +160,18 @@ def get_production_health(
 
     # 5. Verificação do Scheduler
     try:
-        sched_settings = scheduler.get_all_settings(db_path=db_path)
-        worker_alive = scheduler.is_worker_alive()
+        sched_settings = scheduler.get_all_settings(db_path=db_path) if db_exists else {}
+        worker_info = scheduler.get_worker_health(db_path=db_path) if db_exists else {
+            "worker_alive": False,
+            "worker_health_source": scheduler.WORKER_SOURCE_UNAVAILABLE,
+            "worker_last_tick": None,
+            "worker_last_tick_age_seconds": None,
+        }
+        worker_alive = worker_info["worker_alive"]
+        worker_source = worker_info["worker_health_source"]
+        worker_last_tick = worker_info["worker_last_tick"]
+        worker_last_tick_age_seconds = worker_info["worker_last_tick_age_seconds"]
+
         sched_enabled = bool(sched_settings.get("scheduler_enabled"))
         auto_pub = bool(sched_settings.get("auto_publish_enabled"))
         dry_run = bool(sched_settings.get("dry_run"))
@@ -177,6 +187,9 @@ def get_production_health(
         scheduler_health: Dict[str, Any] = {
             "status": sched_status,
             "worker_alive": worker_alive,
+            "worker_health_source": worker_source,
+            "worker_last_tick": worker_last_tick,
+            "worker_last_tick_age_seconds": worker_last_tick_age_seconds,
             "scheduler_enabled": sched_enabled,
             "auto_publish_enabled": auto_pub,
             "dry_run": dry_run,
@@ -186,16 +199,20 @@ def get_production_health(
         scheduler_health = {
             "status": HEALTH_STATUS_DEGRADED,
             "worker_alive": False,
+            "worker_health_source": "unavailable",
+            "worker_last_tick": None,
+            "worker_last_tick_age_seconds": None,
             "scheduler_enabled": False,
             "auto_publish_enabled": False,
             "dry_run": True,
+            "interval_seconds": 30,
             "error": str(exc),
         }
         degraded_reasons.append(f"Falha ao inspecionar scheduler: {exc}")
 
     # 6. Saúde dos Provedores (Passiva, sem chamadas de rede pagas)
     try:
-        providers_health = operator_console.get_provider_health_summary(db_path=db_path)
+        providers_health = operator_console.get_provider_health_summary(db_path=db_path) if db_exists else {}
     except Exception as exc:
         providers_health = {"error": str(exc)}
         degraded_reasons.append(f"Falha ao obter sumário de provedores: {exc}")
@@ -488,7 +505,11 @@ def main():
     print(f"Storage Writable  : {health['storage']['writable']} (Livre: {health['storage']['free_bytes'] / (1024**3):.2f} GB)")
     print(f"FFmpeg            : {'OK' if health['ffmpeg']['available'] else 'FALHA'}")
     s = health['scheduler']
-    print(f"Scheduler         : Enabled={s.get('scheduler_enabled')}, WorkerAlive={s.get('worker_alive')}, AutoPublish={s.get('auto_publish_enabled')}, DryRun={s.get('dry_run')}")
+    w_source = s.get('worker_health_source')
+    w_src_str = f" ({w_source})" if w_source else ""
+    w_age = s.get('worker_last_tick_age_seconds')
+    w_age_str = f", LastTick={w_age}s atrás" if w_age is not None else ""
+    print(f"Scheduler         : Enabled={s.get('scheduler_enabled')}, WorkerAlive={s.get('worker_alive')}{w_src_str}{w_age_str}, AutoPublish={s.get('auto_publish_enabled')}, DryRun={s.get('dry_run')}")
     print("------------------------------------------------------")
     b = health.get("backup", {})
     b_age_str = f"{b['latest_backup_age_seconds'] // 3600}h atrás" if b.get('latest_backup_age_seconds') is not None else "N/A"

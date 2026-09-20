@@ -94,7 +94,16 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         self.autopilot_patcher = patch("app.services.autopilot.generate_ideas", return_value=["Ideia de Teste 1", "Ideia de Teste 2", "Ideia de Teste 3"])
         self.mock_autopilot = self.autopilot_patcher.start()
 
+        # Configura chaves de API nos mocks para validação passiva de provedores
+        config.app["gemini_api_key"] = "mock_test_gemini_key"
+        config.app["pexels_api_key"] = "mock_test_pexels_key"
+        self.ffmpeg_patcher = patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+        self.mock_ffmpeg = self.ffmpeg_patcher.start()
+
     def tearDown(self):
+        self.ffmpeg_patcher.stop()
+        config.app.pop("gemini_api_key", None)
+        config.app.pop("pexels_api_key", None)
         self.autopilot_patcher.stop()
         self.upload_post_patcher.stop()
         self.cross_post_patcher.stop()
@@ -579,6 +588,305 @@ class TestAutonomousProductionLoop(unittest.TestCase):
                     "SELECT id FROM scheduled_posts WHERE task_id = ? AND platform = 'tiktok';", (task_id,)
                 ).fetchall()
                 self.assertEqual(len(tt_posts), 0)
+
+    # -----------------------------------------------------------------------
+    # FASE V12-E.1: Testes de Hardening
+    # -----------------------------------------------------------------------
+
+    # H1: Safety assessment ausente => bloqueia (fail-closed)
+    def test_safety_assessment_missing_fails_closed(self):
+        task_id = "task-safety-missing-1"
+        self._create_mock_video_file(task_id)
+        sm.state.update_task(task_id, state=const.TASK_STATE_COMPLETE, video_subject="Teste Missing")
+
+        with patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+            self.assertFalse(approved)
+            self.assertEqual(metrics.get("safety_status"), "MISSING")
+            self.assertIn("fail-closed", reason)
+
+    # H2: Safety status desconhecido => bloqueia
+    def test_safety_status_unknown_fails_closed(self):
+        task_id = "task-safety-unknown-1"
+        self._create_mock_video_file(task_id)
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": "MAYBE_SAFE", "safety_reasons": []},
+            db_path=self.db_path,
+        )
+        with patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+            self.assertFalse(approved)
+            self.assertEqual(metrics.get("safety_status"), "MAYBE_SAFE")
+            self.assertIn("não aprovado", reason)
+
+    # H3: Safety lookup exception => bloqueia
+    def test_safety_lookup_exception_fails_closed(self):
+        task_id = "task-safety-exc-1"
+        self._create_mock_video_file(task_id)
+        with patch("app.services.safety_gate.get_safety_assessment", side_effect=RuntimeError("DB lock error")), \
+             patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+            self.assertFalse(approved)
+            self.assertEqual(metrics.get("safety_status"), "ERROR")
+            self.assertIn("fail-closed", reason)
+
+    # H4: Quality 69.9 => bloqueia
+    def test_quality_69_9_blocks(self):
+        task_id = "task-quality-69-9"
+        self._create_mock_video_file(task_id)
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},
+            db_path=self.db_path,
+        )
+        with patch("app.services.quality_score.evaluate_quality", return_value={"quality_score": 69.9, "quality_label": "REVIEW"}), \
+             patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+            self.assertFalse(approved)
+            self.assertIn("insuficiente para produção autônoma", reason)
+
+    # H5: Quality 70.0 => aprova
+    def test_quality_70_approves(self):
+        task_id = "task-quality-70-0"
+        self._create_mock_video_file(task_id)
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},
+            db_path=self.db_path,
+        )
+        with patch("app.services.quality_score.evaluate_quality", return_value={"quality_score": 70.0, "quality_label": "GOOD"}), \
+             patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+            self.assertTrue(approved)
+
+    # H6: Quality 85.0 => aprova
+    def test_quality_85_approves(self):
+        task_id = "task-quality-85-0"
+        self._create_mock_video_file(task_id)
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},
+            db_path=self.db_path,
+        )
+        with patch("app.services.quality_score.evaluate_quality", return_value={"quality_score": 85.0, "quality_label": "STRONG"}), \
+             patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+            self.assertTrue(approved)
+
+    # H7: Ready stock ignora REVIEW, BLOCK e safety ausente
+    def test_ready_stock_ignores_review_block_and_missing(self):
+        t_review = "t-rev-1"
+        t_block = "t-blk-1"
+        t_missing = "t-mis-1"
+        t_pass = "t-pas-1"
+
+        for tid, st in [(t_review, "REVIEW"), (t_block, "BLOCK"), (t_missing, None), (t_pass, "PASS")]:
+            v_path = self._create_mock_video_file(tid)
+            sm.state.update_task(
+                tid,
+                state=const.TASK_STATE_COMPLETE,
+                safety_status=st,
+                video_file=v_path,
+                video_subject=f"Video {tid}",
+            )
+            if st:
+                safety_gate.save_safety_assessment(
+                    {"task_id": tid, "safety_status": st, "safety_reasons": []},
+                    db_path=self.db_path,
+                )
+
+        stock = operator_console.get_ready_stock(task_base_dir=self.task_base_dir, db_path=self.db_path)
+        # Apenas t_pass deve ser computado
+        self.assertEqual(stock["total_ready"], 1)
+        self.assertEqual(stock["youtube_count"], 1)
+        self.assertEqual(stock["youtube_ready"][0]["task_id"], t_pass)
+
+    # H8: YouTube stock não é inflado por TikTok
+    def test_youtube_stock_not_inflated_by_tiktok(self):
+        t_id = "t-yt-published-tt-ready"
+        v_path = self._create_mock_video_file(t_id)
+        sm.state.update_task(
+            t_id,
+            state=const.TASK_STATE_COMPLETE,
+            safety_status="PASS",
+            video_file=v_path,
+            video_subject="Video YT Published",
+        )
+        safety_gate.save_safety_assessment(
+            {"task_id": t_id, "safety_status": "PASS", "safety_reasons": []},
+            db_path=self.db_path,
+        )
+
+        # Marca como já publicado no YouTube
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO publication_events (task_id, platform, status, published_at) VALUES (?, 'youtube', 'success', ?);",
+                (t_id, self.now.isoformat()),
+            )
+
+        stock = operator_console.get_ready_stock(task_base_dir=self.task_base_dir, db_path=self.db_path)
+        self.assertEqual(stock["tiktok_count"], 1)
+        self.assertEqual(stock["youtube_count"], 0)
+
+        # get_autonomous_ready_stock usa estritamente youtube_count
+        auto_stock = autonomous_production.get_autonomous_ready_stock(db_path=self.db_path)
+        self.assertEqual(auto_stock["ready_count"], 0)
+        self.assertEqual(auto_stock["youtube_count"], 0)
+        self.assertTrue(auto_stock["is_below_target"])
+
+    # H9: approved + sem slot => waiting_schedule
+    def test_approved_no_slots_enters_waiting_schedule(self):
+        task_id = "task-waiting-1"
+        v_path = self._create_mock_video_file(task_id)
+
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Mistérios do Oceano",
+            video_file=v_path,
+            safety_status=const.SAFETY_STATUS_PASS,
+            profile_id=profile_manager.DEFAULT_PROFILE_ID,
+        )
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},
+            db_path=self.db_path,
+        )
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, db_path=self.db_path
+        )
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.quality_score.evaluate_quality", return_value={"quality_score": 78.0, "quality_label": "GOOD"}), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.scheduler.plan_schedule", return_value=[]):  # Simula Growth Mode sem slot
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "waiting_schedule")
+            self.assertEqual(res.get("task_id"), task_id)
+            self.assertEqual(res.get("scheduled_items"), 0)
+
+            # Verifica persistência de waiting_task_id
+            waiting_id = autonomous_production.get_autonomous_setting(
+                autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, db_path=self.db_path
+            )
+            self.assertEqual(waiting_id, task_id)
+            status_snap = autonomous_production.get_autonomous_status(db_path=self.db_path)
+            self.assertEqual(status_snap.get("state"), autonomous_production.STATE_WAITING_SCHEDULE)
+
+    # H10: waiting_schedule + slot futuro => agenda sem duplicar
+    def test_waiting_schedule_schedules_when_slot_available(self):
+        task_id = "task-waiting-slot-avail-1"
+        v_path = self._create_mock_video_file(task_id)
+
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Espaço Profundo",
+            video_file=v_path,
+            safety_status=const.SAFETY_STATUS_PASS,
+            profile_id=profile_manager.DEFAULT_PROFILE_ID,
+        )
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path
+        )
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_STATE, autonomous_production.STATE_WAITING_SCHEDULE, db_path=self.db_path
+        )
+
+        with patch("app.services.scheduler.plan_schedule", return_value=[{"task_id": task_id, "scheduled_id": 101}]), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "scheduled")
+            self.assertEqual(res.get("task_id"), task_id)
+            self.assertEqual(res.get("scheduled_items"), 1)
+
+            # waiting_task_id deve ter sido limpo
+            waiting_id = autonomous_production.get_autonomous_setting(
+                autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, db_path=self.db_path
+            )
+            self.assertEqual(waiting_id, "")
+            mock_sub.assert_not_called()
+
+    # H11: reboot preserva waiting_schedule
+    def test_reboot_preserves_waiting_schedule(self):
+        task_id = "task-reboot-waiting-1"
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path
+        )
+
+        # Simula restart lendo puramente do SQLite
+        st = autonomous_production.get_autonomous_status(db_path=self.db_path)
+        self.assertEqual(st.get("waiting_task_id"), task_id)
+
+    # H12: one_shot OFF funciona uma vez
+    def test_one_shot_off_executes_once(self):
+        autonomous_production.set_autonomous_mode_enabled(False, db_path=self.db_path)
+        self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
+
+        with patch("app.services.autonomous_production.get_autonomous_ready_stock") as mock_stock:
+            mock_stock.return_value = {"ready_count": 5, "youtube_count": 5, "target_stock": 3, "is_below_target": False}
+            res = autonomous_production.run_autonomous_cycle(force=True, one_shot=True, db_path=self.db_path, now=self.now)
+            # Permitiu a execução controlada
+            self.assertEqual(res.get("status"), "idle")
+
+            # Permanece com autonomous_mode_enabled desligado no banco
+            self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
+
+    # H13: normal OFF continua disabled
+    def test_normal_off_continues_disabled(self):
+        autonomous_production.set_autonomous_mode_enabled(False, db_path=self.db_path)
+        res = autonomous_production.run_autonomous_cycle(force=False, one_shot=False, db_path=self.db_path, now=self.now)
+        self.assertEqual(res.get("status"), "disabled")
+
+    # H14: trend não vira USED em falha de submit
+    def test_trend_not_used_on_submit_failure(self):
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_TARGET_STOCK, "5", db_path=self.db_path
+        )
+
+        with trend_radar.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO trend_items (
+                    trend_id, source, title, normalized_topic, collected_at,
+                    trend_score, novelty_score, relevance_score, opportunity_score,
+                    source_confidence, verification, status, niche
+                )
+                VALUES (
+                    'trend-fail-1', 'google_trends', 'Tema Incrivel', 'tema incrivel', ?,
+                    80.0, 80.0, 80.0, 80.0, 'HIGH', 'UNVERIFIED', 'APPROVED', 'curiosidades'
+                );
+                """,
+                (self.now.isoformat(),)
+            )
+
+        with patch("app.services.autonomous_production.get_autonomous_ready_stock", return_value={"ready_count": 0, "youtube_count": 0, "target_stock": 5, "is_below_target": True}), \
+             patch("app.services.webui_task.submit_generation", side_effect=RuntimeError("Pipeline submit failed")):
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "error")
+
+            # Verifica que a trend NÃO foi alterada para USED
+            items = trend_radar.get_trend_items(status="APPROVED", niche="curiosidades", db_path=self.db_path)
+            self.assertTrue(any(i.get("trend_id") == "trend-fail-1" for i in items))
+
+    # H15: provider necessário indisponível => zero geração
+    def test_provider_unavailable_blocks_generation(self):
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_TARGET_STOCK, "5", db_path=self.db_path
+        )
+
+        with patch("app.services.autonomous_production.check_required_providers_preflight", return_value=(False, "FFmpeg não executável", {"FFmpeg": "UNAVAILABLE"})), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "blocked")
+            self.assertEqual(res.get("reason"), "provider_unavailable")
+            mock_sub.assert_not_called()
 
 
 if __name__ == "__main__":

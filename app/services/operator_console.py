@@ -1153,9 +1153,18 @@ def get_ready_stock(
         if t.get("state") != const.TASK_STATE_COMPLETE:
             continue
 
-        # Safety Gate: deve ter passado ou não reprovado
+        # Safety Gate fail-closed: deve possuir status PASS explícito
         safety_status = t.get("safety_status")
-        if safety_status == "FAIL":
+        if not safety_status:
+            try:
+                from app.services import safety_gate
+                safety_rec = safety_gate.get_safety_assessment(task_id, db_path=db_path)
+                if safety_rec:
+                    safety_status = safety_rec.get("safety_status")
+            except Exception:
+                safety_status = None
+
+        if not safety_status or str(safety_status).upper() != const.SAFETY_STATUS_PASS:
             continue
 
         # Verifica se o arquivo final de vídeo existe em disco
@@ -1171,7 +1180,7 @@ def get_ready_stock(
         task_info = {
             "task_id": task_id,
             "topic": t.get("video_subject") or t.get("topic") or task_id,
-            "safety_status": safety_status or "PASS",
+            "safety_status": safety_status,
             "video_path": final_video,
             "created_at": t.get("created_at"),
         }
@@ -1199,6 +1208,12 @@ def get_ready_stock(
         "youtube_items": youtube_ready[:5],
         "tiktok_items": tiktok_ready[:5],
         "cross_platform_items": cross_platform_ready[:5],
+        "youtube_ready": youtube_ready,
+        "tiktok_ready": tiktok_ready,
+        "cross_platform_ready": cross_platform_ready,
+        "youtube_tasks": youtube_ready,
+        "tiktok_tasks": tiktok_ready,
+        "cross_platform_tasks": cross_platform_ready,
     }
 
 
@@ -2062,8 +2077,8 @@ def set_autonomous_mode_enabled_op(enabled: bool, db_path: Optional[str] = None)
     autonomous_production.set_autonomous_mode_enabled(enabled=enabled, db_path=db_path)
 
 
-def run_autonomous_cycle_op(force: bool = True, db_path: Optional[str] = None) -> Dict[str, Any]:
-    """Dispara a execução imediata de um ciclo de produção autônoma (exige PRIMARY)."""
+def run_autonomous_cycle_op(force: bool = True, one_shot: bool = True, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Dispara a execução imediata de um ciclo de produção autônoma controlado (exige PRIMARY)."""
     require_primary_instance(db_path=db_path)
     from app.services import autonomous_production
-    return autonomous_production.run_autonomous_cycle(force=force, db_path=db_path)
+    return autonomous_production.run_autonomous_cycle(force=force, one_shot=one_shot, db_path=db_path)

@@ -1561,8 +1561,8 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
             with b2:
                 if st.button("⚡ Executar Ciclo Agora (Run Cycle)", key="op_run_autonomous_cycle_now", use_container_width=True):
                     if not demo_enabled:
-                        with st.spinner("Executando ciclo autônomo..."):
-                            res = operator_console.run_autonomous_cycle_op(force=True)
+                        with st.spinner("Executando ciclo autônomo controlado..."):
+                            res = operator_console.run_autonomous_cycle_op(force=True, one_shot=True)
                             if res.get("status") in ("scheduled", "generation_started"):
                                 st.success(f"✓ {res.get('message')}")
                             elif res.get("status") == "idle":

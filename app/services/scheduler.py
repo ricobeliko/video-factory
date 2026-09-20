@@ -1867,6 +1867,13 @@ def _scheduler_worker_loop(interval_seconds: int = 30) -> None:
                 analytics_scheduler.run_analytics_collection_cycle()
             except Exception as a_exc:
                 logger.warning(f"[SCHEDULER][WORKER] Erro no ciclo de analytics (não fatal): {a_exc}")
+
+            # Fase V12-E: Loop de produção autônoma reutilizando o Scheduler Worker existente
+            try:
+                from app.services import autonomous_production
+                autonomous_production.run_autonomous_cycle()
+            except Exception as ap_exc:
+                logger.warning(f"[SCHEDULER][WORKER] Erro no ciclo de produção autônoma (não fatal): {ap_exc}")
         except Exception as exc:
             logger.exception(f"[SCHEDULER][WORKER] Erro inesperado no ciclo de execução: {exc}")
             _set_executor_status(state="error", message=f"Erro no worker: {exc}")

@@ -1485,6 +1485,105 @@ def _render_automatic_analytics_section(demo_enabled: bool, scenario_choice: str
 
 
 # ---------------------------------------------------------------------------
+# Section 5.55: Autonomous Production Loop (Fase V12-E - STATIC)
+# ---------------------------------------------------------------------------
+
+def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    st.markdown("#### 🤖 Produção Autônoma (Autonomous Production Loop)")
+    st.caption("Fábrica autônoma self-feeding: monitoramento de estoque, geração automática de temas, Quality & Safety Gates e abastecimento do Scheduler (YouTube).")
+
+    if demo_enabled:
+        enabled = (scenario_choice in ("Factory RUNNING", "Full Showcase (Todos os 7 Estados)"))
+        state = "generating" if scenario_choice == "Factory RUNNING" else ("idle" if scenario_choice == "Full Showcase (Todos os 7 Estados)" else "disabled")
+        ready_stock = 2
+        target_stock = 3
+        generated_today = 1
+        max_24h = 5
+        current_task = "3 fatos surpreendentes sobre buracos negros" if state == "generating" else "—"
+        last_cycle = "2026-09-19T22:10:00+00:00"
+        next_cycle = "2026-09-19T22:25:00+00:00"
+        last_error = None
+        message = "Geração autônoma em andamento para YouTube" if state == "generating" else "Estoque em monitoramento"
+    else:
+        status_data = operator_console.get_autonomous_production_status_op()
+        enabled = status_data.get("autonomous_mode_enabled", False)
+        state = status_data.get("state", "disabled")
+        ready_stock = status_data.get("ready_stock_total", 0)
+        target_stock = status_data.get("target_ready_stock", 3)
+        generated_today = status_data.get("generated_today_24h", 0)
+        max_24h = status_data.get("max_generations_24h", 5)
+        current_task = status_data.get("current_task_id") or "—"
+        last_cycle = status_data.get("last_tick") or "—"
+        next_cycle = status_data.get("next_cycle_at") or "—"
+        last_error = status_data.get("last_error")
+        message = status_data.get("message") or "—"
+
+    # Badges
+    mode_badge = "<span class='op-badge op-badge-green'>🟢 ON (Ativado)</span>" if enabled else "<span class='op-badge op-badge-gray'>⚪ OFF (Desativado)</span>"
+    state_col = "green" if state == "idle" else ("yellow" if state in ("generating", "planning", "reviewing", "scheduling") else ("red" if state in ("blocked", "error") else "gray"))
+    state_badge = f"<span class='op-badge op-badge-{state_col}'>{state.upper()}</span>"
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"**Modo Autônomo:** {mode_badge}", unsafe_allow_html=True)
+            st.markdown(f"**Estado Atual:** {state_badge}", unsafe_allow_html=True)
+            st.caption(f"Status: {message}")
+        with c2:
+            st.markdown(f"**Estoque Pronto:** `{ready_stock} / {target_stock}` vídeos")
+            st.markdown(f"**Gerados Hoje (24h):** `{generated_today} / {max_24h}`")
+            st.caption(f"Tarefa Atual: `{current_task[:25]}`" if current_task != "—" else "Tarefa Atual: Nenhuma")
+        with c3:
+            st.markdown(f"**Último Ciclo:** `{last_cycle}`")
+            st.markdown(f"**Próximo Ciclo:** `{next_cycle}`")
+            if last_error:
+                st.caption(f"⚠️ Último Erro: `{last_error[:45]}`")
+
+        if is_primary:
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                if not enabled:
+                    if st.button("▶️ Ativar Produção Autônoma", key="op_enable_autonomous_prod", use_container_width=True):
+                        if not demo_enabled:
+                            operator_console.set_autonomous_mode_enabled_op(True)
+                            st.success("Produção autônoma ATIVADA!")
+                            st.rerun()
+                        else:
+                            st.toast("Modo autônomo ativado (simulação demo).", icon="🤖")
+                else:
+                    if st.button("⏸️ Desativar Produção Autônoma", key="op_disable_autonomous_prod", use_container_width=True):
+                        if not demo_enabled:
+                            operator_console.set_autonomous_mode_enabled_op(False)
+                            st.info("Produção autônoma DESATIVADA.")
+                            st.rerun()
+                        else:
+                            st.toast("Modo autônomo desativado (simulação demo).", icon="⏸️")
+            with b2:
+                if st.button("⚡ Executar Ciclo Agora (Run Cycle)", key="op_run_autonomous_cycle_now", use_container_width=True):
+                    if not demo_enabled:
+                        with st.spinner("Executando ciclo autônomo..."):
+                            res = operator_console.run_autonomous_cycle_op(force=True)
+                            if res.get("status") in ("scheduled", "generation_started"):
+                                st.success(f"✓ {res.get('message')}")
+                            elif res.get("status") == "idle":
+                                st.info(f"ℹ️ {res.get('message')}")
+                            elif res.get("status") == "blocked":
+                                st.warning(f"⚠️ Bloqueado: {res.get('message')}")
+                            else:
+                                st.info(f"ℹ️ Resultado: {res.get('status')} — {res.get('message')}")
+                            st.rerun()
+                    else:
+                        st.toast("Ciclo executado no modo demo.", icon="⚡")
+            with b3:
+                st.caption("Destino Exclusivo: **YouTube** (TikTok bloqueado nesta fase). Publicação realizada pelo Scheduler.")
+        else:
+            st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+
+
+# ---------------------------------------------------------------------------
 # Section 5.6: Clip Mode Foundation (Fase V11-A - STATIC - Sem auto-refresh)
 # ---------------------------------------------------------------------------
 
@@ -2344,6 +2443,9 @@ def render_operator_console():
 
     # 5.5. Automatic Analytics Scheduler (STATIC)
     _render_automatic_analytics_section(demo_enabled, scenario_choice, is_primary)
+
+    # 5.55. Autonomous Production Loop (STATIC - Fase V12-E)
+    _render_autonomous_production_section(demo_enabled, scenario_choice, is_primary)
 
     # 5.6. Clip Mode Foundation (STATIC)
     _render_clip_mode_section(demo_enabled, scenario_choice, is_primary)

@@ -2043,3 +2043,27 @@ def get_approved_clip_artifact_op(
     """Recupera o artefato aprovado ativo de um segmento (permitido em PRIMARY e VIEW ONLY)."""
     from app.services import clip_review
     return clip_review.get_approved_clip_artifact(segment_id=segment_id, db_path=db_path)
+
+
+# ---------------------------------------------------------------------------
+# 16. Produção Autônoma (Autonomous Production Loop - Fase V12-E)
+# ---------------------------------------------------------------------------
+
+def get_autonomous_production_status_op(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna snapshot de status da produção autônoma (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import autonomous_production
+    return autonomous_production.get_autonomous_status(db_path=db_path)
+
+
+def set_autonomous_mode_enabled_op(enabled: bool, db_path: Optional[str] = None) -> None:
+    """Ativa ou desativa a produção autônoma (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import autonomous_production
+    autonomous_production.set_autonomous_mode_enabled(enabled=enabled, db_path=db_path)
+
+
+def run_autonomous_cycle_op(force: bool = True, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Dispara a execução imediata de um ciclo de produção autônoma (exige PRIMARY)."""
+    require_primary_instance(db_path=db_path)
+    from app.services import autonomous_production
+    return autonomous_production.run_autonomous_cycle(force=force, db_path=db_path)

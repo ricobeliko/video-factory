@@ -139,6 +139,7 @@ def submit_generation(
     voice_preview: dict | None = None,
     loomloom_video_request: LoomLoomConfirmedVideoRequest | None = None,
     profile_id: str | None = None,
+    db_path: str | None = None,
 ) -> None:
     """
     登记并提交 WebUI 视频生成任务，调用后立即返回。
@@ -148,8 +149,8 @@ def submit_generation(
     """
     task_params = params.model_copy(deep=True)
     from app.services import operator_console, profile_manager
-    operator_console.require_primary_instance()
-    if operator_console.is_factory_paused():
+    operator_console.require_primary_instance(db_path=db_path)
+    if operator_console.is_factory_paused(db_path=db_path):
         logger.warning(f"Rejeitando geração: fábrica pausada. task_id={task_id}")
         raise ValueError("Fábrica pausada. A tarefa atual pode concluir; novas execuções estão bloqueadas.")
 
@@ -158,10 +159,10 @@ def submit_generation(
     assigned_profile_id = (
         profile_id
         or getattr(task_params, "profile_id", None)
-        or profile_manager.get_active_profile_id()
+        or profile_manager.get_active_profile_id(db_path=db_path)
     )
     task_params.profile_id = assigned_profile_id
-    ctx = profile_manager.get_generation_profile_context(profile_id=assigned_profile_id)
+    ctx = profile_manager.get_generation_profile_context(profile_id=assigned_profile_id, db_path=db_path)
 
     explicit_fields = (
         params.model_fields_set
@@ -186,7 +187,7 @@ def submit_generation(
         task_params.monetization_preset = ctx.get("default_preset")
 
     # Persistência imutável da associação task <-> profile
-    profile_manager.save_task_profile(task_id, assigned_profile_id)
+    profile_manager.save_task_profile(task_id, assigned_profile_id, db_path=db_path)
 
     # 预览载荷只包含不可变音频路径、参数快照和只读字幕时间轴。复制外层字典，
     # 避免页面后续 rerun 替换缓存字段时影响已经提交到后台队列的任务。

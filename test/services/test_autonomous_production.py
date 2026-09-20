@@ -30,6 +30,7 @@ from unittest.mock import MagicMock, patch
 
 from app.config import config
 from app.models import const
+from app.models.schema import VideoAspect, VideoParams
 from app.services import (
     autonomous_production,
     operator_console,
@@ -38,6 +39,7 @@ from app.services import (
     safety_gate,
     scheduler,
     trend_radar,
+    voice,
     webui_task,
 )
 from app.services import state as sm
@@ -97,6 +99,9 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         # Configura chaves de API nos mocks para validação passiva de provedores
         config.app["gemini_api_key"] = "mock_test_gemini_key"
         config.app["pexels_api_keys"] = ["mock_test_pexels_key"]
+        config.app["video_source"] = "pexels"
+        config.ui["voice_mode"] = "tts"
+        config.ui["voice_name"] = "pt-BR-AntonioNeural-Male"
         self.ffmpeg_patcher = patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
         self.mock_ffmpeg = self.ffmpeg_patcher.start()
 
@@ -109,6 +114,17 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         config.app.pop("pixabay_api_key", None)
         config.app.pop("coverr_api_keys", None)
         config.app.pop("coverr_api_key", None)
+        config.app.pop("video_source", None)
+        config.ui.pop("voice_mode", None)
+        config.ui.pop("voice_name", None)
+        config.ui.pop("subtitle_enabled", None)
+        config.ui.pop("font_name", None)
+        config.ui.pop("font_size", None)
+        config.ui.pop("bgm_type", None)
+        config.ui.pop("bgm_volume", None)
+        config.ui.pop("video_aspect_pexels", None)
+        config.ui.pop("video_aspect_pixabay", None)
+        config.ui.pop("video_aspect_coverr", None)
         self.autopilot_patcher.stop()
         self.upload_post_patcher.stop()
         self.cross_post_patcher.stop()
@@ -1089,6 +1105,190 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             mock_sub.assert_called_once()
             called_params = mock_sub.call_args[1].get("params") or mock_sub.call_args[0][1]
             self.assertEqual(called_params.video_subject, "Tópico Substituto B")
+
+    # -----------------------------------------------------------------------
+    # Cenários Fase V12-E.1.2: Autonomous Generation Config Contract
+    # -----------------------------------------------------------------------
+
+    def test_config_video_source_pexels_preflight_and_params(self):
+        """1. config video_source=pexels => preflight recebe pexels => params.video_source == pexels"""
+        config.app["video_source"] = "pexels"
+        config.app["pexels_api_keys"] = ["test_pexels_key"]
+        params = autonomous_production.build_autonomous_video_params("Tema Pexels", db_path=self.db_path)
+        self.assertEqual(params.video_source, "pexels")
+
+        ok, msg, details = autonomous_production.check_required_providers_preflight(
+            video_source=params.video_source,
+            voice_name=params.voice_name,
+            db_path=self.db_path,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(details.get("Media"), "Pexels")
+
+    def test_config_video_source_pixabay_preflight_and_params(self):
+        """2. config video_source=pixabay => preflight recebe pixabay => params.video_source == pixabay"""
+        config.app["video_source"] = "pixabay"
+        config.app["pixabay_api_keys"] = ["test_pixabay_key"]
+        params = autonomous_production.build_autonomous_video_params("Tema Pixabay", db_path=self.db_path)
+        self.assertEqual(params.video_source, "pixabay")
+
+        ok, msg, details = autonomous_production.check_required_providers_preflight(
+            video_source=params.video_source,
+            voice_name=params.voice_name,
+            db_path=self.db_path,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(details.get("Media"), "Pixabay")
+
+    def test_persisted_voice_name_inherited_by_autonomous_params(self):
+        """3. voice_name persistida => autonomous params usa exatamente a mesma voice"""
+        config.ui["voice_mode"] = "tts"
+        config.ui["voice_name"] = "pt-BR-FranciscaNeural-Female"
+        params = autonomous_production.build_autonomous_video_params("Tema Voz Persistida", db_path=self.db_path)
+        self.assertEqual(params.voice_name, "pt-BR-FranciscaNeural-Female")
+
+    def test_empty_voice_name_when_tts_active_blocks_cycle(self):
+        """4. voice_name vazio quando TTS ativo => BLOCK, nenhuma geração"""
+        config.ui["voice_mode"] = "tts"
+        config.ui["voice_name"] = ""
+        with self.assertRaises(autonomous_production.AutonomousConfigError) as ctx:
+            autonomous_production.build_autonomous_video_params("Tema Voz Vazia", db_path=self.db_path)
+        self.assertIn("voice_name vazio quando TTS ativo", str(ctx.exception))
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        with patch("app.services.webui_task.submit_generation") as mock_sub:
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "blocked")
+            self.assertIn("voice_name vazio quando TTS ativo", res.get("message", ""))
+            mock_sub.assert_not_called()
+
+    def test_no_voice_mode_uses_official_sentinel(self):
+        """5. no-voice mode => usa sentinel oficial corretamente"""
+        config.ui["voice_mode"] = "none"
+        params = autonomous_production.build_autonomous_video_params("Tema Sem Voz", db_path=self.db_path)
+        self.assertEqual(params.voice_name, voice.NO_VOICE_NAME)
+        self.assertTrue(voice.is_no_voice(params.voice_name))
+
+        ok, msg, details = autonomous_production.check_required_providers_preflight(
+            video_source=params.video_source,
+            voice_name=params.voice_name,
+            db_path=self.db_path,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(details.get("TTS"), "None (No Voiceover)")
+
+    def test_paid_source_blocks_autonomous_cycle(self):
+        """6. source paga/requer confirmação => BLOCK em autonomous mode"""
+        config.app["video_source"] = "wavespeed"
+        with self.assertRaises(autonomous_production.AutonomousConfigError) as ctx:
+            autonomous_production.build_autonomous_video_params("Tema Pago", db_path=self.db_path)
+        self.assertIn("Fonte requer confirmação de custo e não é permitida em modo autônomo", str(ctx.exception))
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        with patch("app.services.webui_task.submit_generation") as mock_sub:
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "blocked")
+            self.assertIn("Fonte requer confirmação de custo e não é permitida em modo autônomo", res.get("message", ""))
+            mock_sub.assert_not_called()
+
+    def test_local_source_blocks_autonomous_cycle(self):
+        """6b. local source requer upload manual => BLOCK em autonomous mode"""
+        config.app["video_source"] = "local"
+        with self.assertRaises(autonomous_production.AutonomousConfigError):
+            autonomous_production.build_autonomous_video_params("Tema Local", db_path=self.db_path)
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        with patch("app.services.webui_task.submit_generation") as mock_sub:
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "blocked")
+            mock_sub.assert_not_called()
+
+    def test_upload_voice_mode_blocks_autonomous_cycle(self):
+        """6c. upload voice mode requer arquivo manual => BLOCK em autonomous mode"""
+        config.ui["voice_mode"] = "upload"
+        with self.assertRaises(autonomous_production.AutonomousConfigError) as ctx:
+            autonomous_production.build_autonomous_video_params("Tema Upload Voice", db_path=self.db_path)
+        self.assertIn("Modo de voz 'upload' requer áudio manual e não é permitido em modo autônomo", str(ctx.exception))
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        with patch("app.services.webui_task.submit_generation") as mock_sub:
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "blocked")
+            mock_sub.assert_not_called()
+
+    def test_aspect_and_subtitle_settings_inherited_from_persisted_config(self):
+        """7. parâmetros de aspect/subtitle relevantes são herdados da configuração persistida"""
+        config.ui["video_aspect_pexels"] = "16:9"
+        config.ui["subtitle_enabled"] = False
+        config.ui["font_name"] = "CustomFont.ttf"
+        config.ui["font_size"] = 52
+        config.ui["bgm_type"] = "random"
+        config.ui["bgm_volume"] = 0.35
+
+        params = autonomous_production.build_autonomous_video_params("Tema Config", db_path=self.db_path)
+        self.assertEqual(params.video_aspect, VideoAspect.landscape)
+        self.assertFalse(params.subtitle_enabled)
+        self.assertEqual(params.font_name, "CustomFont.ttf")
+        self.assertEqual(params.font_size, 52)
+        self.assertEqual(params.bgm_type, "random")
+        self.assertAlmostEqual(params.bgm_volume, 0.35)
+
+    def test_reboot_without_streamlit_session_state_resolves_params(self):
+        """8. reinício sem Streamlit/session_state => parâmetros continuam resolvidos corretamente"""
+        import sys
+        # Garante ausência ou não dependência de st.session_state
+        params = autonomous_production.build_autonomous_video_params("Tema Post-Reboot", db_path=self.db_path)
+        self.assertIsNotNone(params)
+        self.assertEqual(params.video_source, "pexels")
+        self.assertEqual(params.voice_name, "pt-BR-AntonioNeural-Male")
+
+    def test_preflight_receives_exact_submitted_params(self):
+        """9. preflight recebe exatamente os parâmetros usados no submit"""
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        config.ui["voice_name"] = "pt-BR-FranciscaNeural-Female"
+        config.app["video_source"] = "pexels"
+
+        preflight_calls = []
+        orig_preflight = autonomous_production.check_required_providers_preflight
+
+        def spy_preflight(*args, **kwargs):
+            preflight_calls.append((args, kwargs))
+            return orig_preflight(*args, **kwargs)
+
+        with patch("app.utils.utils.task_dir", return_value=self.task_base_dir), \
+             patch("app.services.autonomous_production.discover_candidate_topic", return_value={"topic": "Tema Exato", "origin": "test"}), \
+             patch("app.services.autonomous_production.check_required_providers_preflight", side_effect=spy_preflight), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "generation_started")
+            mock_sub.assert_called_once()
+            submitted_params = mock_sub.call_args[1].get("params") or mock_sub.call_args[0][1]
+
+            # O último preflight realizado antes do submit deve validar os mesmos campos
+            last_preflight = preflight_calls[-1][1]
+            self.assertEqual(last_preflight.get("video_source"), submitted_params.video_source)
+            self.assertEqual(last_preflight.get("voice_name"), submitted_params.voice_name)
+
+    def test_zero_external_api_calls_and_no_publishing(self):
+        """10 & 11. zero APIs externas reais e nenhuma publicação"""
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        with patch("app.utils.utils.task_dir", return_value=self.task_base_dir), \
+             patch("app.services.autonomous_production.discover_candidate_topic", return_value={"topic": "Tema Offline", "origin": "test"}), \
+             patch("app.services.webui_task.submit_generation"):
+
+            autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.mock_upload_video.assert_not_called()
+            self.mock_cross_post.assert_not_called()
+            self.mock_publish_task.assert_not_called()
+
+    def test_autonomous_off_remains_off(self):
+        """12. Autonomous OFF continua OFF"""
+        autonomous_production.set_autonomous_mode_enabled(False, db_path=self.db_path)
+        self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
+        res = autonomous_production.run_autonomous_cycle(db_path=self.db_path, now=self.now)
+        self.assertEqual(res.get("status"), "disabled")
+        self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
 
 
 if __name__ == "__main__":

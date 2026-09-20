@@ -21,8 +21,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from app.config import config
 from app.models import const
-from app.models.schema import VideoParams
+from app.models.schema import (
+    VideoAspect,
+    VideoConcatMode,
+    VideoFitMode,
+    VideoParams,
+    VideoTransitionMode,
+    _SUBTITLE_ANIMATIONS,
+    _SUBTITLE_DISPLAY_MODES,
+    _get_valid_ui_choice,
+)
 from app.services import (
     content_strategy,
     operator_console,
@@ -31,6 +41,7 @@ from app.services import (
     safety_gate,
     scheduler,
     trend_radar,
+    voice,
     webui_task,
 )
 from app.utils import utils
@@ -59,6 +70,15 @@ VALID_AUTONOMOUS_STATES = {
     STATE_BLOCKED,
     STATE_ERROR,
 }
+
+# Fontes de mídia permitidas sem supervisão para modo autônomo (fontes seguras/gratuitas)
+ALLOWED_AUTONOMOUS_VIDEO_SOURCES = frozenset({"pexels", "pixabay", "coverr"})
+
+
+class AutonomousConfigError(ValueError):
+    """Erro de validação ou contrato de configuração para a produção autônoma."""
+    pass
+
 
 # Configurações padrão seguras
 DEFAULT_AUTONOMOUS_MODE_ENABLED = False
@@ -573,14 +593,220 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
     }
 
 
+def build_autonomous_video_params(
+    topic: str,
+    profile_id: Optional[str] = None,
+    narrative_structure: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> VideoParams:
+    """Constrói VideoParams canônico para produção autônoma herdando configurações reais persistidas.
+
+    Precedência estrita:
+    1. Perfil específico (quando o campo fizer parte do perfil)
+    2. Configuração persistida da aplicação/WebUI (config.app e config.ui)
+    3. Defaults seguros do schema (VideoParams)
+    """
+    from app.config import config
+    from app.services import voice
+
+    # 1. Obter contexto do perfil
+    assigned_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+    ctx = profile_manager.get_generation_profile_context(profile_id=assigned_profile_id, db_path=db_path)
+
+    # Identidade / Metadados operacionais
+    niche = ctx.get("niche") or config.app.get("default_niche") or "curiosidades"
+    language = ctx.get("language") or config.app.get("video_language") or "pt-BR"
+    region = ctx.get("region") or config.app.get("default_region") or "BR"
+    preset = ctx.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET
+
+    # 2. Fonte de Vídeo (video_source)
+    # Precedência: Profile -> config.app["video_source"] -> "pexels"
+    raw_source = ctx.get("video_source") or config.app.get("video_source", "pexels")
+    video_source = str(raw_source or "pexels").lower().strip()
+
+    if video_source not in ALLOWED_AUTONOMOUS_VIDEO_SOURCES:
+        raise AutonomousConfigError(
+            f"Fonte requer confirmação de custo e não é permitida em modo autônomo: '{video_source}'"
+        )
+
+    # 3. Voz (voice_mode & voice_name)
+    saved_voice_mode = ctx.get("voice_mode") or config.ui.get("voice_mode")
+    saved_tts_server = config.ui.get("tts_server", "azure-tts-v1")
+
+    if saved_voice_mode not in {"tts", "upload", "none"}:
+        if saved_tts_server == voice.NO_VOICE_NAME:
+            saved_voice_mode = "none"
+        else:
+            saved_voice_mode = "tts"
+
+    if saved_voice_mode == "upload":
+        raise AutonomousConfigError(
+            "Modo de voz 'upload' requer áudio manual e não é permitido em modo autônomo"
+        )
+    elif saved_voice_mode == "none":
+        resolved_voice_name = voice.NO_VOICE_NAME
+    else:  # "tts"
+        resolved_voice_name = ctx.get("voice_name") or config.ui.get("voice_name", "")
+        resolved_voice_name = str(resolved_voice_name or "").strip()
+        if not resolved_voice_name:
+            raise AutonomousConfigError(
+                "voice_name vazio quando TTS ativo na configuração persistida"
+            )
+
+    try:
+        voice_volume = float(config.ui.get("voice_volume", 1.0))
+    except (ValueError, TypeError):
+        voice_volume = 1.0
+
+    try:
+        voice_rate = float(config.ui.get("voice_rate", 1.0))
+    except (ValueError, TypeError):
+        voice_rate = 1.0
+
+    # 4. Aspect Ratio & Fit Mode
+    default_aspect = VideoAspect.landscape.value if video_source == "coverr" else VideoAspect.portrait.value
+    aspect_str = config.ui.get(f"video_aspect_{video_source}") or config.ui.get("video_aspect") or default_aspect
+    try:
+        video_aspect = VideoAspect(aspect_str)
+    except (ValueError, TypeError):
+        video_aspect = VideoAspect(default_aspect)
+
+    fit_mode_str = config.ui.get("video_fit_mode", VideoFitMode.cover.value)
+    try:
+        video_fit_mode = VideoFitMode(fit_mode_str)
+    except (ValueError, TypeError):
+        video_fit_mode = VideoFitMode.cover
+
+    # 5. Concat Mode & Script Order Match
+    match_materials_to_script = bool(config.app.get("match_materials_to_script", False))
+    if match_materials_to_script:
+        video_concat_mode = VideoConcatMode.sequential
+    else:
+        concat_str = config.ui.get("video_concat_mode", VideoConcatMode.random.value)
+        try:
+            video_concat_mode = VideoConcatMode(concat_str)
+        except (ValueError, TypeError):
+            video_concat_mode = VideoConcatMode.random
+
+    # 6. Transição
+    trans_str = config.ui.get("video_transition_mode", None)
+    if trans_str:
+        try:
+            video_transition_mode = VideoTransitionMode(trans_str)
+        except (ValueError, TypeError):
+            video_transition_mode = None
+    else:
+        video_transition_mode = None
+
+    # 7. Duração do clipe e contagem de vídeos
+    try:
+        video_clip_duration = max(1, int(config.ui.get("video_clip_duration", 5)))
+    except (ValueError, TypeError):
+        video_clip_duration = 5
+
+    try:
+        video_count = max(1, int(config.ui.get("video_count", 1)))
+    except (ValueError, TypeError):
+        video_count = 1
+
+    # 8. Legendas
+    subtitle_enabled = bool(config.ui.get("subtitle_enabled", True))
+    font_name = str(config.ui.get("font_name", "MicrosoftYaHeiBold.ttc") or "MicrosoftYaHeiBold.ttc")
+    subtitle_position = str(config.ui.get("subtitle_position", "bottom"))
+    subtitle_display_mode = _get_valid_ui_choice("subtitle_display_mode", _SUBTITLE_DISPLAY_MODES, "sentence")
+    subtitle_animation = _get_valid_ui_choice("subtitle_animation", _SUBTITLE_ANIMATIONS, "none")
+    try:
+        custom_position = float(config.ui.get("custom_position", 70.0))
+    except (ValueError, TypeError):
+        custom_position = 70.0
+
+    text_fore_color = str(config.ui.get("text_fore_color", "#FFFFFF"))
+    try:
+        font_size = int(config.ui.get("font_size", 60))
+    except (ValueError, TypeError):
+        font_size = 60
+
+    stroke_color = str(config.ui.get("stroke_color", "#000000"))
+    try:
+        stroke_width = float(config.ui.get("stroke_width", 1.5))
+    except (ValueError, TypeError):
+        stroke_width = 1.5
+
+    subtitle_bg_enabled = bool(config.ui.get("subtitle_background_enabled", False))
+    subtitle_bg_color = str(config.ui.get("subtitle_background_color", "#000000"))
+    text_background_color = subtitle_bg_color if subtitle_bg_enabled else False
+    rounded_subtitle_background = bool(config.ui.get("rounded_subtitle_background", False))
+
+    # 9. Trilha Sonora (BGM)
+    bgm_type = str(config.ui.get("bgm_type", "random"))
+    bgm_file = str(config.ui.get("bgm_file", "") or "")
+    try:
+        bgm_volume = float(config.ui.get("bgm_volume", 0.2))
+    except (ValueError, TypeError):
+        bgm_volume = 0.2
+
+    # Se bgm_type for custom mas o arquivo não existir fisicamente, fallback para "random"
+    if bgm_type == "custom" and (not bgm_file or not os.path.isfile(bgm_file)):
+        bgm_type = "random"
+        bgm_file = ""
+
+    return VideoParams(
+        video_subject=topic,
+        video_language=language,
+        niche=niche,
+        region=region,
+        monetization_preset=preset,
+        narrative_structure=narrative_structure,
+        profile_id=assigned_profile_id,
+        video_source=video_source,
+        voice_name=resolved_voice_name,
+        voice_volume=voice_volume,
+        voice_rate=voice_rate,
+        video_aspect=video_aspect,
+        video_fit_mode=video_fit_mode,
+        video_concat_mode=video_concat_mode,
+        video_transition_mode=video_transition_mode,
+        match_materials_to_script=match_materials_to_script,
+        video_clip_duration=video_clip_duration,
+        video_count=video_count,
+        subtitle_enabled=subtitle_enabled,
+        font_name=font_name,
+        subtitle_position=subtitle_position,
+        subtitle_display_mode=subtitle_display_mode,
+        subtitle_animation=subtitle_animation,
+        custom_position=custom_position,
+        text_fore_color=text_fore_color,
+        font_size=font_size,
+        stroke_color=stroke_color,
+        stroke_width=stroke_width,
+        text_background_color=text_background_color,
+        rounded_subtitle_background=rounded_subtitle_background,
+        bgm_type=bgm_type,
+        bgm_file=bgm_file,
+        bgm_volume=bgm_volume,
+    )
+
+
 def check_required_providers_preflight(
-    video_source: str = "pexels",
-    voice_name: str = "",
+    video_source: Optional[str] = None,
+    voice_name: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Validação passiva e estática (sem chamadas pagas) de provedores requeridos."""
     from app.config import config
     from app.models.llm_provider import get_llm_provider, DEFAULT_LLM_PROVIDER_ID
+    from app.services import voice
+
+    # Se não especificado explicitamente, herda os parâmetros configurados canônicos
+    if video_source is None:
+        video_source = config.app.get("video_source", "pexels")
+
+    if voice_name is None:
+        mode = config.ui.get("voice_mode")
+        if mode == "none":
+            voice_name = voice.NO_VOICE_NAME
+        else:
+            voice_name = config.ui.get("voice_name", "")
 
     details: Dict[str, Any] = {}
 
@@ -617,32 +843,45 @@ def check_required_providers_preflight(
     details["LLM"] = "HEALTHY"
 
     # 4. Provedor de TTS Selecionado
-    clean_voice = (voice_name or "").lower().strip()
-    if not clean_voice or "edge" in clean_voice:
-        try:
-            import edge_tts
-            details["TTS"] = "Edge TTS"
-        except Exception as exc:
-            return False, f"Provedor de TTS (Edge TTS) indisponível: {exc}", {"TTS": "UNAVAILABLE"}
-    elif "azure" in clean_voice:
-        azure_key = config.azure.get("speech_key") or os.environ.get("AZURE_SPEECH_KEY")
-        if not azure_key:
-            return False, "Provedor Azure TTS selecionado mas speech_key ausente", {"TTS": "UNAVAILABLE"}
-        details["TTS"] = "Azure"
-    elif "elevenlabs" in clean_voice:
-        el_key = config.elevenlabs.get("api_key") or os.environ.get("ELEVENLABS_API_KEY")
-        if not el_key:
-            return False, "Provedor ElevenLabs selecionado mas api_key ausente", {"TTS": "UNAVAILABLE"}
-        details["TTS"] = "ElevenLabs"
-    elif "siliconflow" in clean_voice:
-        sf_key = config.siliconflow.get("api_key") or os.environ.get("SILICONFLOW_API_KEY")
-        if not sf_key:
-            return False, "Provedor SiliconFlow TTS selecionado mas api_key ausente", {"TTS": "UNAVAILABLE"}
-        details["TTS"] = "SiliconFlow"
+    if voice.is_no_voice(voice_name):
+        details["TTS"] = "None (No Voiceover)"
+    elif not voice_name or not voice_name.strip():
+        return False, "voice_name vazio quando TTS ativo na configuração persistida", {"TTS": "MISSING"}
+    else:
+        clean_voice = voice_name.lower().strip()
+        if "azure" in clean_voice:
+            azure_key = config.azure.get("speech_key") or os.environ.get("AZURE_SPEECH_KEY")
+            if not azure_key:
+                return False, "Provedor Azure TTS selecionado mas speech_key ausente", {"TTS": "UNAVAILABLE"}
+            details["TTS"] = "Azure"
+        elif "elevenlabs" in clean_voice:
+            el_key = config.elevenlabs.get("api_key") or os.environ.get("ELEVENLABS_API_KEY")
+            if not el_key:
+                return False, "Provedor ElevenLabs selecionado mas api_key ausente", {"TTS": "UNAVAILABLE"}
+            details["TTS"] = "ElevenLabs"
+        elif "siliconflow" in clean_voice:
+            sf_key = config.siliconflow.get("api_key") or os.environ.get("SILICONFLOW_API_KEY")
+            if not sf_key:
+                return False, "Provedor SiliconFlow TTS selecionado mas api_key ausente", {"TTS": "UNAVAILABLE"}
+            details["TTS"] = "SiliconFlow"
+        elif "gemini" in clean_voice:
+            gemini_key = config.app.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+            if not gemini_key:
+                return False, "Provedor Gemini TTS selecionado mas gemini_api_key ausente", {"TTS": "UNAVAILABLE"}
+            details["TTS"] = "Gemini"
+        else:
+            try:
+                import edge_tts
+                details["TTS"] = "Edge TTS"
+            except Exception as exc:
+                return False, f"Provedor de TTS (Edge TTS) indisponível: {exc}", {"TTS": "UNAVAILABLE"}
 
     # 5. Fonte de Mídia Selecionada (contratos canônicos: pexels_api_keys, pixabay_api_keys, coverr_api_keys)
-    from app.services import material
     source_clean = (video_source or "pexels").lower().strip()
+    if source_clean not in ALLOWED_AUTONOMOUS_VIDEO_SOURCES:
+        return False, f"Fonte requer confirmação de custo e não é permitida em modo autônomo: '{source_clean}'", {"Media": "UNAUTHORIZED_SOURCE"}
+
+    from app.services import material
     if source_clean == "pexels":
         if not material.has_material_api_keys("pexels"):
             return False, "Fonte de mídia 'pexels' selecionada mas pexels_api_keys não está configurada", {"Media": "UNAVAILABLE"}
@@ -918,15 +1157,28 @@ def run_autonomous_cycle(
     # Guarda 6: Provedores Críticos Requeridos (FFmpeg, Storage, LLM, TTS, Media)
     # -----------------------------------------------------------------------
     active_profile_id = profile_manager.get_active_profile_id(db_path=db_path)
-    ctx = profile_manager.get_generation_profile_context(profile_id=active_profile_id, db_path=db_path)
-    niche = ctx.get("niche") or "curiosidades"
-    language = ctx.get("language") or "pt-BR"
-    region = ctx.get("region") or "BR"
-    preset = ctx.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET
+    try:
+        probe_params = build_autonomous_video_params(
+            topic="probe",
+            profile_id=active_profile_id,
+            db_path=db_path,
+        )
+    except AutonomousConfigError as cfg_err:
+        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, str(cfg_err), db_path=db_path)
+        operator_console.log_operational_event(
+            component="autonomous_production",
+            severity=operator_console.SEVERITY_ERROR,
+            event_type="configuration_contract_block",
+            message=str(cfg_err),
+            metadata={"error": str(cfg_err)},
+            db_path=db_path,
+        )
+        return {"status": "blocked", "reason": "invalid_configuration", "message": str(cfg_err)}
 
     prov_ok, prov_msg, prov_details = check_required_providers_preflight(
-        video_source="pexels",
-        voice_name=ctx.get("voice_name", ""),
+        video_source=probe_params.video_source,
+        voice_name=probe_params.voice_name,
         db_path=db_path,
     )
     if not prov_ok:
@@ -971,7 +1223,11 @@ def run_autonomous_cycle(
     set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_PLANNING, db_path=db_path)
     set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, f"Estoque abaixo da meta ({ready_total}/{target_stock}). Selecionando {tasks_to_create} tema(s)...", db_path=db_path)
 
-    candidate = discover_candidate_topic(niche=niche, language=language, db_path=db_path)
+    candidate = discover_candidate_topic(
+        niche=probe_params.niche,
+        language=probe_params.video_language,
+        db_path=db_path,
+    )
     if not candidate or not candidate.get("topic"):
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
         msg = "Nenhum candidato a tema elegível encontrado sem duplicação."
@@ -984,27 +1240,76 @@ def run_autonomous_cycle(
     # Recomenda estrutura narrativa diversificada
     rec_struct, _ = content_strategy.recommend_narrative_structure(
         topic=chosen_topic,
-        niche=niche,
+        niche=probe_params.niche,
     )
 
     # -----------------------------------------------------------------------
     # Etapa D: Criação da Task e Submissão ao Pipeline Existente (Generating)
     # -----------------------------------------------------------------------
     new_task_id = str(uuid.uuid4())
-    params = VideoParams(
-        video_subject=chosen_topic,
-        video_language=language,
-        niche=niche,
-        region=region,
-        monetization_preset=preset,
-        narrative_structure=rec_struct,
+    params = build_autonomous_video_params(
+        topic=chosen_topic,
         profile_id=active_profile_id,
+        narrative_structure=rec_struct,
+        db_path=db_path,
     )
+
+    # Validação estrita do mesmo conjunto de parâmetros construídos
+    final_ok, final_msg, final_details = check_required_providers_preflight(
+        video_source=params.video_source,
+        voice_name=params.voice_name,
+        db_path=db_path,
+    )
+    if not final_ok:
+        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, final_msg, db_path=db_path)
+        operator_console.log_operational_event(
+            component="autonomous_production",
+            severity=operator_console.SEVERITY_ERROR,
+            event_type="provider_unavailable_block",
+            message=final_msg,
+            metadata=final_details,
+            db_path=db_path,
+        )
+        return {"status": "blocked", "reason": "provider_unavailable", "message": final_msg}
 
     set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, new_task_id, db_path=db_path)
     set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_GENERATING, db_path=db_path)
     msg = f"Iniciando geração autônoma: '{chosen_topic}' (task_id={new_task_id})"
     set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+
+    aspect_val = params.video_aspect.value if hasattr(params.video_aspect, "value") else str(params.video_aspect)
+    concat_val = params.video_concat_mode.value if hasattr(params.video_concat_mode, "value") else str(params.video_concat_mode)
+    trans_val = params.video_transition_mode.value if hasattr(params.video_transition_mode, "value") else (str(params.video_transition_mode) if params.video_transition_mode else "None")
+
+    param_snapshot = {
+        "topic": chosen_topic,
+        "niche": params.niche,
+        "language": params.video_language,
+        "region": params.region,
+        "preset": params.monetization_preset,
+        "profile_id": params.profile_id,
+        "narrative_structure": params.narrative_structure,
+        "video_source": params.video_source,
+        "voice_name": params.voice_name,
+        "voice_volume": params.voice_volume,
+        "voice_rate": params.voice_rate,
+        "video_aspect": aspect_val,
+        "video_concat_mode": concat_val,
+        "video_transition_mode": trans_val,
+        "match_materials_to_script": params.match_materials_to_script,
+        "subtitle_enabled": params.subtitle_enabled,
+        "subtitle_position": params.subtitle_position,
+        "subtitle_display_mode": params.subtitle_display_mode,
+        "subtitle_animation": params.subtitle_animation,
+        "font_name": params.font_name,
+        "font_size": params.font_size,
+        "bgm_type": params.bgm_type,
+        "bgm_volume": params.bgm_volume,
+        "video_clip_duration": params.video_clip_duration,
+        "video_count": params.video_count,
+        "origin": candidate.get("origin"),
+    }
 
     operator_console.log_operational_event(
         component="autonomous_production",
@@ -1012,13 +1317,7 @@ def run_autonomous_cycle(
         event_type="generation_started",
         task_id=new_task_id,
         message=msg,
-        metadata={
-            "topic": chosen_topic,
-            "niche": niche,
-            "preset": preset,
-            "narrative_structure": rec_struct,
-            "origin": candidate.get("origin"),
-        },
+        metadata=param_snapshot,
         db_path=db_path,
     )
 
@@ -1058,6 +1357,6 @@ def run_autonomous_cycle(
         "status": "generation_started",
         "task_id": new_task_id,
         "topic": chosen_topic,
-        "niche": niche,
+        "niche": params.niche,
         "message": res_summary,
     }

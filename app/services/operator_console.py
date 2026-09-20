@@ -1261,10 +1261,11 @@ def get_provider_health_summary(db_path: Optional[str] = None) -> Dict[str, Dict
             "last_checked": now_iso,
         }
 
-    # 3. Pexels
-    pexels_key = config.app.get("pexels_api_key") or os.environ.get("PEXELS_API_KEY")
+    # 3. Pexels (contrato canônico: pexels_api_keys)
+    from app.services import material
+    has_pexels = material.has_material_api_keys("pexels")
     pexels_err = errors_by_comp.get("pexels")
-    if pexels_key:
+    if has_pexels:
         summary["Pexels"] = {
             "status": PROVIDER_DEGRADED if pexels_err else PROVIDER_HEALTHY,
             "details": "Chave de API configurada",

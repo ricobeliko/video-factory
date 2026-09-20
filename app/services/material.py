@@ -189,6 +189,35 @@ def get_api_key(cfg_key: str):
         return api_keys[_api_key_counter % len(api_keys)]
 
 
+def has_material_api_keys(provider: str) -> bool:
+    """Verifica se há ao menos uma chave de API configurada e válida para o provedor de material.
+
+    Suporta os contratos plurais canônicos ('pexels_api_keys', 'pixabay_api_keys', 'coverr_api_keys')
+    com fallback para chaves singulares legadas ou variáveis de ambiente.
+    Nunca expõe segredos em logs e realiza verificação puramente passiva (sem chamadas de rede).
+    """
+    prov = (provider or "").lower().strip()
+    if prov.endswith("_api_keys"):
+        plural_key = prov
+    elif prov.endswith("_api_key"):
+        plural_key = prov + "s"
+    else:
+        plural_key = f"{prov}_api_keys"
+
+    legacy_singular = plural_key[:-1]  # ex: pexels_api_key
+    env_var = plural_key[:-1].upper()  # ex: PEXELS_API_KEY
+
+    raw = config.app.get(plural_key)
+    if raw is None or raw == "" or raw == []:
+        raw = config.app.get(legacy_singular)
+    if raw is None or raw == "" or raw == []:
+        raw = os.environ.get(env_var)
+
+    if isinstance(raw, (list, tuple)):
+        return any(bool(k and str(k).strip()) for k in raw)
+    return bool(raw and str(raw).strip())
+
+
 def _redact_secret(message: str, secret: str) -> str:
     """
     对即将写入日志的异常文本做最小范围脱敏。

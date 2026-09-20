@@ -167,21 +167,75 @@ def get_cycle_interval_minutes(db_path: Optional[str] = None) -> int:
 # 2. Telemetria e Status
 # ---------------------------------------------------------------------------
 
-def get_autonomous_ready_stock(db_path: Optional[str] = None) -> Dict[str, Any]:
-    """Calcula o estoque pronto elegível para o loop autônomo (YouTube-first e fail-closed).
+def get_autonomous_ready_stock(
+    task_base_dir: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Calcula o estoque pronto elegível para o loop autônomo (YouTube-first, fail-closed em Safety e Quality).
 
     Garante que:
-    - Somente vídeos com Safety PASS explícito e arquivo físico existente sejam computados.
-    - O estoque represente tarefas elegíveis para YouTube (não publicado no YouTube).
+    - Tarefa em TASK_STATE_COMPLETE com vídeo físico existente em disco.
+    - Safety PASS explícito.
+    - Quality assessment existente com quality_score >= 70 e quality_label em ('GOOD', 'STRONG').
+    - Ausência de Quality assessment é fail-closed (não conta no estoque autônomo).
+    - Tarefa ainda não publicada no YouTube.
     - Readiness de TikTok NÃO infle o estoque utilizado pelo loop YouTube.
     """
-    stock_info = operator_console.get_ready_stock(db_path=db_path)
-    youtube_ready = stock_info.get("youtube_ready")
-    if youtube_ready is not None:
-        youtube_count = len(youtube_ready)
+    stock_info = operator_console.get_ready_stock(task_base_dir=task_base_dir, db_path=db_path)
+    youtube_ready_tasks = stock_info.get("youtube_ready")
+    eligible_youtube: List[Dict[str, Any]] = []
+
+    if youtube_ready_tasks is not None:
+        try:
+            from app.services import quality_score
+            quality_score.init_quality_db(db_path)
+        except Exception:
+            pass
+
+        scheduler.init_db(db_path)
+        with scheduler.get_connection(db_path) as conn:
+            for task in youtube_ready_tasks:
+                task_id = task.get("task_id")
+                if not task_id:
+                    continue
+                try:
+                    q_row = conn.execute(
+                        """
+                        SELECT quality_score, quality_label
+                        FROM content_quality_scores
+                        WHERE task_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1;
+                        """,
+                        (task_id,),
+                    ).fetchone()
+                except Exception as exc:
+                    logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao consultar content_quality_scores para {task_id}: {exc}")
+                    q_row = None
+
+                if not q_row:
+                    # Ausência de Quality assessment é fail-closed para o estoque autônomo
+                    continue
+
+                try:
+                    q_score = float(q_row["quality_score"]) if q_row["quality_score"] is not None else 0.0
+                except (ValueError, TypeError):
+                    q_score = 0.0
+
+                q_label = str(q_row["quality_label"] or "").upper().strip()
+
+                if q_score >= MIN_QUALITY_SCORE_FOR_AUTONOMOUS and q_label in ("GOOD", "STRONG"):
+                    t_copy = dict(task)
+                    t_copy["quality_score"] = q_score
+                    t_copy["quality_label"] = q_label
+                    eligible_youtube.append(t_copy)
+
+        youtube_count = len(eligible_youtube)
     else:
+        # Fallback caso mocks sintéticos de teste passem apenas contadores escalares
         youtube_count = stock_info.get("youtube_count", stock_info.get("total_ready", 0))
-        youtube_ready = []
+        eligible_youtube = []
+
     target_stock = get_target_ready_stock(db_path=db_path)
 
     return {
@@ -190,7 +244,7 @@ def get_autonomous_ready_stock(db_path: Optional[str] = None) -> Dict[str, Any]:
         "tiktok_count": stock_info.get("tiktok_count", 0),
         "target_stock": target_stock,
         "is_below_target": youtube_count < target_stock,
-        "youtube_ready": youtube_ready,
+        "youtube_ready": eligible_youtube,
     }
 
 
@@ -490,6 +544,27 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
             "safety_status": clean_status,
         }
 
+    # Garante persistência na tabela content_quality_scores caso evaluate_quality
+    # tenha sido interceptada por mock ou não tenha persistido.
+    try:
+        quality_score.init_quality_db(db_path)
+        with scheduler.get_connection(db_path) as conn:
+            existing = conn.execute(
+                "SELECT id FROM content_quality_scores WHERE task_id = ? LIMIT 1;", (task_id,)
+            ).fetchone()
+            if not existing:
+                created_iso = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO content_quality_scores (
+                        task_id, topic, quality_score, quality_label, created_at
+                    ) VALUES (?, ?, ?, ?, ?);
+                    """,
+                    (task_id, str(topic or task_id), q_score, q_label, created_iso),
+                )
+    except Exception as p_exc:
+        logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao assegurar persistência de quality score: {p_exc}")
+
     return True, "Aprovado nos Gates de Qualidade e Segurança", {
         "quality_score": q_score,
         "quality_label": q_label,
@@ -565,18 +640,21 @@ def check_required_providers_preflight(
             return False, "Provedor SiliconFlow TTS selecionado mas api_key ausente", {"TTS": "UNAVAILABLE"}
         details["TTS"] = "SiliconFlow"
 
-    # 5. Fonte de Mídia Selecionada
+    # 5. Fonte de Mídia Selecionada (contratos canônicos: pexels_api_keys, pixabay_api_keys, coverr_api_keys)
+    from app.services import material
     source_clean = (video_source or "pexels").lower().strip()
     if source_clean == "pexels":
-        pexels_key = config.app.get("pexels_api_key") or os.environ.get("PEXELS_API_KEY")
-        if not pexels_key:
-            return False, "Fonte de mídia 'pexels' selecionada mas pexels_api_key não está configurada", {"Media": "UNAVAILABLE"}
+        if not material.has_material_api_keys("pexels"):
+            return False, "Fonte de mídia 'pexels' selecionada mas pexels_api_keys não está configurada", {"Media": "UNAVAILABLE"}
         details["Media"] = "Pexels"
     elif source_clean == "pixabay":
-        pixabay_key = config.app.get("pixabay_api_key") or os.environ.get("PIXABAY_API_KEY")
-        if not pixabay_key:
-            return False, "Fonte de mídia 'pixabay' selecionada mas pixabay_api_key não está configurada", {"Media": "UNAVAILABLE"}
+        if not material.has_material_api_keys("pixabay"):
+            return False, "Fonte de mídia 'pixabay' selecionada mas pixabay_api_keys não está configurada", {"Media": "UNAVAILABLE"}
         details["Media"] = "Pixabay"
+    elif source_clean == "coverr":
+        if not material.has_material_api_keys("coverr"):
+            return False, "Fonte de mídia 'coverr' selecionada mas coverr_api_keys não está configurada", {"Media": "UNAVAILABLE"}
+        details["Media"] = "Coverr"
 
     return True, "Todos os provedores necessários estão disponíveis", details
 

@@ -96,14 +96,19 @@ class TestAutonomousProductionLoop(unittest.TestCase):
 
         # Configura chaves de API nos mocks para validação passiva de provedores
         config.app["gemini_api_key"] = "mock_test_gemini_key"
-        config.app["pexels_api_key"] = "mock_test_pexels_key"
+        config.app["pexels_api_keys"] = ["mock_test_pexels_key"]
         self.ffmpeg_patcher = patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
         self.mock_ffmpeg = self.ffmpeg_patcher.start()
 
     def tearDown(self):
         self.ffmpeg_patcher.stop()
         config.app.pop("gemini_api_key", None)
+        config.app.pop("pexels_api_keys", None)
         config.app.pop("pexels_api_key", None)
+        config.app.pop("pixabay_api_keys", None)
+        config.app.pop("pixabay_api_key", None)
+        config.app.pop("coverr_api_keys", None)
+        config.app.pop("coverr_api_key", None)
         self.autopilot_patcher.stop()
         self.upload_post_patcher.stop()
         self.cross_post_patcher.stop()
@@ -887,6 +892,203 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             self.assertEqual(res.get("status"), "blocked")
             self.assertEqual(res.get("reason"), "provider_unavailable")
             mock_sub.assert_not_called()
+
+    # -----------------------------------------------------------------------
+    # V12-E.1.1: Testes de Contrato Real e Quality Ready Stock
+    # -----------------------------------------------------------------------
+
+    def test_pexels_api_keys_plural_contract_preflight(self):
+        # 1. Configuração canônica real com lista
+        config.app["pexels_api_keys"] = ["fake-pexels-key-123"]
+        config.app.pop("pexels_api_key", None)
+        ok, msg, details = autonomous_production.check_required_providers_preflight(
+            video_source="pexels", db_path=self.db_path
+        )
+        self.assertTrue(ok)
+        self.assertEqual(details.get("Media"), "Pexels")
+
+        # 2. Ausência total da chave
+        config.app.pop("pexels_api_keys", None)
+        config.app.pop("pexels_api_key", None)
+        with patch.dict(os.environ, {}, clear=True):
+            ok, msg, details = autonomous_production.check_required_providers_preflight(
+                video_source="pexels", db_path=self.db_path
+            )
+            self.assertFalse(ok)
+            self.assertIn("pexels_api_keys", msg)
+            self.assertEqual(details.get("Media"), "UNAVAILABLE")
+
+    def test_pixabay_api_keys_plural_contract_preflight(self):
+        # 1. Configuração canônica real com lista
+        config.app["pixabay_api_keys"] = ["fake-pixabay-key-456"]
+        config.app.pop("pixabay_api_key", None)
+        ok, msg, details = autonomous_production.check_required_providers_preflight(
+            video_source="pixabay", db_path=self.db_path
+        )
+        self.assertTrue(ok)
+        self.assertEqual(details.get("Media"), "Pixabay")
+
+        # 2. Ausência total da chave
+        config.app.pop("pixabay_api_keys", None)
+        config.app.pop("pixabay_api_key", None)
+        with patch.dict(os.environ, {}, clear=True):
+            ok, msg, details = autonomous_production.check_required_providers_preflight(
+                video_source="pixabay", db_path=self.db_path
+            )
+            self.assertFalse(ok)
+            self.assertIn("pixabay_api_keys", msg)
+            self.assertEqual(details.get("Media"), "UNAVAILABLE")
+
+    def test_operator_console_provider_health_plural_pexels(self):
+        # Pexels saudável via pexels_api_keys plural
+        config.app["pexels_api_keys"] = ["pexels-test-token"]
+        config.app.pop("pexels_api_key", None)
+        summary = operator_console.get_provider_health_summary(db_path=self.db_path)
+        self.assertEqual(summary["Pexels"]["status"], operator_console.PROVIDER_HEALTHY)
+
+        # Pexels indisponível quando ausente
+        config.app.pop("pexels_api_keys", None)
+        config.app.pop("pexels_api_key", None)
+        with patch.dict(os.environ, {}, clear=True):
+            summary = operator_console.get_provider_health_summary(db_path=self.db_path)
+            self.assertEqual(summary["Pexels"]["status"], operator_console.PROVIDER_UNAVAILABLE)
+
+    def test_quality_review_excluded_from_autonomous_ready_stock(self):
+        t_id = "task-review-stock"
+        v_path = self._create_mock_video_file(t_id)
+
+        sm.state.update_task(
+            t_id,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Fatos Curiosos",
+            video_file=v_path,
+            safety_status=const.SAFETY_STATUS_PASS,
+        )
+        # Quality 62.0 / REVIEW
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO content_quality_scores (
+                    task_id, topic, quality_score, quality_label, created_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (t_id, "Fatos Curiosos", 62.0, "REVIEW", self.now.isoformat())
+            )
+
+        stock = autonomous_production.get_autonomous_ready_stock(
+            task_base_dir=self.task_base_dir, db_path=self.db_path
+        )
+        self.assertEqual(stock["ready_count"], 0)
+        self.assertEqual(len(stock["youtube_ready"]), 0)
+
+    def test_quality_missing_excluded_from_autonomous_ready_stock(self):
+        t_id = "task-no-quality-stock"
+        v_path = self._create_mock_video_file(t_id)
+
+        sm.state.update_task(
+            t_id,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Espaço Sideral",
+            video_file=v_path,
+            safety_status=const.SAFETY_STATUS_PASS,
+        )
+        # Sem registro na tabela content_quality_scores (fail-closed)
+        stock = autonomous_production.get_autonomous_ready_stock(
+            task_base_dir=self.task_base_dir, db_path=self.db_path
+        )
+        self.assertEqual(stock["ready_count"], 0)
+        self.assertEqual(len(stock["youtube_ready"]), 0)
+
+    def test_quality_good_and_strong_included_in_autonomous_ready_stock(self):
+        t_good = "task-good-stock"
+        v_good = self._create_mock_video_file(t_good)
+        sm.state.update_task(
+            t_good,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Tema Good",
+            video_file=v_good,
+            safety_status=const.SAFETY_STATUS_PASS,
+        )
+        t_strong = "task-strong-stock"
+        v_strong = self._create_mock_video_file(t_strong)
+        sm.state.update_task(
+            t_strong,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Tema Strong",
+            video_file=v_strong,
+            safety_status=const.SAFETY_STATUS_PASS,
+        )
+
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO content_quality_scores (
+                    task_id, topic, quality_score, quality_label, created_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (t_good, "Tema Good", 70.0, "GOOD", self.now.isoformat())
+            )
+            conn.execute(
+                """
+                INSERT INTO content_quality_scores (
+                    task_id, topic, quality_score, quality_label, created_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (t_strong, "Tema Strong", 85.0, "STRONG", self.now.isoformat())
+            )
+
+        stock = autonomous_production.get_autonomous_ready_stock(
+            task_base_dir=self.task_base_dir, db_path=self.db_path
+        )
+        self.assertEqual(stock["ready_count"], 2)
+        self.assertEqual(len(stock["youtube_ready"]), 2)
+
+    def test_replenishment_cycle_after_quality_reject(self):
+        # Meta = 1
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_TARGET_STOCK, "1", db_path=self.db_path
+        )
+
+        # Task A existente: COMPLETE, vídeo OK, Safety PASS, mas Quality 62 / REVIEW
+        task_a = "task-rejected-a"
+        v_path = self._create_mock_video_file(task_a)
+        sm.state.update_task(
+            task_a,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Tópico Rejeitado",
+            video_file=v_path,
+            safety_status=const.SAFETY_STATUS_PASS,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO content_quality_scores (
+                    task_id, topic, quality_score, quality_label, created_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (task_a, "Tópico Rejeitado", 62.0, "REVIEW", self.now.isoformat())
+            )
+
+        # Garante que get_autonomous_ready_stock dá 0
+        stock = autonomous_production.get_autonomous_ready_stock(
+            task_base_dir=self.task_base_dir, db_path=self.db_path
+        )
+        self.assertEqual(stock["ready_count"], 0)
+
+        # No ciclo autônomo, com task_base_dir apontando para os mocks, detecta déficit e gera substituto B
+        with patch("app.utils.utils.task_dir", return_value=self.task_base_dir), \
+             patch("app.services.autonomous_production.discover_candidate_topic") as mock_disc, \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            mock_disc.return_value = {"topic": "Tópico Substituto B", "origin": "test"}
+            mock_sub.return_value = {"success": True, "task_id": "task-replacement-b"}
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+            self.assertEqual(res.get("status"), "generation_started")
+            mock_sub.assert_called_once()
+            called_params = mock_sub.call_args[1].get("params") or mock_sub.call_args[0][1]
+            self.assertEqual(called_params.video_subject, "Tópico Substituto B")
 
 
 if __name__ == "__main__":

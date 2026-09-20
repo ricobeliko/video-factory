@@ -1031,6 +1031,7 @@ def run_autonomous_cycle(
         if not video_path or not os.path.isfile(video_path):
             task_state = task_data.get("state")
             if task_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
+                interrupted_task_id = current_task_id
                 set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=db_path)
                 set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_ERROR, db_path=db_path)
                 msg = f"Geração da tarefa {current_task_id} interrompida (reboot/crash). Vídeo final ausente."
@@ -1044,7 +1045,14 @@ def run_autonomous_cycle(
                     message=msg,
                     db_path=db_path,
                 )
-                current_task_id = None
+                # UMA TRANSIÇÃO POR CICLO: recovery encerra o ciclo aqui.
+                # O próximo ciclo poderá gerar reposição se o estoque estiver abaixo da meta.
+                return {
+                    "status": "recovery_error",
+                    "task_id": interrupted_task_id,
+                    "reason": "generation_interrupted",
+                    "message": msg,
+                }
 
     if current_task_id:
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_REVIEWING, db_path=db_path)
@@ -1106,6 +1114,7 @@ def run_autonomous_cycle(
                     "metrics": metrics,
                 }
         else:
+            rejected_task_id = current_task_id
             operator_console.log_operational_event(
                 component="autonomous_production",
                 severity=operator_console.SEVERITY_WARNING,
@@ -1115,8 +1124,20 @@ def run_autonomous_cycle(
                 metadata=metrics,
                 db_path=db_path,
             )
-            set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, f"Tarefa {current_task_id} retida: {reason}", db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, f"Tarefa retida: {reason}", db_path=db_path)
+            rejection_summary = f"Tarefa {current_task_id} retida: {reason}"
+            set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, rejection_summary, db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, rejection_summary, db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, now_iso, db_path=db_path)
+            # UMA TRANSIÇÃO POR CICLO: rejeição encerra o ciclo aqui.
+            # O próximo ciclo poderá gerar reposição se o estoque estiver abaixo da meta.
+            return {
+                "status": "rejected",
+                "task_id": rejected_task_id,
+                "reason": reason,
+                "metrics": metrics,
+                "message": rejection_summary,
+            }
 
     # -----------------------------------------------------------------------
     # Guarda 4: Cooldown Timer (a menos que force=True ou one_shot=True)

@@ -1291,5 +1291,247 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
 
 
+    # -----------------------------------------------------------------------
+    # FASE V12-E.2.1: ONE-CYCLE / ONE-TRANSITION INVARIANT TESTS
+    # -----------------------------------------------------------------------
+
+    def _setup_current_task_with_video(self, task_id: str, safety_status: str = const.SAFETY_STATUS_PASS) -> str:
+        """Helper: cria task com vídeo mock, Safety salvo e aponta current_task_id para ela."""
+        v_path = self._create_mock_video_file(task_id)
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            video_subject=f"Topico {task_id}",
+            video_file=v_path,
+            safety_status=safety_status,
+            profile_id=profile_manager.DEFAULT_PROFILE_ID,
+        )
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_id,
+                "safety_status": safety_status,
+                "safety_reasons": [],
+                "checked_at": self.now.isoformat(),
+            },
+            db_path=self.db_path,
+        )
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, db_path=self.db_path
+        )
+        return v_path
+
+    # T1: current_task + Safety PASS + Quality 45 => rejected, zero submit_generation
+    def test_v12e21_t1_safety_pass_quality_45_rejected_no_new_task(self):
+        """Safety PASS + Quality 45/WEAK => status=rejected, zero submit_generation no mesmo ciclo."""
+        task_id = "v12e21-t1-quality-45"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_PASS)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.quality_score.evaluate_quality", return_value={
+                 "quality_score": 45.0,
+                 "quality_label": quality_score.LABEL_WEAK,
+             }), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "rejected")
+            self.assertIn("task_id", res)
+            self.assertEqual(res.get("task_id"), task_id)
+            mock_sub.assert_not_called()
+
+    # T2: current_task + Safety REVIEW => rejected, zero nova task
+    def test_v12e21_t2_safety_review_rejected_no_new_task(self):
+        """Safety REVIEW => status=rejected, zero submit_generation no mesmo ciclo."""
+        task_id = "v12e21-t2-safety-review"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_REVIEW)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "rejected")
+            self.assertIn("REVIEW", res.get("reason", "") + res.get("message", ""))
+            mock_sub.assert_not_called()
+
+    # T3: current_task + Safety BLOCK => rejected, zero nova task
+    def test_v12e21_t3_safety_block_rejected_no_new_task(self):
+        """Safety BLOCK => status=rejected, zero submit_generation no mesmo ciclo."""
+        task_id = "v12e21-t3-safety-block"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_BLOCK)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "rejected")
+            self.assertIn("BLOCK", res.get("reason", "") + res.get("message", ""))
+            mock_sub.assert_not_called()
+
+    # T4: current_task + Quality 69 => rejected, zero nova task
+    def test_v12e21_t4_quality_69_rejected_no_new_task(self):
+        """Quality 69/WEAK => status=rejected (abaixo do limiar 70), zero submit_generation."""
+        task_id = "v12e21-t4-quality-69"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_PASS)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.quality_score.evaluate_quality", return_value={
+                 "quality_score": 69.0,
+                 "quality_label": quality_score.LABEL_REVIEW,
+             }), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "rejected")
+            mock_sub.assert_not_called()
+
+    # T5: current_task + Quality 70 => approved/scheduled ou waiting_schedule, zero segunda geração
+    def test_v12e21_t5_quality_70_approved_zero_second_generation(self):
+        """Quality 70/GOOD => approved e ciclo encerra (scheduled ou waiting_schedule), zero segunda geração."""
+        task_id = "v12e21-t5-quality-70"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_PASS)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.quality_score.evaluate_quality", return_value={
+                 "quality_score": 70.0,
+                 "quality_label": quality_score.LABEL_GOOD,
+             }), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            # Deve ter encerrado com scheduled ou waiting_schedule — nunca com generation_started
+            self.assertIn(res.get("status"), ("scheduled", "waiting_schedule"))
+            # Zero geração adicional no mesmo ciclo
+            mock_sub.assert_not_called()
+
+    # T6: current_task interrompida (PROCESSING, sem vídeo) => recovery_error, zero geração
+    def test_v12e21_t6_interrupted_task_recovery_error_no_new_generation(self):
+        """Tarefa em PROCESSING sem vídeo final => recovery_error, zero submit_generation no mesmo ciclo."""
+        task_id = "v12e21-t6-interrupted"
+        # Não cria vídeo de propósito para simular crash
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_PROCESSING,
+            progress=50,
+            video_subject="Tarefa Interrompida",
+            profile_id=profile_manager.DEFAULT_PROFILE_ID,
+        )
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, db_path=self.db_path
+        )
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=None), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "recovery_error")
+            self.assertEqual(res.get("task_id"), task_id)
+            self.assertEqual(res.get("reason"), "generation_interrupted")
+            mock_sub.assert_not_called()
+
+    # T7: ciclo seguinte após rejected + estoque abaixo da meta => pode gerar exatamente uma nova task
+    def test_v12e21_t7_next_cycle_after_reject_can_generate_one_task(self):
+        """Após rejeição, no ciclo seguinte (sem current_task_id), se estoque abaixo da meta pode gerar uma task."""
+        # current_task_id já foi limpo (ciclo anterior terminou com rejected)
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=self.db_path
+        )
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_TARGET_STOCK, "1", db_path=self.db_path
+        )
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.autonomous_production.get_autonomous_ready_stock", return_value={
+                 "ready_count": 0, "youtube_count": 0, "target_stock": 1, "is_below_target": True,
+             }), \
+             patch("app.services.autonomous_production.discover_candidate_topic",
+                   return_value={"topic": "Reposição Ciclo Seguinte", "origin": "test"}), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "generation_started")
+            # Exatamente uma nova task — não mais de uma
+            mock_sub.assert_called_once()
+
+    # T8: one_shot nunca realiza duas transições principais (reject + generate) no mesmo ciclo
+    def test_v12e21_t8_one_shot_never_two_transitions(self):
+        """one_shot=True com current_task rejected => ciclo encerra em 'rejected', sem segunda geração."""
+        task_id = "v12e21-t8-one-shot"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_PASS)
+        # Desliga autonomous mode para confirmar que one_shot ainda aplica a regra
+        autonomous_production.set_autonomous_mode_enabled(False, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, db_path=self.db_path
+        )
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.quality_score.evaluate_quality", return_value={
+                 "quality_score": 40.0,
+                 "quality_label": quality_score.LABEL_WEAK,
+             }), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(
+                force=True, one_shot=True, db_path=self.db_path, now=self.now
+            )
+
+            # Deve encerrar em rejected — nunca em generation_started
+            self.assertEqual(res.get("status"), "rejected")
+            mock_sub.assert_not_called()
+
+    # T9: autonomous contínuo (enabled=True) também respeita uma transição por ciclo
+    def test_v12e21_t9_continuous_mode_also_one_transition_per_cycle(self):
+        """autonomous_mode_enabled=True com current_task rejected => 'rejected', sem geração no mesmo ciclo."""
+        task_id = "v12e21-t9-continuous"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_PASS)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.quality_score.evaluate_quality", return_value={
+                 "quality_score": 55.0,
+                 "quality_label": quality_score.LABEL_REVIEW,
+             }), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            self.assertEqual(res.get("status"), "rejected")
+            mock_sub.assert_not_called()
+
+    # T10: zero chamadas externas reais em todos os fluxos de rejeição
+    def test_v12e21_t10_zero_external_calls_on_rejection(self):
+        """Nenhuma chamada a APIs externas ou publicação durante rejeição."""
+        task_id = "v12e21-t10-zero-ext"
+        v_path = self._setup_current_task_with_video(task_id, const.SAFETY_STATUS_BLOCK)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
+             patch("app.services.webui_task.submit_generation") as mock_sub:
+
+            autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
+
+            mock_sub.assert_not_called()
+            self.mock_upload_video.assert_not_called()
+            self.mock_cross_post.assert_not_called()
+            self.mock_publish_task.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

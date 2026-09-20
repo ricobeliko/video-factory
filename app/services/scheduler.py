@@ -844,6 +844,109 @@ def get_upcoming_posts(limit: int = 50, db_path: Optional[str] = None) -> List[D
         return enriched
 
 
+def has_existing_or_terminal_destination(
+    task_id: str,
+    platform: str,
+    channel_id: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Verifica se uma tarefa/plataforma/canal já possui agendamento ativo, histórico publicado ou cancelamento terminal.
+
+    Regras de compatibilidade (Hotfix V12-D.2):
+    1. Destino com channel_id específico:
+       - Bloqueia se existir registro idêntico com o mesmo channel_id em status ('planned', 'ready', 'published', 'cancelled').
+       - Bloqueia se publication_events possuir registro de sucesso para o mesmo channel_id.
+       - REGRA CRÍTICA DE TOMBSTONE LEGADO: Bloqueia se existir registro legado em scheduled_posts com
+         (channel_id IS NULL ou channel_id = '') e status = 'cancelled'. Esse cancelamento pré-canais
+         atua como wildcard de compatibilidade para a task/platform, impedindo ressurreição automática em novos canais.
+    2. Destino sem channel_id (None ou ''):
+       - Bloqueia se existir registro em scheduled_posts com (channel_id IS NULL ou channel_id = '') em status ('planned', 'ready', 'published', 'cancelled').
+       - Bloqueia se publication_events possuir registro de sucesso com (channel_id IS NULL ou channel_id = '').
+    """
+    clean_plat = platform.lower().strip()
+    clean_channel = channel_id.strip() if channel_id and str(channel_id).strip() else None
+
+    def _execute(c: sqlite3.Connection) -> bool:
+        if clean_channel:
+            # 1. Match moderno no mesmo canal específico
+            row = c.execute(
+                """
+                SELECT id FROM scheduled_posts
+                WHERE task_id = ? AND platform = ? AND channel_id = ?
+                AND status IN ('planned', 'ready', 'published', 'cancelled')
+                LIMIT 1;
+                """,
+                (task_id, clean_plat, clean_channel),
+            ).fetchone()
+            if row:
+                return True
+
+            pub_row = c.execute(
+                """
+                SELECT id FROM publication_events
+                WHERE task_id = ? AND platform = ? AND channel_id = ?
+                AND status = 'success'
+                LIMIT 1;
+                """,
+                (task_id, clean_plat, clean_channel),
+            ).fetchone()
+            if pub_row:
+                return True
+
+            # 2. Tombstone legado: cancelamento pré-canais sem channel_id atua como wildcard
+            legacy_tombstone = c.execute(
+                """
+                SELECT id FROM scheduled_posts
+                WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
+                AND status = 'cancelled'
+                LIMIT 1;
+                """,
+                (task_id, clean_plat),
+            ).fetchone()
+            if legacy_tombstone:
+                return True
+
+            return False
+        else:
+            # Destino sem canal (legado / fallback)
+            row = c.execute(
+                """
+                SELECT id FROM scheduled_posts
+                WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
+                AND status IN ('planned', 'ready', 'published', 'cancelled')
+                LIMIT 1;
+                """,
+                (task_id, clean_plat),
+            ).fetchone()
+            if row:
+                return True
+
+            pub_row = c.execute(
+                """
+                SELECT id FROM publication_events
+                WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
+                AND status = 'success'
+                LIMIT 1;
+                """,
+                (task_id, clean_plat),
+            ).fetchone()
+            if pub_row:
+                return True
+
+            return False
+
+    if conn is not None:
+        return _execute(conn)
+    else:
+        init_db(db_path)
+        with get_connection(db_path) as c:
+            return _execute(c)
+
+
+_has_existing_or_terminal_destination = has_existing_or_terminal_destination
+
+
 def plan_schedule(
     tasks: List[Dict[str, Any]],
     now: Optional[datetime] = None,
@@ -1007,44 +1110,14 @@ def plan_schedule(
 
         # Enfileira slots para os candidatos
         for task_id, task_data, task_profile_id, channel_id in candidates:
-            # 1. Verifica idempotência: já existe no scheduled_posts ou publication_events?
+            # 1. Verifica idempotência e terminalidade (Hotfix V12-D.2)
             with get_connection(db_path) as conn:
-                if channel_id:
-                    existing = conn.execute(
-                        """
-                        SELECT id FROM scheduled_posts
-                        WHERE task_id = ? AND platform = ? AND channel_id = ?
-                        AND status IN ('planned', 'ready', 'published', 'cancelled');
-                        """,
-                        (task_id, clean_plat, channel_id),
-                    ).fetchone()
-                    already_pub = conn.execute(
-                        """
-                        SELECT id FROM publication_events
-                        WHERE task_id = ? AND platform = ? AND channel_id = ?
-                        AND status = 'success';
-                        """,
-                        (task_id, clean_plat, channel_id),
-                    ).fetchone()
-                else:
-                    existing = conn.execute(
-                        """
-                        SELECT id FROM scheduled_posts
-                        WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
-                        AND status IN ('planned', 'ready', 'published', 'cancelled');
-                        """,
-                        (task_id, clean_plat),
-                    ).fetchone()
-                    already_pub = conn.execute(
-                        """
-                        SELECT id FROM publication_events
-                        WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
-                        AND status = 'success';
-                        """,
-                        (task_id, clean_plat),
-                    ).fetchone()
-
-                if existing or already_pub:
+                if has_existing_or_terminal_destination(
+                    task_id=task_id,
+                    platform=clean_plat,
+                    channel_id=channel_id,
+                    conn=conn,
+                ):
                     continue
 
             # 2. Consulta limites específicos do perfil no modo de crescimento ativo

@@ -344,6 +344,235 @@ class TestScheduleCancellation(unittest.TestCase):
             self.assertEqual(row["status"], "cancelled")
             self.assertIn("CLI legitimate stopped lock test", row["last_error"])
 
+    # -----------------------------------------------------------------------
+    # Testes de Compatibilidade de Canais (Hotfix V12-D.2)
+    # -----------------------------------------------------------------------
+
+    def test_17_legacy_cancelled_null_channel_blocks_new_specific_channel(self):
+        """A: Cancelled legado com channel=NULL bloqueia novo channel específico."""
+        task_id = "task-c3ed-incident"
+        # Cria cancelamento legado sem channel_id
+        self._insert_post(task_id, "tiktok", status="cancelled", channel_id=None)
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["tiktok"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": "channel-default-tiktok", "platform": "tiktok", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 0, "O agendamento legado cancelado DEVE bloquear novo agendamento com canal")
+        with scheduler.get_connection(self.db_path) as conn:
+            posts = conn.execute("SELECT id, channel_id, status FROM scheduled_posts WHERE task_id = ?;", (task_id,)).fetchall()
+            self.assertEqual(len(posts), 1)
+            self.assertEqual(posts[0]["status"], "cancelled")
+
+    def test_18_legacy_cancelled_empty_string_channel_blocks_new_specific_channel(self):
+        """B: Cancelled legado com channel='' também bloqueia novo channel específico."""
+        task_id = "task-empty-str-chan"
+        self._insert_post(task_id, "tiktok", status="cancelled", channel_id="")
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["tiktok"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": "channel-default-tiktok", "platform": "tiktok", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 0)
+
+    def test_19_modern_cancelled_same_channel_blocks(self):
+        """C: Cancelled moderno no mesmo channel_id continua bloqueando."""
+        task_id = "task-modern-cancel"
+        channel_id = "channel-default-tiktok"
+        self._insert_post(task_id, "tiktok", status="cancelled", channel_id=channel_id)
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["tiktok"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": channel_id, "platform": "tiktok", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 0)
+
+    def test_20_modern_cancelled_channel_a_does_not_block_channel_b(self):
+        """D: Cancelled moderno no canal A NÃO bloqueia canal B."""
+        task_id = "task-chan-a-and-b"
+        self._insert_post(task_id, "tiktok", status="cancelled", channel_id="channel-A")
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["tiktok"],
+            }
+        ]
+
+        # Canal B está habilitado
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": "channel-B", "platform": "tiktok", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 1)
+        self.assertEqual(new_posts[0]["channel_id"], "channel-B")
+
+    def test_21_different_task_not_blocked(self):
+        """E: Tarefa diferente não é bloqueada pelo cancelamento de outra."""
+        task_a = "task-cancelled-a"
+        task_b = "task-eligible-b"
+        self._insert_post(task_a, "tiktok", status="cancelled", channel_id=None)
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_b,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["tiktok"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": "channel-default-tiktok", "platform": "tiktok", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 1)
+        self.assertEqual(new_posts[0]["task_id"], task_b)
+
+    def test_22_different_platform_not_blocked(self):
+        """F: Plataforma diferente não é bloqueada pelo cancelamento de outra plataforma."""
+        task_id = "task-cross-plat"
+        # Cancelado no TikTok
+        self._insert_post(task_id, "tiktok", status="cancelled", channel_id=None)
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("youtube_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["youtube"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": "channel-default-youtube", "platform": "youtube", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 1)
+        self.assertEqual(new_posts[0]["platform"], "youtube")
+
+    def test_23_publication_event_success_prevents_duplication(self):
+        """G: publication_event success continua impedindo duplicação."""
+        task_id = "task-pub-event"
+        channel_id = "channel-default-youtube"
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO publication_events (
+                    task_id, platform, published_at, status, channel_id
+                ) VALUES (?, ?, ?, 'success', ?);
+                """,
+                (task_id, "youtube", now_iso, channel_id),
+            )
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("youtube_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["youtube"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": channel_id, "platform": "youtube", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 0)
+
+    def test_24_planned_and_ready_existing_remain_idempotent(self):
+        """H: planned e ready existentes continuam idempotentes."""
+        task_id = "task-ready-exist"
+        channel_id = "channel-default-tiktok"
+        self._insert_post(task_id, "tiktok", status="ready", channel_id=channel_id)
+
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", True, db_path=self.db_path)
+        operator_console.set_factory_state(operator_console.FACTORY_STATE_RUNNING, db_path=self.db_path)
+
+        tasks = [
+            {
+                "task_id": task_id,
+                "state": "complete",
+                "video_file": "final-1.mp4",
+                "planned_platforms": ["tiktok"],
+            }
+        ]
+
+        with patch("app.services.profile_manager.list_channels", return_value=[{"channel_id": channel_id, "platform": "tiktok", "is_enabled": True}]):
+            new_posts = scheduler.plan_schedule(tasks, db_path=self.db_path)
+
+        self.assertEqual(len(new_posts), 0)
+
+    def test_25_zero_external_network_calls(self):
+        """I: Garante que a verificação de terminalidade e plan_schedule realizam zero chamadas de rede."""
+        with patch("requests.post") as mock_post:
+            with patch("requests.get") as mock_get:
+                task_id = "task-net-check"
+                self._insert_post(task_id, "tiktok", status="cancelled", channel_id=None)
+
+                exists = scheduler.has_existing_or_terminal_destination(
+                    task_id=task_id,
+                    platform="tiktok",
+                    channel_id="channel-default-tiktok",
+                    db_path=self.db_path,
+                )
+                self.assertTrue(exists)
+                mock_post.assert_not_called()
+                mock_get.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

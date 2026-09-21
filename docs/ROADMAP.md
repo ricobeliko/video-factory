@@ -184,9 +184,9 @@ Endureceu sete contratos em `analytics_scheduler.py` e `analytics_providers/*`: 
 
 ### V12-F.1B — Headless Worker Bootstrap
 
-**Status: 🔵 aberta, não implementada.**
+**Status: ✅ implementado localmente (21/09/2026), não deployado.**
 
-Bloqueador identificado durante V12-F.1A: `scheduler.start_scheduler_worker()` só inicia dentro do fragmento Streamlit da página de agendamento, que exige uma sessão de navegador conectada para executar. Após reboot de produção sem navegador, o worker (scheduler, analytics automático, produção autônoma) não inicia automaticamente. Requer mudança de lifecycle/startup da fábrica, tratada com gate próprio nesta fase — não implementar como parte da V12-F.1A.
+Bloqueador identificado durante V12-F.1A corrigido: `scripts/production_entrypoint.py` agora inicializa `operator_console.ensure_instance_initialized()` e, se PRIMARY, `scheduler.start_scheduler_worker(interval_seconds=30)` no MESMO processo que hospedará o Streamlit (`streamlit.web.bootstrap.load_config_options` + `.run`), antes de qualquer sessão de navegador conectar. `scripts/start_production.ps1` passou a chamar esse entrypoint em vez de `streamlit run` diretamente, preservando os mesmos parâmetros operacionais. SECONDARY nunca inicia o worker; shutdown libera worker e lock de forma idempotente. Regressão: 349 passed, 19 subtests passed, 0 failed (single-instance, scheduler worker, production health, autonomous production, analytics scheduler + testes do entrypoint). Detalhes completos em `PROJECT_HANDOFF.md`.
 
 ## V12-F.2 — Closed Feedback Loop
 

@@ -76,7 +76,7 @@ if (-not (Test-Path $VenvPython)) {
 }
 
 # 4. Validação do Entrypoint da Aplicação
-$Entrypoint = Join-Path $ProjectRoot "webui\Main.py"
+$Entrypoint = Join-Path $ProjectRoot "scripts\production_entrypoint.py"
 if (-not (Test-Path $Entrypoint)) {
     $ErrMsg = "ERRO CRÍTICO: Entrypoint '$Entrypoint' não encontrado."
     Write-OperationalLog $ErrMsg -Level "ERROR" -IsError
@@ -92,10 +92,14 @@ Write-OperationalLog "Entrypoint            : $Entrypoint"
 Write-OperationalLog "Endereço de Escuta    : $HostAddress"
 Write-OperationalLog "Porta de Serviço      : $Port"
 Write-OperationalLog "Modo Headless         : Ativo (navegador local não será aberto)"
+Write-OperationalLog "Bootstrap V12-F.1B    : PRIMARY + SchedulerExecutionWorker no mesmo processo (sem depender de navegador)"
 
-# 6. Execução do Streamlit em Modo Servidor
-$StreamlitArgs = @(
-    "-m", "streamlit", "run", $Entrypoint,
+# 6. Execução do Entrypoint de Produção (V12-F.1B — Headless Worker Bootstrap)
+# Substitui a chamada direta a "python -m streamlit run" para garantir que o
+# PRIMARY guard e o SchedulerExecutionWorker sejam inicializados no MESMO
+# processo, antes de qualquer sessão de navegador se conectar.
+$EntrypointArgs = @(
+    $Entrypoint,
     "--server.address=$HostAddress",
     "--server.port=$Port",
     "--server.headless=true",
@@ -106,8 +110,8 @@ $StreamlitArgs = @(
     "--server.enableCORS=true"
 )
 
-Write-OperationalLog "Iniciando processo Streamlit..."
-& $VenvPython $StreamlitArgs
+Write-OperationalLog "Iniciando processo de produção (entrypoint + Streamlit no mesmo processo)..."
+& $VenvPython $EntrypointArgs
 $ExitCode = $LASTEXITCODE
 
 Write-OperationalLog "Processo do servidor encerrado com código de saída $ExitCode."

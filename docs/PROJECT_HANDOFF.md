@@ -1,6 +1,26 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
 
+## V12-F.1B — Headless Worker Bootstrap (21/09/2026)
+
+Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`), sem deploy em produção. Nenhuma ativação de Analytics; nenhuma regra de publicação/Growth Mode/Safety/Quality Gate alterada.
+
+**Causa raiz:** `scheduler.start_scheduler_worker()` só era chamado dentro do fragmento Streamlit `_render_publication_schedule()` em `webui/Main.py`, que só executa quando uma sessão de navegador conecta. Em modo headless (`--server.headless=true`), após reboot da Scheduled Task sem navegador, o script nunca era executado por nenhuma sessão e o worker (scheduler, analytics automático, produção autônoma) nunca iniciava.
+
+**Arquitetura implementada:** um novo `scripts/production_entrypoint.py` roda no MESMO processo/interpretador que hospedará o Streamlit:
+
+1. `operator_console.ensure_instance_initialized()` — reaproveita exatamente o mecanismo de Single PRIMARY já existente (mesmo lock SQLite, mesmos papéis PRIMARY/SECONDARY_VIEW_ONLY).
+2. Se PRIMARY: `scheduler.start_scheduler_worker(interval_seconds=30)` e confirma `is_worker_alive()` antes de prosseguir (fail-closed: erro aqui aborta o processo com código de saída != 0 e o Streamlit nunca sobe).
+3. Se SECONDARY_VIEW_ONLY: worker intencionalmente não iniciado.
+4. Streamlit iniciado no MESMO processo via `streamlit.web.bootstrap.load_config_options()` + `streamlit.web.bootstrap.run(...)` — as duas únicas funções públicas usadas internamente por `streamlit run`, evitando subprocess e evitando depender de API privada instável (`cli._main_run`).
+5. Ao encerrar (sinal, exceção do servidor ou saída normal): `scheduler.stop_scheduler_worker()` e `operator_console.release_instance_lock()` são chamados em `finally`, de forma idempotente.
+
+`scripts/start_production.ps1` foi ajustado para chamar `production_entrypoint.py` em vez de `python -m streamlit run webui/Main.py` diretamente, preservando os mesmos parâmetros operacionais (`address`, `port`, `headless`, CORS, toolbar, usage stats etc.). Nenhum segundo processo de worker, nenhuma segunda Scheduled Task, nenhum "acordar" via navegador/WebSocket falso. A chamada existente da UI a `start_scheduler_worker()` permanece como fallback idempotente (singleton já garantido pelo código existente), sem necessidade de alteração em `webui/Main.py`.
+
+Regressão direcionada: **349 passed; 19 subtests passed; 0 failed** (single-instance, scheduler worker, production health, autonomous production, analytics scheduler + 11 novos testes do entrypoint).
+
+---
+
 ## V12-F.1A — Analytics Activation Hardening (21/09/2026)
 
 Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`), sem deploy em produção. Analytics Auto Collection permanece `OFF` por default; nenhum setting de produção foi alterado.
@@ -17,7 +37,7 @@ Sete contratos endurecidos em `app/services/analytics_scheduler.py` e `app/servi
 - Sanitização de mensagens de erro de rede/HTTP para nunca expor API key/token/query sensível.
 - `DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED` passou a ser a fonte real do valor default (antes um literal `"False"` divergente da constante).
 
-**V12-F.1 (auditoria e ativação completa) NÃO está concluída.** Bloqueador identificado e registrado, não corrigido nesta tarefa: `scheduler.start_scheduler_worker()` só é iniciado dentro do fragmento Streamlit da página de agendamento, que só executa quando uma sessão de navegador conecta. Após reboot de produção sem navegador conectado, o worker (scheduler, analytics automático, produção autônoma) não inicia. Esse bloqueador de lifecycle/startup foi separado em **V12-F.1B — Headless Worker Bootstrap**, com gate próprio, ainda não implementada.
+**V12-F.1 (auditoria e ativação completa) NÃO está concluída.** O bloqueador de lifecycle/startup identificado aqui foi corrigido pela V12-F.1B (ver seção acima). Ativação real do Analytics Auto Collection em produção continua exigindo decisão e homologação próprias, não incluídas nesta tarefa.
 
 ---
 
@@ -188,7 +208,7 @@ Timeout stale:
 - V12-E.2.2 Persistent Waiting Schedule Recovery — **homologado**
 - V12-F Adaptive Learning + Multi-Channel Warm-Up — **planejamento aberto**
 - V12-F.1A Analytics Activation Hardening — **implementado localmente, não deployado; Analytics OFF**
-- V12-F.1B Headless Worker Bootstrap — **aberta, não implementada**
+- V12-F.1B Headless Worker Bootstrap — **implementado localmente, não deployado**
 
 Próximas fases planejadas:
 - V13 Headless Remote Deployment / Safe Update

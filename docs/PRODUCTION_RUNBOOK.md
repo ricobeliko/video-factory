@@ -1,11 +1,21 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
 
+## V12-F.1B — Headless Worker Bootstrap (21/09/2026)
+
+Implementação concluída **somente em desenvolvimento** (`D:\Projetos\MoneyPrinterTurbo`); nenhuma mudança em produção (`C:\Projetos\MoneyPrinterTurbo`) nesta tarefa; nenhum deploy realizado.
+
+`scripts/start_production.ps1` agora invoca `scripts/production_entrypoint.py` em vez de `python -m streamlit run` diretamente. O entrypoint garante, no MESMO processo que hospedará o Streamlit: inicialização do PRIMARY guard (`operator_console.ensure_instance_initialized`) e, se PRIMARY, início do `SchedulerExecutionWorker` — antes de qualquer navegador conectar. Isso corrige o bloqueador registrado na V12-F.1A (worker dependente de sessão Streamlit ativa). Parâmetros operacionais (address, port, headless, CORS, toolbar, usage stats) preservados. Regressão: 349 passed, 19 subtests passed, 0 failed. Detalhes em `PROJECT_HANDOFF.md` e `ROADMAP.md`.
+
+Quando este código for promovido a produção, o procedimento de deploy (seção 5 abaixo) permanece o mesmo; nenhum passo manual adicional é necessário além de garantir que `scripts/production_entrypoint.py` esteja presente no commit atualizado.
+
+---
+
 ## V12-F.1A — Analytics Activation Hardening (21/09/2026)
 
 Implementação concluída **somente em desenvolvimento** (`D:\Projetos\MoneyPrinterTurbo`); nenhuma mudança em produção (`C:\Projetos\MoneyPrinterTurbo`) nesta tarefa. Analytics Auto Collection permanece `OFF`. Regressão: 338 passed, 19 subtests passed, 0 failed. Detalhes em `PROJECT_HANDOFF.md` e `ROADMAP.md`.
 
-Bloqueador identificado (não corrigido aqui): o worker do scheduler só inicia dentro de uma sessão Streamlit ativa; após reboot sem navegador conectado, nada inicia automaticamente. Tratado como V12-F.1B — Headless Worker Bootstrap, ainda não implementada. Até lá, não presumir que o worker está ativo após um reboot de produção sem verificação manual.
+Bloqueador identificado (corrigido pela V12-F.1B, ver seção acima): o worker do scheduler dependia de uma sessão Streamlit ativa; após reboot sem navegador conectado, nada iniciava automaticamente.
 
 ---
 

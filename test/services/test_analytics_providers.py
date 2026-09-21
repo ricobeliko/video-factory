@@ -261,5 +261,62 @@ class TestAnalyticsProviders(unittest.TestCase):
                 operator_console._current_role = operator_console.ROLE_PRIMARY
 
 
+class TestAnalyticsProviderErrorSanitization(unittest.TestCase):
+    """V12-F.1A: garante que erros de rede/HTTP nunca exponham API key/token/query sensível."""
+
+    def setUp(self):
+        self._orig_yt_key = config.app.get("youtube_api_key")
+        self._orig_tt_token = config.app.get("tiktok_access_token")
+        config.app["youtube_api_key"] = "AIzaSyFAKESECRETKEY1234567890"
+        config.app["tiktok_access_token"] = "FAKE-TIKTOK-ACCESS-TOKEN-1234567890"
+
+    def tearDown(self):
+        config.app["youtube_api_key"] = self._orig_yt_key
+        config.app["tiktok_access_token"] = self._orig_tt_token
+
+    def test_sanitize_error_text_redacts_query_key(self):
+        from app.services.analytics_providers import sanitize_error_text
+
+        raw = "ConnectionError: url: /videos?part=stats&id=abc&key=AIzaSyFAKESECRETKEY1234567890"
+        clean = sanitize_error_text(raw)
+        self.assertNotIn("AIzaSyFAKESECRETKEY1234567890", clean)
+        self.assertIn("key=***REDACTED***", clean)
+
+    def test_sanitize_error_text_redacts_bearer_token(self):
+        from app.services.analytics_providers import sanitize_error_text
+
+        raw = "Unauthorized request with header Authorization: Bearer FAKE-TIKTOK-ACCESS-TOKEN-1234567890"
+        clean = sanitize_error_text(raw)
+        self.assertNotIn("FAKE-TIKTOK-ACCESS-TOKEN-1234567890", clean)
+        self.assertIn("Bearer ***REDACTED***", clean)
+
+    def test_youtube_network_error_message_never_leaks_api_key(self):
+        import requests
+        from app.services.analytics_providers.youtube import YouTubeAnalyticsProvider
+
+        provider = YouTubeAnalyticsProvider()
+        leaking_exc = requests.exceptions.ConnectionError(
+            "HTTPSConnectionPool(host='www.googleapis.com', port=443): Max retries exceeded with url: "
+            "/youtube/v3/videos?part=statistics&id=abc123&key=AIzaSyFAKESECRETKEY1234567890"
+        )
+        with patch("app.services.analytics_providers.youtube.requests.get", side_effect=leaking_exc):
+            with self.assertRaises(AnalyticsProviderError) as ctx:
+                provider.fetch_metrics(external_post_id="abc123", dry_run=False)
+        self.assertNotIn("AIzaSyFAKESECRETKEY1234567890", str(ctx.exception))
+
+    def test_tiktok_network_error_message_never_leaks_token(self):
+        import requests
+        from app.services.analytics_providers.tiktok import TikTokAnalyticsProvider
+
+        provider = TikTokAnalyticsProvider()
+        leaking_exc = requests.exceptions.ConnectionError(
+            "Failed request with header Authorization: Bearer FAKE-TIKTOK-ACCESS-TOKEN-1234567890"
+        )
+        with patch("app.services.analytics_providers.tiktok.requests.post", side_effect=leaking_exc):
+            with self.assertRaises(AnalyticsProviderError) as ctx:
+                provider.fetch_metrics(external_post_id="abc123", dry_run=False)
+        self.assertNotIn("FAKE-TIKTOK-ACCESS-TOKEN-1234567890", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

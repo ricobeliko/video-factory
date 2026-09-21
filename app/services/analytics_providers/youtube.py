@@ -21,6 +21,7 @@ from app.services.analytics_providers.base import (
     ERR_RATE_LIMIT,
     ERR_TEMPORARY,
     ERR_UNAVAILABLE,
+    sanitize_error_text,
 )
 
 
@@ -96,7 +97,9 @@ class YouTubeAnalyticsProvider(AnalyticsProvider):
         except requests.exceptions.Timeout:
             raise AnalyticsProviderError("Timeout ao conectar com a API do YouTube.", code=ERR_TEMPORARY)
         except requests.exceptions.RequestException as req_err:
-            raise AnalyticsProviderError(f"Erro de rede ao conectar com YouTube API: {req_err}", code=ERR_UNAVAILABLE)
+            raise AnalyticsProviderError(
+                f"Erro de rede ao conectar com YouTube API: {sanitize_error_text(req_err)}", code=ERR_UNAVAILABLE
+            )
 
         if resp.status_code == 401:
             raise AnalyticsProviderError("Autenticação inválida na YouTube Data API.", code=ERR_AUTH)
@@ -111,14 +114,16 @@ class YouTubeAnalyticsProvider(AnalyticsProvider):
             raise AnalyticsProviderError(f"Servidor da YouTube API retornou erro {resp.status_code}.", code=ERR_TEMPORARY)
         elif resp.status_code != 200:
             raise AnalyticsProviderError(
-                f"YouTube API retornou código inesperado {resp.status_code}: {resp.text[:200]}",
+                f"YouTube API retornou código inesperado {resp.status_code}: {sanitize_error_text(resp.text[:200])}",
                 code=ERR_INVALID_RESPONSE,
             )
 
         try:
             data = resp.json()
         except Exception as json_err:
-            raise AnalyticsProviderError(f"Falha ao decodificar resposta da YouTube API: {json_err}", code=ERR_INVALID_RESPONSE)
+            raise AnalyticsProviderError(
+                f"Falha ao decodificar resposta da YouTube API: {sanitize_error_text(json_err)}", code=ERR_INVALID_RESPONSE
+            )
 
         items = data.get("items") or []
         if not items:

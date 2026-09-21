@@ -166,7 +166,9 @@ class TestAnalyticsScheduler(unittest.TestCase):
     """Suíte de testes completa para a Fase V10-C."""
 
     def setUp(self):
-        self.tmp_dir = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors evita falha de teardown quando a thread real do
+        # worker (ex.: test_39) toca o storage_dir patchado de forma concorrente.
+        self.tmp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.tmp_dir.name, "test_factory.db")
 
         # Inicializa tabelas
@@ -198,12 +200,28 @@ class TestAnalyticsScheduler(unittest.TestCase):
 
         self.base_time = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 
+        # V12-F.1A: privacidade do YouTube passa a ser fail-closed (PUBLIC comprovado
+        # é exigido). Todos os testes legados assumem publicação pública por padrão;
+        # testes específicos de privacidade sobrescrevem via `_insert_publication`.
+        self._storage_dir_patcher = patch("app.utils.utils.storage_dir", return_value=self.tmp_dir.name)
+        self._storage_dir_patcher.start()
+
     def tearDown(self):
+        self._storage_dir_patcher.stop()
         # Restaura provedores originais
         register_provider("youtube", self._orig_yt)
         register_provider("tiktok", self._orig_tt)
         operator_console.reset_instance_for_testing()
         self.tmp_dir.cleanup()
+
+    def _write_task_privacy(self, task_id: str, youtube_privacy_status: Optional[str]) -> None:
+        """Escreve (ou omite) task.json com o status de privacidade do YouTube."""
+        if youtube_privacy_status is None:
+            return
+        task_dir = os.path.join(self.tmp_dir.name, "tasks", task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        with open(os.path.join(task_dir, "task.json"), "w", encoding="utf-8") as f:
+            json.dump({"publish_info": {"youtube_privacy_status": youtube_privacy_status}}, f)
 
     def _insert_publication(
         self,
@@ -214,8 +232,12 @@ class TestAnalyticsScheduler(unittest.TestCase):
         published_at: Optional[datetime] = None,
         profile_id: Optional[str] = "default",
         channel_id: Optional[str] = None,
+        youtube_privacy_status: Optional[str] = "public",
     ) -> int:
-        """Helper para inserir evento de publicação."""
+        """Helper para inserir evento de publicação. Por padrão, marca o YouTube como
+        'public' comprovado (privacidade fail-closed exige isso para ser elegível)."""
+        if platform == "youtube":
+            self._write_task_privacy(task_id, youtube_privacy_status)
         p_at = published_at or self.base_time
         iso_p_at = p_at.isoformat()
         with scheduler.get_connection(self.db_path) as conn:
@@ -740,17 +762,114 @@ class TestAnalyticsScheduler(unittest.TestCase):
     # -----------------------------------------------------------------------
     def test_37_private_youtube_skipped(self):
         tid = "task_private_yt"
-        self._insert_publication(tid, external_id="yt_priv")
+        self._insert_publication(tid, external_id="yt_priv", youtube_privacy_status="private")
 
-        # Simula arquivo task.json no storage com privacy = 'private'
-        task_dir = os.path.join(self.tmp_dir.name, "tasks", tid)
-        os.makedirs(task_dir, exist_ok=True)
-        with open(os.path.join(task_dir, "task.json"), "w", encoding="utf-8") as f:
-            json.dump({"publish_info": {"youtube_privacy_status": "private"}}, f)
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 0)
 
-        with patch("app.utils.utils.storage_dir", return_value=self.tmp_dir.name):
-            candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
-            self.assertEqual(len(candidates), 0)
+    # -----------------------------------------------------------------------
+    # 41. V12-F.1A: privacidade UNKNOWN (sem task.json) bloqueia fail-closed
+    # -----------------------------------------------------------------------
+    def test_41_unknown_privacy_blocks_fail_closed(self):
+        tid = "task_unknown_privacy"
+        self._insert_publication(tid, external_id="yt_unknown", youtube_privacy_status=None)
+
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 0)
+
+        pub_row = {
+            "task_id": tid,
+            "platform": "youtube",
+            "status": "success",
+            "external_id": "yt_unknown",
+            "published_at": self.base_time.isoformat(),
+            "profile_id": "default",
+            "channel_id": None,
+        }
+        is_eligible, reason, _ = analytics_scheduler.check_publication_eligibility(
+            pub_row, now=self.base_time, db_path=self.db_path
+        )
+        self.assertFalse(is_eligible)
+        self.assertIn("youtube_privacy_not_public_confirmed", reason)
+
+    # -----------------------------------------------------------------------
+    # 42. V12-F.1A: privacidade PUBLIC comprovada é elegível
+    # -----------------------------------------------------------------------
+    def test_42_public_privacy_eligible(self):
+        tid = "task_public_privacy"
+        self._insert_publication(tid, external_id="yt_public", youtube_privacy_status="public")
+
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["task_id"], tid)
+
+    # -----------------------------------------------------------------------
+    # 43. V12-F.1A: coleta automática restrita a YouTube (TikTok fora do escopo)
+    # -----------------------------------------------------------------------
+    def test_43_automatic_collection_youtube_only(self):
+        self.assertEqual(analytics_scheduler.SUPPORTED_ANALYTICS_PLATFORMS, ("youtube",))
+        self._insert_publication("t_tt", platform="tiktok", external_id="tt_1")
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 0)
+
+    # -----------------------------------------------------------------------
+    # 44. V12-F.1A: exclusão mútua entre ciclo manual e automático
+    # -----------------------------------------------------------------------
+    def test_44_mutual_exclusion_between_cycles(self):
+        self._insert_publication("t1", external_id="yt_ok")
+        analytics_scheduler.set_analytics_auto_collection_enabled(True, db_path=self.db_path)
+
+        # Simula um ciclo já em andamento (lock recém-adquirido)
+        scheduler.set_setting(
+            "analytics_cycle_lock_at",
+            self.base_time.isoformat(),
+            db_path=self.db_path,
+        )
+        result = analytics_scheduler.run_analytics_collection_cycle(
+            db_path=self.db_path, now=self.base_time, force=True
+        )
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "cycle_already_running")
+        self.assertEqual(self.mock_yt.fetch_call_count, 0)
+
+    # -----------------------------------------------------------------------
+    # 45. V12-F.1A: lock é liberado ao final do ciclo (não trava ciclos seguintes)
+    # -----------------------------------------------------------------------
+    def test_45_lock_released_after_cycle(self):
+        self._insert_publication("t1", external_id="yt_ok")
+        analytics_scheduler.run_analytics_collection_cycle(db_path=self.db_path, now=self.base_time, force=True)
+
+        lock_after = scheduler.get_setting("analytics_cycle_lock_at", None, db_path=self.db_path)
+        self.assertIn(lock_after, (None, ""))
+
+    # -----------------------------------------------------------------------
+    # 46. V12-F.1A: revalidação de backoff antes de cada fetch no mesmo ciclo
+    # -----------------------------------------------------------------------
+    def test_46_backoff_revalidated_before_each_fetch_same_cycle(self):
+        # Duas publicações YouTube elegíveis; a primeira falha e aciona backoff,
+        # a segunda deve ser pulada por revalidação (não deve chamar o provider).
+        self.mock_yt.should_raise = AnalyticsProviderError("Auth failed", code=ERR_AUTH)
+        self._insert_publication("t1", external_id="yt_1", published_at=self.base_time - timedelta(minutes=5))
+        self._insert_publication("t2", external_id="yt_2", published_at=self.base_time - timedelta(minutes=10))
+
+        result = analytics_scheduler.run_analytics_collection_cycle(
+            db_path=self.db_path, now=self.base_time, force=True
+        )
+        # Apenas a primeira publicação deve ter efetivamente chamado o provider;
+        # a segunda é bloqueada pela revalidação de backoff antes do fetch.
+        self.assertEqual(self.mock_yt.fetch_call_count, 1)
+        skipped = [r for r in result["results"] if r["status"] == "skipped"]
+        self.assertGreaterEqual(len(skipped), 1)
+
+    # -----------------------------------------------------------------------
+    # 47. V12-F.1A: default de auto-coleta usa a constante como fonte real
+    # -----------------------------------------------------------------------
+    def test_47_default_source_is_constant(self):
+        with patch.object(analytics_scheduler, "DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED", True):
+            # Sem setting persistido ainda, deve refletir a constante (não um literal fixo).
+            fresh_db = os.path.join(self.tmp_dir.name, "fresh_default.db")
+            scheduler.init_db(fresh_db)
+            self.assertTrue(analytics_scheduler.is_analytics_auto_collection_enabled(db_path=fresh_db))
 
     # -----------------------------------------------------------------------
     # 38. Run One Cycle respeita limite

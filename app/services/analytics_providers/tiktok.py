@@ -20,6 +20,7 @@ from app.services.analytics_providers.base import (
     ERR_RATE_LIMIT,
     ERR_TEMPORARY,
     ERR_UNAVAILABLE,
+    sanitize_error_text,
 )
 
 
@@ -101,7 +102,9 @@ class TikTokAnalyticsProvider(AnalyticsProvider):
         except requests.exceptions.Timeout:
             raise AnalyticsProviderError("Timeout ao conectar com a API do TikTok.", code=ERR_TEMPORARY)
         except requests.exceptions.RequestException as req_err:
-            raise AnalyticsProviderError(f"Erro de rede ao conectar com TikTok API: {req_err}", code=ERR_UNAVAILABLE)
+            raise AnalyticsProviderError(
+                f"Erro de rede ao conectar com TikTok API: {sanitize_error_text(req_err)}", code=ERR_UNAVAILABLE
+            )
 
         if resp.status_code in (401, 403):
             raise AnalyticsProviderError("Token inválido ou sem permissão na TikTok API.", code=ERR_AUTH)
@@ -113,14 +116,16 @@ class TikTokAnalyticsProvider(AnalyticsProvider):
             raise AnalyticsProviderError(f"Servidor da TikTok API retornou erro {resp.status_code}.", code=ERR_TEMPORARY)
         elif resp.status_code != 200:
             raise AnalyticsProviderError(
-                f"TikTok API retornou status inesperado {resp.status_code}: {resp.text[:200]}",
+                f"TikTok API retornou status inesperado {resp.status_code}: {sanitize_error_text(resp.text[:200])}",
                 code=ERR_INVALID_RESPONSE,
             )
 
         try:
             data = resp.json()
         except Exception as json_err:
-            raise AnalyticsProviderError(f"Falha ao decodificar resposta da TikTok API: {json_err}", code=ERR_INVALID_RESPONSE)
+            raise AnalyticsProviderError(
+                f"Falha ao decodificar resposta da TikTok API: {sanitize_error_text(json_err)}", code=ERR_INVALID_RESPONSE
+            )
 
         # TikTok API costuma retornar {"error": {"code": ...}}
         error_info = data.get("error") or {}

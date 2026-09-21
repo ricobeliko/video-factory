@@ -1,6 +1,14 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
 
+## V12-F.1A — Analytics Activation Hardening (21/09/2026)
+
+Implementação concluída **somente em desenvolvimento** (`D:\Projetos\MoneyPrinterTurbo`); nenhuma mudança em produção (`C:\Projetos\MoneyPrinterTurbo`) nesta tarefa. Analytics Auto Collection permanece `OFF`. Regressão: 338 passed, 19 subtests passed, 0 failed. Detalhes em `PROJECT_HANDOFF.md` e `ROADMAP.md`.
+
+Bloqueador identificado (não corrigido aqui): o worker do scheduler só inicia dentro de uma sessão Streamlit ativa; após reboot sem navegador conectado, nada inicia automaticamente. Tratado como V12-F.1B — Headless Worker Bootstrap, ainda não implementada. Até lá, não presumir que o worker está ativo após um reboot de produção sem verificação manual.
+
+---
+
 ## Steady-state homologado — 21/09/2026
 
 V12-E HOMOLOGADA EM PRODUÇÃO; PUBLIC GATE PASS. Produção em `66f92a4`; `de62a4b` é governança de agentes e não foi necessário ao deploy de homologação. Evidências completas no [PROJECT_HANDOFF](PROJECT_HANDOFF.md).

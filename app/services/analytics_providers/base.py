@@ -5,6 +5,7 @@ V10-A — Automatic Analytics Provider Foundation.
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, Optional
 
 # Provider Health / Status constants
@@ -22,6 +23,21 @@ ERR_NOT_FOUND = "NOT_FOUND"
 ERR_TEMPORARY = "TEMPORARY"
 ERR_UNAVAILABLE = "UNAVAILABLE"
 ERR_INVALID_RESPONSE = "INVALID_RESPONSE"
+
+# V12-F.1A: padrões usados para nunca expor API key/token/query sensível em
+# mensagens de erro (exceções de rede podem ecoar a URL completa da requisição).
+_SENSITIVE_QUERY_PATTERN = re.compile(
+    r"(key|token|access_token|api_key|secret)=([^&\s'\"]+)", re.IGNORECASE
+)
+_SENSITIVE_BEARER_PATTERN = re.compile(r"Bearer\s+[A-Za-z0-9\-_\.]+", re.IGNORECASE)
+
+
+def sanitize_error_text(text: Any) -> str:
+    """Remove valores sensíveis (query params de credenciais, tokens Bearer) de um texto de erro."""
+    clean_text = str(text) if text is not None else ""
+    clean_text = _SENSITIVE_QUERY_PATTERN.sub(lambda m: f"{m.group(1)}=***REDACTED***", clean_text)
+    clean_text = _SENSITIVE_BEARER_PATTERN.sub("Bearer ***REDACTED***", clean_text)
+    return clean_text
 
 
 class AnalyticsProviderError(Exception):

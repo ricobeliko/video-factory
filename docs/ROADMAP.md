@@ -162,6 +162,8 @@ Objetivo: transformar o feedback de desempenho em um ciclo fechado de otimizaç�
 
 ## V12-F.1 — Analytics Auto-Collection Audit & Activation
 
+**Status: NÃO concluída.** Auditoria parcial concluída via V12-F.1A; ativação em produção continua bloqueada até V12-F.1B ser implementada e homologada.
+
 Objetivo futuro: auditar e ativar com segurança a coleta automática de Analytics já existente.
 
 Verificar futuramente:
@@ -173,6 +175,18 @@ Verificar futuramente:
 - isolamento por profile/channel.
 
 Gate futuro: comprovar esses contratos antes de autorizar ativação. Não implementar nem ativar nesta tarefa.
+
+### V12-F.1A — Analytics Activation Hardening
+
+**Status: ✅ implementado localmente (21/09/2026), não deployado. Analytics Auto Collection permanece OFF.**
+
+Endureceu sete contratos em `analytics_scheduler.py` e `analytics_providers/*`: coleta automática restrita a YouTube; privacidade fail-closed (PUBLIC comprovado exigido; PRIVATE/UNKNOWN bloqueiam); deduplicação/revalidação de elegibilidade antes de cada chamada ao provider; exclusão mútua entre ciclo manual e automático via lock persistido; revalidação de backoff por publicação antes de cada fetch; sanitização de erros de rede/HTTP para nunca expor API key/token/query; `DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED` como fonte real do default. Regressão: 338 passed, 19 subtests passed, 0 failed. Detalhes completos em `PROJECT_HANDOFF.md`.
+
+### V12-F.1B — Headless Worker Bootstrap
+
+**Status: 🔵 aberta, não implementada.**
+
+Bloqueador identificado durante V12-F.1A: `scheduler.start_scheduler_worker()` só inicia dentro do fragmento Streamlit da página de agendamento, que exige uma sessão de navegador conectada para executar. Após reboot de produção sem navegador, o worker (scheduler, analytics automático, produção autônoma) não inicia automaticamente. Requer mudança de lifecycle/startup da fábrica, tratada com gate próprio nesta fase — não implementar como parte da V12-F.1A.
 
 ## V12-F.2 — Closed Feedback Loop
 

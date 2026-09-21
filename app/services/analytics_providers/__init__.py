@@ -20,6 +20,7 @@ from app.services.analytics_providers.base import (
     ERR_RATE_LIMIT,
     ERR_TEMPORARY,
     ERR_UNAVAILABLE,
+    sanitize_error_text,
 )
 from app.services.analytics_providers.youtube import YouTubeAnalyticsProvider
 from app.services.analytics_providers.tiktok import TikTokAnalyticsProvider
@@ -84,4 +85,5 @@ __all__ = [
     "ERR_RATE_LIMIT",
     "ERR_TEMPORARY",
     "ERR_UNAVAILABLE",
+    "sanitize_error_text",
 ]

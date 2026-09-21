@@ -36,10 +36,17 @@ from app.services import operator_console, profile_manager, scheduler
 
 DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED = False
 DEFAULT_ANALYTICS_MAX_FETCHES_PER_CYCLE = 3
-SUPPORTED_ANALYTICS_PLATFORMS = ("youtube", "tiktok")
+# V12-F.1A: coleta automática restrita a YouTube; TikTok permanece fora da coleta
+# automática até homologação própria (não afeta consulta manual de um único post).
+SUPPORTED_ANALYTICS_PLATFORMS = ("youtube",)
 
 # Throttle mínimo entre ciclos automáticos (Hotfix V10-C)
 ANALYTICS_CYCLE_MIN_INTERVAL_SECONDS = 300  # 5 minutos
+
+# V12-F.1A: exclusão mútua entre ciclo automático e ciclo manual (Run One Cycle Now).
+# Lock considerado obsoleto (stale) após esse período, para nunca travar o sistema
+# permanentemente em caso de crash no meio de um ciclo.
+ANALYTICS_CYCLE_LOCK_STALE_SECONDS = 120
 
 # Cooldowns por idade da publicação (em segundos)
 # 0–6h: 60 min (3600s)
@@ -105,7 +112,11 @@ def _to_iso(dt_val: datetime) -> str:
 
 def is_analytics_auto_collection_enabled(db_path: Optional[str] = None) -> bool:
     """Verifica se a coleta automática de analytics está ativada."""
-    val = scheduler.get_setting("analytics_auto_collection_enabled", "False", db_path=db_path)
+    val = scheduler.get_setting(
+        "analytics_auto_collection_enabled",
+        str(DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED),
+        db_path=db_path,
+    )
     return str(val).lower() in ("true", "1", "yes")
 
 
@@ -449,24 +460,29 @@ def get_publication_latest_analytics(
 # Verificação de Privacidade Conhecida (Seção 5)
 # ---------------------------------------------------------------------------
 
-def is_publication_known_private(
+PRIVACY_PUBLIC = "public"
+PRIVACY_PRIVATE = "private"
+PRIVACY_UNKNOWN = "unknown"
+
+
+def get_known_publication_privacy_status(
     task_id: str,
     platform: str,
     db_path: Optional[str] = None,
-) -> bool:
+) -> str:
     """
-    Verifica se o conteúdo é sabidamente 'private'.
-    No YouTube, vídeos privados não são acessíveis via API Key pública.
-    Se a privacidade for 'private' comprovada nos metadados da tarefa, ignora
-    automaticamente para não desperdiçar cota. Se desconhecida, não inventa.
+    Resolve a privacidade conhecida da publicação a partir dos metadados persistidos
+    da tarefa (task.json). Retorna exatamente um de: 'public', 'private', 'unknown'.
+    Não inventa valor: qualquer ausência, erro de leitura ou valor não reconhecido
+    resulta em 'unknown', preservando o comportamento fail-closed do chamador.
     """
     clean_platform = str(platform or "").strip().lower()
     if clean_platform != "youtube":
-        return False
+        return PRIVACY_UNKNOWN
 
     clean_tid = str(task_id or "").strip()
     if not clean_tid:
-        return False
+        return PRIVACY_UNKNOWN
 
     try:
         from app.utils import utils
@@ -481,12 +497,24 @@ def is_publication_known_private(
                     or data.get("publish_info", {}).get("privacy")
                     or data.get("privacy")
                 )
-                if privacy and str(privacy).strip().lower() == "private":
-                    return True
+                clean_privacy = str(privacy).strip().lower() if privacy else ""
+                if clean_privacy == PRIVACY_PUBLIC:
+                    return PRIVACY_PUBLIC
+                if clean_privacy == PRIVACY_PRIVATE:
+                    return PRIVACY_PRIVATE
     except Exception:
         pass
 
-    return False
+    return PRIVACY_UNKNOWN
+
+
+def is_publication_known_private(
+    task_id: str,
+    platform: str,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Compatibilidade: verifica se o conteúdo é sabidamente 'private'."""
+    return get_known_publication_privacy_status(task_id, platform, db_path=db_path) == PRIVACY_PRIVATE
 
 
 # ---------------------------------------------------------------------------
@@ -549,9 +577,12 @@ def check_publication_eligibility(
     if backoff is not None:
         return False, f"provider_in_backoff ({backoff['reason']})", None
 
-    # 8. Verificação de YouTube sabidamente privado
-    if is_publication_known_private(task_id, platform, db_path=db_path):
-        return False, "private_youtube_skipped", None
+    # 8. Privacidade do YouTube fail-closed: só é elegível com PUBLIC comprovado.
+    # PRIVATE e UNKNOWN (metadado ausente/inconclusivo) bloqueiam a coleta automática.
+    if platform == "youtube":
+        privacy_status = get_known_publication_privacy_status(task_id, platform, db_path=db_path)
+        if privacy_status != PRIVACY_PUBLIC:
+            return False, f"youtube_privacy_not_public_confirmed ({privacy_status})", None
 
     # 9. Janela de idade (publicação deve ter <= 30 dias)
     published_at_str = pub_row.get("published_at")
@@ -727,121 +758,156 @@ def run_analytics_collection_cycle(
     if not force:
         scheduler.set_setting("analytics_last_auto_cycle_at", now_iso, db_path=db_path)
 
-    max_fetches = get_analytics_max_fetches_per_cycle(db_path=db_path)
-    candidates = get_eligible_analytics_candidates(limit=max_fetches, now=current_time, db_path=db_path)
-
-    if not candidates:
-        summary_msg = "Nenhuma publicação elegível para coleta de analytics neste ciclo."
-        scheduler.set_setting("analytics_last_cycle_status", "idle", db_path=db_path)
-        scheduler.set_setting("analytics_last_cycle_summary", summary_msg, db_path=db_path)
-        logger.info(f"[ANALYTICS_SCHEDULER] {summary_msg}")
-        return {
-            "status": "idle",
-            "candidates_count": 0,
-            "processed_count": 0,
-            "results": [],
-            "message": summary_msg,
-        }
-
-    logger.info(f"[ANALYTICS_SCHEDULER] Iniciando coleta para {len(candidates)} publicações elegíveis.")
-    results = []
-    processed_count = 0
-
-    for cand in candidates:
-        task_id = cand["task_id"]
-        platform = cand["platform"]
-        channel_id = cand.get("channel_id")
-        ext_id = cand.get("external_id")
-
-        # Verifica rate limit global
-        if not check_and_increment_rate_limit(platform, now=current_time, db_path=db_path):
-            results.append({
-                "task_id": task_id,
-                "platform": platform,
-                "status": "skipped",
-                "reason": "rate_limit_exceeded",
-            })
-            continue
-
+    # 5. Exclusão mútua entre ciclo manual (force=True) e ciclo automático (Seção V12-F.1A).
+    # Evita que dois ciclos (worker automático + "Run One Cycle Now" manual) processem
+    # candidatos simultaneamente. Lock persistido com expiração automática (stale).
+    lock_at_iso = scheduler.get_setting("analytics_cycle_lock_at", None, db_path=db_path)
+    if lock_at_iso:
         try:
-            # Coleta e ingestão do snapshot com isolamento total de falhas
-            snapshot = analytics_ingestion.ingest_analytics_for_publication(
-                task_id=task_id,
-                platform=platform,
-                channel_id=channel_id,
-                db_path=db_path,
-                collected_at=now_iso,
-            )
-            processed_count += 1
+            lock_dt = _normalize_utc(lock_at_iso)
+            if (current_time - lock_dt).total_seconds() < ANALYTICS_CYCLE_LOCK_STALE_SECONDS:
+                logger.info("[ANALYTICS_SCHEDULER] Ciclo ignorado: outro ciclo de analytics já em execução.")
+                return {
+                    "status": "skipped",
+                    "reason": "cycle_already_running",
+                    "message": "Outro ciclo de coleta de analytics (manual ou automático) já está em execução",
+                }
+        except Exception:
+            pass
+    scheduler.set_setting("analytics_cycle_lock_at", now_iso, db_path=db_path)
 
-            # Sucesso
-            scheduler.set_setting("analytics_last_success_at", now_iso, db_path=db_path)
-            operator_console.log_operational_event(
-                component="analytics",
-                severity="INFO",
-                event_type="ANALYTICS_COLLECTION_SUCCESS",
-                task_id=task_id,
-                message=f"Analytics coletado com sucesso para {task_id} ({platform}). Score: {snapshot.get('performance_score')}.",
-                metadata={
+    try:
+        max_fetches = get_analytics_max_fetches_per_cycle(db_path=db_path)
+        candidates = get_eligible_analytics_candidates(limit=max_fetches, now=current_time, db_path=db_path)
+
+        if not candidates:
+            summary_msg = "Nenhuma publicação elegível para coleta de analytics neste ciclo."
+            scheduler.set_setting("analytics_last_cycle_status", "idle", db_path=db_path)
+            scheduler.set_setting("analytics_last_cycle_summary", summary_msg, db_path=db_path)
+            logger.info(f"[ANALYTICS_SCHEDULER] {summary_msg}")
+            return {
+                "status": "idle",
+                "candidates_count": 0,
+                "processed_count": 0,
+                "results": [],
+                "message": summary_msg,
+            }
+
+        logger.info(f"[ANALYTICS_SCHEDULER] Iniciando coleta para {len(candidates)} publicações elegíveis.")
+        results = []
+        processed_count = 0
+
+        for cand in candidates:
+            task_id = cand["task_id"]
+            platform = cand["platform"]
+            channel_id = cand.get("channel_id")
+            ext_id = cand.get("external_id")
+
+            # 6. Revalidação imediatamente antes de chamar o provider (Seção V12-F.1A):
+            # reconfirma elegibilidade (dedupe de cooldown/snapshot novo) e libera apenas
+            # se o provedor não entrou em backoff durante o processamento deste mesmo ciclo.
+            is_still_eligible, reval_reason, _ = check_publication_eligibility(cand, now=current_time, db_path=db_path)
+            if not is_still_eligible:
+                results.append({
+                    "task_id": task_id,
                     "platform": platform,
-                    "channel_id": channel_id,
+                    "status": "skipped",
+                    "reason": f"revalidation_failed:{reval_reason}",
+                })
+                continue
+
+            # Verifica rate limit global
+            if not check_and_increment_rate_limit(platform, now=current_time, db_path=db_path):
+                results.append({
+                    "task_id": task_id,
+                    "platform": platform,
+                    "status": "skipped",
+                    "reason": "rate_limit_exceeded",
+                })
+                continue
+
+            try:
+                # Coleta e ingestão do snapshot com isolamento total de falhas
+                snapshot = analytics_ingestion.ingest_analytics_for_publication(
+                    task_id=task_id,
+                    platform=platform,
+                    channel_id=channel_id,
+                    db_path=db_path,
+                    collected_at=now_iso,
+                )
+                processed_count += 1
+
+                # Sucesso
+                scheduler.set_setting("analytics_last_success_at", now_iso, db_path=db_path)
+                operator_console.log_operational_event(
+                    component="analytics",
+                    severity="INFO",
+                    event_type="ANALYTICS_COLLECTION_SUCCESS",
+                    task_id=task_id,
+                    message=f"Analytics coletado com sucesso para {task_id} ({platform}). Score: {snapshot.get('performance_score')}.",
+                    metadata={
+                        "platform": platform,
+                        "channel_id": channel_id,
+                        "source": snapshot.get("source"),
+                        "views": snapshot.get("views"),
+                        "likes": snapshot.get("likes"),
+                        "performance_score": snapshot.get("performance_score"),
+                    },
+                    db_path=db_path,
+                )
+
+                results.append({
+                    "task_id": task_id,
+                    "platform": platform,
+                    "status": "success",
+                    "snapshot_id": snapshot.get("id"),
                     "source": snapshot.get("source"),
                     "views": snapshot.get("views"),
-                    "likes": snapshot.get("likes"),
                     "performance_score": snapshot.get("performance_score"),
-                },
-                db_path=db_path,
-            )
+                })
 
-            results.append({
-                "task_id": task_id,
-                "platform": platform,
-                "status": "success",
-                "snapshot_id": snapshot.get("id"),
-                "source": snapshot.get("source"),
-                "views": snapshot.get("views"),
-                "performance_score": snapshot.get("performance_score"),
-            })
+            except AnalyticsProviderError as ape:
+                err_code = ape.code or "UNKNOWN"
+                logger.warning(
+                    f"[ANALYTICS_SCHEDULER] Erro do provider '{platform}' ao coletar task {task_id}: "
+                    f"code={err_code}, msg={ape}"
+                )
+                # Aplica backoff no provider
+                set_provider_backoff(platform, reason=err_code, now=current_time, db_path=db_path)
+                results.append({
+                    "task_id": task_id,
+                    "platform": platform,
+                    "status": "failed",
+                    "error_code": err_code,
+                    "error_message": str(ape),
+                })
 
-        except AnalyticsProviderError as ape:
-            err_code = ape.code or "UNKNOWN"
-            logger.warning(
-                f"[ANALYTICS_SCHEDULER] Erro do provider '{platform}' ao coletar task {task_id}: "
-                f"code={err_code}, msg={ape}"
-            )
-            # Aplica backoff no provider
-            set_provider_backoff(platform, reason=err_code, now=current_time, db_path=db_path)
-            results.append({
-                "task_id": task_id,
-                "platform": platform,
-                "status": "failed",
-                "error_code": err_code,
-                "error_message": str(ape),
-            })
+            except Exception as exc:
+                logger.exception(f"[ANALYTICS_SCHEDULER] Falha inesperada ao coletar task {task_id}: {exc}")
+                set_provider_backoff(platform, reason=ERR_TEMPORARY, now=current_time, db_path=db_path)
+                results.append({
+                    "task_id": task_id,
+                    "platform": platform,
+                    "status": "failed",
+                    "error_code": "EXCEPTION",
+                    "error_message": str(exc),
+                })
 
-        except Exception as exc:
-            logger.exception(f"[ANALYTICS_SCHEDULER] Falha inesperada ao coletar task {task_id}: {exc}")
-            set_provider_backoff(platform, reason=ERR_TEMPORARY, now=current_time, db_path=db_path)
-            results.append({
-                "task_id": task_id,
-                "platform": platform,
-                "status": "failed",
-                "error_code": "EXCEPTION",
-                "error_message": str(exc),
-            })
+        summary_msg = f"Ciclo de analytics concluído: {processed_count}/{len(candidates)} processados com sucesso."
+        scheduler.set_setting("analytics_last_cycle_status", "completed", db_path=db_path)
+        scheduler.set_setting("analytics_last_cycle_summary", summary_msg, db_path=db_path)
 
-    summary_msg = f"Ciclo de analytics concluído: {processed_count}/{len(candidates)} processados com sucesso."
-    scheduler.set_setting("analytics_last_cycle_status", "completed", db_path=db_path)
-    scheduler.set_setting("analytics_last_cycle_summary", summary_msg, db_path=db_path)
-
-    logger.info(f"[ANALYTICS_SCHEDULER] {summary_msg}")
-    return {
-        "status": "completed",
-        "candidates_count": len(candidates),
-        "processed_count": processed_count,
-        "results": results,
-        "message": summary_msg,
-    }
+        logger.info(f"[ANALYTICS_SCHEDULER] {summary_msg}")
+        return {
+            "status": "completed",
+            "candidates_count": len(candidates),
+            "processed_count": processed_count,
+            "results": results,
+            "message": summary_msg,
+        }
+    finally:
+        # Libera sempre o lock de exclusão mútua, mesmo em caso de exceção/return antecipado.
+        scheduler.set_setting("analytics_cycle_lock_at", "", db_path=db_path)
 
 
 # ---------------------------------------------------------------------------

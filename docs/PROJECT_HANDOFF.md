@@ -1,6 +1,26 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
 
+## V12-F.1A — Analytics Activation Hardening (21/09/2026)
+
+Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`), sem deploy em produção. Analytics Auto Collection permanece `OFF` por default; nenhum setting de produção foi alterado.
+
+Regressão direcionada: **338 passed; 19 subtests passed; 0 failed** (baseline V12-E de 234+19 preservado, mais as suítes de analytics/providers estendidas).
+
+Sete contratos endurecidos em `app/services/analytics_scheduler.py` e `app/services/analytics_providers/*`:
+
+- Coleta automática restrita a YouTube (`SUPPORTED_ANALYTICS_PLATFORMS = ("youtube",)`).
+- Privacidade do YouTube fail-closed: PUBLIC comprovado é exigido; PRIVATE e UNKNOWN bloqueiam.
+- Deduplicação/revalidação de elegibilidade imediatamente antes de cada chamada ao provider.
+- Exclusão mútua entre ciclo manual (`force=True`) e ciclo automático via lock persistido com expiração (stale).
+- Revalidação de backoff por publicação antes de cada fetch dentro do mesmo ciclo.
+- Sanitização de mensagens de erro de rede/HTTP para nunca expor API key/token/query sensível.
+- `DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED` passou a ser a fonte real do valor default (antes um literal `"False"` divergente da constante).
+
+**V12-F.1 (auditoria e ativação completa) NÃO está concluída.** Bloqueador identificado e registrado, não corrigido nesta tarefa: `scheduler.start_scheduler_worker()` só é iniciado dentro do fragmento Streamlit da página de agendamento, que só executa quando uma sessão de navegador conecta. Após reboot de produção sem navegador conectado, o worker (scheduler, analytics automático, produção autônoma) não inicia. Esse bloqueador de lifecycle/startup foi separado em **V12-F.1B — Headless Worker Bootstrap**, com gate próprio, ainda não implementada.
+
+---
+
 ## Homologação V12-E em produção — 21/09/2026
 
 **V12-E HOMOLOGADA EM PRODUÇÃO. PUBLIC GATE = PASS.** Registro baseado nas evidências fornecidas pelo operador; nenhuma consulta ou alteração de produção nesta tarefa documental.
@@ -167,6 +187,8 @@ Timeout stale:
 - V12-E.2.1 One-cycle / One-transition hotfix — **homologado**
 - V12-E.2.2 Persistent Waiting Schedule Recovery — **homologado**
 - V12-F Adaptive Learning + Multi-Channel Warm-Up — **planejamento aberto**
+- V12-F.1A Analytics Activation Hardening — **implementado localmente, não deployado; Analytics OFF**
+- V12-F.1B Headless Worker Bootstrap — **aberta, não implementada**
 
 Próximas fases planejadas:
 - V13 Headless Remote Deployment / Safe Update

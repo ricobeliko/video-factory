@@ -1,26 +1,23 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
 
-## V12-E.2.2 ? Persistent Waiting Schedule Recovery (20/09/2026)
+## V12-E.2.2 — Persistent Waiting Schedule Recovery (20/09/2026)
 
-Hotfix validado localmente; deploy de produ??o ainda n?o realizado. V12-E permanece em homologa??o: o gate real PUBLIC no YouTube continua pendente.
+Hotfix validado localmente; deploy de produção não realizado. V12-E permanece em homologação e o gate real PUBLIC no YouTube continua pendente.
 
-Causa raiz confirmada no c?digo: ap?s perda do MemoryState, o retry de WAITING_SCHEDULE enviava apenas `task_id`. `scheduler.plan_schedule()` descartava esse payload por aus?ncia de estado COMPLETE ou `video_file`, antes de resolver os destinos persistidos.
+Causa raiz confirmada: após perda do MemoryState, WAITING_SCHEDULE enviava apenas `task_id`. O scheduler descartava o payload sem COMPLETE ou `video_file`, antes de resolver os destinos persistidos.
 
-Corre??o: o retry revalida v?deo final existente e n?o vazio via `get_task_final_video()`, Safety PASS expl?cito, ?ltimo Quality finito >= 70 com label GOOD/STRONG, destino YouTube em `task_platforms`, v?nculo em `task_profiles`, perfil ativo e canal YouTube habilitado. Reconstr?i o payload m?nimo quando a mem?ria est? ausente/incompleta; preserva os vetos de estado presentes em mem?ria. Reutiliza o scheduler para Growth Mode e deduplica??o por task/canal. O payload ? restrito a YouTube.
+Correção: o retry verifica vídeo final existente e não vazio via `get_task_final_video()`, Safety PASS explícito, último Quality finito >= 70 com label GOOD/STRONG, YouTube em `task_platforms`, vínculo em `task_profiles`, perfil ativo e canal YouTube habilitado. Reconstrói o payload quando a memória está ausente/incompleta e preserva vetos de estado presentes em memória. Reutiliza o scheduler para Growth Mode e deduplicação por task/canal; envia somente YouTube.
 
-Falha de recupera??o mant?m WAITING_SCHEDULE com `reason=waiting_recovery_failed` e diagn?stico na mensagem. Sem slot, permanece em espera. Sucesso agenda e retorna. Nenhum desses caminhos gera outra task no mesmo ciclo. Auto Publish, TikTok, MPT Auto Upload, schema e thresholds de produ??o n?o foram alterados.
+Recuperação inválida mantém WAITING_SCHEDULE com `reason=waiting_recovery_failed` e diagnóstico na mensagem. Sem slot, permanece em espera; sucesso agenda e retorna. Nenhum desses caminhos gera outra task no mesmo ciclo. Auto Publish, TikTok, MPT Auto Upload, schema e thresholds de produção permanecem inalterados.
 
-Valida??o: **234 testes + 19 subcasos PASS** nas oito su?tes solicitadas:
-`test_autonomous_production.py`, `test_scheduler.py`, `test_scheduler_worker.py`, `test_quality_score.py`, `test_operator_console.py`, `test_single_instance.py`, `test_schedule_cancellation.py`, `test_production_health.py` (todas em `test/services/`).
-
-Os novos testes cobrem mem?ria presente/ausente/incompleta, v?deo ausente/vazio, Safety BLOCK/REVIEW/ausente, Quality ausente/baixo/label inv?lido, perfil/canal/destino inv?lidos, slot WARMUP realmente ocupado, repeti??o e destinos terminais, one_shot com Autonomous OFF, aus?ncia de nova gera??o e Auto Publish OFF. Publica??o ? interceptada por mocks e conex?es externas s?o bloqueadas nos novos retries. Sete testes legados do scheduler passaram a declarar SCALE apenas no SQLite tempor?rio para testar seus tetos t?cnicos, sem modificar Growth Mode de produ??o.
-
-Comando de regress?o:
+Validação: **234 testes + 19 subcasos PASS** nas oito suítes abaixo. Cenários novos: memória presente/ausente/incompleta, vídeo ausente/vazio, Safety BLOCK/REVIEW/ausente, Quality ausente/baixo/label inválido, perfil/canal/destino inválidos, slot WARMUP ocupado, idempotência e destinos terminais, one_shot com Autonomous OFF, nenhuma nova geração, Auto Publish OFF e exclusão de TikTok. Publicação é interceptada por mocks e conexões externas são bloqueadas nos novos retries. Sete testes legados do scheduler agora declaram SCALE apenas no SQLite temporário para verificar tetos técnicos; Growth Mode de produção não mudou.
 
 ```powershell
 .venv/Scripts/python.exe -m pytest test/services/test_autonomous_production.py test/services/test_scheduler.py test/services/test_scheduler_worker.py test/services/test_quality_score.py test/services/test_operator_console.py test/services/test_single_instance.py test/services/test_schedule_cancellation.py test/services/test_production_health.py -q -p no:cacheprovider
 ```
+
+Próximo passo seguro: no PC de produção, seguir stop/backup/update/test/start com uma única instância PRIMARY. Manter Auto Publish OFF durante a verificação. Executar um ciclo supervisionado para a waiting task `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; conferir um único destino por canal, nenhuma nova geração e gates preservados. Sem slot, aguardar Growth Mode. Em `waiting_recovery_failed`, inspecionar o diagnóstico e corrigir a evidência pela operação normal, sem forçar COMPLETE nem limpar o waiting ID. PUBLIC segue como gate posterior de homologação supervisionada.
 
 ---
 

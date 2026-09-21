@@ -462,19 +462,54 @@ def get_publication_latest_analytics(
 
 PRIVACY_PUBLIC = "public"
 PRIVACY_PRIVATE = "private"
+PRIVACY_UNLISTED = "unlisted"
 PRIVACY_UNKNOWN = "unknown"
+_RECOGNIZED_PRIVACY_VALUES = (PRIVACY_PUBLIC, PRIVACY_PRIVATE, PRIVACY_UNLISTED)
+
+
+def _lookup_persisted_privacy_status(
+    task_id: str,
+    platform: str,
+    db_path: Optional[str] = None,
+) -> Optional[str]:
+    """Consulta publication_events.privacy_status diretamente (fonte primária, V12-F.1C)."""
+    try:
+        with scheduler.get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT privacy_status FROM publication_events
+                WHERE task_id = ? AND platform = ? AND status = 'success'
+                ORDER BY id DESC LIMIT 1;
+                """,
+                (task_id, platform),
+            ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    value = str(row["privacy_status"]).strip().lower() if row["privacy_status"] else ""
+    return value if value in _RECOGNIZED_PRIVACY_VALUES else None
 
 
 def get_known_publication_privacy_status(
     task_id: str,
     platform: str,
     db_path: Optional[str] = None,
+    persisted_privacy_status: Optional[str] = None,
 ) -> str:
     """
-    Resolve a privacidade conhecida da publicação a partir dos metadados persistidos
-    da tarefa (task.json). Retorna exatamente um de: 'public', 'private', 'unknown'.
-    Não inventa valor: qualquer ausência, erro de leitura ou valor não reconhecido
-    resulta em 'unknown', preservando o comportamento fail-closed do chamador.
+    Resolve a privacidade conhecida da publicação. Retorna exatamente um de:
+    'public', 'private', 'unlisted', 'unknown'. Não inventa valor: qualquer
+    ausência, erro de leitura ou valor não reconhecido resulta em 'unknown',
+    preservando o comportamento fail-closed do chamador.
+
+    Ordem de resolução (V12-F.1C):
+    1. publication_event.privacy_status persistido (fonte primária). Se o
+       chamador já tiver a linha em mãos, pode informar `persisted_privacy_status`
+       para evitar uma consulta redundante; caso contrário, é consultado aqui.
+    2. Fallback legado: task.json (compatibilidade com eventos anteriores à
+       persistência de privacy_status).
+    3. 'unknown' se nada acima resolver.
     """
     clean_platform = str(platform or "").strip().lower()
     if clean_platform != "youtube":
@@ -484,6 +519,16 @@ def get_known_publication_privacy_status(
     if not clean_tid:
         return PRIVACY_UNKNOWN
 
+    # 1. Fonte primária: publication_events.privacy_status
+    clean_persisted = str(persisted_privacy_status).strip().lower() if persisted_privacy_status else ""
+    if clean_persisted in _RECOGNIZED_PRIVACY_VALUES:
+        return clean_persisted
+    if persisted_privacy_status is None:
+        looked_up = _lookup_persisted_privacy_status(clean_tid, clean_platform, db_path=db_path)
+        if looked_up:
+            return looked_up
+
+    # 2. Fallback legado: task.json
     try:
         from app.utils import utils
         storage_folder = utils.storage_dir(create=False)
@@ -498,10 +543,8 @@ def get_known_publication_privacy_status(
                     or data.get("privacy")
                 )
                 clean_privacy = str(privacy).strip().lower() if privacy else ""
-                if clean_privacy == PRIVACY_PUBLIC:
-                    return PRIVACY_PUBLIC
-                if clean_privacy == PRIVACY_PRIVATE:
-                    return PRIVACY_PRIVATE
+                if clean_privacy in _RECOGNIZED_PRIVACY_VALUES:
+                    return clean_privacy
     except Exception:
         pass
 
@@ -578,9 +621,13 @@ def check_publication_eligibility(
         return False, f"provider_in_backoff ({backoff['reason']})", None
 
     # 8. Privacidade do YouTube fail-closed: só é elegível com PUBLIC comprovado.
-    # PRIVATE e UNKNOWN (metadado ausente/inconclusivo) bloqueiam a coleta automática.
+    # PRIVATE, UNLISTED e UNKNOWN (metadado ausente/inconclusivo) bloqueiam a coleta
+    # automática. Prioriza privacy_status persistido em publication_events (pub_row),
+    # com fallback legado para task.json dentro de get_known_publication_privacy_status.
     if platform == "youtube":
-        privacy_status = get_known_publication_privacy_status(task_id, platform, db_path=db_path)
+        privacy_status = get_known_publication_privacy_status(
+            task_id, platform, db_path=db_path, persisted_privacy_status=pub_row.get("privacy_status")
+        )
         if privacy_status != PRIVACY_PUBLIC:
             return False, f"youtube_privacy_not_public_confirmed ({privacy_status})", None
 
@@ -645,7 +692,7 @@ def get_eligible_analytics_candidates(
         cursor = conn.execute(
             """
             SELECT id, task_id, platform, published_at, status, external_id,
-                   provider_request_id, profile_id, channel_id, external_url
+                   provider_request_id, profile_id, channel_id, external_url, privacy_status
             FROM publication_events
             WHERE status = 'success'
               AND external_id IS NOT NULL

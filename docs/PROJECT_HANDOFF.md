@@ -1,9 +1,32 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
 
+## V12-F.1C — Publication Privacy Persistence (21/09/2026)
+
+Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`), sem deploy em produção. Analytics Auto Collection continua `OFF`. Nenhuma API real executada; nenhum secret acessado ou exposto.
+
+**Causa raiz:** a privacidade do YouTube nunca era persistida de forma própria em `publication_events` — o único sinal disponível era um fallback legado (`storage/tasks/<task_id>/task.json`), que não existe para o evento real homologado (`publication_event id=16`, task `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`, external_id `fTrkUqSnYqs`), apesar do operador ter confirmado visualmente PUBLIC no YouTube Studio. Isso fazia `get_known_publication_privacy_status()` retornar `unknown`, bloqueando corretamente a coleta automática (fail-closed), mas sem nenhuma forma auditável de registrar a evidência real. Também foi identificado que `fetch_real_metrics_for_publication()` (coleta manual) não verificava privacidade antes da chamada real — uma coleta manual poderia ter contornado o mesmo contrato fail-closed do Analytics automático.
+
+**Mudanças implementadas (aditivas, mínimas, backward-compatible):**
+
+- **Schema:** nova coluna `publication_events.privacy_status TEXT NULL`, adicionada via migração idempotente do scheduler (`_run_migrations`) e presente no `CREATE TABLE` para bancos novos. Nenhum histórico existente é reescrito.
+- **Persistência:** `scheduler.record_publication_event()` aceita `privacy_status: Optional[str] = None`, normalizado para `public`/`private`/`unlisted` (ou `NULL` para valores não reconhecidos ou plataformas que não sejam YouTube).
+- **Publicação futura:** `task.py` (ambos os caminhos, síncrono e assíncrono de `publish_task`) agora persiste exatamente o `privacyStatus` efetivamente enviado ao Upload-Post (`effective_youtube_privacy` / `youtube_privacy_status`), em vez de inferir depois pela configuração atual.
+- **Elegibilidade do Analytics automático:** `get_known_publication_privacy_status()` prioriza `publication_events.privacy_status` persistido, com fallback legado para `task.json`, e retorna `unknown` se nada resolver. `PRIVATE`, `UNLISTED` e `UNKNOWN` continuam bloqueando (fail-closed); somente `PUBLIC` comprovado é elegível.
+- **Coleta manual (`fetch_real_metrics_for_publication`):** agora exige `PUBLIC` comprovado para YouTube **antes** de qualquer requisição HTTP real, para `persist=False` e `persist=True`. Bloqueio usa o novo código de erro `ERR_PRIVACY_BLOCKED`, sem expor segredos.
+- **Confirmação operacional auditável:** nova `operator_console.confirm_publication_privacy_op(publication_event_id, expected_task_id, expected_external_id, privacy_status)` — exige PRIMARY, valida exatamente o evento (status=success, platform=youtube, task_id e external_id esperados), aceita apenas valores reconhecidos, atualiza SOMENTE `privacy_status`, registra `operational_event` auditável sem secrets, não altera `scheduled_posts` nem publica nada. **Não executada em produção nesta tarefa** — permite futuramente homologar o evento real 16 (task `f9b3e05f-...`, external_id `fTrkUqSnYqs`, privacy `public`) sem SQL manual.
+
+Regressão direcionada: suítes exigidas 100% PASS (`test_analytics_scheduler.py`, `test_analytics_ingestion.py`, `test_analytics_providers.py`, `test_analytics_real_fetch.py`, `test_scheduler.py`, `test_scheduler_worker.py`, `test_operator_console.py`, `test_autonomous_production.py`, `test_single_instance.py`, `test_production_health.py`, `test_production_entrypoint.py`, `test_publication_persistence.py`): **329 passed, 19 subtests passed, 0 failed**. Verificação adicional do publish path revelou 7 falhas pré-existentes e não relacionadas (Growth Mode/warmup de TikTok e ordenação de plataformas em `test_scheduler_execution.py`, `test_scheduler_timezone.py`, `test_publish_task.py`), confirmadas por reprodução em isolamento total sem qualquer mudança desta tarefa — não corrigidas aqui por estarem fora do escopo da V12-F.1C.
+
+**Não marcar V12-F.1 como concluída.** V12-F.1A e V12-F.1C endureceram contratos de segurança do Analytics; V12-F.1B corrigiu o bootstrap headless. A ativação real do Analytics Auto Collection em produção continua exigindo decisão e homologação próprias.
+
+---
+
 ## V12-F.1B — Headless Worker Bootstrap (21/09/2026)
 
-Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`), sem deploy em produção. Nenhuma ativação de Analytics; nenhuma regra de publicação/Growth Mode/Safety/Quality Gate alterada.
+**Status: ✅ implementada e HOMOLOGADA em produção.** Gate headless PASS, conforme evidências fornecidas pelo operador: Scheduled Task Running, HTTP 200/ok, heartbeat do PRIMARY avançou sem navegador, `executor_last_tick` avançou sem navegador. Estado operacional confirmado: Autonomous OFF, Auto Publish OFF, Analytics Auto OFF. Produção em `d1a8677`. Backup pré-deploy: `video_factory_20260921_044508.db`, SHA-256 `2f20ae0e7814f5b8745b5025d8ba6b49073e1cfb50e042d7d631f934506a1e52`, integridade `ok`.
+
+Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`) antes do deploy. Nenhuma ativação de Analytics; nenhuma regra de publicação/Growth Mode/Safety/Quality Gate alterada.
 
 **Causa raiz:** `scheduler.start_scheduler_worker()` só era chamado dentro do fragmento Streamlit `_render_publication_schedule()` em `webui/Main.py`, que só executa quando uma sessão de navegador conecta. Em modo headless (`--server.headless=true`), após reboot da Scheduled Task sem navegador, o script nunca era executado por nenhuma sessão e o worker (scheduler, analytics automático, produção autônoma) nunca iniciava.
 
@@ -208,7 +231,8 @@ Timeout stale:
 - V12-E.2.2 Persistent Waiting Schedule Recovery — **homologado**
 - V12-F Adaptive Learning + Multi-Channel Warm-Up — **planejamento aberto**
 - V12-F.1A Analytics Activation Hardening — **implementado localmente, não deployado; Analytics OFF**
-- V12-F.1B Headless Worker Bootstrap — **implementado localmente, não deployado**
+- V12-F.1B Headless Worker Bootstrap — **✅ homologada em produção; Headless gate PASS**
+- V12-F.1C Publication Privacy Persistence — **implementado localmente, não deployado; Analytics OFF**
 
 Próximas fases planejadas:
 - V13 Headless Remote Deployment / Safe Update
@@ -226,9 +250,9 @@ Próximas fases planejadas:
 - `08c644f` — enforce one autonomous transition per cycle
 
 ### Commit atual em produção
-`66f92a4`
+`d1a8677`
 
-`de62a4b` é governança de agentes, sem necessidade de deploy para validar a aplicação.
+`de62a4b` é governança de agentes, sem necessidade de deploy para validar a aplicação. `d1a8677` corresponde à V12-F.1B (Headless Worker Bootstrap), homologada em produção com Headless gate PASS.
 
 ---
 

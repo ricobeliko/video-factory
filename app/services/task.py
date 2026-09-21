@@ -1264,6 +1264,7 @@ def _run_cross_post(
                         external_id=req_id,
                         channel_id=channel_id,
                         profile_id=profile_id,
+                        privacy_status=youtube_privacy_status if (p or "").lower().strip() == "youtube" else None,
                         db_path=db_path,
                     )
             except Exception as e:
@@ -1778,6 +1779,7 @@ def publish_task(
                     channel_id=resolved_channel_id,
                     profile_id=task_profile_id,
                     external_url=str(platform_post_url) if platform_post_url else None,
+                    privacy_status=effective_youtube_privacy if p_clean == "youtube" else None,
                     db_path=db_path,
                 )
         except Exception as e:

@@ -233,9 +233,12 @@ class TestAnalyticsScheduler(unittest.TestCase):
         profile_id: Optional[str] = "default",
         channel_id: Optional[str] = None,
         youtube_privacy_status: Optional[str] = "public",
+        persisted_privacy_status: Optional[str] = None,
     ) -> int:
         """Helper para inserir evento de publicação. Por padrão, marca o YouTube como
-        'public' comprovado (privacidade fail-closed exige isso para ser elegível)."""
+        'public' comprovado (privacidade fail-closed exige isso para ser elegível) via
+        o fallback legado (task.json). `persisted_privacy_status` grava diretamente a
+        coluna publication_events.privacy_status (fonte primária, V12-F.1C)."""
         if platform == "youtube":
             self._write_task_privacy(task_id, youtube_privacy_status)
         p_at = published_at or self.base_time
@@ -245,10 +248,10 @@ class TestAnalyticsScheduler(unittest.TestCase):
                 """
                 INSERT INTO publication_events (
                     task_id, platform, published_at, status, external_id,
-                    profile_id, channel_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                    profile_id, channel_id, privacy_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                 """,
-                (task_id, platform, iso_p_at, status, external_id, profile_id, channel_id),
+                (task_id, platform, iso_p_at, status, external_id, profile_id, channel_id, persisted_privacy_status),
             )
             return cursor.lastrowid
 
@@ -870,6 +873,64 @@ class TestAnalyticsScheduler(unittest.TestCase):
             fresh_db = os.path.join(self.tmp_dir.name, "fresh_default.db")
             scheduler.init_db(fresh_db)
             self.assertTrue(analytics_scheduler.is_analytics_auto_collection_enabled(db_path=fresh_db))
+
+    # -----------------------------------------------------------------------
+    # V12-F.1C — Publication Privacy Persistence
+    # -----------------------------------------------------------------------
+
+    # T5: publication_event.privacy_status = public => elegível
+    def test_t5_persisted_privacy_public_is_eligible(self):
+        tid = "task_t5_persisted_public"
+        self._insert_publication(
+            tid, external_id="yt_t5", youtube_privacy_status=None, persisted_privacy_status="public"
+        )
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["task_id"], tid)
+
+    # T6: publication_event.privacy_status = private => bloqueado
+    def test_t6_persisted_privacy_private_blocks(self):
+        tid = "task_t6_persisted_private"
+        self._insert_publication(
+            tid, external_id="yt_t6", youtube_privacy_status=None, persisted_privacy_status="private"
+        )
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 0)
+
+    # T7: publication_event.privacy_status = unlisted => bloqueado
+    def test_t7_persisted_privacy_unlisted_blocks(self):
+        tid = "task_t7_persisted_unlisted"
+        self._insert_publication(
+            tid, external_id="yt_t7", youtube_privacy_status=None, persisted_privacy_status="unlisted"
+        )
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 0)
+
+    # T8: privacy_status NULL (sem task.json) => unknown => bloqueado
+    def test_t8_null_privacy_and_no_task_json_blocks(self):
+        tid = "task_t8_null_unknown"
+        self._insert_publication(
+            tid, external_id="yt_t8", youtube_privacy_status=None, persisted_privacy_status=None
+        )
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 0)
+
+        status = analytics_scheduler.get_known_publication_privacy_status(tid, "youtube", db_path=self.db_path)
+        self.assertEqual(status, analytics_scheduler.PRIVACY_UNKNOWN)
+
+    # T9: privacy_status persistido é NULL mas fallback task.json legado = public => elegível
+    def test_t9_fallback_task_json_when_persisted_is_null(self):
+        tid = "task_t9_fallback_legacy"
+        self._insert_publication(
+            tid, external_id="yt_t9", youtube_privacy_status="public", persisted_privacy_status=None
+        )
+        candidates = analytics_scheduler.get_eligible_analytics_candidates(db_path=self.db_path, now=self.base_time)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["task_id"], tid)
+
+        # persisted_privacy_status persistido continua tendo prioridade quando presente
+        status = analytics_scheduler.get_known_publication_privacy_status(tid, "youtube", db_path=self.db_path)
+        self.assertEqual(status, analytics_scheduler.PRIVACY_PUBLIC)
 
     # -----------------------------------------------------------------------
     # 38. Run One Cycle respeita limite

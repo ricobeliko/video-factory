@@ -1729,6 +1729,107 @@ def run_analytics_collection_cycle_op(db_path: Optional[str] = None) -> Dict[str
     return analytics_scheduler.run_analytics_collection_cycle(db_path=db_path, force=True)
 
 
+RECOGNIZED_PUBLICATION_PRIVACY_STATUSES = ("public", "private", "unlisted")
+
+
+def confirm_publication_privacy_op(
+    publication_event_id: int,
+    expected_task_id: str,
+    expected_external_id: str,
+    privacy_status: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Confirma manualmente e de forma auditável o `privacy_status` de um evento de
+    publicação YouTube já existente (Fase V12-F.1C — ex.: homologar eventos legados
+    sem `task.json`, como o evento real 16, sem raw SQL manual).
+
+    Exige estritamente PRIMARY role. Localiza exatamente o `publication_event_id`
+    informado e só aplica a mudança se TODAS as condições abaixo forem verdadeiras:
+    - status do evento é 'success'
+    - platform do evento é 'youtube'
+    - task_id do evento corresponde a `expected_task_id`
+    - external_id do evento corresponde a `expected_external_id`
+    - `privacy_status` é um valor reconhecido ('public', 'private' ou 'unlisted')
+
+    Atualiza SOMENTE a coluna `privacy_status` daquele evento. Não altera o status
+    da publicação, não altera `scheduled_posts` e não executa nenhuma publicação.
+    Registra um `operational_event` auditável sem expor segredos.
+    """
+    require_primary_instance(db_path=db_path)
+
+    clean_privacy = str(privacy_status or "").strip().lower()
+    if clean_privacy not in RECOGNIZED_PUBLICATION_PRIVACY_STATUSES:
+        raise ValueError(
+            f"privacy_status inválido: '{privacy_status}'. "
+            f"Valores aceitos: {list(RECOGNIZED_PUBLICATION_PRIVACY_STATUSES)}."
+        )
+
+    from app.services import scheduler
+    scheduler.init_db(db_path)
+
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM publication_events WHERE id = ?;",
+            (publication_event_id,),
+        ).fetchone()
+
+        if not row:
+            raise ValueError(f"publication_event id={publication_event_id} não encontrado.")
+
+        row_dict = dict(row)
+
+        if (row_dict.get("status") or "").strip().lower() != "success":
+            raise ValueError(
+                f"publication_event id={publication_event_id} não está em status 'success' "
+                f"(status={row_dict.get('status')})."
+            )
+        if (row_dict.get("platform") or "").strip().lower() != "youtube":
+            raise ValueError(
+                f"publication_event id={publication_event_id} não é da plataforma 'youtube' "
+                f"(platform={row_dict.get('platform')})."
+            )
+        if str(row_dict.get("task_id") or "") != str(expected_task_id or ""):
+            raise ValueError(
+                f"task_id informado não corresponde ao publication_event id={publication_event_id}."
+            )
+        if str(row_dict.get("external_id") or "") != str(expected_external_id or ""):
+            raise ValueError(
+                f"external_id informado não corresponde ao publication_event id={publication_event_id}."
+            )
+
+        conn.execute(
+            "UPDATE publication_events SET privacy_status = ? WHERE id = ?;",
+            (clean_privacy, publication_event_id),
+        )
+
+    log_operational_event(
+        component="analytics",
+        severity=SEVERITY_INFO,
+        event_type="PUBLICATION_PRIVACY_CONFIRMED",
+        task_id=str(expected_task_id),
+        message=(
+            f"Privacidade confirmada manualmente para publication_event id={publication_event_id} "
+            f"(task={expected_task_id}, platform=youtube): {clean_privacy}."
+        ),
+        metadata={
+            "publication_event_id": publication_event_id,
+            "task_id": expected_task_id,
+            "platform": "youtube",
+            "privacy_status": clean_privacy,
+        },
+        db_path=db_path,
+    )
+
+    return {
+        "success": True,
+        "publication_event_id": publication_event_id,
+        "task_id": expected_task_id,
+        "platform": "youtube",
+        "privacy_status": clean_privacy,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 13. Operações de Clip Mode (Fase V11-A)
 # ---------------------------------------------------------------------------

@@ -1,13 +1,19 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
 
+## V12-F.1C — Publication Privacy Persistence (21/09/2026)
+
+Implementação concluída **somente em desenvolvimento** (`D:\Projetos\MoneyPrinterTurbo`); nenhuma mudança em produção (`C:\Projetos\MoneyPrinterTurbo`) nesta tarefa; nenhum deploy realizado; nenhuma API real executada. Analytics Auto Collection permanece `OFF`.
+
+Nova coluna `publication_events.privacy_status` (migração aditiva/idempotente) passa a ser a fonte primária de privacidade do YouTube para o Analytics automático e para a coleta manual (`fetch_real_metrics_for_publication`), com fallback legado para `task.json`. Nova operação auditável `confirm_publication_privacy_op` no Operator Console permite homologar eventos legados sem SQL manual — **não executada em produção nesta tarefa**. Regressão das suítes exigidas: 329 passed, 19 subtests passed, 0 failed. Detalhes em `PROJECT_HANDOFF.md` e `ROADMAP.md`.
+
+---
+
 ## V12-F.1B — Headless Worker Bootstrap (21/09/2026)
 
-Implementação concluída **somente em desenvolvimento** (`D:\Projetos\MoneyPrinterTurbo`); nenhuma mudança em produção (`C:\Projetos\MoneyPrinterTurbo`) nesta tarefa; nenhum deploy realizado.
+**Status: ✅ HOMOLOGADA EM PRODUÇÃO. Headless gate PASS**, conforme evidências fornecidas pelo operador: Scheduled Task Running, HTTP 200/ok, heartbeat do PRIMARY avançou sem navegador, `executor_last_tick` avançou sem navegador. Estado operacional confirmado no gate: Autonomous OFF, Auto Publish OFF, Analytics Auto OFF. Produção em `d1a8677`. Backup pré-deploy: `video_factory_20260921_044508.db`, SHA-256 `2f20ae0e7814f5b8745b5025d8ba6b49073e1cfb50e042d7d631f934506a1e52`, integridade `ok`.
 
 `scripts/start_production.ps1` agora invoca `scripts/production_entrypoint.py` em vez de `python -m streamlit run` diretamente. O entrypoint garante, no MESMO processo que hospedará o Streamlit: inicialização do PRIMARY guard (`operator_console.ensure_instance_initialized`) e, se PRIMARY, início do `SchedulerExecutionWorker` — antes de qualquer navegador conectar. Isso corrige o bloqueador registrado na V12-F.1A (worker dependente de sessão Streamlit ativa). Parâmetros operacionais (address, port, headless, CORS, toolbar, usage stats) preservados. Regressão: 349 passed, 19 subtests passed, 0 failed. Detalhes em `PROJECT_HANDOFF.md` e `ROADMAP.md`.
-
-Quando este código for promovido a produção, o procedimento de deploy (seção 5 abaixo) permanece o mesmo; nenhum passo manual adicional é necessário além de garantir que `scripts/production_entrypoint.py` esteja presente no commit atualizado.
 
 ---
 
@@ -21,7 +27,7 @@ Bloqueador identificado (corrigido pela V12-F.1B, ver seção acima): o worker d
 
 ## Steady-state homologado — 21/09/2026
 
-V12-E HOMOLOGADA EM PRODUÇÃO; PUBLIC GATE PASS. Produção em `66f92a4`; `de62a4b` é governança de agentes e não foi necessário ao deploy de homologação. Evidências completas no [PROJECT_HANDOFF](PROJECT_HANDOFF.md).
+V12-E HOMOLOGADA EM PRODUÇÃO; PUBLIC GATE PASS. Produção em `d1a8677` (atualizada após homologação da V12-F.1B); `de62a4b` é governança de agentes e não foi necessário ao deploy de homologação. Evidências completas no [PROJECT_HANDOFF](PROJECT_HANDOFF.md).
 
 ```text
 Factory RUNNING

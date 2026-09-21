@@ -162,7 +162,7 @@ Objetivo: transformar o feedback de desempenho em um ciclo fechado de otimizaç�
 
 ## V12-F.1 — Analytics Auto-Collection Audit & Activation
 
-**Status: NÃO concluída.** Auditoria parcial concluída via V12-F.1A; ativação em produção continua bloqueada até V12-F.1B ser implementada e homologada.
+**Status: NÃO concluída.** Auditoria parcial concluída via V12-F.1A/V12-F.1C; bootstrap headless homologado via V12-F.1B. Ativação real do Analytics Auto Collection em produção continua exigindo decisão e homologação próprias.
 
 Objetivo futuro: auditar e ativar com segurança a coleta automática de Analytics já existente.
 
@@ -184,9 +184,15 @@ Endureceu sete contratos em `analytics_scheduler.py` e `analytics_providers/*`: 
 
 ### V12-F.1B — Headless Worker Bootstrap
 
-**Status: ✅ implementado localmente (21/09/2026), não deployado.**
+**Status: ✅ implementada e HOMOLOGADA em produção (21/09/2026). Headless gate PASS.**
 
-Bloqueador identificado durante V12-F.1A corrigido: `scripts/production_entrypoint.py` agora inicializa `operator_console.ensure_instance_initialized()` e, se PRIMARY, `scheduler.start_scheduler_worker(interval_seconds=30)` no MESMO processo que hospedará o Streamlit (`streamlit.web.bootstrap.load_config_options` + `.run`), antes de qualquer sessão de navegador conectar. `scripts/start_production.ps1` passou a chamar esse entrypoint em vez de `streamlit run` diretamente, preservando os mesmos parâmetros operacionais. SECONDARY nunca inicia o worker; shutdown libera worker e lock de forma idempotente. Regressão: 349 passed, 19 subtests passed, 0 failed (single-instance, scheduler worker, production health, autonomous production, analytics scheduler + testes do entrypoint). Detalhes completos em `PROJECT_HANDOFF.md`.
+Bloqueador identificado durante V12-F.1A corrigido: `scripts/production_entrypoint.py` agora inicializa `operator_console.ensure_instance_initialized()` e, se PRIMARY, `scheduler.start_scheduler_worker(interval_seconds=30)` no MESMO processo que hospedará o Streamlit (`streamlit.web.bootstrap.load_config_options` + `.run`), antes de qualquer sessão de navegador conectar. `scripts/start_production.ps1` passou a chamar esse entrypoint em vez de `streamlit run` diretamente, preservando os mesmos parâmetros operacionais. SECONDARY nunca inicia o worker; shutdown libera worker e lock de forma idempotente. Regressão: 349 passed, 19 subtests passed, 0 failed. Gate headless homologado com evidências do operador: Scheduled Task Running, HTTP 200/ok, heartbeat do PRIMARY e `executor_last_tick` avançando sem navegador. Produção em `d1a8677`. Detalhes completos em `PROJECT_HANDOFF.md`.
+
+### V12-F.1C — Publication Privacy Persistence
+
+**Status: ✅ implementado localmente (21/09/2026), não deployado. Analytics Auto Collection permanece OFF.**
+
+Cria fonte persistente e auditável de `privacy_status` em `publication_events` (migração aditiva/idempotente) e faz todos os caminhos de Analytics YouTube respeitarem essa evidência: publicação futura persiste o `privacyStatus` efetivamente usado; elegibilidade do Analytics automático prioriza o valor persistido com fallback legado para `task.json`, mantendo fail-closed (PRIVATE/UNLISTED/UNKNOWN bloqueiam); coleta manual (`fetch_real_metrics_for_publication`) agora exige PUBLIC comprovado antes de qualquer requisição real, para `persist=False` e `persist=True`; nova operação auditável `confirm_publication_privacy_op` no Operator Console permite homologar eventos legados (ex.: evento real 16) sem SQL manual, exigindo PRIMARY e validação exata do evento. Regressão das suítes exigidas: 329 passed, 19 subtests passed, 0 failed. Detalhes completos em `PROJECT_HANDOFF.md`.
 
 ## V12-F.2 — Closed Feedback Loop
 

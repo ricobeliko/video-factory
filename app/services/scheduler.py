@@ -80,6 +80,10 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE publication_events ADD COLUMN channel_id TEXT;")
     if "external_url" not in existing_pub_cols:
         conn.execute("ALTER TABLE publication_events ADD COLUMN external_url TEXT;")
+    if "privacy_status" not in existing_pub_cols:
+        # V12-F.1C: fonte persistente e auditável de privacidade (public/private/unlisted).
+        # Aditiva/idempotente; nunca reescreve histórico existente.
+        conn.execute("ALTER TABLE publication_events ADD COLUMN privacy_status TEXT;")
 
     # Idempotência aprimorada por task_id + channel_id + platform
     conn.execute("DROP INDEX IF EXISTS idx_active_schedule;")
@@ -130,7 +134,8 @@ def init_db(db_path: Optional[str] = None) -> None:
                 provider_request_id TEXT,
                 profile_id TEXT,
                 channel_id TEXT,
-                external_url TEXT
+                external_url TEXT,
+                privacy_status TEXT
             );
             """
         )
@@ -749,6 +754,25 @@ def get_platform_rate_limits(
 # Scheduler: Planejamento e Agenda
 # ---------------------------------------------------------------------------
 
+RECOGNIZED_PRIVACY_STATUSES = ("public", "private", "unlisted")
+
+
+def _normalize_privacy_status(value: Optional[str], platform: str) -> Optional[str]:
+    """Normaliza o valor de privacidade antes de persistir.
+
+    Para plataformas que não sejam YouTube permanece NULL nesta fase. Qualquer
+    valor não reconhecido (vazio, None, typo) também normaliza para NULL —
+    nunca inventa um valor; ausência de evidência é tratada como desconhecida
+    pelos consumidores (fail-closed), não aqui.
+    """
+    if (platform or "").strip().lower() != "youtube":
+        return None
+    clean_value = str(value or "").strip().lower()
+    if clean_value in RECOGNIZED_PRIVACY_STATUSES:
+        return clean_value
+    return None
+
+
 def record_publication_event(
     task_id: str,
     platform: str,
@@ -760,6 +784,7 @@ def record_publication_event(
     channel_id: Optional[str] = None,
     profile_id: Optional[str] = None,
     external_url: Optional[str] = None,
+    privacy_status: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Registra um evento de publicação (usado pelo publicador manual ou testes)."""
@@ -767,15 +792,16 @@ def record_publication_event(
     pub_time = _normalize_utc(published_at)
     iso_time = _to_iso(pub_time)
     clean_platform = platform.lower().strip()
+    clean_privacy_status = _normalize_privacy_status(privacy_status, clean_platform)
 
     with get_connection(db_path) as conn:
         conn.execute(
             """
             INSERT INTO publication_events (
-                task_id, platform, published_at, status, external_id, error_code, provider_request_id, profile_id, channel_id, external_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                task_id, platform, published_at, status, external_id, error_code, provider_request_id, profile_id, channel_id, external_url, privacy_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            (task_id, clean_platform, iso_time, status, external_id, error_code, provider_request_id, profile_id, channel_id, external_url),
+            (task_id, clean_platform, iso_time, status, external_id, error_code, provider_request_id, profile_id, channel_id, external_url, clean_privacy_status),
         )
         if status == "success":
             if channel_id:

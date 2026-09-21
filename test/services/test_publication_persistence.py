@@ -229,6 +229,177 @@ class TestPublicationPersistence(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(captured_extra.get("privacyStatus"), "unlisted")
 
+    # -----------------------------------------------------------------------
+    # V12-F.1C — Publication Privacy Persistence
+    # -----------------------------------------------------------------------
+
+    # T1: migração adiciona privacy_status em banco legado
+    def test_t1_migration_adds_privacy_status_to_legacy_db(self):
+        legacy_db_path = os.path.join(self.test_dir, "legacy_privacy.db")
+        conn = sqlite3.connect(legacy_db_path)
+        conn.execute(
+            """
+            CREATE TABLE publication_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                published_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                external_id TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO publication_events (task_id, platform, published_at, status, external_id)
+            VALUES ('legacy_task_priv', 'youtube', '2026-09-16T12:00:00+00:00', 'success', 'legacy_ext_priv');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        scheduler.init_db(legacy_db_path)
+
+        conn = sqlite3.connect(legacy_db_path)
+        conn.row_factory = sqlite3.Row
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(publication_events);").fetchall()]
+        self.assertIn("privacy_status", cols)
+
+        row = conn.execute("SELECT * FROM publication_events WHERE task_id = 'legacy_task_priv';").fetchone()
+        conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["privacy_status"])
+        self.assertEqual(row["external_id"], "legacy_ext_priv")
+
+    # T2: migração é idempotente (rodar novamente não falha nem duplica coluna)
+    def test_t2_migration_is_idempotent(self):
+        legacy_db_path = os.path.join(self.test_dir, "legacy_privacy_idem.db")
+        scheduler.init_db(legacy_db_path)
+        scheduler.init_db(legacy_db_path)  # segunda chamada não deve falhar
+
+        conn = sqlite3.connect(legacy_db_path)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(publication_events);").fetchall()]
+        conn.close()
+        self.assertEqual(cols.count("privacy_status"), 1)
+
+    # T3: record_publication_event(public) persiste 'public'
+    def test_t3_record_publication_event_persists_public(self):
+        scheduler.record_publication_event(
+            task_id="task_priv_public",
+            platform="youtube",
+            status="success",
+            external_id="yt_pub_1",
+            privacy_status="public",
+            db_path=self.db_path,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE task_id = ?;",
+                ("task_priv_public",),
+            ).fetchone()
+        self.assertEqual(row["privacy_status"], "public")
+
+    # T4: record_publication_event(private) persiste 'private'
+    def test_t4_record_publication_event_persists_private(self):
+        scheduler.record_publication_event(
+            task_id="task_priv_private",
+            platform="youtube",
+            status="success",
+            external_id="yt_priv_1",
+            privacy_status="private",
+            db_path=self.db_path,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE task_id = ?;",
+                ("task_priv_private",),
+            ).fetchone()
+        self.assertEqual(row["privacy_status"], "private")
+
+    # Valor não reconhecido normaliza para NULL (não inventa dado)
+    def test_record_publication_event_unrecognized_privacy_normalizes_to_null(self):
+        scheduler.record_publication_event(
+            task_id="task_priv_typo",
+            platform="youtube",
+            status="success",
+            external_id="yt_typo_1",
+            privacy_status="Public ",  # variação de case/whitespace ainda é aceita
+            db_path=self.db_path,
+        )
+        scheduler.record_publication_event(
+            task_id="task_priv_garbage",
+            platform="youtube",
+            status="success",
+            external_id="yt_garbage_1",
+            privacy_status="not_a_real_value",
+            db_path=self.db_path,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            row_ok = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE task_id = ?;",
+                ("task_priv_typo",),
+            ).fetchone()
+            row_bad = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE task_id = ?;",
+                ("task_priv_garbage",),
+            ).fetchone()
+        self.assertEqual(row_ok["privacy_status"], "public")
+        self.assertIsNone(row_bad["privacy_status"])
+
+    # Plataformas não-YouTube permanecem NULL nesta fase, mesmo se um valor for passado
+    def test_record_publication_event_non_youtube_privacy_stays_null(self):
+        scheduler.record_publication_event(
+            task_id="task_priv_tiktok",
+            platform="tiktok",
+            status="success",
+            external_id="tt_1",
+            privacy_status="public",
+            db_path=self.db_path,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE task_id = ?;",
+                ("task_priv_tiktok",),
+            ).fetchone()
+        self.assertIsNone(row["privacy_status"])
+
+    # T17: publicação síncrona real persiste o privacyStatus efetivamente usado
+    def test_t17_synchronous_publish_persists_effective_youtube_privacy(self):
+        task_id = "task_pub_yt_privacy_persisted"
+        self._create_task(task_id)
+
+        mock_response = {
+            "success": True,
+            "results": {
+                "youtube": {
+                    "success": True,
+                    "post_id": "yt_privacy_persisted_1",
+                    "url": "https://www.youtube.com/watch?v=yt_privacy_persisted_1",
+                }
+            },
+            "request_id": "req_privacy_persisted_1",
+        }
+
+        with patch("app.services.upload_post.cross_post_video", return_value=mock_response):
+            success, err = task_module.publish_task(
+                task_id,
+                platforms=["youtube"],
+                synchronous=True,
+                youtube_privacy_status="public",
+                db_path=self.db_path,
+            )
+
+        self.assertTrue(success)
+        self.assertEqual(err, "")
+
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE task_id = ?;",
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(row["privacy_status"], "public")
+
 
 if __name__ == "__main__":
     unittest.main()

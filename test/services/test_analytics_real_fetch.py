@@ -143,6 +143,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="dQw4w9WgXcQ",
+            privacy_status="public",
             db_path=self.db_path,
         )
 
@@ -225,6 +226,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_np_123",
+            privacy_status="public",
             db_path=self.db_path,
         )
 
@@ -256,6 +258,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_p_123",
+            privacy_status="public",
             db_path=self.db_path,
         )
 
@@ -321,6 +324,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             external_id="vid_iso_999",
             profile_id="profile_historias",
             channel_id="chan_yt_hist",
+            privacy_status="public",
             db_path=self.db_path,
         )
 
@@ -375,6 +379,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_auth_err",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -400,6 +405,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_rl_err",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -425,6 +431,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_nf_err",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -450,6 +457,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_temp_err",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -475,6 +483,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_inv_err",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -501,6 +510,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_sec_meta",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -528,6 +538,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_imm_999",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -569,6 +580,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_vo_1",
+            privacy_status="public",
             db_path=self.db_path,
         )
 
@@ -594,6 +606,7 @@ class TestAnalyticsRealFetch(unittest.TestCase):
             platform="youtube",
             status="success",
             external_id="vid_prim_1",
+            privacy_status="public",
             db_path=self.db_path,
         )
         mock_resp = MagicMock()
@@ -618,6 +631,132 @@ class TestAnalyticsRealFetch(unittest.TestCase):
         validate_provider_configuration("youtube", db_path=self.db_path)
         threads_after = threading.active_count()
         self.assertEqual(threads_before, threads_after)
+
+    # -----------------------------------------------------------------------
+    # V12-F.1C — Manual real fetch respeita o mesmo contrato fail-closed
+    # -----------------------------------------------------------------------
+
+    @patch("requests.get")
+    def test_t10_manual_fetch_unknown_privacy_never_calls_provider(self, mock_get):
+        """T10: privacidade UNKNOWN (sem persistido, sem task.json) bloqueia ANTES do provider."""
+        config.app["youtube_api_key"] = "valid_key"
+        scheduler.record_publication_event(
+            task_id="task_manual_unknown",
+            platform="youtube",
+            status="success",
+            external_id="vid_manual_unknown",
+            db_path=self.db_path,
+        )
+
+        for persist in (False, True):
+            with self.assertRaises(AnalyticsProviderError) as ctx:
+                analytics_ingestion.fetch_real_metrics_for_publication(
+                    task_id="task_manual_unknown",
+                    platform="youtube",
+                    persist=persist,
+                    db_path=self.db_path,
+                )
+            self.assertEqual(ctx.exception.code, analytics_providers.ERR_PRIVACY_BLOCKED)
+        mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_t11_manual_fetch_private_never_calls_provider(self, mock_get):
+        """T11: privacidade PRIVATE persistida bloqueia ANTES do provider."""
+        config.app["youtube_api_key"] = "valid_key"
+        scheduler.record_publication_event(
+            task_id="task_manual_private",
+            platform="youtube",
+            status="success",
+            external_id="vid_manual_private",
+            privacy_status="private",
+            db_path=self.db_path,
+        )
+
+        with self.assertRaises(AnalyticsProviderError) as ctx:
+            analytics_ingestion.fetch_real_metrics_for_publication(
+                task_id="task_manual_private",
+                platform="youtube",
+                persist=False,
+                db_path=self.db_path,
+            )
+        self.assertEqual(ctx.exception.code, analytics_providers.ERR_PRIVACY_BLOCKED)
+        mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_t12_manual_fetch_unlisted_never_calls_provider(self, mock_get):
+        """T12: privacidade UNLISTED persistida bloqueia ANTES do provider."""
+        config.app["youtube_api_key"] = "valid_key"
+        scheduler.record_publication_event(
+            task_id="task_manual_unlisted",
+            platform="youtube",
+            status="success",
+            external_id="vid_manual_unlisted",
+            privacy_status="unlisted",
+            db_path=self.db_path,
+        )
+
+        with self.assertRaises(AnalyticsProviderError) as ctx:
+            analytics_ingestion.fetch_real_metrics_for_publication(
+                task_id="task_manual_unlisted",
+                platform="youtube",
+                persist=True,
+                db_path=self.db_path,
+            )
+        self.assertEqual(ctx.exception.code, analytics_providers.ERR_PRIVACY_BLOCKED)
+        mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_t13_manual_fetch_public_reaches_provider_mock(self, mock_get):
+        """T13: privacidade PUBLIC persistida permite chegar ao provider (mockado)."""
+        config.app["youtube_api_key"] = "valid_key"
+        scheduler.record_publication_event(
+            task_id="task_manual_public",
+            platform="youtube",
+            status="success",
+            external_id="vid_manual_public",
+            privacy_status="public",
+            db_path=self.db_path,
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "items": [{"id": "vid_manual_public", "statistics": {"viewCount": "42"}}]
+        }
+        mock_get.return_value = mock_resp
+
+        res = analytics_ingestion.fetch_real_metrics_for_publication(
+            task_id="task_manual_public",
+            platform="youtube",
+            persist=False,
+            db_path=self.db_path,
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["metrics"]["views"], 42)
+        mock_get.assert_called_once()
+
+    @patch("requests.get")
+    def test_manual_fetch_privacy_block_never_exposes_secret(self, mock_get):
+        """Erro de bloqueio de privacidade nunca expõe a API key configurada."""
+        secret_key = "AIzaSySecretManualBlock999"
+        config.app["youtube_api_key"] = secret_key
+        scheduler.record_publication_event(
+            task_id="task_manual_secret_block",
+            platform="youtube",
+            status="success",
+            external_id="vid_manual_secret_block",
+            db_path=self.db_path,
+        )
+
+        with self.assertRaises(AnalyticsProviderError) as ctx:
+            analytics_ingestion.fetch_real_metrics_for_publication(
+                task_id="task_manual_secret_block",
+                platform="youtube",
+                persist=False,
+                db_path=self.db_path,
+            )
+        self.assertNotIn(secret_key, str(ctx.exception))
+        mock_get.assert_not_called()
 
 
 if __name__ == "__main__":

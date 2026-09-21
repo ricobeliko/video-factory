@@ -19,6 +19,7 @@ from app.services.analytics_providers import (
     AnalyticsProviderError,
     ERR_AUTH,
     ERR_NOT_FOUND,
+    ERR_PRIVACY_BLOCKED,
     get_provider,
 )
 
@@ -272,6 +273,23 @@ def fetch_real_metrics_for_publication(
             f"Publicação da task '{ref.task_id}' na plataforma '{ref.platform}' não possui external_post_id.",
             code=ERR_NOT_FOUND,
         )
+
+    # 3.5. Privacidade do YouTube fail-closed (V12-F.1C): a coleta manual respeita
+    # exatamente o mesmo contrato do Analytics automático. PUBLIC precisa estar
+    # comprovado (publication_events.privacy_status ou fallback legado task.json)
+    # ANTES de qualquer requisição HTTP real, para persist=False e persist=True.
+    if clean_platform == "youtube":
+        from app.services import analytics_scheduler
+
+        privacy_status = analytics_scheduler.get_known_publication_privacy_status(
+            ref.task_id, clean_platform, db_path=db_path
+        )
+        if privacy_status != analytics_scheduler.PRIVACY_PUBLIC:
+            raise AnalyticsProviderError(
+                f"Coleta manual bloqueada: privacidade do YouTube não confirmada como PUBLIC "
+                f"para a task '{ref.task_id}' (status={privacy_status}).",
+                code=ERR_PRIVACY_BLOCKED,
+            )
 
     # 4. Validar formato do external_post_id
     clean_post_id = provider.validate_external_id(ref.external_post_id)

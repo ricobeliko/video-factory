@@ -23,6 +23,9 @@ ERR_NOT_FOUND = "NOT_FOUND"
 ERR_TEMPORARY = "TEMPORARY"
 ERR_UNAVAILABLE = "UNAVAILABLE"
 ERR_INVALID_RESPONSE = "INVALID_RESPONSE"
+# V12-F.1C: bloqueio fail-closed por privacidade não confirmada como PUBLIC
+# (nunca dispara a requisição externa real quando este código é usado).
+ERR_PRIVACY_BLOCKED = "PRIVACY_BLOCKED"
 
 # V12-F.1A: padrões usados para nunca expor API key/token/query sensível em
 # mensagens de erro (exceções de rede podem ecoar a URL completa da requisição).

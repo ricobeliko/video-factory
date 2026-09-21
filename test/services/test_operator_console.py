@@ -281,6 +281,157 @@ class TestOperatorConsole(unittest.TestCase):
         # Não deve duplicar o agendamento
         self.assertEqual(len(scheduled), 0)
 
+    # -----------------------------------------------------------------------
+    # V12-F.1C — confirm_publication_privacy_op
+    # -----------------------------------------------------------------------
+
+    def _insert_legacy_publication_event(
+        self,
+        task_id: str = "legacy_task",
+        platform: str = "youtube",
+        status: str = "success",
+        external_id: str = "ext_legacy_1",
+    ) -> int:
+        with scheduler.get_connection(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO publication_events (task_id, platform, published_at, status, external_id)
+                VALUES (?, ?, ?, ?, ?);
+                """,
+                (task_id, platform, datetime.now(timezone.utc).isoformat(), status, external_id),
+            )
+            return cursor.lastrowid
+
+    def tearDown_reset_instance(self):
+        operator_console.reset_instance_for_testing()
+
+    # T14: exige PRIMARY
+    def test_t14_confirm_publication_privacy_requires_primary(self):
+        event_id = self._insert_legacy_publication_event()
+        with patch.object(operator_console, "is_primary_instance", return_value=False):
+            with self.assertRaises(PermissionError):
+                operator_console.confirm_publication_privacy_op(
+                    publication_event_id=event_id,
+                    expected_task_id="legacy_task",
+                    expected_external_id="ext_legacy_1",
+                    privacy_status="public",
+                    db_path=self.db_path,
+                )
+        # Nenhuma alteração deve ter ocorrido
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT privacy_status FROM publication_events WHERE id = ?;", (event_id,)
+            ).fetchone()
+        self.assertIsNone(row["privacy_status"])
+        operator_console.reset_instance_for_testing()
+
+    # T15: rejeita event_id/task_id/external_id incompatível
+    def test_t15_confirm_publication_privacy_rejects_mismatch(self):
+        event_id = self._insert_legacy_publication_event()
+
+        with self.assertRaises(ValueError):
+            operator_console.confirm_publication_privacy_op(
+                publication_event_id=999999,
+                expected_task_id="legacy_task",
+                expected_external_id="ext_legacy_1",
+                privacy_status="public",
+                db_path=self.db_path,
+            )
+        with self.assertRaises(ValueError):
+            operator_console.confirm_publication_privacy_op(
+                publication_event_id=event_id,
+                expected_task_id="wrong_task_id",
+                expected_external_id="ext_legacy_1",
+                privacy_status="public",
+                db_path=self.db_path,
+            )
+        with self.assertRaises(ValueError):
+            operator_console.confirm_publication_privacy_op(
+                publication_event_id=event_id,
+                expected_task_id="legacy_task",
+                expected_external_id="wrong_external_id",
+                privacy_status="public",
+                db_path=self.db_path,
+            )
+        with self.assertRaises(ValueError):
+            operator_console.confirm_publication_privacy_op(
+                publication_event_id=event_id,
+                expected_task_id="legacy_task",
+                expected_external_id="ext_legacy_1",
+                privacy_status="not_a_real_value",
+                db_path=self.db_path,
+            )
+        # Evento sem status='success' também é rejeitado
+        failed_event_id = self._insert_legacy_publication_event(
+            task_id="legacy_task_failed", status="failed", external_id="ext_legacy_failed"
+        )
+        with self.assertRaises(ValueError):
+            operator_console.confirm_publication_privacy_op(
+                publication_event_id=failed_event_id,
+                expected_task_id="legacy_task_failed",
+                expected_external_id="ext_legacy_failed",
+                privacy_status="public",
+                db_path=self.db_path,
+            )
+        # Evento de plataforma diferente de youtube também é rejeitado
+        tiktok_event_id = self._insert_legacy_publication_event(
+            task_id="legacy_task_tt", platform="tiktok", external_id="ext_legacy_tt"
+        )
+        with self.assertRaises(ValueError):
+            operator_console.confirm_publication_privacy_op(
+                publication_event_id=tiktok_event_id,
+                expected_task_id="legacy_task_tt",
+                expected_external_id="ext_legacy_tt",
+                privacy_status="public",
+                db_path=self.db_path,
+            )
+
+    # T16: altera SOMENTE privacy_status (status/scheduled_posts intocados)
+    def test_t16_confirm_publication_privacy_updates_only_privacy_status(self):
+        task_id = "legacy_task_real16"
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at)
+                VALUES (?, 'youtube', ?, 'published', ?);
+                """,
+                (task_id, datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat()),
+            )
+        event_id = self._insert_legacy_publication_event(
+            task_id=task_id, external_id="fTrkUqSnYqs"
+        )
+
+        result = operator_console.confirm_publication_privacy_op(
+            publication_event_id=event_id,
+            expected_task_id=task_id,
+            expected_external_id="fTrkUqSnYqs",
+            privacy_status="public",
+            db_path=self.db_path,
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["privacy_status"], "public")
+
+        with scheduler.get_connection(self.db_path) as conn:
+            ev = conn.execute(
+                "SELECT status, platform, task_id, external_id, privacy_status FROM publication_events WHERE id = ?;",
+                (event_id,),
+            ).fetchone()
+            sp = conn.execute(
+                "SELECT status FROM scheduled_posts WHERE task_id = ?;", (task_id,)
+            ).fetchone()
+
+        self.assertEqual(ev["privacy_status"], "public")
+        self.assertEqual(ev["status"], "success")  # inalterado
+        self.assertEqual(ev["platform"], "youtube")  # inalterado
+        self.assertEqual(ev["external_id"], "fTrkUqSnYqs")  # inalterado
+        self.assertEqual(sp["status"], "published")  # scheduled_posts inalterado
+
+        # Evento operacional auditável sem secrets
+        events = operator_console.get_operational_events(limit=10, db_path=self.db_path)
+        confirm_events = [e for e in events if e.get("event_type") == "PUBLICATION_PRIVACY_CONFIRMED"]
+        self.assertGreaterEqual(len(confirm_events), 1)
+        self.assertEqual(confirm_events[0]["task_id"], task_id)
+
 
 if __name__ == "__main__":
     unittest.main()

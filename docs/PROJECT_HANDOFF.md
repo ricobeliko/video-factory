@@ -1,9 +1,40 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
 
+## Homologação V12-E em produção — 21/09/2026
+
+**V12-E HOMOLOGADA EM PRODUÇÃO. PUBLIC GATE = PASS.** Registro baseado nas evidências fornecidas pelo operador; nenhuma consulta ou alteração de produção nesta tarefa documental.
+
+Produção atualizada para `66f92a4` antes da homologação. Commits: `fd57f84` (hotfix funcional V12-E.2.2), `66f92a4` (documentação/encoding), `de62a4b` (governança de agentes, sem necessidade de deploy para validar a aplicação).
+
+Backup pré-deploy: `video_factory_20260921_014133.db`.
+SHA-256: `79313b694f54000b57d704eadfc8a6e5b1871ac5198e95006ef4890cd82f44a5`.
+Integridade: `ok`. Regressão em produção: **234 passed; 19 subtests passed; 0 failed**.
+
+Task: `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; Safety PASS; Quality 78.3; label GOOD.
+Sem slot, permaneceu corretamente em WAITING_SCHEDULE. Após abertura de slot e deploy do hotfix, a task foi recuperada, sem geração indevida; `waiting_task_id` foi limpo e a task entrou no Scheduler.
+
+| Evidência | Resultado |
+| --- | --- |
+| Scheduled Post | id=15; platform=youtube; profile_id=default; channel_id=channel-default-youtube |
+| Estado final | published; attempts=0; last_error=None |
+| Publication Event | id=16; status=success; platform=youtube |
+| external_id | fTrkUqSnYqs |
+| provider_request_id | 9f5c57e089314532a686492a47a74690 |
+| external_url | https://www.youtube.com/watch?v=fTrkUqSnYqs |
+| Gate visual | YouTube Studio confirmou VISIBILIDADE = PÚBLICO |
+
+Fluxo real validado: Autonomous Production → geração → Safety Gate → Quality Gate → WAITING_SCHEDULE → recuperação persistida → Scheduler → Worker → Upload-Post → YouTube → PUBLIC.
+
+Estado operacional atual: Factory RUNNING; Scheduler ON; Auto Publish ON; Dry Run OFF; YouTube ON; TikTok OFF; Growth Mode WARMUP; Autonomous Production ON; MPT Auto Upload OFF. Produção em modo autônomo contínuo.
+
+Próxima fase: **V12-F — Adaptive Learning + Multi-Channel Warm-Up**, somente planejamento nesta tarefa. Existe feedback parcial; o closed loop automático ainda precisa ser homologado. V13 e V14 permanecem posteriores.
+
+---
+
 ## V12-E.2.2 — Persistent Waiting Schedule Recovery (20/09/2026)
 
-Hotfix validado localmente; deploy de produção não realizado. V12-E permanece em homologação e o gate real PUBLIC no YouTube continua pendente.
+Hotfix V12-E.2.2 deployado e homologado em produção em 21/09/2026 com a aplicação em `66f92a4`. V12-E concluída; PUBLIC GATE = PASS, conforme evidências fornecidas pelo operador.
 
 Causa raiz confirmada: após perda do MemoryState, WAITING_SCHEDULE enviava apenas `task_id`. O scheduler descartava o payload sem COMPLETE ou `video_file`, antes de resolver os destinos persistidos.
 
@@ -17,11 +48,11 @@ Validação: **234 testes + 19 subcasos PASS** nas oito suítes abaixo. Cenário
 .venv/Scripts/python.exe -m pytest test/services/test_autonomous_production.py test/services/test_scheduler.py test/services/test_scheduler_worker.py test/services/test_quality_score.py test/services/test_operator_console.py test/services/test_single_instance.py test/services/test_schedule_cancellation.py test/services/test_production_health.py -q -p no:cacheprovider
 ```
 
-Próximo passo seguro: no PC de produção, seguir stop/backup/update/test/start com uma única instância PRIMARY. Manter Auto Publish OFF durante a verificação. Executar um ciclo supervisionado para a waiting task `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; conferir um único destino por canal, nenhuma nova geração e gates preservados. Sem slot, aguardar Growth Mode. Em `waiting_recovery_failed`, inspecionar o diagnóstico e corrigir a evidência pela operação normal, sem forçar COMPLETE nem limpar o waiting ID. PUBLIC segue como gate posterior de homologação supervisionada.
+Recuperação persistida homologada com publicação PUBLIC. Em futuros casos sem slot, aguardar Growth Mode; em `waiting_recovery_failed`, inspecionar o diagnóstico sem forçar COMPLETE nem limpar o waiting ID. Próximo passo: planejar a auditoria V12-F.1, sem alterar produção nesta tarefa.
 
 ---
 
-**Data de referência:** 20/09/2026
+**Data de referência:** 21/09/2026
 
 **Projeto:** Video Factory baseado em MoneyPrinterTurbo v1.3.7
 
@@ -132,8 +163,10 @@ Timeout stale:
 - V12-D cancelamento terminal ✅
 - V12-D.1 PRIMARY guard ✅
 - V12-D.2 legacy cancellation compatibility ✅
-- V12-E Autonomous Production Loop — **em homologação real**
-- V12-E.2.1 One-cycle / One-transition hotfix — **deploy concluído e em teste real**
+- V12-E Autonomous Production Loop — **✅ homologada em produção**
+- V12-E.2.1 One-cycle / One-transition hotfix — **homologado**
+- V12-E.2.2 Persistent Waiting Schedule Recovery — **homologado**
+- V12-F Adaptive Learning + Multi-Channel Warm-Up — **planejamento aberto**
 
 Próximas fases planejadas:
 - V13 Headless Remote Deployment / Safe Update
@@ -151,23 +184,25 @@ Próximas fases planejadas:
 - `08c644f` — enforce one autonomous transition per cycle
 
 ### Commit atual em produção
-`08c644f`
+`66f92a4`
+
+`de62a4b` é governança de agentes, sem necessidade de deploy para validar a aplicação.
 
 ---
 
 ## 6. Configuração segura atual
 
-Estado confirmado antes do teste atual:
+Estado confirmado após homologação:
 
 - Factory: `RUNNING`
 - Primary: `ACTIVE`
 - Scheduler: `ON`
-- Auto Publish: `OFF`
+- Auto Publish: `ON`
 - Dry Run: `OFF`
 - Growth Mode: `warmup`
 - YouTube: `ON`
 - TikTok: `OFF`
-- Autonomous Mode: `OFF`
+- Autonomous Mode: `ON`
 - MPT Auto Upload: `OFF`
 - YouTube privacy: `public`
 - Autonomous max generations / 24h: `5`
@@ -176,40 +211,16 @@ Estado confirmado antes do teste atual:
 
 ## 7. Backup mais recente
 
-Criado antes do deploy do hotfix:
-
-`video_factory_20260920_143053.db`
-
-Path:
-`C:\Projetos\MoneyPrinterTurbo\storage\backups\database\video_factory_20260920_143053.db`
-
-Tamanho:
-`540672 bytes`
-
-SHA-256:
-`ba5c09fbba6391dc5fe499b5db90d99e8a2a575a34358add77a061b8c9ee779c`
-
-Integridade:
-`ok`
+Backup pré-deploy: `video_factory_20260921_014133.db`.
+SHA-256: `79313b694f54000b57d704eadfc8a6e5b1871ac5198e95006ef4890cd82f44a5`.
+Integridade: `ok`.
 
 ---
 
 ## 8. Testes do hotfix em produção
 
-Após deploy do `08c644f` no PC forte:
-
-```text
-197 passed in 76.49s
-```
-
-Arquivos cobertos no gate direcionado:
-- `test_autonomous_production.py`
-- `test_operator_console.py`
-- `test_scheduler_worker.py`
-- `test_quality_score.py`
-- `test_single_instance.py`
-- `test_production_health.py`
-- `test_schedule_cancellation.py`
+Após atualização para `66f92a4`: **234 passed, 19 subtests passed, 0 failed**, nas oito suítes registradas na seção V12-E.2.2.
+Histórico: `08c644f` teve 197 testes PASS em produção.
 
 ---
 
@@ -325,111 +336,23 @@ Resultados:
 
 ---
 
-## 13. Teste real atual do hotfix
+## 13. Histórico do teste V12-E.2.1
 
-Após deploy do `08c644f`, foi feito um novo one-shot.
-
-Resultado da primeira transição:
-
-```text
-Modo Autônomo: OFF
-Estado: GENERATING
-Estoque: 0 / 3
-Gerados 24h: 3 / 5
-```
-
-Nova task:
-
-`fdb20c65-76b2-42cc-9c0f-a1764f7237e0`
-
-Tema:
-
-`Curiosidades para celebrar Dia Internacional do maior roedor do mundo`
-
-Estado atual:
-**vídeo em geração**
-
-Não clicar em `Run Cycle` enquanto estiver gerando.
+Após deploy de `08c644f`, um one-shot criou a task `fdb20c65-76b2-42cc-9c0f-a1764f7237e0`, sobre curiosidades do maior roedor do mundo. O registro anterior capturava GENERATING, Autonomous OFF e 3/5 gerações em 24h. É um snapshot histórico, não uma tarefa atualmente aguardando ação neste handoff.
 
 ---
 
-## 14. Próximo gate quando a task atual terminar
+## 14. Regra homologada de transição
 
-Depois de confirmar:
-
-```text
-final-1.mp4 existe
-FFMPEG_RUNNING=False
-```
-
-executar **um único** `Run Cycle`.
-
-Com o `08c644f`, o resultado esperado é:
-
-### Se aprovado
-```text
-Safety PASS
-Quality >= 70
-→ scheduled ou waiting_schedule
-→ return
-```
-
-### Se rejeitado
-```text
-Safety/Quality rejeita
-→ status=rejected
-→ return
-```
-
-### Regra decisiva
-**NÃO pode nascer uma quarta task no mesmo clique.**
-
-Esse é o teste real que fecha o hotfix.
+Um ciclo autônomo executa uma transição operacional principal e retorna: geração, revisão, agendamento ou recuperação. Rejeitar uma task ou falhar na recuperação não pode gerar outra no mesmo ciclo. A recuperação persistida real ocorreu sem geração indevida.
 
 ---
 
-## 15. Gate final da V12-E
+## 15. Gate final da V12-E — PASS
 
-Ainda falta comprovar:
+Safety PASS, Quality 78.3/GOOD, Scheduler, Worker/Upload-Post e visibilidade PÚBLICO no YouTube Studio confirmados para `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`. Evidências completas no início deste documento.
 
-1. uma task com:
-   - Safety PASS
-   - Quality >= 70
-   - GOOD ou STRONG
-
-2. entrada no Scheduler
-
-3. publicação real pelo caminho:
-
-```text
-Autonomous
-→ Scheduler
-→ worker
-→ YouTube
-```
-
-4. confirmar visualmente no YouTube Studio que o vídeo ficou:
-
-`PUBLIC`
-
-Somente depois disso:
-
-- Auto Publish pode ser ligado
-- Autonomous contínuo pode ser ligado
-
-Steady state desejado:
-
-```text
-Factory RUNNING
-Scheduler ON
-Auto Publish ON
-Dry Run OFF
-Growth Mode WARMUP
-YouTube PUBLIC
-MPT Auto Upload OFF
-Autonomous ON
-TikTok OFF
-```
+Auto Publish e Autonomous contínuo estão ON; TikTok e MPT Auto Upload permanecem OFF.
 
 ---
 
@@ -550,27 +473,17 @@ Métricas futuras:
 Default:
 `avatar_mode=none`
 
-Não implementar antes de fechar V12-E.
+V12-E está fechada; V14 permanece posterior à V12-F e V13, sem implementação nesta tarefa.
 
 ---
 
-## 22. Prioridade imediata
+## 22. Prioridade imediata — V12-F
 
-Prioridade atual:
+Planejar V12-F.1: auditar a coleta automática de Analytics existente antes de qualquer ativação. A V12-F inclui coleta automática, closed feedback loop, aprendizado isolado por canal e warm-up controlado do segundo canal; escopo e gates no ROADMAP.
 
-**fechar a homologação real da V12-E**
+Canal principal: perfil `default` homologado. Segundo canal criado manualmente: **Dose Diária de Histórias e Mistério**, handle **@DoseDiáriadeHistóriasemistério**. Ainda não conectar nem publicar automaticamente. Integração futura pela infraestrutura V9, com perfil/canal, Analytics, histórico e WARMUP separados.
 
-Ordem:
-
-1. esperar a task `fdb20c65-76b2-42cc-9c0f-a1764f7237e0` terminar
-2. confirmar final + FFmpeg encerrado
-3. executar um único Run Cycle
-4. comprovar que o ciclo apenas revisa e retorna
-5. obter um vídeo Safety PASS + Quality >=70
-6. Scheduler
-7. publicação real PUBLIC no YouTube
-8. ativar operação contínua
-9. atualizar este handoff novamente
+Nenhum código V12-F, schema, configuração, secret ou ambiente de produção foi alterado nesta atualização documental.
 
 ---
 

@@ -1,9 +1,42 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
 
+## Steady-state homologado — 21/09/2026
+
+V12-E HOMOLOGADA EM PRODUÇÃO; PUBLIC GATE PASS. Produção em `66f92a4`; `de62a4b` é governança de agentes e não foi necessário ao deploy de homologação. Evidências completas no [PROJECT_HANDOFF](PROJECT_HANDOFF.md).
+
+```text
+Factory RUNNING
+Autonomous ON
+Scheduler ON
+Auto Publish ON
+Dry Run OFF
+YouTube ON
+TikTok OFF
+Growth Mode WARMUP
+MPT Auto Upload OFF
+```
+
+O operador confirmou PUBLIC no YouTube Studio para `fTrkUqSnYqs` (task `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; scheduled post 15; publication event 16/success). Operação contínua habilitada. Esta tarefa somente registra o estado informado; não executa deploy nem altera settings.
+
+### Retornar ao modo supervisionado
+
+Em intervenção autorizada, usar os controles existentes no Operator Console da instância PRIMARY para desativar **Autonomous Production** e **Auto Publish**. Confirmar ambos persistidos como OFF pela verificação de settings da seção 10.
+
+```text
+Autonomous OFF
+Auto Publish OFF
+```
+
+Não presumir cancelamento de geração ou publicação já em andamento: verificar tarefas/worker antes de manutenção. Manter TikTok OFF, MPT Auto Upload OFF, Safety/Quality Gates, WARMUP e Single PRIMARY. One-shot pode ser usado com Autonomous OFF, respeitando uma transição por ciclo; publicação real exige autorização explícita. Para update, seguir backup e parada abaixo. Retomada contínua exige decisão operacional explícita após verificações.
+
+V12-F aberta somente para planejamento. Não ativar Analytics, conectar o segundo canal ou iniciar sua operação automática por conta desta atualização documental.
+
+---
+
 ## V12-E.2.2 — Persistent Waiting Schedule Recovery (20/09/2026)
 
-Hotfix validado localmente; deploy de produção não realizado. V12-E permanece em homologação e o gate real PUBLIC no YouTube continua pendente.
+Hotfix V12-E.2.2 deployado e homologado em produção em 21/09/2026 com a aplicação em `66f92a4`. V12-E concluída; PUBLIC GATE = PASS, conforme evidências fornecidas pelo operador.
 
 Causa raiz confirmada: após perda do MemoryState, WAITING_SCHEDULE enviava apenas `task_id`. O scheduler descartava o payload sem COMPLETE ou `video_file`, antes de resolver os destinos persistidos.
 
@@ -17,11 +50,11 @@ Validação: **234 testes + 19 subcasos PASS** nas oito suítes abaixo. Cenário
 .venv/Scripts/python.exe -m pytest test/services/test_autonomous_production.py test/services/test_scheduler.py test/services/test_scheduler_worker.py test/services/test_quality_score.py test/services/test_operator_console.py test/services/test_single_instance.py test/services/test_schedule_cancellation.py test/services/test_production_health.py -q -p no:cacheprovider
 ```
 
-Próximo passo seguro: no PC de produção, seguir stop/backup/update/test/start com uma única instância PRIMARY. Manter Auto Publish OFF durante a verificação. Executar um ciclo supervisionado para a waiting task `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; conferir um único destino por canal, nenhuma nova geração e gates preservados. Sem slot, aguardar Growth Mode. Em `waiting_recovery_failed`, inspecionar o diagnóstico e corrigir a evidência pela operação normal, sem forçar COMPLETE nem limpar o waiting ID. PUBLIC segue como gate posterior de homologação supervisionada.
+Recuperação persistida homologada com publicação PUBLIC. Em futuros casos sem slot, aguardar Growth Mode; em `waiting_recovery_failed`, inspecionar o diagnóstico sem forçar COMPLETE nem limpar o waiting ID. Próximo passo: planejar a auditoria V12-F.1, sem alterar produção nesta tarefa.
 
 ---
 
-**Atualizado em:** 20/09/2026
+**Atualizado em:** 21/09/2026
 
 **Host de produção:** PC forte
 
@@ -137,6 +170,7 @@ Critérios:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
   test/services/test_autonomous_production.py `
+  test/services/test_scheduler.py `
   test/services/test_operator_console.py `
   test/services/test_scheduler_worker.py `
   test/services/test_quality_score.py `
@@ -149,7 +183,9 @@ Critérios:
 Baseline atual:
 
 ```text
-197 passed
+234 passed
+19 subtests passed
+0 failed
 ```
 
 ---
@@ -372,11 +408,9 @@ Auto Publish do Scheduler é controlado por:
 auto_publish_enabled
 ```
 
-Antes do gate final:
-`False`
+Steady-state homologado: `True` (ON).
 
-Após homologação PUBLIC:
-pode ser `True`.
+Modo supervisionado/manutenção: `False` (OFF), junto de Autonomous OFF.
 
 ---
 
@@ -385,8 +419,7 @@ pode ser `True`.
 Privacy esperada:
 `public`
 
-Gate final:
-confirmar visualmente no YouTube Studio que uma publicação real do Scheduler ficou PUBLIC.
+Gate final da V12-E: PASS, com visibilidade PÚBLICO confirmada no YouTube Studio para `fTrkUqSnYqs`. O segundo canal exige nova publicação supervisionada e confirmação PUBLIC antes de operação contínua.
 
 ---
 

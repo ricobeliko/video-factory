@@ -3,7 +3,7 @@
 
 ## V12-E.2.2 — Persistent Waiting Schedule Recovery (20/09/2026)
 
-Hotfix validado localmente; deploy de produção não realizado. V12-E permanece em homologação e o gate real PUBLIC no YouTube continua pendente.
+Hotfix V12-E.2.2 deployado e homologado em produção em 21/09/2026 com a aplicação em `66f92a4`. V12-E concluída; PUBLIC GATE = PASS, conforme evidências fornecidas pelo operador.
 
 Causa raiz confirmada: após perda do MemoryState, WAITING_SCHEDULE enviava apenas `task_id`. O scheduler descartava o payload sem COMPLETE ou `video_file`, antes de resolver os destinos persistidos.
 
@@ -17,11 +17,11 @@ Validação: **234 testes + 19 subcasos PASS** nas oito suítes abaixo. Cenário
 .venv/Scripts/python.exe -m pytest test/services/test_autonomous_production.py test/services/test_scheduler.py test/services/test_scheduler_worker.py test/services/test_quality_score.py test/services/test_operator_console.py test/services/test_single_instance.py test/services/test_schedule_cancellation.py test/services/test_production_health.py -q -p no:cacheprovider
 ```
 
-Próximo passo seguro: no PC de produção, seguir stop/backup/update/test/start com uma única instância PRIMARY. Manter Auto Publish OFF durante a verificação. Executar um ciclo supervisionado para a waiting task `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; conferir um único destino por canal, nenhuma nova geração e gates preservados. Sem slot, aguardar Growth Mode. Em `waiting_recovery_failed`, inspecionar o diagnóstico e corrigir a evidência pela operação normal, sem forçar COMPLETE nem limpar o waiting ID. PUBLIC segue como gate posterior de homologação supervisionada.
+Recuperação persistida homologada com publicação PUBLIC. Em futuros casos sem slot, aguardar Growth Mode; em `waiting_recovery_failed`, inspecionar o diagnóstico sem forçar COMPLETE nem limpar o waiting ID. Próximo passo: planejar a auditoria V12-F.1, sem alterar produção nesta tarefa.
 
 ---
 
-**Atualizado em:** 20/09/2026
+**Atualizado em:** 21/09/2026
 
 **Projeto:** Video Factory
 
@@ -63,12 +63,13 @@ Princípio central:
 - V12-D Schedule Cancellation Safety ✅
 - V12-D.1 PRIMARY Guard ✅
 - V12-D.2 Legacy Cancellation Compatibility ✅
+- V12-E Autonomous Production Loop ✅ — homologada em produção; PUBLIC GATE PASS
 
 ---
 
 # V12-E — Autonomous Production Loop
 
-**Status:** 🟡 homologação real em produção
+**Status:** ✅ HOMOLOGADA EM PRODUÇÃO — 21/09/2026
 
 Objetivo:
 - detectar déficit de estoque
@@ -103,7 +104,7 @@ Status: ✅ concluído
 Status: ✅ concluído
 
 ### V12-E.2 — Homologação real
-Status: 🟡 em andamento
+Status: ✅ homologada em produção
 
 ### V12-E.2.1 — One-cycle / One-transition Hotfix
 
@@ -114,7 +115,7 @@ Status:
 - ✅ implementado
 - ✅ 197/197 testes PASS no PC forte
 - ✅ deploy realizado
-- 🟡 teste real final em andamento
+- ✅ homologação real concluída
 
 Regra consolidada:
 
@@ -122,69 +123,97 @@ Regra consolidada:
 
 ---
 
-## Teste real atual
+## Homologação V12-E em produção — 21/09/2026
 
-Task em geração:
+**V12-E HOMOLOGADA EM PRODUÇÃO. PUBLIC GATE = PASS.** Registro baseado nas evidências fornecidas pelo operador; nenhuma consulta ou alteração de produção nesta tarefa documental.
 
-`fdb20c65-76b2-42cc-9c0f-a1764f7237e0`
+Produção atualizada para `66f92a4` antes da homologação. Commits: `fd57f84` (hotfix funcional V12-E.2.2), `66f92a4` (documentação/encoding), `de62a4b` (governança de agentes, sem necessidade de deploy para validar a aplicação).
 
-Tema:
+Backup pré-deploy: `video_factory_20260921_014133.db`.
+SHA-256: `79313b694f54000b57d704eadfc8a6e5b1871ac5198e95006ef4890cd82f44a5`.
+Integridade: `ok`. Regressão em produção: **234 passed; 19 subtests passed; 0 failed**.
 
-`Curiosidades para celebrar Dia Internacional do maior roedor do mundo`
+Task: `f9b3e05f-a8ce-4c5a-8f6d-e65c46e117ef`; Safety PASS; Quality 78.3; label GOOD.
+Sem slot, permaneceu corretamente em WAITING_SCHEDULE. Após abertura de slot e deploy do hotfix, a task foi recuperada, sem geração indevida; `waiting_task_id` foi limpo e a task entrou no Scheduler.
 
-Estado:
-`GENERATING`
+| Evidência | Resultado |
+| --- | --- |
+| Scheduled Post | id=15; platform=youtube; profile_id=default; channel_id=channel-default-youtube |
+| Estado final | published; attempts=0; last_error=None |
+| Publication Event | id=16; status=success; platform=youtube |
+| external_id | fTrkUqSnYqs |
+| provider_request_id | 9f5c57e089314532a686492a47a74690 |
+| external_url | https://www.youtube.com/watch?v=fTrkUqSnYqs |
+| Gate visual | YouTube Studio confirmou VISIBILIDADE = PÚBLICO |
 
-Generated 24h:
-`3 / 5`
+Fluxo real validado: Autonomous Production → geração → Safety Gate → Quality Gate → WAITING_SCHEDULE → recuperação persistida → Scheduler → Worker → Upload-Post → YouTube → PUBLIC.
 
-Autonomous Mode:
-`OFF`
+Estado operacional atual: Factory RUNNING; Scheduler ON; Auto Publish ON; Dry Run OFF; YouTube ON; TikTok OFF; Growth Mode WARMUP; Autonomous Production ON; MPT Auto Upload OFF. Produção em modo autônomo contínuo.
 
-Auto Publish:
-`OFF`
-
-TikTok:
-`OFF`
-
-Próximo gate:
-1. esperar geração finalizar
-2. confirmar `final-1.mp4`
-3. confirmar FFmpeg encerrado
-4. executar 1 Run Cycle
-5. comprovar que o ciclo apenas revisa e retorna
-6. garantir que não nasce uma quarta task no mesmo clique
+Próxima fase: **V12-F — Adaptive Learning + Multi-Channel Warm-Up**, somente planejamento nesta tarefa. Existe feedback parcial; o closed loop automático ainda precisa ser homologado. V13 e V14 permanecem posteriores.
 
 ---
 
-## Gate final da V12-E
+# V12-F — Adaptive Learning + Multi-Channel Warm-Up
 
-Para declarar V12-E homologada:
+**Status: planejamento formal aberto; nenhuma implementação nesta tarefa.**
 
-1. Task real com Safety PASS
-2. Quality >= 70
-3. Label GOOD ou STRONG
-4. Entrada correta no Scheduler
-5. Publicação real pelo Scheduler
-6. Confirmar no YouTube Studio que o vídeo está PUBLIC
-7. Confirmar que MPT Auto Upload permanece OFF
-8. Confirmar TikTok OFF
-9. Ativar Autonomous contínuo
-10. Observar pelo menos um ciclo automático completo sem intervenção
+Objetivo: transformar o feedback de desempenho em um ciclo fechado de otimização, sem treinamento de pesos do modelo e sem sacrificar segurança, diversidade ou controle por canal.
 
-Steady state esperado:
+## V12-F.1 — Analytics Auto-Collection Audit & Activation
 
-```text
-Factory RUNNING
-Scheduler ON
-Auto Publish ON
-Dry Run OFF
-Growth Mode WARMUP
-YouTube PUBLIC
-MPT Auto Upload OFF
-Autonomous ON
-TikTok OFF
-```
+Objetivo futuro: auditar e ativar com segurança a coleta automática de Analytics já existente.
+
+Verificar futuramente:
+- `analytics_scheduler.py`, integração do worker e settings atuais;
+- `DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED`;
+- persistência de métricas e cooldowns por idade do vídeo;
+- comportamento após reboot e nenhuma chamada duplicada;
+- nenhuma coleta de vídeos privados;
+- isolamento por profile/channel.
+
+Gate futuro: comprovar esses contratos antes de autorizar ativação. Não implementar nem ativar nesta tarefa.
+
+## V12-F.2 — Closed Feedback Loop
+
+Fluxo desejado: YouTube publication → automatic analytics collection → performance history → content strategy → próximas decisões de tema/hook/estrutura/duração → novos vídeos → nova medição.
+
+A infraestrutura em `analytics.py`, `analytics_scheduler.py`, `content_strategy.py` e `quality_score.py` oferece feedback parcial; o closed loop automático ainda precisa ser homologado.
+
+Regras:
+- Não é fine-tuning/retraining de pesos; usar memória persistida de performance.
+- Exigir mínimo de amostras antes de adaptação.
+- Manter diversidade, evitar perseguir viral isolado e evitar overfitting em poucos vídeos.
+- Preservar Safety e Quality Gates.
+- Decisão determinística/auditável sempre que possível.
+
+Gate futuro: demonstrar que métricas persistidas influenciam decisões futuras de forma rastreável, com amostras suficientes e diversidade preservada.
+
+## V12-F.3 — Per-Channel Learning Isolation
+
+Cada canal deve aprender separadamente. Não misturar automaticamente métricas, performance histórica, nicho, hooks vencedores, estruturas narrativas, duração ótima ou frequência entre canais/perfis.
+
+Canal principal: manter perfil `default` já homologado.
+Segundo canal criado manualmente: **Dose Diária de Histórias e Mistério**.
+Handle: **@DoseDiáriadeHistóriasemistério**.
+
+Planejar integração futura pela infraestrutura V9 Multi-Profile/Multi-Channel como perfil/canal separado. Não conectar nem publicar automaticamente nesta tarefa.
+
+Gate futuro: confirmar métricas e decisões associadas ao profile/channel correto, sem contaminação automática entre canais.
+
+## V12-F.4 — Second Channel Warm-Up
+
+Objetivo futuro: integrar o segundo canal de forma controlada.
+
+Regras:
+- Perfil, canal, Analytics, histórico e Growth Mode WARMUP separados.
+- Não duplicar vídeos do canal principal.
+- Não gerar engajamento artificial nem espelhar conteúdo em massa.
+- Somente YouTube inicialmente; TikTok permanece OFF.
+
+Gate futuro: uma publicação real supervisionada no segundo canal → confirmar PUBLIC → confirmar Analytics associado ao canal correto → confirmar aprendizado isolado → somente depois habilitar operação contínua.
+
+V13 e V14 permanecem posteriores. Este planejamento não autoriza conexão, publicação ou ativação de produção.
 
 ---
 
@@ -212,7 +241,7 @@ Possíveis entregáveis:
 - teste pós-deploy
 - rollback documentado
 
-Não iniciar antes de fechar V12-E.
+V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização próprios.
 
 ---
 

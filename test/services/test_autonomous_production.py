@@ -796,16 +796,7 @@ class TestAutonomousProductionLoop(unittest.TestCase):
     # H10: waiting_schedule + slot futuro => agenda sem duplicar
     def test_waiting_schedule_schedules_when_slot_available(self):
         task_id = "task-waiting-slot-avail-1"
-        v_path = self._create_mock_video_file(task_id)
-
-        sm.state.update_task(
-            task_id,
-            state=const.TASK_STATE_COMPLETE,
-            video_subject="Espaço Profundo",
-            video_file=v_path,
-            safety_status=const.SAFETY_STATUS_PASS,
-            profile_id=profile_manager.DEFAULT_PROFILE_ID,
-        )
+        self._persist_waiting_fixture(task_id)
         autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
         autonomous_production.set_autonomous_setting(
             autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path
@@ -814,7 +805,8 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             autonomous_production.KEY_AUTONOMOUS_STATE, autonomous_production.STATE_WAITING_SCHEDULE, db_path=self.db_path
         )
 
-        with patch("app.services.scheduler.plan_schedule", return_value=[{"task_id": task_id, "scheduled_id": 101}]), \
+        with patch("app.utils.utils.task_dir", return_value=self.task_base_dir), \
+             patch("app.services.scheduler.plan_schedule", return_value=[{"task_id": task_id, "scheduled_id": 101}]), \
              patch("app.services.webui_task.submit_generation") as mock_sub:
 
             res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
@@ -1531,6 +1523,142 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             self.mock_upload_video.assert_not_called()
             self.mock_cross_post.assert_not_called()
             self.mock_publish_task.assert_not_called()
+
+
+
+    def _persist_waiting_fixture(self, task_id):
+        video = self._create_mock_video_file(task_id)
+        channels = profile_manager.list_channels(profile_id="default", db_path=self.db_path)
+        for channel in channels[1:]:
+            profile_manager.set_channel_enabled(channel["channel_id"], False, db_path=self.db_path)
+        scheduler.save_task_platforms(task_id, ["youtube"], db_path=self.db_path)
+        profile_manager.save_task_profile(task_id, "default", db_path=self.db_path)
+        safety_gate.save_safety_assessment({
+            "task_id": task_id, "safety_status": "PASS", "safety_reasons": [],
+            "checked_at": self.now.isoformat(),
+        }, db_path=self.db_path)
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO content_quality_scores "
+                "(task_id, topic, quality_score, quality_label, created_at) VALUES (?, ?, 78.3, 'GOOD', ?)",
+                (task_id, task_id, self.now.isoformat()),
+            )
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path)
+        return video
+
+    def _retry_persisted_waiting(self, memory=None, one_shot=False):
+        with patch.object(sm.state, "get_task", return_value=memory), \
+             patch("app.utils.utils.task_dir", return_value=self.task_base_dir), \
+             patch("app.services.webui_task.submit_generation") as submit, \
+             patch("socket.socket.connect", side_effect=AssertionError("External network forbidden")):
+            result = autonomous_production.run_autonomous_cycle(
+                force=True, one_shot=one_shot, db_path=self.db_path, now=self.now)
+        submit.assert_not_called()
+        self.mock_upload_video.assert_not_called()
+        self.mock_cross_post.assert_not_called()
+        self.mock_publish_task.assert_not_called()
+        self.assertFalse(scheduler.get_all_settings(self.db_path)["auto_publish_enabled"])
+        return result
+
+    def test_v12e22_memory_present_absent_and_incomplete(self):
+        task_id = "persistent-waiting"
+        video = self._persist_waiting_fixture(task_id)
+        for memory in (None, {"task_id": task_id}, {
+            "task_id": task_id, "state": const.TASK_STATE_COMPLETE, "video_file": video,
+        }):
+            with self.subTest(memory=memory):
+                with scheduler.get_connection(self.db_path) as conn:
+                    conn.execute("DELETE FROM scheduled_posts")
+                autonomous_production.set_autonomous_setting(
+                    autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path)
+                self.assertEqual(self._retry_persisted_waiting(memory)["status"], "scheduled")
+                with scheduler.get_connection(self.db_path) as conn:
+                    rows = conn.execute("SELECT * FROM scheduled_posts").fetchall()
+                self.assertTrue(rows)
+                self.assertTrue(all(r["platform"] == "youtube" and r["profile_id"] == "default" for r in rows))
+
+    def test_v12e22_fail_closed(self):
+        cases = ("video", "empty_video", "BLOCK", "REVIEW", "safety_missing", "quality_missing",
+                 "low_quality", "bad_label", "profile_disabled", "profile_missing", "channel_disabled", "destination_missing")
+        for case in cases:
+            with self.subTest(case=case):
+                task_id = "fail-" + case
+                video = self._persist_waiting_fixture(task_id)
+                with scheduler.get_connection(self.db_path) as conn:
+                    if case == "video":
+                        os.remove(video)
+                    elif case == "empty_video":
+                        open(video, "wb").close()
+                    elif case in ("BLOCK", "REVIEW"):
+                        conn.execute("UPDATE monetization_safety SET safety_status=? WHERE task_id=?", (case, task_id))
+                    elif case == "safety_missing":
+                        conn.execute("DELETE FROM monetization_safety WHERE task_id=?", (task_id,))
+                    elif case == "quality_missing":
+                        conn.execute("DELETE FROM content_quality_scores WHERE task_id=?", (task_id,))
+                    elif case == "low_quality":
+                        conn.execute("UPDATE content_quality_scores SET quality_score=69 WHERE task_id=?", (task_id,))
+                    elif case == "bad_label":
+                        conn.execute("UPDATE content_quality_scores SET quality_label='REVIEW' WHERE task_id=?", (task_id,))
+                    elif case == "profile_missing":
+                        conn.execute("DELETE FROM task_profiles WHERE task_id=?", (task_id,))
+                    elif case == "destination_missing":
+                        conn.execute("DELETE FROM task_platforms WHERE task_id=?", (task_id,))
+                if case == "profile_disabled":
+                    with scheduler.get_connection(self.db_path) as conn:
+                        conn.execute("UPDATE content_profiles SET is_active=0 WHERE id='default'")
+                channels = profile_manager.list_channels(profile_id="default", db_path=self.db_path)
+                if case == "channel_disabled":
+                    for channel in channels:
+                        profile_manager.set_channel_enabled(channel["channel_id"], False, db_path=self.db_path)
+                result = self._retry_persisted_waiting()
+                self.assertEqual(result["reason"], "waiting_recovery_failed")
+                with scheduler.get_connection(self.db_path) as conn:
+                    self.assertEqual(conn.execute("SELECT count(*) FROM scheduled_posts").fetchone()[0], 0)
+                profile_manager.set_profile_active("default", True, db_path=self.db_path)
+                for channel in channels:
+                    profile_manager.set_channel_enabled(channel["channel_id"], bool(channel["is_enabled"]), db_path=self.db_path)
+
+    def test_v12e22_no_growth_slot(self):
+        self._persist_waiting_fixture("occupies-warmup-slot")
+        self.assertEqual(self._retry_persisted_waiting()["status"], "scheduled")
+        task_id = "no-slot"
+        self._persist_waiting_fixture(task_id)
+        self.assertEqual(self._retry_persisted_waiting()["status"], "waiting_schedule")
+        self.assertEqual(autonomous_production.get_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, db_path=self.db_path), task_id)
+
+    def test_v12e22_persisted_tiktok_is_not_scheduled(self):
+        task_id = "youtube-only-recovery"
+        self._persist_waiting_fixture(task_id)
+        scheduler.save_task_platforms(task_id, ["youtube", "tiktok"], db_path=self.db_path)
+        self.assertEqual(self._retry_persisted_waiting()["status"], "scheduled")
+        with scheduler.get_connection(self.db_path) as conn:
+            platforms = [r[0] for r in conn.execute("SELECT platform FROM scheduled_posts")]
+        self.assertEqual(platforms, ["youtube"])
+
+    def test_v12e22_retry_idempotent_and_terminal(self):
+        task_id = "retry-idempotent"
+        self._persist_waiting_fixture(task_id)
+        self.assertEqual(self._retry_persisted_waiting()["status"], "scheduled")
+        with scheduler.get_connection(self.db_path) as conn:
+            count = conn.execute("SELECT count(*) FROM scheduled_posts").fetchone()[0]
+        for status in ("planned", "ready", "published", "cancelled"):
+            with self.subTest(status=status):
+                with scheduler.get_connection(self.db_path) as conn:
+                    conn.execute("UPDATE scheduled_posts SET status=?", (status,))
+                autonomous_production.set_autonomous_setting(
+                    autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path)
+                self.assertEqual(self._retry_persisted_waiting()["status"], "waiting_schedule")
+                with scheduler.get_connection(self.db_path) as conn:
+                    self.assertEqual(conn.execute("SELECT count(*) FROM scheduled_posts").fetchone()[0], count)
+
+    def test_v12e22_one_shot_with_autonomous_off(self):
+        self._persist_waiting_fixture("one-shot-recovery")
+        autonomous_production.set_autonomous_mode_enabled(False, db_path=self.db_path)
+        self.assertEqual(self._retry_persisted_waiting(one_shot=True)["status"], "scheduled")
+        self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
 
 
 if __name__ == "__main__":

@@ -87,6 +87,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_05_tiktok_respects_15_per_24h_limit(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         scheduler.set_setting("tiktok_limit_24h", 15, db_path=self.db_path)
         now = datetime.now(timezone.utc)
 
@@ -110,6 +112,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_06_youtube_respects_10_per_24h_limit(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         scheduler.set_setting("youtube_limit_24h", 10, db_path=self.db_path)
         now = datetime.now(timezone.utc)
 
@@ -132,6 +136,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_07_publications_in_last_24h_reduce_available_slots(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         scheduler.set_setting("tiktok_limit_24h", 15, db_path=self.db_path)
         now = datetime.now(timezone.utc)
 
@@ -165,6 +171,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_08_publication_older_than_24h_does_not_count(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         scheduler.set_setting("tiktok_limit_24h", 15, db_path=self.db_path)
         now = datetime.now(timezone.utc)
 
@@ -186,6 +194,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_09_schedule_distributes_times_evenly_across_the_day(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         scheduler.set_setting("tiktok_limit_24h", 15, db_path=self.db_path)
         now = datetime.now(timezone.utc)
 
@@ -270,6 +280,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_15_clear_schedule_removes_only_planned_and_ready(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         now = datetime.now(timezone.utc)
         tasks = [
             {"task_id": f"t-clear-{i}", "state": const.TASK_STATE_COMPLETE, "planned_platforms": ["tiktok"]}
@@ -284,6 +296,8 @@ class TestScheduler(unittest.TestCase):
 
     def test_16_published_items_are_not_deleted_by_clear_schedule(self):
         scheduler.init_db(self.db_path)
+        # These legacy cases exercise technical ceilings, not the default WARMUP quota.
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_SCALE, db_path=self.db_path)
         now = datetime.now(timezone.utc)
         scheduler.plan_schedule(
             [{"task_id": "t-keep-pub", "state": const.TASK_STATE_COMPLETE, "planned_platforms": ["tiktok"]}],

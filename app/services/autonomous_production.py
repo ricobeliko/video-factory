@@ -12,6 +12,7 @@ Transforma a Video Factory em uma fábrica de conteúdo autônoma e self-feeding
 8. NÃO constrói segundo pipeline; reutiliza estritamente os serviços existentes.
 9. NUNCA publica diretamente: o Scheduler Worker permanece como único executor da publicação.
 """
+import math
 import os
 import shutil
 import sqlite3
@@ -902,6 +903,48 @@ def check_required_providers_preflight(
 # 5. Ciclo Principal do Orquestrador
 # ---------------------------------------------------------------------------
 
+def _recover_waiting_task(task_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Revalidate persisted approval before retrying the existing scheduler."""
+    from app.services import state as sm
+
+    task = dict(sm.state.get_task(task_id) or {})
+    if task.get("state") in (
+        const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING,
+        const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED,
+    ) or task.get("cancelled"):
+        raise ValueError("waiting_task_not_complete")
+    video = scheduler.get_task_final_video(task_id)
+    if not video or not os.path.isfile(video) or os.path.getsize(video) <= 0:
+        raise ValueError("waiting_final_video_missing")
+    safety = safety_gate.get_safety_assessment(task_id, db_path=db_path) or {}
+    if safety.get("safety_status") != const.SAFETY_STATUS_PASS:
+        raise ValueError("waiting_safety_not_pass")
+    with scheduler.get_connection(db_path) as conn:
+        quality = conn.execute(
+            "SELECT quality_score, quality_label FROM content_quality_scores "
+            "WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        profile = conn.execute(
+            "SELECT profile_id FROM task_profiles WHERE task_id = ?", (task_id,),
+        ).fetchone()
+    score = float(quality["quality_score"]) if quality else float("nan")
+    if (not math.isfinite(score) or score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS
+            or quality["quality_label"] not in ("GOOD", "STRONG")):
+        raise ValueError("waiting_quality_not_approved")
+    if "youtube" not in scheduler.get_task_platforms(task_id, db_path=db_path):
+        raise ValueError("waiting_youtube_destination_missing")
+    prof = profile_manager.get_profile(profile["profile_id"], db_path=db_path) if profile else None
+    if not prof or not prof.get("is_active"):
+        raise ValueError("waiting_profile_unavailable")
+    if not profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path):
+        raise ValueError("waiting_youtube_channel_unavailable")
+    task.update(task_id=task_id, state=const.TASK_STATE_COMPLETE, video_file=video,
+                safety_status=const.SAFETY_STATUS_PASS, planned_platforms=["youtube"],
+                profile_id=profile["profile_id"])
+    return task
+
+
 def run_autonomous_cycle(
     force: bool = False,
     one_shot: bool = False,
@@ -970,8 +1013,14 @@ def run_autonomous_cycle(
     # -----------------------------------------------------------------------
     waiting_task_id = get_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, db_path=db_path)
     if waiting_task_id:
-        from app.services import state as sm
-        task_data = sm.state.get_task(waiting_task_id) or {"task_id": waiting_task_id}
+        try:
+            task_data = _recover_waiting_task(waiting_task_id, db_path=db_path)
+        except Exception as exc:
+            msg = f"Waiting task {waiting_task_id}: recovery blocked ({exc})."
+            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE, db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+            return {"status": "waiting_schedule", "task_id": waiting_task_id,
+                    "scheduled_items": 0, "reason": "waiting_recovery_failed", "message": msg}
         scheduled_items = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path)
         if scheduled_items:
             set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, "", db_path=db_path)

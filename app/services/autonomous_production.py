@@ -288,6 +288,10 @@ def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
 def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
     """Conta quantas gerações foram iniciadas pelo autonomous loop nas últimas 24 horas."""
     scheduler.init_db(db_path)
+    try:
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
     now_utc = scheduler._normalize_utc(now)
     since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
 
@@ -302,10 +306,10 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                 """,
                 (since_iso,),
             ).fetchone()
-            return int(row[0]) if row else 0
+            return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar gerações 24h: {exc}")
-        return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H
+        return 0
 
 
 # ---------------------------------------------------------------------------

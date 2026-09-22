@@ -1,5 +1,19 @@
 # ROADMAP — Video Factory / MoneyPrinterTurbo
 
+## V12-E.3 — gate DEV controlado — 21/09/2026
+
+Hardening independente da V12-F.2: estoque YouTube recuperável por persistência,
+fila de múltiplas aprovações e seleção de uma ação por ciclo. WARMUP sem slot
+permite reposição até a meta 3, mantendo uma geração/ciclo e cinco/24h.
+Deduplicação persistente de eventos Growth e cooldown de retry de 15 minutos.
+Sem mudança de schema, Growth Mode, Auto Publish, publicação direta ou TikTok.
+
+Implementação e validação DEV concluídas: **600 testes + 32 subtestes passaram**
+em 23 suítes (246,12s), com geração fake e rede bloqueada; 16 testes novos E.3.
+Próximo gate: revisão do diff E.3 isolado.
+Sem commit/push/deploy e sem acesso à produção. A fase V12-F.2 permanece separada.
+
+
 
 ## V12-E.2.2 — Persistent Waiting Schedule Recovery (20/09/2026)
 

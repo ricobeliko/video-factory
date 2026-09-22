@@ -16,6 +16,7 @@ import math
 import os
 import shutil
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -102,6 +103,7 @@ KEY_AUTONOMOUS_LAST_RESULT = "autonomous_last_result"
 KEY_AUTONOMOUS_CURRENT_TASK_ID = "autonomous_current_task_id"
 KEY_AUTONOMOUS_WAITING_TASK_ID = "autonomous_waiting_task_id"
 KEY_AUTONOMOUS_LAST_ERROR = "autonomous_last_error"
+_cycle_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +163,7 @@ def get_max_tasks_per_cycle(db_path: Optional[str] = None) -> int:
     """Retorna o limite de novas tarefas criadas por ciclo (padrão conservador 1)."""
     val = get_autonomous_setting(KEY_AUTONOMOUS_MAX_TASKS_PER_CYCLE, str(DEFAULT_AUTONOMOUS_MAX_NEW_TASKS_PER_CYCLE), db_path=db_path)
     try:
-        return max(1, int(val))
+        return min(DEFAULT_AUTONOMOUS_MAX_NEW_TASKS_PER_CYCLE, max(1, int(val)))
     except (ValueError, TypeError):
         return DEFAULT_AUTONOMOUS_MAX_NEW_TASKS_PER_CYCLE
 
@@ -170,7 +172,7 @@ def get_max_generations_24h(db_path: Optional[str] = None) -> int:
     """Retorna o teto de gerações em 24h para segurança de custos e infra."""
     val = get_autonomous_setting(KEY_AUTONOMOUS_MAX_24H, str(DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H), db_path=db_path)
     try:
-        return max(1, int(val))
+        return min(DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H, max(1, int(val)))
     except (ValueError, TypeError):
         return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H
 
@@ -200,73 +202,34 @@ def get_autonomous_ready_stock(
     - Quality assessment existente com quality_score >= 70 e quality_label em ('GOOD', 'STRONG').
     - Ausência de Quality assessment é fail-closed (não conta no estoque autônomo).
     - Tarefa ainda não publicada no YouTube.
+    - Aprovação e destinos persistidos; perfil ativo e canal YouTube habilitado.
+    - MemoryState vazio não elimina aprovações recuperáveis.
     - Readiness de TikTok NÃO infle o estoque utilizado pelo loop YouTube.
     """
-    stock_info = operator_console.get_ready_stock(task_base_dir=task_base_dir, db_path=db_path)
-    youtube_ready_tasks = stock_info.get("youtube_ready")
-    eligible_youtube: List[Dict[str, Any]] = []
-
-    if youtube_ready_tasks is not None:
+    scheduler.init_db(db_path)
+    quality_score.init_quality_db(db_path)
+    with scheduler.get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT task_id FROM monetization_safety WHERE safety_status = 'PASS' "
+            "ORDER BY checked_at, task_id"
+        ).fetchall()
+        excluded = {r["task_id"] for r in conn.execute(
+            "SELECT task_id FROM publication_events WHERE platform='youtube' AND status='success' "
+            "UNION SELECT task_id FROM scheduled_posts WHERE platform='youtube' "
+            "AND status IN ('published', 'cancelled')"
+        )}
+    eligible = []
+    for row in rows:
+        if row["task_id"] in excluded:
+            continue
         try:
-            from app.services import quality_score
-            quality_score.init_quality_db(db_path)
-        except Exception:
-            pass
-
-        scheduler.init_db(db_path)
-        with scheduler.get_connection(db_path) as conn:
-            for task in youtube_ready_tasks:
-                task_id = task.get("task_id")
-                if not task_id:
-                    continue
-                try:
-                    q_row = conn.execute(
-                        """
-                        SELECT quality_score, quality_label
-                        FROM content_quality_scores
-                        WHERE task_id = ?
-                        ORDER BY created_at DESC, id DESC
-                        LIMIT 1;
-                        """,
-                        (task_id,),
-                    ).fetchone()
-                except Exception as exc:
-                    logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao consultar content_quality_scores para {task_id}: {exc}")
-                    q_row = None
-
-                if not q_row:
-                    # Ausência de Quality assessment é fail-closed para o estoque autônomo
-                    continue
-
-                try:
-                    q_score = float(q_row["quality_score"]) if q_row["quality_score"] is not None else 0.0
-                except (ValueError, TypeError):
-                    q_score = 0.0
-
-                q_label = str(q_row["quality_label"] or "").upper().strip()
-
-                if q_score >= MIN_QUALITY_SCORE_FOR_AUTONOMOUS and q_label in ("GOOD", "STRONG"):
-                    t_copy = dict(task)
-                    t_copy["quality_score"] = q_score
-                    t_copy["quality_label"] = q_label
-                    eligible_youtube.append(t_copy)
-
-        youtube_count = len(eligible_youtube)
-    else:
-        # Fallback caso mocks sintéticos de teste passem apenas contadores escalares
-        youtube_count = stock_info.get("youtube_count", stock_info.get("total_ready", 0))
-        eligible_youtube = []
-
-    target_stock = get_target_ready_stock(db_path=db_path)
-
-    return {
-        "ready_count": youtube_count,
-        "youtube_count": youtube_count,
-        "tiktok_count": stock_info.get("tiktok_count", 0),
-        "target_stock": target_stock,
-        "is_below_target": youtube_count < target_stock,
-        "youtube_ready": eligible_youtube,
-    }
+            eligible.append(_recover_waiting_task(row["task_id"], db_path, task_base_dir))
+        except (ValueError, TypeError, OSError):
+            continue
+    target = get_target_ready_stock(db_path=db_path)
+    return {"ready_count": len(eligible), "youtube_count": len(eligible),
+            "tiktok_count": 0, "target_stock": target,
+            "is_below_target": len(eligible) < target, "youtube_ready": eligible}
 
 
 def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
@@ -325,6 +288,10 @@ def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
 def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
     """Conta quantas gerações foram iniciadas pelo autonomous loop nas últimas 24 horas."""
     scheduler.init_db(db_path)
+    try:
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
     now_utc = scheduler._normalize_utc(now)
     since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
 
@@ -339,7 +306,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                 """,
                 (since_iso,),
             ).fetchone()
-            return int(row[0]) if row else 0
+            return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar gerações 24h: {exc}")
         return 0
@@ -903,7 +870,8 @@ def check_required_providers_preflight(
 # 5. Ciclo Principal do Orquestrador
 # ---------------------------------------------------------------------------
 
-def _recover_waiting_task(task_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
+                          task_base_dir: Optional[str] = None) -> Dict[str, Any]:
     """Revalidate persisted approval before retrying the existing scheduler."""
     from app.services import state as sm
 
@@ -913,7 +881,7 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None) -> Dict[s
         const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED,
     ) or task.get("cancelled"):
         raise ValueError("waiting_task_not_complete")
-    video = scheduler.get_task_final_video(task_id)
+    video = scheduler.get_task_final_video(task_id, task_base_dir=task_base_dir)
     if not video or not os.path.isfile(video) or os.path.getsize(video) <= 0:
         raise ValueError("waiting_final_video_missing")
     safety = safety_gate.get_safety_assessment(task_id, db_path=db_path) or {}
@@ -941,11 +909,27 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None) -> Dict[s
         raise ValueError("waiting_youtube_channel_unavailable")
     task.update(task_id=task_id, state=const.TASK_STATE_COMPLETE, video_file=video,
                 safety_status=const.SAFETY_STATUS_PASS, planned_platforms=["youtube"],
-                profile_id=profile["profile_id"])
+                profile_id=profile["profile_id"], quality_score=score,
+                quality_label=quality["quality_label"])
     return task
 
 
 def run_autonomous_cycle(
+    force: bool = False,
+    one_shot: bool = False,
+    now: Optional[datetime] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Serialize worker/manual cycles inside the PRIMARY process."""
+    if not _cycle_lock.acquire(blocking=False):
+        return {"status": "busy", "reason": "cycle_in_progress"}
+    try:
+        return _run_autonomous_cycle(force, one_shot, now, db_path)
+    finally:
+        _cycle_lock.release()
+
+
+def _run_autonomous_cycle(
     force: bool = False,
     one_shot: bool = False,
     now: Optional[datetime] = None,
@@ -956,8 +940,8 @@ def run_autonomous_cycle(
     Responsabilidades:
     1. Exige nó PRIMARY e fábrica RUNNING.
     2. Verifica autonomous_mode_enabled (ou one_shot=True para execução supervisionada).
-    3. Monitora tarefas em waiting_schedule e tenta replanejar agenda quando surgirem slots.
-    4. Monitora/revisa tarefas geradas pendentes de Gate (Quality >= 70 e Safety PASS estrito).
+    3. Monitora/revisa a geração atual antes de escolher uma nova ação.
+    4. Recupera aprovações persistidas e tenta agendar uma task se houver slot.
     5. Avalia espaço em disco e saúde passiva dos provedores críticos requeridos.
     6. Verifica teto de gerações em 24h.
     7. Calcula estoque pronto elegível estritamente para YouTube.
@@ -1007,52 +991,6 @@ def run_autonomous_cycle(
             "status": "disabled",
             "message": "autonomous_mode_enabled is False",
         }
-
-    # -----------------------------------------------------------------------
-    # Etapa A1: Tratar Tarefa Aprovada Aguardando Agenda (waiting_schedule)
-    # -----------------------------------------------------------------------
-    waiting_task_id = get_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, db_path=db_path)
-    if waiting_task_id:
-        try:
-            task_data = _recover_waiting_task(waiting_task_id, db_path=db_path)
-        except Exception as exc:
-            msg = f"Waiting task {waiting_task_id}: recovery blocked ({exc})."
-            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE, db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
-            return {"status": "waiting_schedule", "task_id": waiting_task_id,
-                    "scheduled_items": 0, "reason": "waiting_recovery_failed", "message": msg}
-        scheduled_items = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path)
-        if scheduled_items:
-            set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, "", db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
-            msg = f"Tarefa {waiting_task_id} agendada com sucesso após espera de slot."
-            set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, msg, db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
-            operator_console.log_operational_event(
-                component="autonomous_production",
-                severity=operator_console.SEVERITY_INFO,
-                event_type="task_approved_and_scheduled",
-                task_id=waiting_task_id,
-                message=msg,
-                metadata={"scheduled_items": len(scheduled_items)},
-                db_path=db_path,
-            )
-            return {
-                "status": "scheduled",
-                "task_id": waiting_task_id,
-                "scheduled_items": len(scheduled_items),
-                "message": msg,
-            }
-        else:
-            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE, db_path=db_path)
-            msg = f"Tarefa {waiting_task_id} aprovada aguardando slot de agendamento (Growth Mode / limite 24h)."
-            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
-            return {
-                "status": "waiting_schedule",
-                "task_id": waiting_task_id,
-                "scheduled_items": 0,
-                "message": msg,
-            }
 
     # -----------------------------------------------------------------------
     # Etapa A2: Tratar Geração Anterior / Revisão de Tarefas Concluídas
@@ -1188,6 +1126,86 @@ def run_autonomous_cycle(
                 "message": rejection_summary,
             }
 
+    # Select exactly one action. A blocked publication destination is not a
+    # generation lock; all persisted approvals remain discoverable after restart.
+    waiting_task_id = get_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, db_path=db_path)
+    if waiting_task_id:
+        try:
+            _recover_waiting_task(waiting_task_id, db_path=db_path)
+        except (ValueError, TypeError, OSError) as exc:
+            set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, "", db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE, db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, str(exc), db_path=db_path)
+            return {"status": "waiting_schedule", "task_id": waiting_task_id,
+                    "reason": "waiting_recovery_failed", "message": str(exc), "scheduled_items": 0}
+
+    stock_info = get_autonomous_ready_stock(db_path=db_path)
+    pending = []
+    for task_data in stock_info.get("youtube_ready", []):
+        channels = profile_manager.resolve_task_channels(
+            task_data["task_id"], platforms=["youtube"], db_path=db_path)
+        with scheduler.get_connection(db_path) as conn:
+            unscheduled = any(not scheduler.has_existing_or_terminal_destination(
+                task_data["task_id"], "youtube", c["channel_id"], conn
+            ) for c in channels)
+            queued = conn.execute(
+                "SELECT 1 FROM scheduled_posts WHERE task_id=? AND platform='youtube' "
+                "AND status IN ('planned', 'ready', 'processing') LIMIT 1", (task_data["task_id"],)
+            ).fetchone()
+        if unscheduled and not queued:
+            pending.append(task_data)
+    # This legacy pointer is only a display hint, never the queue or a lock.
+    set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID,
+                           pending[0]["task_id"] if pending else "", db_path=db_path)
+    for task_data in pending:
+        rate = scheduler.get_platform_rate_limits(
+            "youtube", now=current_time, profile_id=task_data["profile_id"], db_path=db_path)
+        if not rate["enabled"] or rate["available_slots"] <= 0:
+            scheduler.log_growth_limit_block(
+                task_data["task_id"], task_data["profile_id"], "youtube", rate,
+                now=current_time, db_path=db_path)
+            continue
+        retry_key = "autonomous_schedule_retry:" + task_data["task_id"]
+        retry_at = get_autonomous_setting(retry_key, None, db_path=db_path)
+        if retry_at:
+            try:
+                if current_time < scheduler._from_iso(retry_at):
+                    continue
+            except (ValueError, TypeError):
+                pass  # Malformed retry metadata must not block the whole buffer.
+        set_autonomous_setting(retry_key, scheduler._to_iso(current_time + timedelta(minutes=15)), db_path=db_path)
+        scheduled = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path)
+        status = "scheduled" if scheduled else "waiting_schedule"
+        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE if scheduled else STATE_WAITING_SCHEDULE, db_path=db_path)
+        message = f"Task {task_data['task_id']}: {status} ({len(scheduled)} scheduled items)."
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, message, db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, message, db_path=db_path)
+        if scheduled:
+            set_autonomous_setting(retry_key, "", db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, "", db_path=db_path)
+            operator_console.log_operational_event(
+                component="autonomous_production", severity=operator_console.SEVERITY_INFO,
+                event_type="task_approved_and_scheduled", task_id=task_data["task_id"],
+                message="Persisted approval scheduled for YouTube.",
+                metadata={"scheduled_items": len(scheduled)}, db_path=db_path)
+        return {"status": status, "task_id": task_data["task_id"],
+                "scheduled_items": len(scheduled), "message": message}
+
+    ready_total = stock_info["ready_count"]
+    target_stock = stock_info["target_stock"]
+
+    if ready_total >= target_stock:
+        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
+        msg = f"Estoque pronto suficiente ({ready_total}/{target_stock}). Nenhuma nova geração necessária."
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, msg, db_path=db_path)
+        return {
+            "status": "idle",
+            "ready_stock": ready_total,
+            "target_stock": target_stock,
+            "message": msg,
+        }
+
     # -----------------------------------------------------------------------
     # Guarda 4: Cooldown Timer (a menos que force=True ou one_shot=True)
     # -----------------------------------------------------------------------
@@ -1267,22 +1285,6 @@ def run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Etapa B: Cálculo do Estoque Pronto YouTube vs Meta (get_autonomous_ready_stock)
     # -----------------------------------------------------------------------
-    stock_info = get_autonomous_ready_stock(db_path=db_path)
-    ready_total = stock_info["ready_count"]
-    target_stock = stock_info["target_stock"]
-
-    if ready_total >= target_stock:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
-        msg = f"Estoque pronto suficiente ({ready_total}/{target_stock}). Nenhuma nova geração necessária."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, msg, db_path=db_path)
-        return {
-            "status": "idle",
-            "ready_stock": ready_total,
-            "target_stock": target_stock,
-            "message": msg,
-        }
-
     deficit = target_stock - ready_total
     max_per_cycle = get_max_tasks_per_cycle(db_path=db_path)
     tasks_to_create = min(deficit, max_per_cycle, 1)  # Fase V12-E.1: máximo efetivo = 1
@@ -1317,6 +1319,8 @@ def run_autonomous_cycle(
     # Etapa D: Criação da Task e Submissão ao Pipeline Existente (Generating)
     # -----------------------------------------------------------------------
     new_task_id = str(uuid.uuid4())
+    chosen_topic = candidate["topic"]
+    trend_id = candidate.get("trend_id")
     params = build_autonomous_video_params(
         topic=chosen_topic,
         profile_id=active_profile_id,

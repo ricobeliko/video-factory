@@ -47,6 +47,10 @@ from app.services import state as sm
 
 class TestAutonomousProductionLoop(unittest.TestCase):
     def setUp(self):
+        # Explicit synthetic provider: tests must not depend on local config.toml.
+        self.llm_provider_patcher = patch.dict(config.app, {"llm_provider": "gemini"})
+        self.llm_provider_patcher.start()
+        self.addCleanup(self.llm_provider_patcher.stop)
         self.test_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.test_dir, "test_autonomous.db")
         self.task_base_dir = os.path.join(self.test_dir, "tasks")
@@ -188,10 +192,10 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             autonomous_production.KEY_AUTONOMOUS_TARGET_STOCK, "2", db_path=self.db_path
         )
 
-        # Mock operator_console.get_ready_stock retornando total_ready = 2 (estoque atingido)
-        with patch("app.services.operator_console.get_ready_stock") as mock_stock, \
+        # Isola a decisão do ciclo; inventário persistente tem testes próprios.
+        with patch("app.services.autonomous_production.get_autonomous_ready_stock") as mock_stock, \
              patch("app.services.webui_task.submit_generation") as mock_sub:
-            mock_stock.return_value = {"total_ready": 2, "youtube_count": 2, "tiktok_count": 2}
+            mock_stock.return_value = {"ready_count": 2, "target_stock": 2}
             res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
             self.assertEqual(res.get("status"), "idle")
             self.assertIn("Estoque pronto suficiente", res.get("message"))
@@ -209,10 +213,10 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             autonomous_production.KEY_AUTONOMOUS_MAX_TASKS_PER_CYCLE, "1", db_path=self.db_path
         )
 
-        with patch("app.services.operator_console.get_ready_stock") as mock_stock, \
+        with patch("app.services.autonomous_production.get_autonomous_ready_stock") as mock_stock, \
              patch("app.services.autonomous_production.discover_candidate_topic") as mock_disc, \
              patch("app.services.webui_task.submit_generation") as mock_sub:
-            mock_stock.return_value = {"total_ready": 1, "youtube_count": 1}
+            mock_stock.return_value = {"ready_count": 1, "target_stock": 3}
             mock_disc.return_value = {"topic": "O mistério das pirâmides submersas", "origin": "test"}
 
             res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
@@ -233,10 +237,10 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             autonomous_production.KEY_AUTONOMOUS_MAX_TASKS_PER_CYCLE, "1", db_path=self.db_path
         )
 
-        with patch("app.services.operator_console.get_ready_stock") as mock_stock, \
+        with patch("app.services.autonomous_production.get_autonomous_ready_stock") as mock_stock, \
              patch("app.services.autonomous_production.discover_candidate_topic") as mock_disc, \
              patch("app.services.webui_task.submit_generation") as mock_sub:
-            mock_stock.return_value = {"total_ready": 0}  # Déficit de 10
+            mock_stock.return_value = {"ready_count": 0, "target_stock": 10}  # Déficit de 10
             mock_disc.return_value = {"topic": "3 fatos sobre buracos negros", "origin": "test"}
 
             res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
@@ -263,9 +267,9 @@ class TestAutonomousProductionLoop(unittest.TestCase):
                 db_path=self.db_path,
             )
 
-        with patch("app.services.operator_console.get_ready_stock") as mock_stock, \
+        with patch("app.services.autonomous_production.get_autonomous_ready_stock") as mock_stock, \
              patch("app.services.webui_task.submit_generation") as mock_sub:
-            mock_stock.return_value = {"total_ready": 0}
+            mock_stock.return_value = {"ready_count": 0, "target_stock": 10}
             res = autonomous_production.run_autonomous_cycle(force=True, db_path=self.db_path, now=self.now)
             self.assertEqual(res.get("status"), "blocked")
             self.assertEqual(res.get("reason"), "daily_limit_reached")
@@ -499,6 +503,7 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             db_path=self.db_path,
         )
 
+        self._persist_waiting_fixture(task_id)
         with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
              patch("app.services.quality_score.evaluate_quality", return_value={"quality_score": 90.0, "quality_label": "STRONG"}), \
              patch("app.services.scheduler.get_task_final_video", return_value=v_path), \
@@ -1027,6 +1032,11 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             safety_status=const.SAFETY_STATUS_PASS,
         )
 
+        for task_id in (t_good, t_strong):
+            self._persist_waiting_fixture(task_id)
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute("DELETE FROM content_quality_scores WHERE task_id IN (?, ?)", (t_good, t_strong))
+
         with scheduler.get_connection(self.db_path) as conn:
             conn.execute(
                 """
@@ -1548,14 +1558,14 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path)
         return video
 
-    def _retry_persisted_waiting(self, memory=None, one_shot=False):
+    def _retry_persisted_waiting(self, memory=None, one_shot=False, expected_generations=0):
         with patch.object(sm.state, "get_task", return_value=memory), \
              patch("app.utils.utils.task_dir", return_value=self.task_base_dir), \
              patch("app.services.webui_task.submit_generation") as submit, \
              patch("socket.socket.connect", side_effect=AssertionError("External network forbidden")):
             result = autonomous_production.run_autonomous_cycle(
                 force=True, one_shot=one_shot, db_path=self.db_path, now=self.now)
-        submit.assert_not_called()
+        self.assertEqual(submit.call_count, expected_generations)
         self.mock_upload_video.assert_not_called()
         self.mock_cross_post.assert_not_called()
         self.mock_publish_task.assert_not_called()
@@ -1625,7 +1635,7 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         self.assertEqual(self._retry_persisted_waiting()["status"], "scheduled")
         task_id = "no-slot"
         self._persist_waiting_fixture(task_id)
-        self.assertEqual(self._retry_persisted_waiting()["status"], "waiting_schedule")
+        self.assertEqual(self._retry_persisted_waiting(expected_generations=1)["status"], "generation_started")
         self.assertEqual(autonomous_production.get_autonomous_setting(
             autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, db_path=self.db_path), task_id)
 
@@ -1650,7 +1660,9 @@ class TestAutonomousProductionLoop(unittest.TestCase):
                     conn.execute("UPDATE scheduled_posts SET status=?", (status,))
                 autonomous_production.set_autonomous_setting(
                     autonomous_production.KEY_AUTONOMOUS_WAITING_TASK_ID, task_id, db_path=self.db_path)
-                self.assertEqual(self._retry_persisted_waiting()["status"], "waiting_schedule")
+                autonomous_production.set_autonomous_setting(
+                    autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=self.db_path)
+                self.assertEqual(self._retry_persisted_waiting(expected_generations=1)["status"], "generation_started")
                 with scheduler.get_connection(self.db_path) as conn:
                     self.assertEqual(conn.execute("SELECT count(*) FROM scheduled_posts").fetchone()[0], count)
 

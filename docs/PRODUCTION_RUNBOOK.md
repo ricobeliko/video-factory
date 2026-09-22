@@ -1,5 +1,28 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
+## V12-E.3 — contrato DEV, sem rollout autorizado
+
+Esta etapa não acessou produção e não autoriza deploy, commit ou push.
+Após eventual revisão e autorização separada, o comportamento esperado é:
+
+- Uma task aprovada sem slot WARMUP conta no estoque e não impede reposição.
+- Abaixo de 3, um ciclo elegível pode iniciar uma geração; com 3, não gera.
+- Ciclo que revisa, recupera indicação inválida ou tenta agendar encerra nessa ação.
+- Estoque é revalidado a partir de dados persistidos e vídeos locais; publicação,
+  cancelamento, gates inválidos, perfil/canal inválido ou vídeo ausente excluem a task.
+- `waiting_task_id` é apenas uma indicação; limpar/perder essa chave não perde a fila.
+- Retry de agendamento sem resultado espera 15 minutos; falta de slot é verificada
+  antes da tentativa e não bloqueia reposição. Eventos Growth repetidos da mesma
+  task/perfil/plataforma/modo são limitados a um por 15 minutos, após restart também.
+- Growth Mode, Auto Publish, Scheduler único publicador e TikTok OFF permanecem
+  com o contrato anterior. Nenhuma migração nova ou alteração de configuração operacional.
+
+Validação concluída exclusivamente DEV/offline: 600 testes + 32 subtestes passaram
+em 23 suítes, zero falhas (246,12s). Comando reproduzível no handoff.
+Próximo gate seguro: revisão do diff V12-E.3. Não misturar aprovação desta etapa
+com ativação da V12-F.2; produção ainda não homologada para E.3.
+
+
 
 ## V12-F.1C — Publication Privacy Persistence (21/09/2026)
 

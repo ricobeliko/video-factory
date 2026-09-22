@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.models import const
+from app.config import config
 from app.services import scheduler
 from app.services import task as task_module
 from app.services import state as sm
@@ -19,6 +20,13 @@ class TestPublicationPersistence(unittest.TestCase):
     """Testes para validação da separação entre platform_post_id (external_id) e provider_request_id."""
 
     def setUp(self):
+        # Publication is mocked below; configuration is synthetic and restored.
+        configured = patch.dict(config.app, {
+            "upload_post_enabled": True, "upload_post_api_key": "test-only-not-a-credential",
+            "upload_post_username": "test-user", "upload_post_platforms": ["youtube"],
+        })
+        configured.start()
+        self.addCleanup(configured.stop)
         self.test_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.test_dir, "test_pub.db")
         scheduler.init_db(self.db_path)

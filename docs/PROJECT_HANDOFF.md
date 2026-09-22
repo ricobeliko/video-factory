@@ -1,5 +1,40 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
+## V12-E.3 — gate DEV controlado — 21/09/2026
+
+Baseline de código `54875c6`; sem commit, push, deploy ou acesso à produção.
+Esta entrega resolve a recuperação e reposição do buffer autônomo de estoque YouTube
+de forma desacoplada da V12-F.2.
+
+Principais contratos implementados:
+- Estoque YouTube persistente: `get_autonomous_ready_stock` reconstrói tarefas aprovadas
+  a partir de `monetization_safety` (PASS explícito), `content_quality_scores` (>= 70,
+  GOOD/STRONG), `task_profiles` e arquivo de vídeo existente em disco.
+- Recuperação sem `MemoryState`: `_recover_waiting_task` não depende do estado em memória
+  para revalidar ou agendar tarefas aprovadas pós-restart.
+- Buffer 0→3 em WARMUP: tarefas aprovadas sem slot disponível são retidas no estoque
+  sem impedir novas gerações caso o total pronto esteja abaixo da meta (3).
+- Exatamente uma ação por ciclo: cada execução do loop autônomo executa no máximo uma
+  transição (revisão de conclusão, agendamento de 1 task aprovada ou início de 1 geração).
+- Limite de gerações: 1 geração por ciclo e teto estrito de 5 gerações nas últimas 24h.
+- Retry e deduplicação de 15 minutos: falha de agendamento sem slot impõe cooldown de 15 min
+  por task via `autonomous_schedule_retry:<task_id>`. Eventos `PROFILE_GROWTH_LIMIT_BLOCK`
+  são deduplicados transacionalmente em `scheduler.log_growth_limit_block` a cada 15 min.
+- Scheduler como único publicador: nenhuma publicação direta; Growth Mode preservado; TikTok OFF.
+- Sem migrações de schema: utiliza tabelas e colunas já existentes.
+
+Validação DEV concluída: **600 testes e 32 subtestes passaram, zero falhas**, em
+246,12s, nas 23 suítes; 16 testes novos são da V12-E.3. SQLite, vídeos e
+configuração sintéticos em diretórios temporários; rede bloqueada. `git diff --check`
+aprovado. Fixtures antigas foram atualizadas para aprovações persistidas e para
+permitir reposição sem slot. Próximo gate seguro: revisar exclusivamente o diff V12-E.3;
+qualquer homologação/deploy em produção exige autorização separada.
+Arquivos desta etapa: `app/services/autonomous_production.py`,
+`app/services/scheduler.py`, `test/services/test_autonomous_production.py`,
+`test/services/test_autonomous_stock_buffer.py` e os três documentos canônicos
+de handoff, roadmap e runbook.
+
+
 
 ## V12-F.1C — Publication Privacy Persistence (21/09/2026)
 

@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import sqlite3
 import threading
@@ -1155,15 +1156,8 @@ def plan_schedule(
                 profile_id=task_profile_id,
             )
             if not rate_info["enabled"] or rate_info["available_slots"] <= 0:
-                operator_console.log_operational_event(
-                    component="scheduler",
-                    severity="INFO",
-                    event_type="PROFILE_GROWTH_LIMIT_BLOCK",
-                    task_id=task_id,
-                    message=f"Limite do modo {rate_info.get('growth_mode')} atingido para {clean_plat} no perfil {task_profile_id}.",
-                    metadata={"profile_id": task_profile_id, "platform": clean_plat, "growth_mode": rate_info.get("growth_mode")},
-                    db_path=db_path,
-                )
+                log_growth_limit_block(task_id, task_profile_id, clean_plat, rate_info,
+                                       now=current_time, db_path=db_path)
                 continue
 
             limit_24h = rate_info["limit"]
@@ -1362,6 +1356,40 @@ def calculate_backoff_seconds(attempt: int, retry_after: Optional[int] = None) -
     if attempt == 2:
         return 60 * 60  # 60 minutos
     return 60 * 60
+
+
+def log_growth_limit_block(
+    task_id: str, profile_id: Optional[str], platform: str, rate_info: Dict[str, Any],
+    now: Optional[datetime] = None, db_path: Optional[str] = None,
+) -> bool:
+    """Persist at most one event per task/profile/platform/mode every 15 minutes.
+
+    The transaction serializes planner/worker retries, including after restart.
+    This only suppresses telemetry; publication limits are still rechecked.
+    """
+    from app.services import operator_console
+
+    operator_console.init_operator_db(db_path)
+    current_time = _normalize_utc(now)
+    metadata = json.dumps({"profile_id": profile_id, "platform": platform,
+                           "growth_mode": rate_info.get("growth_mode")}, sort_keys=True)
+    with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute(
+            "SELECT timestamp FROM operational_events "
+            "WHERE event_type='PROFILE_GROWTH_LIMIT_BLOCK' AND task_id=? "
+            "AND metadata_json=? ORDER BY id DESC LIMIT 1", (task_id, metadata)
+        ).fetchone()
+        if previous and current_time < _from_iso(previous["timestamp"]) + timedelta(minutes=15):
+            return False
+        conn.execute(
+            "INSERT INTO operational_events "
+            "(timestamp, component, severity, event_type, task_id, message, metadata_json) "
+            "VALUES (?, 'scheduler', 'INFO', 'PROFILE_GROWTH_LIMIT_BLOCK', ?, ?, ?)",
+            (_to_iso(current_time), task_id,
+             f"Growth limit: {platform}, profile {profile_id}, mode {rate_info.get('growth_mode')}.", metadata),
+        )
+    return True
 
 
 def get_task_final_video(task_id: str, task_base_dir: Optional[str] = None) -> Optional[str]:
@@ -1650,15 +1678,8 @@ def run_scheduler_cycle(
                 (_to_iso(next_eligible), _to_iso(next_eligible), post_id),
             )
 
-        operator_console.log_operational_event(
-            component="scheduler",
-            severity="INFO",
-            event_type="PROFILE_GROWTH_LIMIT_BLOCK",
-            task_id=task_id,
-            message=f"Limite de {platform} atingido ({rate_info['total_used']}/{rate_info['limit']} no modo {rate_info.get('growth_mode')}) para perfil {profile_id}.",
-            metadata={"profile_id": profile_id, "platform": platform, "growth_mode": rate_info.get("growth_mode")},
-            db_path=db_path,
-        )
+        log_growth_limit_block(task_id, profile_id, platform, rate_info,
+                               now=current_time, db_path=db_path)
 
         _set_executor_status(
             state="limit_blocked",

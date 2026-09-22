@@ -432,6 +432,63 @@ class TestOperatorConsole(unittest.TestCase):
         self.assertGreaterEqual(len(confirm_events), 1)
         self.assertEqual(confirm_events[0]["task_id"], task_id)
 
+    # 29. canonical ready stock matches autonomous production
+    def test_canonical_ready_stock_matches_autonomous_production(self):
+        from app.services import autonomous_production, safety_gate, quality_score, profile_manager
+        safety_gate.init_safety_db(self.db_path)
+        quality_score.init_quality_db(self.db_path)
+        profile_manager.ensure_default_profile(self.db_path)
+
+        task_id = "test-ready-canonical-1"
+        video_path = os.path.join(self.tasks_dir, task_id, "final-1.mp4")
+        os.makedirs(os.path.dirname(video_path), exist_ok=True)
+        with open(video_path, "wb") as f:
+            f.write(b"fake video content")
+
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},
+            db_path=self.db_path,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO content_quality_scores "
+                "(task_id, topic, quality_score, quality_label, created_at) VALUES (?, ?, 75.0, 'GOOD', ?)",
+                (task_id, "Topico Teste", datetime.now(timezone.utc).isoformat()),
+            )
+        scheduler.save_task_platforms(task_id, ["youtube"], db_path=self.db_path)
+        profile_manager.save_task_profile(task_id, "default", db_path=self.db_path)
+
+        # In-memory sm.state remains empty (simulating application restart or headless worker)
+        with patch("app.utils.utils.task_dir", return_value=self.tasks_dir):
+            auto_status = autonomous_production.get_autonomous_status(db_path=self.db_path)
+            auto_stock = autonomous_production.get_autonomous_ready_stock(task_base_dir=self.tasks_dir, db_path=self.db_path)
+            canonical_stock = operator_console.get_canonical_ready_stock(task_base_dir=self.tasks_dir, db_path=self.db_path)
+
+        # Validar que ambas as fontes representam o mesmo estoque autônomo elegível
+        self.assertEqual(auto_stock["ready_count"], 1)
+        self.assertEqual(canonical_stock["total_ready"], 1)
+        self.assertEqual(canonical_stock["total_ready"], auto_stock["ready_count"])
+        self.assertEqual(canonical_stock["total_ready"], auto_status["ready_stock_total"])
+        self.assertEqual(canonical_stock["youtube_count"], 1)
+        self.assertEqual(canonical_stock["minimum_threshold"], auto_status["target_ready_stock"])
+        self.assertEqual(canonical_stock["is_below_minimum"], auto_status["is_below_target"])
+
+    # 30. webui telemetry uses canonical ready stock
+    def test_webui_telemetry_uses_canonical_ready_stock(self):
+        from webui.components.operator_console import _load_telemetry_data
+        with patch("app.services.operator_console.get_canonical_ready_stock") as mock_stock:
+            mock_stock.return_value = {
+                "total_ready": 1,
+                "minimum_threshold": 3,
+                "is_below_minimum": True,
+                "youtube_count": 1,
+            }
+            data = _load_telemetry_data(demo_enabled=False, scenario_choice="Normal")
+            self.assertEqual(data["stock"]["total_ready"], 1)
+            self.assertEqual(data["stock"]["minimum_threshold"], 3)
+            self.assertTrue(data["stock"]["is_below_minimum"])
+            self.assertGreaterEqual(mock_stock.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

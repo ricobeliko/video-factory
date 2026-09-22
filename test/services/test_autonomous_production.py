@@ -257,12 +257,12 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             autonomous_production.KEY_AUTONOMOUS_MAX_24H, "3", db_path=self.db_path
         )
 
-        # Registra 3 gerações no banco nas últimas 2 horas
+        # Registra 3 gerações aprovadas no banco nas últimas 2 horas
         for i in range(3):
             operator_console.log_operational_event(
                 component="autonomous_production",
                 severity=operator_console.SEVERITY_INFO,
-                event_type="generation_started",
+                event_type="generation_approved",
                 message=f"Geração {i}",
                 db_path=self.db_path,
             )

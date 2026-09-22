@@ -103,6 +103,13 @@ KEY_AUTONOMOUS_LAST_RESULT = "autonomous_last_result"
 KEY_AUTONOMOUS_CURRENT_TASK_ID = "autonomous_current_task_id"
 KEY_AUTONOMOUS_WAITING_TASK_ID = "autonomous_waiting_task_id"
 KEY_AUTONOMOUS_LAST_ERROR = "autonomous_last_error"
+KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS = "autonomous_consecutive_rejections"
+KEY_AUTONOMOUS_MAX_ATTEMPTS_24H = "autonomous_max_attempts_24h"
+KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE = "autonomous_last_narrative_structure"
+KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE = "autonomous_rejected_narrative_structure"
+
+DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS = 10
+DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H = 15
 _cycle_lock = threading.Lock()
 
 
@@ -186,6 +193,24 @@ def get_cycle_interval_minutes(db_path: Optional[str] = None) -> int:
         return DEFAULT_AUTONOMOUS_CYCLE_INTERVAL_MINUTES
 
 
+def get_consecutive_rejections(db_path: Optional[str] = None) -> int:
+    """Retorna a contagem atual de rejeições consecutivas nos Gates."""
+    val = get_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, "0", db_path=db_path)
+    try:
+        return max(0, int(val))
+    except (ValueError, TypeError):
+        return 0
+
+
+def get_max_attempts_24h(db_path: Optional[str] = None) -> int:
+    """Retorna o teto de tentativas totais de geração em 24h para proteção de custos."""
+    val = get_autonomous_setting(KEY_AUTONOMOUS_MAX_ATTEMPTS_24H, str(DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H), db_path=db_path)
+    try:
+        return max(1, int(val))
+    except (ValueError, TypeError):
+        return DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H
+
+
 # ---------------------------------------------------------------------------
 # 2. Telemetria e Status
 # ---------------------------------------------------------------------------
@@ -246,7 +271,9 @@ def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
 
     # Contagem de gerações nas últimas 24h
     generated_today = count_generations_in_last_24h(db_path=db_path)
+    attempts_today = count_generation_attempts_in_last_24h(db_path=db_path)
     max_24h = get_max_generations_24h(db_path=db_path)
+    consecutive_rejections = get_consecutive_rejections(db_path=db_path)
 
     # Estoque atual e meta (estritamente elegível para YouTube)
     stock_info = get_autonomous_ready_stock(db_path=db_path)
@@ -280,13 +307,46 @@ def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
         "is_below_target": stock_info["is_below_target"],
         "generated_today_24h": generated_today,
         "max_generations_24h": max_24h,
+        "generation_attempts_24h": attempts_today,
+        "consecutive_rejections": consecutive_rejections,
         "max_tasks_per_cycle": get_max_tasks_per_cycle(db_path=db_path),
         "cycle_interval_minutes": interval_min,
     }
 
 
 def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
-    """Conta quantas gerações foram iniciadas pelo autonomous loop nas últimas 24 horas."""
+    """Conta quantas gerações APROVADAS foram concluídas pelo autonomous loop nas últimas 24 horas.
+
+    Separa tentativas/rejeições de vídeos aprovados/prontos para assegurar que
+    rejeições não impeçam a fábrica de repor o estoque até a meta.
+    """
+    scheduler.init_db(db_path)
+    try:
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
+    now_utc = scheduler._normalize_utc(now)
+    since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
+
+    try:
+        with scheduler.get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT count(*) FROM operational_events
+                WHERE component = 'autonomous_production'
+                  AND event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                  AND timestamp >= ?;
+                """,
+                (since_iso,),
+            ).fetchone()
+            return int(row[0]) if (row and row[0] is not None) else 0
+    except Exception as exc:
+        logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar gerações aprovadas 24h: {exc}")
+        return 0
+
+
+def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
+    """Conta quantas tentativas de geração foram iniciadas pelo autonomous loop nas últimas 24 horas."""
     scheduler.init_db(db_path)
     try:
         operator_console.init_operator_db(db_path)
@@ -308,7 +368,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
             ).fetchone()
             return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
-        logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar gerações 24h: {exc}")
+        logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar tentativas 24h: {exc}")
         return 0
 
 
@@ -1049,6 +1109,20 @@ def _run_autonomous_cycle(
         set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=db_path)
 
         if approved:
+            # Reseta contador de rejeições consecutivas e limpa tracking de rejeição narrativa
+            set_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, "0", db_path=db_path)
+            set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, "", db_path=db_path)
+
+            operator_console.log_operational_event(
+                component="autonomous_production",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="generation_approved",
+                task_id=current_task_id,
+                message=f"Tarefa {current_task_id} aprovada nos Gates de Qualidade e Segurança.",
+                metadata=metrics,
+                db_path=db_path,
+            )
+
             set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_SCHEDULING, db_path=db_path)
             # YouTube Primeiro: Apenas YouTube habilitado
             scheduler.adopt_tasks_into_scheduler([current_task_id], ["youtube"], db_path=db_path)
@@ -1102,6 +1176,25 @@ def _run_autonomous_cycle(
                 }
         else:
             rejected_task_id = current_task_id
+            consec = get_consecutive_rejections(db_path=db_path) + 1
+            set_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, str(consec), db_path=db_path)
+
+            try:
+                from app.services import state as sm
+                sm.state.patch_task(rejected_task_id, gate_status="rejected", gate_reason=reason)
+            except Exception:
+                pass
+
+            from app.services import state as sm
+            rej_task = sm.state.get_task(rejected_task_id) or {}
+            rej_struct = rej_task.get("narrative_structure") or metrics.get("narrative_structure")
+            is_narrative_repetition = any(
+                term in str(reason).lower()
+                for term in ["repetição", "repetida", "mesma estrutura", "estrutura narrativa", "narrative_fit"]
+            )
+            if is_narrative_repetition and rej_struct:
+                set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, str(rej_struct), db_path=db_path)
+
             operator_console.log_operational_event(
                 component="autonomous_production",
                 severity=operator_console.SEVERITY_WARNING,
@@ -1231,13 +1324,34 @@ def _run_autonomous_cycle(
     set_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, now_iso, db_path=db_path)
 
     # -----------------------------------------------------------------------
-    # Guarda 5: Limite Diário de Gerações (24h)
+    # Guarda 5: Limite Diário de Gerações Aprovadas e Proteção contra Loop de Custo
     # -----------------------------------------------------------------------
+    # 5.1 Proteção contra loop infinito de falhas consecutivas (Circuit Breaker)
+    consecutive_rejections = get_consecutive_rejections(db_path=db_path)
+    if consecutive_rejections >= DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS:
+        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        msg = (
+            f"Proteção de custo ativada: {consecutive_rejections} rejeições consecutivas nos Gates. "
+            f"Produção pausada para evitar loop/gasto descontrolado."
+        )
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        return {"status": "blocked", "reason": "consecutive_rejections_limit", "message": msg}
+
+    # 5.2 Teto de tentativas totais em 24h (para evitar consumo excessivo de API)
+    max_attempts_24h = get_max_attempts_24h(db_path=db_path)
+    attempts_today = count_generation_attempts_in_last_24h(now=current_time, db_path=db_path)
+    if attempts_today >= max_attempts_24h:
+        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        msg = f"Teto diário de tentativas atingido ({attempts_today}/{max_attempts_24h} em 24h). Aguardando liberação da janela."
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        return {"status": "blocked", "reason": "daily_attempt_limit_reached", "message": msg}
+
+    # 5.3 Limite diário de gerações APROVADAS (máximo de vídeos prontos por 24h)
     max_24h = get_max_generations_24h(db_path=db_path)
     gen_today = count_generations_in_last_24h(now=current_time, db_path=db_path)
     if gen_today >= max_24h:
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
-        msg = f"Limite diário de gerações atingido ({gen_today}/{max_24h} em 24h). Aguardando liberação da janela."
+        msg = f"Limite diário de gerações aprovadas atingido ({gen_today}/{max_24h} em 24h). Aguardando liberação da janela."
         set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
         return {"status": "blocked", "reason": "daily_limit_reached", "message": msg}
 
@@ -1309,11 +1423,24 @@ def _run_autonomous_cycle(
     chosen_topic = candidate["topic"]
     trend_id = candidate.get("trend_id")
 
-    # Recomenda estrutura narrativa diversificada
+    # Recomenda estrutura narrativa diversificada evitando repetições
+    last_struct = get_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, None, db_path=db_path)
+    rejected_struct = get_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, None, db_path=db_path)
+
     rec_struct, _ = content_strategy.recommend_narrative_structure(
         topic=chosen_topic,
         niche=probe_params.niche,
+        last_used_structure=rejected_struct or last_struct,
     )
+    if rejected_struct and rec_struct == rejected_struct:
+        for alt_st in const.NARRATIVE_STRUCTURES:
+            if alt_st != rejected_struct:
+                rec_struct = alt_st
+                break
+
+    set_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, rec_struct, db_path=db_path)
+    if rejected_struct:
+        set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, "", db_path=db_path)
 
     # -----------------------------------------------------------------------
     # Etapa D: Criação da Task e Submissão ao Pipeline Existente (Generating)

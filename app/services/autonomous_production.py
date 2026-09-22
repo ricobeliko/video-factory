@@ -451,12 +451,11 @@ def get_autonomous_status(
             t_obj = sm.state.get_task(current_task_id) or {}
             task_prof = t_obj.get("profile_id")
         is_default_target = not target_profile or target_profile in (profile_manager.DEFAULT_PROFILE_ID, "default")
-        is_default_task = not task_prof or task_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
         if is_default_target:
-            if not is_default_task:
+            if task_prof and task_prof not in (profile_manager.DEFAULT_PROFILE_ID, "default"):
                 current_task_id = None
         else:
-            if task_prof != target_profile:
+            if task_prof and task_prof != target_profile:
                 current_task_id = None
 
     if waiting_task_id:
@@ -466,12 +465,11 @@ def get_autonomous_status(
             t_obj = sm.state.get_task(waiting_task_id) or {}
             task_prof = t_obj.get("profile_id")
         is_default_target = not target_profile or target_profile in (profile_manager.DEFAULT_PROFILE_ID, "default")
-        is_default_task = not task_prof or task_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
         if is_default_target:
-            if not is_default_task:
+            if task_prof and task_prof not in (profile_manager.DEFAULT_PROFILE_ID, "default"):
                 waiting_task_id = None
         else:
-            if task_prof != target_profile:
+            if task_prof and task_prof != target_profile:
                 waiting_task_id = None
 
     # Contagem de gerações nas últimas 24h
@@ -1206,14 +1204,21 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     from app.services import state as sm
 
     task = dict(sm.state.get_task(task_id) or {})
-    if task.get("state") in (
-        const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING,
-        const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED,
-    ) or task.get("cancelled"):
+    if task.get("state") in (const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED) or task.get("cancelled"):
         raise ValueError("waiting_task_not_complete")
+
     video = scheduler.get_task_final_video(task_id, task_base_dir=task_base_dir)
     if not video or not os.path.isfile(video) or os.path.getsize(video) <= 0:
         raise ValueError("waiting_final_video_missing")
+
+    if task.get("state") in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
+        try:
+            from app.services import webui_task
+            if webui_task.has_active_generation_tasks() and task_id in webui_task.get_active_task_ids():
+                raise ValueError("waiting_task_not_complete")
+        except Exception:
+            pass
+
     safety = safety_gate.get_safety_assessment(task_id, db_path=db_path) or {}
     if safety.get("safety_status") != const.SAFETY_STATUS_PASS:
         raise ValueError("waiting_safety_not_pass")
@@ -1255,12 +1260,21 @@ def run_autonomous_cycle(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Serialize worker/manual cycles inside the PRIMARY process."""
     if not _cycle_lock.acquire(blocking=False):
         return {"status": "busy", "reason": "cycle_in_progress"}
     try:
-        return _run_autonomous_cycle(force, one_shot, now, db_path, profile_id=profile_id, channel_id=channel_id)
+        return _run_autonomous_cycle(
+            force=force,
+            one_shot=one_shot,
+            now=now,
+            db_path=db_path,
+            profile_id=profile_id,
+            channel_id=channel_id,
+            task_base_dir=task_base_dir,
+        )
     finally:
         _cycle_lock.release()
 
@@ -1272,6 +1286,7 @@ def _run_autonomous_cycle(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Executa um ciclo determinístico e idempotente do loop de produção autônoma.
 
@@ -1287,11 +1302,20 @@ def _run_autonomous_cycle(
     9. Se estoque insuficiente -> seleciona tópico sem duplicação e cria nova tarefa no pipeline existente.
     10. Marca trend como USED apenas após sucesso de submissão da task.
     11. Tarefas aprovadas são adotadas no Scheduler exclusivamente para YouTube.
-    12. Registra operational_events e atualiza telemetria.
+    12. Registra operational_events e atualiza telemetria isolada por perfil.
     """
     scheduler.init_db(db_path)
     current_time = scheduler._normalize_utc(now)
     now_iso = scheduler._to_iso(current_time)
+
+    target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+    target_channel_id = channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
+
+    def _set_status(key: str, val: Any) -> None:
+        _set_cycle_setting(key, val, profile_id=target_profile_id, db_path=db_path)
+
+    def _get_status(key: str, default: Any = None) -> Any:
+        return _get_cycle_setting(key, default, profile_id=target_profile_id, db_path=db_path)
 
     # -----------------------------------------------------------------------
     # Guarda 1: PRIMARY Lock
@@ -1299,8 +1323,8 @@ def _run_autonomous_cycle(
     try:
         operator_console.require_primary_instance(db_path=db_path)
     except PermissionError as p_err:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, "Instância em modo SECONDARY_VIEW_ONLY. Produção autônoma bloqueada.", db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, "Instância em modo SECONDARY_VIEW_ONLY. Produção autônoma bloqueada.")
         return {
             "status": "blocked",
             "reason": "secondary_view_only",
@@ -1311,8 +1335,8 @@ def _run_autonomous_cycle(
     # Guarda 2: Factory State RUNNING
     # -----------------------------------------------------------------------
     if operator_console.is_factory_paused(db_path=db_path):
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, "Fábrica PAUSADA. Novas produções e agendamentos bloqueados.", db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, "Fábrica PAUSADA. Novas produções e agendamentos bloqueados.")
         return {
             "status": "blocked",
             "reason": "factory_paused",
@@ -1322,11 +1346,10 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Guarda 3: Autonomous Mode Enabled ou One-Shot Supervisionado
     # -----------------------------------------------------------------------
-    target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
     if not is_profile_autonomous_mode_enabled(target_profile_id, db_path=db_path) and not one_shot:
         msg = f"Produção autônoma desativada para perfil '{target_profile_id}'."
-        _set_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED, profile_id=target_profile_id, db_path=db_path)
-        _set_cycle_setting(KEY_AUTONOMOUS_MESSAGE, msg, profile_id=target_profile_id, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_DISABLED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {
             "status": "disabled",
             "profile_id": target_profile_id,
@@ -1336,14 +1359,20 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Etapa A2: Tratar Geração Anterior / Revisão de Tarefas Concluídas
     # -----------------------------------------------------------------------
-    current_task_id = get_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, None, db_path=db_path)
+    current_task_id = _get_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, None)
+    if current_task_id:
+        task_prof = profile_manager.get_task_profile_id(current_task_id, db_path=db_path)
+        is_default_target = not target_profile_id or target_profile_id in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        is_default_task = not task_prof or task_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        if (is_default_target and not is_default_task) or (not is_default_target and task_prof != target_profile_id):
+            current_task_id = None
 
     # Se há tarefas ativas gerando no task manager
     if webui_task.has_active_generation_tasks():
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_GENERATING, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_GENERATING)
         active_ids = webui_task.get_active_task_ids()
         msg = f"Geração em andamento (tarefas ativas: {', '.join(active_ids[:3])})"
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {
             "status": "busy",
             "state": STATE_GENERATING,
@@ -1353,18 +1382,18 @@ def _run_autonomous_cycle(
     if current_task_id:
         from app.services import state as sm
         task_data = sm.state.get_task(current_task_id) or {}
-        video_path = scheduler.get_task_final_video(current_task_id)
+        video_path = scheduler.get_task_final_video(current_task_id, task_base_dir=task_base_dir)
 
         # Se não há vídeo final e nenhuma thread ativa está rodando, houve crash/reboot
         if not video_path or not os.path.isfile(video_path):
             task_state = task_data.get("state")
             if task_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
                 interrupted_task_id = current_task_id
-                set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_ERROR, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
+                _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
                 msg = f"Geração da tarefa {current_task_id} interrompida (reboot/crash). Vídeo final ausente."
-                set_autonomous_setting(KEY_AUTONOMOUS_LAST_ERROR, msg, db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_LAST_ERROR, msg)
+                _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
                 operator_console.log_operational_event(
                     component="autonomous_production",
                     severity=operator_console.SEVERITY_WARNING,
@@ -1383,16 +1412,16 @@ def _run_autonomous_cycle(
                 }
 
     if current_task_id:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_REVIEWING, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, f"Avaliando Gates para tarefa {current_task_id}...", db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_REVIEWING)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, f"Avaliando Gates para tarefa {current_task_id}...")
 
         approved, reason, metrics = evaluate_completed_task_gates(current_task_id, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
 
         if approved:
-            # Reseta contador de rejeições consecutivas e limpa tracking de rejeição narrativa
-            set_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, "0", db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, "", db_path=db_path)
+            # Reseta contador de rejeições consecutivas e limpa tracking de rejeição narrativa isolada
+            _set_cycle_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, "0", profile_id=target_profile_id, db_path=db_path)
+            _set_cycle_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, "", profile_id=target_profile_id, db_path=db_path)
 
             operator_console.log_operational_event(
                 component="autonomous_production",
@@ -1404,13 +1433,25 @@ def _run_autonomous_cycle(
                 db_path=db_path,
             )
 
-            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_SCHEDULING, db_path=db_path)
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_SCHEDULING)
             # YouTube Primeiro: Apenas YouTube habilitado
             scheduler.adopt_tasks_into_scheduler([current_task_id], ["youtube"], db_path=db_path)
 
             from app.services import state as sm
-            task_data = sm.state.get_task(current_task_id) or {"task_id": current_task_id}
-            scheduled_items = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path)
+            task_data = dict(sm.state.get_task(current_task_id) or {})
+            task_data["task_id"] = current_task_id
+            if not task_data.get("video_file") and video_path:
+                task_data["video_file"] = video_path
+            task_data["state"] = const.TASK_STATE_COMPLETE
+            if "youtube" not in (task_data.get("planned_platforms") or []):
+                task_data["planned_platforms"] = ["youtube"]
+            task_data["profile_id"] = target_profile_id
+            if target_channel_id:
+                task_data["channel_id"] = target_channel_id
+
+            scheduled_items = scheduler.plan_schedule(
+                tasks=[task_data], now=current_time, db_path=db_path, task_base_dir=task_base_dir
+            )
 
             if scheduled_items:
                 operator_console.log_operational_event(
@@ -1423,10 +1464,10 @@ def _run_autonomous_cycle(
                     db_path=db_path,
                 )
                 summary = f"Tarefa {current_task_id} aprovada (Score {metrics.get('quality_score', 0):.1f}) e agendada."
-                set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, summary, db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, summary, db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, now_iso, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_LAST_RESULT, summary)
+                _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
+                _set_status(KEY_AUTONOMOUS_MESSAGE, summary)
+                _set_status(KEY_AUTONOMOUS_LAST_TICK, now_iso)
                 return {
                     "status": "scheduled",
                     "task_id": current_task_id,
@@ -1435,11 +1476,11 @@ def _run_autonomous_cycle(
                 }
             else:
                 # Aprovado mas sem slot imediato no Growth Mode -> waiting_schedule
-                set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, current_task_id, db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, current_task_id)
+                _set_status(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE)
                 msg = f"Tarefa {current_task_id} aprovada (Score {metrics.get('quality_score', 0):.1f}) aguardando slot de agendamento no Growth Mode."
-                set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
-                set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, msg, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+                _set_status(KEY_AUTONOMOUS_LAST_RESULT, msg)
                 operator_console.log_operational_event(
                     component="autonomous_production",
                     severity=operator_console.SEVERITY_INFO,
@@ -1457,8 +1498,8 @@ def _run_autonomous_cycle(
                 }
         else:
             rejected_task_id = current_task_id
-            consec = get_consecutive_rejections(db_path=db_path) + 1
-            set_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, str(consec), db_path=db_path)
+            consec = get_consecutive_rejections(db_path=db_path, profile_id=target_profile_id) + 1
+            _set_cycle_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, str(consec), profile_id=target_profile_id, db_path=db_path)
 
             try:
                 from app.services import state as sm
@@ -1488,10 +1529,10 @@ def _run_autonomous_cycle(
                 db_path=db_path,
             )
             rejection_summary = f"Tarefa {current_task_id} retida: {reason}"
-            set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, rejection_summary, db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, rejection_summary, db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, now_iso, db_path=db_path)
+            _set_status(KEY_AUTONOMOUS_LAST_RESULT, rejection_summary)
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
+            _set_status(KEY_AUTONOMOUS_MESSAGE, rejection_summary)
+            _set_status(KEY_AUTONOMOUS_LAST_TICK, now_iso)
             # UMA TRANSIÇÃO POR CICLO: rejeição encerra o ciclo aqui.
             # O próximo ciclo poderá gerar reposição se o estoque estiver abaixo da meta.
             return {
@@ -1504,21 +1545,25 @@ def _run_autonomous_cycle(
 
     # Select exactly one action. A blocked publication destination is not a
     # generation lock; all persisted approvals remain discoverable after restart.
-    waiting_task_id = get_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, db_path=db_path)
+    waiting_task_id = _get_status(KEY_AUTONOMOUS_WAITING_TASK_ID, None)
+    if waiting_task_id:
+        wait_prof = profile_manager.get_task_profile_id(waiting_task_id, db_path=db_path)
+        is_default_target = not target_profile_id or target_profile_id in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        is_default_wait = not wait_prof or wait_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        if (is_default_target and not is_default_wait) or (not is_default_target and wait_prof != target_profile_id):
+            waiting_task_id = None
+
     if waiting_task_id:
         try:
-            _recover_waiting_task(waiting_task_id, db_path=db_path)
+            _recover_waiting_task(waiting_task_id, db_path=db_path, task_base_dir=task_base_dir)
         except (ValueError, TypeError, OSError) as exc:
-            set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, "", db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE, db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, str(exc), db_path=db_path)
+            _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, "")
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE)
+            _set_status(KEY_AUTONOMOUS_MESSAGE, str(exc))
             return {"status": "waiting_schedule", "task_id": waiting_task_id,
                     "reason": "waiting_recovery_failed", "message": str(exc), "scheduled_items": 0}
 
-    target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
-    target_channel_id = channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
-
-    stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile_id, channel_id=target_channel_id)
+    stock_info = get_autonomous_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=target_profile_id, channel_id=target_channel_id)
     pending = []
     for task_data in stock_info.get("youtube_ready", []):
         channels = profile_manager.resolve_task_channels(
@@ -1533,9 +1578,8 @@ def _run_autonomous_cycle(
             ).fetchone()
         if unscheduled and not queued:
             pending.append(task_data)
-    # This legacy pointer is only a display hint, never the queue or a lock.
-    set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID,
-                           pending[0]["task_id"] if pending else "", db_path=db_path)
+    # This pointer is scoped per profile for display and recovery
+    _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, pending[0]["task_id"] if pending else "")
     for task_data in pending:
         t_prof = task_data.get("profile_id") or target_profile_id
         t_chan = task_data.get("channel_id") or target_channel_id
@@ -1555,15 +1599,15 @@ def _run_autonomous_cycle(
             except (ValueError, TypeError):
                 pass  # Malformed retry metadata must not block the whole buffer.
         set_autonomous_setting(retry_key, scheduler._to_iso(current_time + timedelta(minutes=15)), db_path=db_path)
-        scheduled = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path)
+        scheduled = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path, task_base_dir=task_base_dir)
         status = "scheduled" if scheduled else "waiting_schedule"
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE if scheduled else STATE_WAITING_SCHEDULE, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE if scheduled else STATE_WAITING_SCHEDULE)
         message = f"Task {task_data['task_id']}: {status} ({len(scheduled)} scheduled items)."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, message, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, message, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, message)
+        _set_status(KEY_AUTONOMOUS_LAST_RESULT, message)
         if scheduled:
             set_autonomous_setting(retry_key, "", db_path=db_path)
-            set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, "", db_path=db_path)
+            _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, "")
             operator_console.log_operational_event(
                 component="autonomous_production", severity=operator_console.SEVERITY_INFO,
                 event_type="task_approved_and_scheduled", task_id=task_data["task_id"],
@@ -1576,10 +1620,10 @@ def _run_autonomous_cycle(
     target_stock = stock_info["target_stock"]
 
     if ready_total >= target_stock:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
         msg = f"Estoque pronto suficiente ({ready_total}/{target_stock}). Nenhuma nova geração necessária."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+        _set_status(KEY_AUTONOMOUS_LAST_RESULT, msg)
         return {
             "status": "idle",
             "ready_stock": ready_total,
@@ -1590,7 +1634,7 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Guarda 4: Cooldown Timer (a menos que force=True ou one_shot=True)
     # -----------------------------------------------------------------------
-    last_tick_iso = get_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, None, db_path=db_path)
+    last_tick_iso = _get_status(KEY_AUTONOMOUS_LAST_TICK, None)
     interval_min = get_cycle_interval_minutes(db_path=db_path)
     if not force and not one_shot and last_tick_iso:
         try:
@@ -1598,9 +1642,9 @@ def _run_autonomous_cycle(
             diff_min = (current_time - last_dt).total_seconds() / 60.0
             if diff_min < interval_min:
                 rem_min = int(interval_min - diff_min)
-                set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_COOLDOWN, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_STATE, STATE_COOLDOWN)
                 msg = f"Em cooldown. Próximo ciclo em aprox. {rem_min} min."
-                set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
                 return {
                     "status": "cooldown",
                     "remaining_minutes": rem_min,
@@ -1609,7 +1653,7 @@ def _run_autonomous_cycle(
         except Exception:
             pass
 
-    set_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, now_iso, db_path=db_path)
+    _set_status(KEY_AUTONOMOUS_LAST_TICK, now_iso)
 
     # -----------------------------------------------------------------------
     # Guarda 5: Limite Diário de Gerações Aprovadas e Proteção contra Loop de Custo
@@ -1617,30 +1661,30 @@ def _run_autonomous_cycle(
     # 5.1 Proteção contra loop infinito de falhas consecutivas (Circuit Breaker)
     consecutive_rejections = get_consecutive_rejections(db_path=db_path, profile_id=target_profile_id)
     if consecutive_rejections >= DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         msg = (
             f"Proteção de custo ativada: {consecutive_rejections} rejeições consecutivas nos Gates. "
             f"Produção pausada para evitar loop/gasto descontrolado."
         )
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {"status": "blocked", "reason": "consecutive_rejections_limit", "message": msg}
 
     # 5.2 Teto de tentativas totais em 24h (para evitar consumo excessivo de API)
     max_attempts_24h = get_max_attempts_24h(db_path=db_path)
     attempts_today = count_generation_attempts_in_last_24h(now=current_time, db_path=db_path, profile_id=target_profile_id)
     if attempts_today >= max_attempts_24h:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         msg = f"Teto diário de tentativas atingido ({attempts_today}/{max_attempts_24h} em 24h). Aguardando liberação da janela."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {"status": "blocked", "reason": "daily_attempt_limit_reached", "message": msg}
 
     # 5.3 Limite diário de gerações APROVADAS (máximo de vídeos prontos por 24h)
     max_24h = get_max_generations_24h(db_path=db_path)
     gen_today = count_generations_in_last_24h(now=current_time, db_path=db_path, profile_id=target_profile_id)
     if gen_today >= max_24h:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         msg = f"Limite diário de gerações aprovadas atingido ({gen_today}/{max_24h} em 24h). Aguardando liberação da janela."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {"status": "blocked", "reason": "daily_limit_reached", "message": msg}
 
     # -----------------------------------------------------------------------
@@ -1654,8 +1698,8 @@ def _run_autonomous_cycle(
             db_path=db_path,
         )
     except AutonomousConfigError as cfg_err:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, str(cfg_err), db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, str(cfg_err))
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -1672,8 +1716,8 @@ def _run_autonomous_cycle(
         db_path=db_path,
     )
     if not prov_ok:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, prov_msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, prov_msg)
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -1694,8 +1738,8 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Etapa C: Planejamento e Seleção de Temas (Planning)
     # -----------------------------------------------------------------------
-    set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_PLANNING, db_path=db_path)
-    set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, f"Estoque abaixo da meta ({ready_total}/{target_stock}). Selecionando {tasks_to_create} tema(s)...", db_path=db_path)
+    _set_status(KEY_AUTONOMOUS_STATE, STATE_PLANNING)
+    _set_status(KEY_AUTONOMOUS_MESSAGE, f"Estoque abaixo da meta ({ready_total}/{target_stock}). Selecionando {tasks_to_create} tema(s)...")
 
     candidate = discover_candidate_topic(
         niche=probe_params.niche,
@@ -1703,9 +1747,9 @@ def _run_autonomous_cycle(
         db_path=db_path,
     )
     if not candidate or not candidate.get("topic"):
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_IDLE, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
         msg = "Nenhum candidato a tema elegível encontrado sem duplicação."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {"status": "idle", "reason": "no_candidate", "message": msg}
 
     chosen_topic = candidate["topic"]
@@ -1873,8 +1917,8 @@ def _run_autonomous_cycle(
         db_path=db_path,
     )
     if not final_ok:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, final_msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, final_msg)
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -1885,10 +1929,10 @@ def _run_autonomous_cycle(
         )
         return {"status": "blocked", "reason": "provider_unavailable", "message": final_msg}
 
-    set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, new_task_id, db_path=db_path)
-    set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_GENERATING, db_path=db_path)
+    _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, new_task_id)
+    _set_status(KEY_AUTONOMOUS_STATE, STATE_GENERATING)
     msg = f"Iniciando geração autônoma: '{chosen_topic}' (task_id={new_task_id})"
-    set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+    _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
 
     aspect_val = params.video_aspect.value if hasattr(params.video_aspect, "value") else str(params.video_aspect)
     concat_val = params.video_concat_mode.value if hasattr(params.video_concat_mode, "value") else str(params.video_concat_mode)
@@ -1941,11 +1985,11 @@ def _run_autonomous_cycle(
             db_path=db_path,
         )
     except Exception as g_exc:
-        set_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, "", db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_ERROR, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
         err_msg = f"Falha ao submeter geração autônoma: {g_exc}"
-        set_autonomous_setting(KEY_AUTONOMOUS_LAST_ERROR, err_msg, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, err_msg, db_path=db_path)
+        _set_status(KEY_AUTONOMOUS_LAST_ERROR, err_msg)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, err_msg)
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -1978,7 +2022,7 @@ def _run_autonomous_cycle(
             logger.warning(f"[AUTONOMOUS] Failed to log CLOSED_LOOP_SUBMITTED: {cl_sub_err}")
 
     res_summary = f"Tarefa {new_task_id} submetida com sucesso ao pipeline ('{chosen_topic}')"
-    set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, res_summary, db_path=db_path)
+    _set_status(KEY_AUTONOMOUS_LAST_RESULT, res_summary)
     return {
         "status": "generation_started",
         "task_id": new_task_id,

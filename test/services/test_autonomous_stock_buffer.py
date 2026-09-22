@@ -187,7 +187,7 @@ class TestStockBuffer(unittest.TestCase):
         self._persist_waiting_fixture("daily")
         autonomous.set_autonomous_setting(autonomous.KEY_AUTONOMOUS_MAX_24H, "500", self.db_path)
         for n in range(5):
-            operator_console.log_operational_event("autonomous_production", "INFO", "generation_started", str(n), db_path=self.db_path)
+            operator_console.log_operational_event("autonomous_production", "INFO", "generation_approved", str(n), db_path=self.db_path)
         result, generated, planned = self.cycle()
         self.assertEqual(result["reason"], "daily_limit_reached")
         self.assertEqual((generated, planned), (0, 0))
@@ -224,3 +224,174 @@ class TestStockBuffer(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(DISTINCT task_id) FROM scheduled_posts").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT count(*) FROM scheduled_posts").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT count(*) FROM scheduled_posts WHERE platform='tiktok'").fetchone()[0], 0)
+
+    # -----------------------------------------------------------------------
+    # V12-E.4 Targeted Tests: Reposição até estoque 3/3
+    # -----------------------------------------------------------------------
+    def test_rejected_task_does_not_block_next_generation(self):
+        """1. Rejeição de task nos Gates não bloqueia a reposição de estoque na próxima geração."""
+        task_id = "rejected-candidate"
+        self._persist_waiting_fixture(task_id)
+        autonomous.set_autonomous_setting(autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, self.db_path)
+
+        # Ciclo 1: Avalia e rejeita a tarefa
+        with patch.object(autonomous, "evaluate_completed_task_gates", return_value=(
+            False, "Quality Score insuficiente (45.0 < 70)", {"quality_score": 45.0}
+        )), patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            res1, gen1, plan1 = self.cycle()
+
+        self.assertEqual(res1["status"], "rejected")
+        self.assertEqual(autonomous.get_autonomous_setting(autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, None, self.db_path), "")
+        self.assertEqual(gen1, 0)
+
+        # Ciclo 2: Próximo ciclo deve gerar nova tentativa sem bloqueio
+        res2, gen2, plan2 = self.cycle()
+        self.assertEqual(res2["status"], "generation_started")
+        self.assertEqual(gen2, 1)
+
+    def test_quality_below_70_does_not_enter_stock(self):
+        """2. Quality < 70 não é aprovado e não entra no estoque pronto."""
+        task_id = "low-quality-task"
+        video = self._create_mock_video_file(task_id)
+        from app.services import safety_gate
+        safety_gate.save_safety_assessment({
+            "task_id": task_id,
+            "safety_status": const.SAFETY_STATUS_PASS,
+            "safety_reasons": [],
+            "checked_at": self.now.isoformat(),
+        }, db_path=self.db_path)
+
+        with patch("app.services.quality_score.evaluate_quality", return_value={
+            "quality_score": 68.5,
+            "quality_label": "WEAK",
+            "reasons": ["Hook fraco"],
+        }), patch("app.services.scheduler.get_task_final_video", return_value=video):
+            approved, reason, metrics = autonomous.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+
+        self.assertFalse(approved)
+        self.assertIn("Quality Score insuficiente", reason)
+        self.assertEqual(self.stock()["ready_count"], 0)
+
+    def test_safety_review_does_not_enter_stock(self):
+        """3. Safety REVIEW não é aprovado e não entra no estoque pronto."""
+        task_id = "safety-review-task"
+        video = self._create_mock_video_file(task_id)
+        from app.services import safety_gate
+        safety_gate.save_safety_assessment({
+            "task_id": task_id,
+            "safety_status": const.SAFETY_STATUS_REVIEW,
+            "safety_reasons": ["Review manual necessário"],
+            "checked_at": self.now.isoformat(),
+        }, db_path=self.db_path)
+
+        with patch("app.services.scheduler.get_task_final_video", return_value=video):
+            approved, reason, metrics = autonomous.evaluate_completed_task_gates(task_id, db_path=self.db_path)
+
+        self.assertFalse(approved)
+        self.assertIn("Safety Gate RETIDO para revisão manual (REVIEW)", reason)
+        self.assertEqual(self.stock()["ready_count"], 0)
+
+    def test_replenishes_successive_cycles_until_stock_is_3(self):
+        """4. Continua gerando em ciclos sucessivos (máx 1/ciclo) até atingir ready_stock=3, mesmo após 5 tentativas anteriores."""
+        autonomous.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        # Simula o cenário real de produção:
+        # - 3 tarefas rejeitadas por Quality ~45
+        # - 1 tarefa rejeitada por Safety REVIEW
+        # - 1 tarefa aprovada e publicada (já saiu do estoque)
+        # Total = 5 tentativas anteriores, estoque = 0/3.
+        for i in range(5):
+            operator_console.log_operational_event(
+                "autonomous_production", "INFO", "generation_started", f"Tentativa {i}", db_path=self.db_path
+            )
+        for i in range(4):
+            operator_console.log_operational_event(
+                "autonomous_production", "WARNING", "task_gate_rejected", f"Rejeitada {i}", db_path=self.db_path
+            )
+        operator_console.log_operational_event(
+            "autonomous_production", "INFO", "generation_approved", "Publicada anteriormente", db_path=self.db_path
+        )
+        self.assertEqual(self.stock()["ready_count"], 0)
+
+        # Ciclos sucessivos repondo o estoque 1 a 1:
+        # Ciclo 1: gera nova task
+        res1, gen1, _ = self.cycle()
+        self.assertEqual(res1["status"], "generation_started")
+        self.assertEqual(gen1, 1)
+        # Simula aprovação de vídeo 1 no estoque e liberação do worker
+        self._persist_waiting_fixture("approved-1")
+        autonomous.set_autonomous_setting(autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, "", self.db_path)
+        self.assertEqual(self.stock()["ready_count"], 1)
+
+        # Ciclo 2: gera nova task (estoque 1/3)
+        res2, gen2, _ = self.cycle()
+        self.assertEqual(res2["status"], "generation_started")
+        self.assertEqual(gen2, 1)
+        # Simula aprovação de vídeo 2 no estoque e liberação do worker
+        self._persist_waiting_fixture("approved-2")
+        autonomous.set_autonomous_setting(autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, "", self.db_path)
+        self.assertEqual(self.stock()["ready_count"], 2)
+
+        # Ciclo 3: gera nova task (estoque 2/3)
+        res3, gen3, _ = self.cycle()
+        self.assertEqual(res3["status"], "generation_started")
+        self.assertEqual(gen3, 1)
+        # Simula aprovação de vídeo 3 no estoque e liberação do worker
+        self._persist_waiting_fixture("approved-3")
+        autonomous.set_autonomous_setting(autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, "", self.db_path)
+        self.assertEqual(self.stock()["ready_count"], 3)
+
+        # Ciclo 4: estoque cheio (3/3), não gera mais!
+        res4, gen4, _ = self.cycle()
+        self.assertEqual(res4["status"], "idle")
+        self.assertEqual(gen4, 0)
+        self.assertIn("Estoque pronto suficiente (3/3)", res4["message"])
+
+    def test_full_stock_3_of_3_does_not_generate(self):
+        """5. Com estoque 3/3, nenhuma nova geração é disparada."""
+        for n in range(3):
+            self._persist_waiting_fixture(f"full-stock-{n}")
+        self.assertEqual(self.stock()["ready_count"], 3)
+
+        result, generated, planned = self.cycle()
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(generated, 0)
+        self.assertIn("Estoque pronto suficiente", result["message"])
+
+    def test_narrative_repetition_rejection_picks_alternative_structure(self):
+        """Se rejeição ocorrer por repetição narrativa, próxima geração busca estrutura alternativa válida."""
+        task_id = "narrative-rep-task"
+        self._persist_waiting_fixture(task_id)
+        from app.services import state as sm
+        sm.state.patch_task(task_id, narrative_structure="explainer")
+        autonomous.set_autonomous_setting(autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, self.db_path)
+
+        with patch.object(autonomous, "evaluate_completed_task_gates", return_value=(
+            False, "Mesma estrutura narrativa usada 3+ vezes consecutivas (explainer)", {"narrative_structure": "explainer"}
+        )), patch("app.services.scheduler.get_task_final_video", return_value=self._create_mock_video_file(task_id)):
+            res1, _, _ = self.cycle()
+            self.assertEqual(res1["status"], "rejected")
+            self.assertEqual(
+                autonomous.get_autonomous_setting(autonomous.KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, None, self.db_path),
+                "explainer"
+            )
+
+        with patch.object(autonomous, "build_autonomous_video_params", wraps=autonomous.build_autonomous_video_params) as mock_params:
+            res2, gen2, _ = self.cycle()
+            self.assertEqual(res2["status"], "generation_started")
+            self.assertEqual(gen2, 1)
+            called_struct = mock_params.call_args.kwargs.get("narrative_structure")
+            self.assertNotEqual(called_struct, "explainer")
+            self.assertIn(called_struct, const.NARRATIVE_STRUCTURES)
+
+    def test_cost_loop_guard_circuit_breaker_on_consecutive_rejections(self):
+        """Circuit breaker: 10 rejeições consecutivas pausam o autonomous loop para proteção de custos."""
+        autonomous.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous.set_autonomous_setting(
+            autonomous.KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS,
+            str(autonomous.DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS),
+            self.db_path
+        )
+        res, gen, _ = self.cycle()
+        self.assertEqual(res["status"], "blocked")
+        self.assertEqual(res["reason"], "consecutive_rejections_limit")
+        self.assertEqual(gen, 0)

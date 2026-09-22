@@ -270,17 +270,18 @@ Gate futuro: confirmar métricas e decisões associadas ao profile/channel corre
 
 ## V12-F.4 — Second Channel Warm-Up
 
-Objetivo futuro: integrar o segundo canal de forma controlada.
+**Status: DEV preparado — setup completo; autenticação real e publicação supervisionada pendentes.**
 
-Regras:
-- Perfil, canal, Analytics, histórico e Growth Mode WARMUP separados.
-- Não duplicar vídeos do canal principal.
-- Não gerar engajamento artificial nem espelhar conteúdo em massa.
-- Somente YouTube inicialmente; TikTok permanece OFF.
+Preparação do segundo canal concluída em desenvolvimento:
+- Perfil separado: `profile-historias-misterio` ("Dose Diária de Histórias e Mistério", nicho `historias_misterio`).
+- Canal separado: `channel-historias-misterio-youtube` (handle `@DoseDiáriadeHistóriasemistério`, plataforma YouTube).
+- Growth Mode: `warmup` isolado por perfil/canal (1 pub/24h, min interval 8h).
+- Produção contínua autônoma: estritamente OFF por padrão para o segundo perfil.
+- Isolamento completo: estoque pronto, limites 24h, agendamento, analytics, Closed Loop, histórico e estruturas narrativas (foco em `investigative_mystery` e `short_story`).
+- Credenciais reais não conectadas; segredos não acessados.
+- Canal principal `default` 100% preservado.
 
-Gate futuro: uma publicação real supervisionada no segundo canal → confirmar PUBLIC → confirmar Analytics associado ao canal correto → confirmar aprendizado isolado → somente depois habilitar operação contínua.
-
-V13 e V14 permanecem posteriores. Este planejamento não autoriza conexão, publicação ou ativação de produção.
+Próximo gate: autenticação manual do segundo canal no YouTube via Upload-Post/OAuth → primeira publicação supervisionada.
 
 ---
 

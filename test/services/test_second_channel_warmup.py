@@ -322,3 +322,47 @@ def test_main_channel_continues_functioning_without_alteration(isolated_env):
     item = scheduled[0]
     assert item["profile_id"] == profile_manager.DEFAULT_PROFILE_ID
     assert item["channel_id"] == "channel-default-youtube"
+
+
+def test_second_channel_handle_and_content_strategy_niche(isolated_env):
+    """Cenário 7: Handle oficial, nicho historias_misterio e estruturas temáticas isoladas."""
+    db, _, second_info = isolated_env
+
+    # 1. Handle oficial conferido
+    assert profile_manager.SECOND_CHANNEL_HANDLE == "@DoseDiáriadeHistóriasemistério"
+    assert second_info.get("channel_handle") == "@DoseDiáriadeHistóriasemistério"
+
+    # 2. Recomendação de estrutura narrativa especializada para historias_misterio
+    rec_struct, reasons = strategy.recommend_narrative_structure(
+        topic="O Estranho Caso da Casa Abandonada",
+        niche="historias_misterio",
+    )
+    assert rec_struct in (const.STRUCTURE_MYSTERY, const.STRUCTURE_SHORT_STORY)
+
+    # 3. Classificação de cluster temático para termos de mistério
+    cluster = strategy.classify_topic_cluster("O desaparecimento bizarro e inexplicavel")
+    assert cluster == "historia_misterios"
+
+
+def test_second_channel_continuous_autonomous_disabled_by_default(isolated_env):
+    """Cenário 8: Produção contínua do segundo canal permanece estritamente OFF por padrão."""
+    db, _, _ = isolated_env
+
+    # Continuous mode para o segundo canal deve ser False por padrão
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.SECOND_PROFILE_ID, db_path=db) is False
+
+    # Execução contínua sem one_shot é bloqueada
+    cycle_res = autonomous.run_autonomous_cycle(
+        profile_id=profile_manager.SECOND_PROFILE_ID,
+        one_shot=False,
+        db_path=db,
+    )
+    assert cycle_res["status"] == "disabled"
+    assert cycle_res["profile_id"] == profile_manager.SECOND_PROFILE_ID
+
+    # Modo contínuo do canal principal não é afetado
+    autonomous.set_autonomous_mode_enabled(True, db_path=db)
+    assert autonomous.is_autonomous_mode_enabled(db_path=db) is True
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.DEFAULT_PROFILE_ID, db_path=db) is True
+    # O segundo canal continua False mesmo com o principal ativo
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.SECOND_PROFILE_ID, db_path=db) is False

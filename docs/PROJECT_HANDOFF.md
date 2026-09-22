@@ -670,13 +670,18 @@ V12-E está fechada; V14 permanece posterior à V12-F e V13, sem implementação
 
 ---
 
-## 22. Prioridade imediata — V12-F
+## 22. V12-F.4 — Segundo canal preparado em DEV
 
-Planejar V12-F.1: auditar a coleta automática de Analytics existente antes de qualquer ativação. A V12-F inclui coleta automática, closed feedback loop, aprendizado isolado por canal e warm-up controlado do segundo canal; escopo e gates no ROADMAP.
-
-Canal principal: perfil `default` homologado. Segundo canal criado manualmente: **Dose Diária de Histórias e Mistério**, handle **@DoseDiáriadeHistóriasemistério**. Ainda não conectar nem publicar automaticamente. Integração futura pela infraestrutura V9, com perfil/canal, Analytics, histórico e WARMUP separados.
-
-Nenhum código V12-F, schema, configuração, secret ou ambiente de produção foi alterado nesta atualização documental.
+Segundo canal configurado e isolado na infraestrutura V9 Multi-Profile:
+- Nome: **Dose Diária de Histórias e Mistério**
+- Handle: **@DoseDiáriadeHistóriasemistério**
+- Perfil: `profile-historias-misterio` (nicho `historias_misterio`)
+- Canal: `channel-historias-misterio-youtube` (YouTube)
+- Growth Mode: `warmup` isolado
+- Produção contínua autônoma: estritamente `OFF` por padrão
+- Isolamento: estoque próprio, limite 24h/slots próprios, Analytics isolado, Closed Loop isolado, estruturas narrativas e histórico de tópicos isolados
+- Canal principal `default` 100% preservado e inalterado
+- Credenciais reais e publicação: NÃO conectadas; pendente autenticação real supervisionada.
 
 ---
 

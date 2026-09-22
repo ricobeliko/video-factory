@@ -134,6 +134,41 @@ def is_autonomous_mode_enabled(db_path: Optional[str] = None) -> bool:
     return str(val).lower() in ("true", "1", "yes")
 
 
+def is_profile_autonomous_mode_enabled(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> bool:
+    """Verifica se a produção autônoma está habilitada para um perfil específico.
+
+    O perfil padrão obedece ao switch global KEY_AUTONOMOUS_ENABLED.
+    Perfis secundários possuem switch isolado (f'{KEY_AUTONOMOUS_ENABLED}:{profile_id}'),
+    mantendo CONTINUOUS MODE estritamente OFF por padrão até homologação explícita.
+    """
+    clean_profile = str(profile_id or "").strip()
+    if not clean_profile or clean_profile == profile_manager.DEFAULT_PROFILE_ID or clean_profile == "default":
+        return is_autonomous_mode_enabled(db_path=db_path)
+    val = get_autonomous_setting(f"{KEY_AUTONOMOUS_ENABLED}:{clean_profile}", "False", db_path=db_path)
+    return str(val).lower() in ("true", "1", "yes")
+
+
+def set_profile_autonomous_mode_enabled(profile_id: str, enabled: bool, db_path: Optional[str] = None) -> None:
+    """Ativa ou desativa a produção autônoma de um perfil específico com validação de PRIMARY."""
+    operator_console.require_primary_instance(db_path=db_path)
+    clean_profile = str(profile_id or "").strip()
+    if not clean_profile or clean_profile == profile_manager.DEFAULT_PROFILE_ID or clean_profile == "default":
+        set_autonomous_mode_enabled(enabled, db_path=db_path)
+        return
+    val_str = "True" if enabled else "False"
+    set_autonomous_setting(f"{KEY_AUTONOMOUS_ENABLED}:{clean_profile}", val_str, db_path=db_path)
+    msg = f"Produção autônoma do perfil '{clean_profile}' {'ativada' if enabled else 'desativada'} pelo operador"
+    operator_console.log_operational_event(
+        component="autonomous_production",
+        severity=operator_console.SEVERITY_INFO,
+        event_type="profile_autonomous_mode_toggled",
+        message=msg,
+        metadata={"profile_id": clean_profile, "enabled": enabled},
+        db_path=db_path,
+    )
+    logger.info(f"[AUTONOMOUS_PRODUCTION] {msg}")
+
+
 def set_autonomous_mode_enabled(enabled: bool, db_path: Optional[str] = None) -> None:
     """Ativa ou desativa o modo autônomo com validação estrita de PRIMARY."""
     operator_console.require_primary_instance(db_path=db_path)
@@ -501,29 +536,47 @@ def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_pat
     now_utc = scheduler._normalize_utc(now)
     since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
 
+    clean_profile = str(profile_id or "").strip()
+    is_default = (not clean_profile) or (clean_profile == profile_manager.DEFAULT_PROFILE_ID) or (clean_profile == "default")
+
     try:
         with scheduler.get_connection(db_path) as conn:
-            if profile_id:
+            if not clean_profile:
                 row = conn.execute(
                     """
-                    SELECT count(DISTINCT o.task_id) FROM operational_events o
+                    SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                    FROM operational_events o
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type = 'generation_started'
+                      AND o.timestamp >= ?;
+                    """,
+                    (since_iso,),
+                ).fetchone()
+            elif is_default:
+                row = conn.execute(
+                    """
+                    SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                    FROM operational_events o
+                    LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type = 'generation_started'
+                      AND (tp.profile_id = ? OR tp.profile_id IS NULL OR tp.profile_id = 'default')
+                      AND o.timestamp >= ?;
+                    """,
+                    (profile_manager.DEFAULT_PROFILE_ID, since_iso),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                    FROM operational_events o
                     JOIN task_profiles tp ON tp.task_id = o.task_id
                     WHERE o.component = 'autonomous_production'
                       AND o.event_type = 'generation_started'
                       AND tp.profile_id = ?
                       AND o.timestamp >= ?;
                     """,
-                    (profile_id, since_iso),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    """
-                    SELECT count(*) FROM operational_events
-                    WHERE component = 'autonomous_production'
-                      AND event_type = 'generation_started'
-                      AND timestamp >= ?;
-                    """,
-                    (since_iso,),
+                    (clean_profile, since_iso),
                 ).fetchone()
             return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
@@ -1211,12 +1264,15 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Guarda 3: Autonomous Mode Enabled ou One-Shot Supervisionado
     # -----------------------------------------------------------------------
-    if not is_autonomous_mode_enabled(db_path=db_path) and not one_shot:
+    target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+    if not is_profile_autonomous_mode_enabled(target_profile_id, db_path=db_path) and not one_shot:
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED, db_path=db_path)
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, "Produção autônoma desativada.", db_path=db_path)
+        msg = f"Produção autônoma desativada para perfil '{target_profile_id}'."
+        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
         return {
             "status": "disabled",
-            "message": "autonomous_mode_enabled is False",
+            "profile_id": target_profile_id,
+            "message": f"autonomous_mode_enabled is False for profile '{target_profile_id}'",
         }
 
     # -----------------------------------------------------------------------

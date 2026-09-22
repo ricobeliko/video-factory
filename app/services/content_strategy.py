@@ -195,7 +195,9 @@ CLUSTER_KEYWORDS: Dict[str, List[str]] = {
     ],
     "historia_misterios": [
         "historia", "historico", "antigo", "antiga", "piramide", "piramides", "egito", "roma",
-        "grecia", "imperio", "rei", "rainha", "seculo", "guerra", "medieval", "civilizacao", "arqueologia"
+        "grecia", "imperio", "rei", "rainha", "seculo", "guerra", "medieval", "civilizacao", "arqueologia",
+        "misterio", "misterios", "enigma", "enigmas", "desaparecimento", "inexplicavel", "lenda", "lendas",
+        "assombracao", "sobrenatural", "caso", "bizarro", "oculto", "segredo", "intrigante"
     ],
     "celebridades_cultura": [
         "musica", "album", "cantor", "cantora", "faixa", "filme", "cinema", "ator", "atriz",
@@ -335,7 +337,10 @@ def recommend_narrative_structure(
     elif re.search(r"\b\d+\s+(curiosidades|fatos|coisas|motivos|itens)\b", norm) or any(f in norm for f in ["fatos", "curiosidades", "contexto", "origem", "top "]):
         candidates = [const.STRUCTURE_FACT_CONTEXT, const.STRUCTURE_EXPLAINER, const.STRUCTURE_SHORT_STORY]
     else:
-        candidates = [const.STRUCTURE_EXPLAINER, const.STRUCTURE_FACT_CONTEXT, const.STRUCTURE_MYSTERY]
+        if niche == "historias_misterio":
+            candidates = [const.STRUCTURE_MYSTERY, const.STRUCTURE_SHORT_STORY, const.STRUCTURE_FACT_CONTEXT]
+        else:
+            candidates = [const.STRUCTURE_EXPLAINER, const.STRUCTURE_FACT_CONTEXT, const.STRUCTURE_MYSTERY]
 
     if preferred_structure and preferred_structure in official_structures and preferred_structure not in candidates:
         candidates.insert(0, preferred_structure)

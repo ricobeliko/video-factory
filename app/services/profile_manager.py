@@ -28,6 +28,7 @@ SECOND_PROFILE_NAME = "Dose Diária de Histórias e Mistério"
 SECOND_PROFILE_SLUG = "dose-diaria-de-historias-e-misterio"
 SECOND_CHANNEL_ID = "channel-historias-misterio-youtube"
 SECOND_CHANNEL_DISPLAY = "Dose Diária de Histórias e Mistério (YouTube)"
+SECOND_CHANNEL_HANDLE = "@DoseDiáriadeHistóriasemistério"
 SECOND_PROFILE_NICHE = "historias_misterio"
 
 
@@ -327,9 +328,14 @@ def ensure_second_channel_profile(db_path: Optional[str] = None) -> Dict[str, An
             )
             ch_row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (SECOND_CHANNEL_ID,)).fetchone()
 
+    ch_dict = _normalize_channel_dict(dict(ch_row)) if ch_row else {}
+    if ch_dict:
+        ch_dict["channel_handle"] = SECOND_CHANNEL_HANDLE
+
     return {
         "profile": dict(p_row) if p_row else {},
-        "channel": _normalize_channel_dict(dict(ch_row)) if ch_row else {},
+        "channel": ch_dict,
+        "channel_handle": SECOND_CHANNEL_HANDLE,
     }
 
 

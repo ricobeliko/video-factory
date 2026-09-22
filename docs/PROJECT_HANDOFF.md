@@ -1,39 +1,131 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## V12-E.3 — gate DEV controlado — 21/09/2026
+## V12-E.3 — Autonomous Stock Buffer Hardening — DEV controlado
 
-Baseline de código `54875c6`; sem commit, push, deploy ou acesso à produção.
-Esta entrega resolve a recuperação e reposição do buffer autônomo de estoque YouTube
-de forma desacoplada da V12-F.2.
+Implementação separada da V12-F.2, sobre o worktree existente em `54875c6`.
+Produção não acessada; sem deploy, commit ou push. Os registros de produção abaixo
+continuam sendo informações fornecidas pelo operador, não uma verificação nova.
 
-Principais contratos implementados:
-- Estoque YouTube persistente: `get_autonomous_ready_stock` reconstrói tarefas aprovadas
-  a partir de `monetization_safety` (PASS explícito), `content_quality_scores` (>= 70,
-  GOOD/STRONG), `task_profiles` e arquivo de vídeo existente em disco.
-- Recuperação sem `MemoryState`: `_recover_waiting_task` não depende do estado em memória
-  para revalidar ou agendar tarefas aprovadas pós-restart.
-- Buffer 0→3 em WARMUP: tarefas aprovadas sem slot disponível são retidas no estoque
-  sem impedir novas gerações caso o total pronto esteja abaixo da meta (3).
-- Exatamente uma ação por ciclo: cada execução do loop autônomo executa no máximo uma
-  transição (revisão de conclusão, agendamento de 1 task aprovada ou início de 1 geração).
-- Limite de gerações: 1 geração por ciclo e teto estrito de 5 gerações nas últimas 24h.
-- Retry e deduplicação de 15 minutos: falha de agendamento sem slot impõe cooldown de 15 min
-  por task via `autonomous_schedule_retry:<task_id>`. Eventos `PROFILE_GROWTH_LIMIT_BLOCK`
-  são deduplicados transacionalmente em `scheduler.log_growth_limit_block` a cada 15 min.
-- Scheduler como único publicador: nenhuma publicação direta; Growth Mode preservado; TikTok OFF.
-- Sem migrações de schema: utiliza tabelas e colunas já existentes.
+O Autonomous reconstrói o estoque YouTube a partir de `monetization_safety`,
+`content_quality_scores`, `task_profiles`, `task_platforms`, perfis/canais e
+registros de publicação/agendamento. Revalida vídeo físico não vazio, Safety PASS,
+último Quality finito >=70 e GOOD/STRONG, perfil ativo e canal YouTube habilitado.
+Publicadas e canceladas são excluídas. Tasks já agendadas contam no estoque,
+mas não voltam à fila de agendamento; estados ativos/inválidos em memória vetam
+a recuperação. MemoryState vazio e ausência de `waiting_task_id` não apagam a fila.
+
+Prioridade por ciclo: guards → geração ativa/revisão → recuperação de indicação
+inválida → uma tentativa de agendamento com slot → reposição se abaixo da meta.
+Sem slot, não chama `plan_schedule`; o bloqueio de publicação não bloqueia geração.
+Cada revisão, recuperação ou tentativa de agendamento encerra seu ciclo. Geração
+mantém cooldown existente e tetos efetivos de uma/ciclo e cinco/24h; falha na
+contagem diária bloqueia novas gerações. Lock local impede ciclos manuais/worker
+simultâneos, preservando o requisito de um único PRIMARY entre processos.
+
+`waiting_task_id` é indicação de uma task da fila, não trava global. Retry após
+tentativa sem resultado usa `autonomous_schedule_retry:<task_id>` por 15 minutos
+na tabela existente `autopilot_settings`. Eventos `PROFILE_GROWTH_LIMIT_BLOCK`
+têm deduplicação transacional por task/perfil/plataforma/Growth Mode durante
+15 minutos, compartilhada por Autonomous, planner e executor, inclusive após restart.
+Nenhuma mudança de schema, Growth Mode, Auto Publish ou integração TikTok.
+Scheduler continua sendo o único publicador; elegibilidade não publica conteúdo.
 
 Validação DEV concluída: **600 testes e 32 subtestes passaram, zero falhas**, em
-246,12s, nas 23 suítes; 16 testes novos são da V12-E.3. SQLite, vídeos e
+246,12s, nas 23 suítes abaixo; 16 testes novos são da V12-E.3. SQLite, vídeos e
 configuração sintéticos em diretórios temporários; rede bloqueada. `git diff --check`
 aprovado. Fixtures antigas foram atualizadas para aprovações persistidas e para
-permitir reposição sem slot. Próximo gate seguro: revisar exclusivamente o diff V12-E.3;
+permitir reposição sem slot; duas falhas de fixtures novas foram corrigidas antes
+da execução final verde. Próximo gate seguro: revisar exclusivamente o diff V12-E.3;
 qualquer homologação/deploy em produção exige autorização separada.
 Arquivos desta etapa: `app/services/autonomous_production.py`,
 `app/services/scheduler.py`, `test/services/test_autonomous_production.py`,
 `test/services/test_autonomous_stock_buffer.py` e os três documentos canônicos
-de handoff, roadmap e runbook.
+de handoff, roadmap e runbook. Alterações anteriores da V12-F.2 preservadas.
 
+Comando de regressão isolada (23 suítes; o runner existente cria configuração
+sintética, bloqueia sockets e usa somente diretórios temporários):
+
+```powershell
+.venv/Scripts/python.exe -B scripts/run_closed_loop_tests.py `
+  test/services/test_analytics.py test/services/test_analytics_scheduler.py test/services/test_analytics_ingestion.py test/services/test_analytics_providers.py test/services/test_analytics_real_fetch.py `
+  test/services/test_content_strategy.py test/services/test_quality_score.py test/services/test_autonomous_production.py test/services/test_autonomous_stock_buffer.py `
+  test/services/test_scheduler.py test/services/test_scheduler_worker.py test/services/test_operator_console.py test/services/test_publication_persistence.py `
+  test/services/test_single_instance.py test/services/test_production_health.py test/services/test_profile_manager.py test/services/test_profile_generation.py test/services/test_profile_scheduler.py `
+  test/services/test_growth_mode.py test/services/test_trend_radar.py test/services/test_schedule_cancellation.py test/test_production_entrypoint.py test/services/test_closed_feedback_loop.py -q --tb=short
+```
+
+## Estado vigente — 21/09/2026 — V12-F.2 em validação DEV
+
+Esta seção substitui as descrições de estado atual dos registros históricos abaixo.
+Produção informada e homologada pelo operador em `54875c6`: Factory RUNNING,
+PRIMARY headless ativo, Scheduler ON, Auto Publish ON, Dry Run OFF, YouTube ON,
+TikTok OFF, Growth Mode WARMUP, Autonomous ON, Analytics Auto ON e MPT Auto Upload OFF.
+Nenhuma consulta ao host, SQLite, configuração ou credencial de produção foi realizada nesta implementação.
+
+V12-E e V12-F.1A/B/C estão HOMOLOGADAS EM PRODUÇÃO. YouTube Data API v3,
+fetch real e persistência real homologados. Evidências fornecidas: publication event 16,
+external ID `fTrkUqSnYqs`, privacy `public`, confirmação operacional 200;
+snapshot 3 em `2026-09-21T07:52:50.719666+00:00`; ativação Analytics Auto no evento 211,
+`2026-09-21T07:56:48.285854+00:00`. Snapshot 2, de 18/09, é anterior ao rollout atual.
+Valores zero não significam erro do provider. Limites preservados: 1 fetch/ciclo, 300s;
+estoque 3, uma geração/ciclo, cinco gerações/24h móveis, intervalo 15 min.
+
+### V12-F.2 — implementação DEV controlada
+
+Baseline de código `54875c6`; sem commit, push, deploy ou ativação nesta entrega.
+Flag `closed_feedback_loop_enabled` em `autopilot_settings`, default ausente/False.
+OFF preserva o caminho anterior. ON tenta adaptar somente tema/cluster e estrutura;
+preset, duração, fonte, voz, CTA, ritmo, transições, legendas e música permanecem baseline.
+
+API nova `analytics.get_learning_evidence(platform, profile_id, channel_id, cutoff_time, db_path)`:
+leitura SQLite read-only consistente; scope obrigatório antes da agregação;
+PUBLIC/success, identidade exata, profile persistido, Safety PASS e Quality >=70 GOOD/STRONG.
+Origem `youtube_api`, metadata `dry_run=false` e `item_id` correspondente são exigidas;
+dados sem procedência suficiente são excluídos. Sem uso ou reescrita do performance_score legado.
+
+Política `v12-f2.1`: 12 publicações distintas, cinco por grupo, dois grupos comparáveis,
+janela histórica 60 dias. Uma observação por external ID no scope; idade 72–96h,
+mais próxima de 72h, menor ID em empate. Mediana de views é o sinal primário;
+mediana de engagement é auxiliar descritiva, sem desempatar views. Leave-one-out
+do vencedor precisa manter vantagem estrita. Política de rollout, não significância estatística.
+
+Ranking recebe no máximo cinco pontos. Estruturas restritas às oficiais e às alternativas
+temáticas da heurística. No máximo uma adaptação por três submissões; cluster limitado
+a dois usos na janela resultante de cinco; repetição imediata de estrutura veta adaptação.
+Veto ou falha retorna ao baseline, sem relaxar Safety/Quality.
+
+`CLOSED_LOOP_DECISION` persiste evidência, candidatos/ranks, scope, baseline, escolha e
+parâmetros antes da submissão. Reserva transacional revalida flag e histórico concorrente.
+`CLOSED_LOOP_SUBMITTED` registra sucesso real da submissão ao pipeline. Reserva adaptada
+sem confirmação após crash/falha de auditoria mantém adaptação suspensa conservadoramente;
+geração baseline continua. Não excluir histórico para liberar adaptação automaticamente.
+
+Schema changes: NONE. Reutiliza tabelas existentes. Testes executados via
+`scripts/run_closed_loop_tests.py`, cópia temporária de fontes com config sintética e rede bloqueada.
+Resultados finais de validação serão registrados após a regressão.
+Próximo gate: revisão DEV; deploy e ativação em produção exigem autorizações separadas.
+
+Comando de regressão isolada (somente DEV; mocks/fakes, sem rede):
+
+```powershell
+.venv/Scripts/python.exe -B scripts/run_closed_loop_tests.py `
+  test/services/test_analytics.py test/services/test_analytics_scheduler.py `
+  test/services/test_analytics_ingestion.py test/services/test_analytics_providers.py `
+  test/services/test_analytics_real_fetch.py test/services/test_content_strategy.py `
+  test/services/test_quality_score.py test/services/test_autonomous_production.py `
+  test/services/test_scheduler.py test/services/test_scheduler_worker.py `
+  test/services/test_operator_console.py test/services/test_publication_persistence.py `
+  test/services/test_single_instance.py test/services/test_production_health.py `
+  test/services/test_profile_manager.py test/services/test_profile_generation.py `
+  test/services/test_profile_scheduler.py test/services/test_growth_mode.py `
+  test/services/test_trend_radar.py test/services/test_schedule_cancellation.py `
+  test/test_production_entrypoint.py test/services/test_closed_feedback_loop.py -q --tb=short
+```
+
+## Registros históricos anteriores ao rollout atual
+
+Menções abaixo a Analytics OFF, Autonomous OFF, Auto Publish OFF, produção em `d1a8677`
+ou F.1 incompleta descrevem etapas anteriores e não o estado vigente acima.
 
 
 ## V12-F.1C — Publication Privacy Persistence (21/09/2026)
@@ -53,7 +145,7 @@ Implementação concluída **localmente** (`D:\Projetos\MoneyPrinterTurbo`), sem
 
 Regressão direcionada: suítes exigidas 100% PASS (`test_analytics_scheduler.py`, `test_analytics_ingestion.py`, `test_analytics_providers.py`, `test_analytics_real_fetch.py`, `test_scheduler.py`, `test_scheduler_worker.py`, `test_operator_console.py`, `test_autonomous_production.py`, `test_single_instance.py`, `test_production_health.py`, `test_production_entrypoint.py`, `test_publication_persistence.py`): **329 passed, 19 subtests passed, 0 failed**. Verificação adicional do publish path revelou 7 falhas pré-existentes e não relacionadas (Growth Mode/warmup de TikTok e ordenação de plataformas em `test_scheduler_execution.py`, `test_scheduler_timezone.py`, `test_publish_task.py`), confirmadas por reprodução em isolamento total sem qualquer mudança desta tarefa — não corrigidas aqui por estarem fora do escopo da V12-F.1C.
 
-**Não marcar V12-F.1 como concluída.** V12-F.1A e V12-F.1C endureceram contratos de segurança do Analytics; V12-F.1B corrigiu o bootstrap headless. A ativação real do Analytics Auto Collection em produção continua exigindo decisão e homologação próprias.
+**Gate histórico posteriormente concluído:** V12-F.1A/B/C e ativação real do Analytics Auto foram homologadas pelo operador em 21/09/2026, baseline `54875c6`; ver estado vigente acima.
 
 ---
 
@@ -265,9 +357,9 @@ Timeout stale:
 - V12-E.2.1 One-cycle / One-transition hotfix — **homologado**
 - V12-E.2.2 Persistent Waiting Schedule Recovery — **homologado**
 - V12-F Adaptive Learning + Multi-Channel Warm-Up — **planejamento aberto**
-- V12-F.1A Analytics Activation Hardening — **implementado localmente, não deployado; Analytics OFF**
+- V12-F.1A Analytics Activation Hardening — **homologada em produção; Analytics ON**
 - V12-F.1B Headless Worker Bootstrap — **✅ homologada em produção; Headless gate PASS**
-- V12-F.1C Publication Privacy Persistence — **implementado localmente, não deployado; Analytics OFF**
+- V12-F.1C Publication Privacy Persistence — **homologada em produção; Analytics ON**
 
 Próximas fases planejadas:
 - V13 Headless Remote Deployment / Safe Update
@@ -285,7 +377,7 @@ Próximas fases planejadas:
 - `08c644f` — enforce one autonomous transition per cycle
 
 ### Commit atual em produção
-`d1a8677`
+`54875c6` (homologação informada pelo operador)
 
 `de62a4b` é governança de agentes, sem necessidade de deploy para validar a aplicação. `d1a8677` corresponde à V12-F.1B (Headless Worker Bootstrap), homologada em produção com Headless gate PASS.
 

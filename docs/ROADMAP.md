@@ -13,6 +13,31 @@ em 23 suítes (246,12s), com geração fake e rede bloqueada; 16 testes novos E.
 Próximo gate: revisão do diff E.3 isolado.
 Sem commit/push/deploy e sem acesso à produção. A fase V12-F.2 permanece separada.
 
+## Estado vigente — 21/09/2026
+
+V12-E e V12-F.1A/B/C HOMOLOGADAS EM PRODUÇÃO na baseline `54875c6`, conforme
+evidências do operador. YouTube Data API, fetch e persistência real homologados.
+Factory/PRIMARY headless/Scheduler ativos; Autonomous ON, Auto Publish ON,
+Analytics Auto ON (1 fetch/ciclo, 300s), Dry Run OFF, YouTube ON, TikTok OFF,
+Growth Mode WARMUP e MPT Auto Upload OFF. Produção não acessada nesta implementação.
+
+V12-F.2: implementação DEV em validação; sem deploy/homologação de produção.
+Escopo MVP: tema/cluster e narrative_structure. Flag default OFF.
+Reutiliza Analytics → evidência isolada → Content Strategy → Autonomous → VideoParams;
+12 publicações, cinco por grupo, dois grupos; coorte 72–96h, histórico 60 dias;
+medianas, estabilidade leave-one-out, bônus máximo cinco, diversidade persistida e
+auditoria transacional. Não usa performance_score legado para eleger vencedores.
+Schema NONE. Rollback funcional pela flag; nenhum histórico é removido.
+
+Aceite DEV: testes de elegibilidade/privacidade/scope, gate, outlier, replay,
+diversidade/restart, equivalência OFF, fail-safe e integração com submissão fake;
+regressão das 22 suítes requeridas com rede bloqueada. Resultado final pendente da execução.
+Próximos gates: revisão → autorização de deploy com flag OFF → homologação separada
+→ autorização explícita de ativação. V12-F.3 mantém isolamento multicanal como fase formal;
+V12-F.4/segundo canal e TikTok não são ativados por esta entrega.
+
+Os marcos abaixo preservam histórico; snapshots OFF e baselines antigas não substituem
+o estado vigente desta seção.
 
 
 ## V12-E.2.2 — Persistent Waiting Schedule Recovery (20/09/2026)
@@ -176,11 +201,11 @@ Objetivo: transformar o feedback de desempenho em um ciclo fechado de otimizaç�
 
 ## V12-F.1 — Analytics Auto-Collection Audit & Activation
 
-**Status: NÃO concluída.** Auditoria parcial concluída via V12-F.1A/V12-F.1C; bootstrap headless homologado via V12-F.1B. Ativação real do Analytics Auto Collection em produção continua exigindo decisão e homologação próprias.
+**Status: HOMOLOGADA EM PRODUÇÃO.** V12-F.1A/B/C, fetch e persistência real homologados pelo operador em 21/09/2026; Analytics Auto ON na baseline `54875c6`.
 
-Objetivo futuro: auditar e ativar com segurança a coleta automática de Analytics já existente.
+Objetivo concluído: coleta automática de Analytics auditada, ativada e homologada.
 
-Verificar futuramente:
+Contratos da homologação:
 - `analytics_scheduler.py`, integração do worker e settings atuais;
 - `DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED`;
 - persistência de métricas e cooldowns por idade do vídeo;
@@ -188,11 +213,11 @@ Verificar futuramente:
 - nenhuma coleta de vídeos privados;
 - isolamento por profile/channel.
 
-Gate futuro: comprovar esses contratos antes de autorizar ativação. Não implementar nem ativar nesta tarefa.
+Gate F.1: PASS conforme evidências do operador. A implementação F.2 não altera essa ativação.
 
 ### V12-F.1A — Analytics Activation Hardening
 
-**Status: ✅ implementado localmente (21/09/2026), não deployado. Analytics Auto Collection permanece OFF.**
+**Status: ✅ HOMOLOGADA EM PRODUÇÃO (21/09/2026), baseline `54875c6`. Analytics Auto ON.**
 
 Endureceu sete contratos em `analytics_scheduler.py` e `analytics_providers/*`: coleta automática restrita a YouTube; privacidade fail-closed (PUBLIC comprovado exigido; PRIVATE/UNKNOWN bloqueiam); deduplicação/revalidação de elegibilidade antes de cada chamada ao provider; exclusão mútua entre ciclo manual e automático via lock persistido; revalidação de backoff por publicação antes de cada fetch; sanitização de erros de rede/HTTP para nunca expor API key/token/query; `DEFAULT_ANALYTICS_AUTO_COLLECTION_ENABLED` como fonte real do default. Regressão: 338 passed, 19 subtests passed, 0 failed. Detalhes completos em `PROJECT_HANDOFF.md`.
 
@@ -204,7 +229,7 @@ Bloqueador identificado durante V12-F.1A corrigido: `scripts/production_entrypoi
 
 ### V12-F.1C — Publication Privacy Persistence
 
-**Status: ✅ implementado localmente (21/09/2026), não deployado. Analytics Auto Collection permanece OFF.**
+**Status: ✅ HOMOLOGADA EM PRODUÇÃO (21/09/2026), baseline `54875c6`. Analytics Auto ON.**
 
 Cria fonte persistente e auditável de `privacy_status` em `publication_events` (migração aditiva/idempotente) e faz todos os caminhos de Analytics YouTube respeitarem essa evidência: publicação futura persiste o `privacyStatus` efetivamente usado; elegibilidade do Analytics automático prioriza o valor persistido com fallback legado para `task.json`, mantendo fail-closed (PRIVATE/UNLISTED/UNKNOWN bloqueiam); coleta manual (`fetch_real_metrics_for_publication`) agora exige PUBLIC comprovado antes de qualquer requisição real, para `persist=False` e `persist=True`; nova operação auditável `confirm_publication_privacy_op` no Operator Console permite homologar eventos legados (ex.: evento real 16) sem SQL manual, exigindo PRIMARY e validação exata do evento. Regressão das suítes exigidas: 329 passed, 19 subtests passed, 0 failed. Detalhes completos em `PROJECT_HANDOFF.md`.
 

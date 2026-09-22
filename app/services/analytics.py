@@ -2,6 +2,10 @@ import contextlib
 import json
 import os
 import sqlite3
+import math
+import re
+from statistics import median
+from datetime import timedelta
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -9,6 +13,200 @@ from loguru import logger
 
 # Caminho opcional override do SQLite (útil em testes)
 DB_PATH: Optional[str] = None
+
+# V12-F.2: rollout policy, independent of the legacy performance score.
+LEARNING_POLICY_VERSION = "v12-f2.1"
+MIN_ELIGIBLE_PUBLICATIONS = 12
+MIN_PUBLICATIONS_PER_GROUP = 5
+MIN_DISTINCT_GROUPS = 2
+HISTORY_WINDOW_DAYS = 60
+TARGET_AGE_HOURS = 72
+MAX_AGE_HOURS = 96
+MAX_HISTORY_RANKING_BONUS = 5.0
+ADAPTATION_INTERVAL = 3
+RECENT_SUBMISSIONS = 5
+MAX_CLUSTER_USES = 2
+
+
+def _learning_time(value):
+    result = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if result.tzinfo is None:
+        raise ValueError("timezone required")
+    return result.astimezone(timezone.utc)
+
+
+def _learning_groups(samples, field):
+    groups = {}
+    for sample in samples:
+        key = sample[field]
+        if key:
+            groups.setdefault(key, []).append(sample)
+    summary = {
+        key: {"sample_count": len(items), "median_views": median(x["views"] for x in items),
+              "median_engagement": median(x["engagement"] for x in items)}
+        for key, items in sorted(groups.items())
+    }
+    qualified = [key for key in summary if summary[key]["sample_count"] >= MIN_PUBLICATIONS_PER_GROUP]
+    if len(qualified) < MIN_DISTINCT_GROUPS:
+        return summary, None, "INSUFFICIENT_DATA"
+    ordered = sorted(qualified, key=lambda k: (-summary[k]["median_views"], k))
+    winner, runner = ordered[:2]
+    runner_views = summary[runner]["median_views"]
+    if summary[winner]["median_views"] <= runner_views:
+        return summary, None, "NO_CONTRAST"
+    # The sample gate applies to the original cohort, not each sensitivity replicate.
+    values = [x["views"] for x in groups[winner]]
+    if any(median(values[:i] + values[i + 1:]) <= runner_views for i in range(len(values))):
+        return summary, None, "UNSTABLE"
+    return summary, winner, "ELIGIBLE"
+
+
+def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
+                          cutoff_time=None, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Read-only, scoped evidence. A publication contributes its first 72–96h snapshot.
+
+    Ties use the lowest snapshot ID. No legacy score, implicit identity, schema
+    initialization, network request or historical rewrite is permitted here.
+    """
+    result = {
+        "scope": {"platform": platform, "profile_id": profile_id, "channel_id": channel_id},
+        "policy_version": LEARNING_POLICY_VERSION, "sample_count": 0,
+        "eligible_publication_ids": [], "eligible_snapshot_ids": [], "samples": [],
+        "excluded_counts_by_reason": {}, "groups": {}, "group_sample_counts": {},
+        "median_views": {}, "median_engagement": {}, "stability_result": {},
+        "recommended_topic_cluster": None, "recommended_narrative_structure": None,
+        "evidence_state": "INSUFFICIENT_DATA", "fallback_reason": "invalid_scope",
+    }
+    if platform != "youtube" or not profile_id or not channel_id:
+        return result
+    excluded = result["excluded_counts_by_reason"]
+
+    def exclude(reason):
+        excluded[reason] = excluded.get(reason, 0) + 1
+
+    try:
+        cutoff = _learning_time(cutoff_time or datetime.now(timezone.utc))
+        result["cutoff_time"] = cutoff.isoformat()
+        lower = cutoff - timedelta(days=HISTORY_WINDOW_DAYS)
+        from pathlib import Path
+        from app.services.content_strategy import classify_topic_cluster
+        from app.models import const
+        path = Path(db_path or _get_default_db_path()).resolve()
+        with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN")  # one consistent read snapshot
+            channel = conn.execute(
+                "SELECT c.id FROM publishing_channels c JOIN content_profiles p ON p.id=c.profile_id "
+                "WHERE c.id=? AND c.profile_id=? AND c.platform=? AND c.is_enabled=1 AND p.is_active=1",
+                (channel_id, profile_id, platform)).fetchone()
+            if not channel:
+                return result
+            rows = conn.execute(
+                "SELECT * FROM content_analytics WHERE platform=? AND profile_id=? AND channel_id=? ORDER BY id",
+                (platform, profile_id, channel_id)).fetchall()
+            selected = {}
+            for row in rows:
+                item = dict(row)
+                pub = conn.execute("SELECT * FROM publication_events WHERE id=?", (item["publication_event_id"],)).fetchone()
+                if not pub or any(item[k] != pub[k] for k in ("task_id", "external_id", "platform", "profile_id", "channel_id")):
+                    exclude("identity_mismatch")
+                    continue
+                if pub["status"] != "success" or pub["privacy_status"] != "public":
+                    exclude("publication_not_public_success")
+                    continue
+                if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(pub["external_id"] or "")):
+                    exclude("invalid_external_id")
+                    continue
+                mapping = conn.execute("SELECT profile_id FROM task_profiles WHERE task_id=?", (item["task_id"],)).fetchone()
+                if not mapping or mapping[0] != profile_id:
+                    exclude("task_profile_mismatch")
+                    continue
+                try:
+                    published = _learning_time(pub["published_at"])
+                    collected = _learning_time(item["collected_at"])
+                    if _learning_time(item["published_at"]) != published:
+                        exclude("publication_time_mismatch")
+                        continue
+                    metadata = json.loads(item["metadata_json"] or "{}")
+                    age = (collected - published).total_seconds() / 3600
+                    if not (lower <= published <= cutoff and collected <= cutoff and TARGET_AGE_HOURS <= age <= MAX_AGE_HOURS):
+                        exclude("incomparable_age")
+                        continue
+                    # Provider emits explicit dry_run=False. Missing provenance is not proof.
+                    if (item["source"] != "youtube_api" or not isinstance(metadata, dict)
+                            or metadata.get("dry_run") is not False
+                            or any(metadata.get(k) for k in ("synthetic", "fake", "test", "is_synthetic"))
+                            or metadata.get("item_id") != pub["external_id"]):
+                        exclude("untrusted_source")
+                        continue
+                    metrics = [item[k] for k in ("views", "likes", "comments")]
+                    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 or int(v) != v for v in metrics):
+                        exclude("invalid_metrics")
+                        continue
+                    safety = conn.execute("SELECT * FROM monetization_safety WHERE task_id=?", (item["task_id"],)).fetchone()
+                    quality = conn.execute(
+                        "SELECT * FROM content_quality_scores WHERE task_id=? AND julianday(created_at)<=julianday(?) "
+                        "ORDER BY julianday(created_at) DESC,id DESC LIMIT 1", (item["task_id"], cutoff.isoformat())).fetchone()
+                    if not safety or safety["safety_status"] != "PASS" or _learning_time(safety["checked_at"]) > cutoff:
+                        exclude("safety_not_pass")
+                        continue
+                    if (not quality or not math.isfinite(float(quality["quality_score"]))
+                            or quality["quality_score"] < 70 or quality["quality_label"] not in ("GOOD", "STRONG")):
+                        exclude("quality_not_approved")
+                        continue
+                    if not safety["topic"] or item["topic"] != safety["topic"] or item["narrative_structure"] != safety["narrative_structure"]:
+                        exclude("content_identity_mismatch")
+                        continue
+                    sample = {"publication_id": pub["id"], "snapshot_id": item["id"],
+                              "task_id": item["task_id"], "quality_id": quality["id"],
+                              "safety_checked_at": safety["checked_at"], "external_id": pub["external_id"],
+                              "topic_cluster": classify_topic_cluster(item["topic"]),
+                              "narrative_structure": item["narrative_structure"] if item["narrative_structure"] in const.NARRATIVE_STRUCTURES else None,
+                              "views": item["views"], "engagement": (item["likes"] + item["comments"]) / item["views"] if item["views"] else 0,
+                              "age_hours": age}
+                    # Duplicate publication events for the same external video cannot multiply evidence.
+                    key = pub["external_id"]
+                    previous = selected.get(key)
+                    if previous:
+                        exclude("duplicate_snapshot")
+                    if not previous or (age, item["id"]) < (previous["age_hours"], previous["snapshot_id"]):
+                        selected[key] = sample
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    exclude("invalid_data")
+            samples = sorted(selected.values(), key=lambda s: s["publication_id"])
+        result["samples"] = samples
+        result["sample_count"] = len(samples)
+        result["eligible_publication_ids"] = [s["publication_id"] for s in samples]
+        result["eligible_snapshot_ids"] = [s["snapshot_id"] for s in samples]
+        for dimension in ("topic_cluster", "narrative_structure"):
+            groups, winner, state = _learning_groups(samples, dimension)
+            result["groups"][dimension] = groups
+            result["group_sample_counts"][dimension] = {k: v["sample_count"] for k, v in groups.items()}
+            result["median_views"][dimension] = {k: v["median_views"] for k, v in groups.items()}
+            result["median_engagement"][dimension] = {k: v["median_engagement"] for k, v in groups.items()}
+            result["stability_result"][dimension] = state
+            result["recommended_" + dimension] = winner
+        states = list(result["stability_result"].values())
+        if len(samples) < MIN_ELIGIBLE_PUBLICATIONS:
+            state = "INSUFFICIENT_DATA"
+        elif "UNSTABLE" in states:
+            state = "UNSTABLE"
+        elif "ELIGIBLE" in states:
+            state = "ELIGIBLE"
+        elif "NO_CONTRAST" in states:
+            state = "NO_CONTRAST"
+        else:
+            state = "INSUFFICIENT_DATA"
+        result["evidence_state"] = state
+        result["fallback_reason"] = None if state == "ELIGIBLE" else state.lower()
+        if state != "ELIGIBLE":
+            result["recommended_topic_cluster"] = None
+            result["recommended_narrative_structure"] = None
+        return result
+    except Exception:
+        result.update(evidence_state="ERROR_FALLBACK", fallback_reason="evidence_read_error",
+                      recommended_topic_cluster=None, recommended_narrative_structure=None)
+        return result
 
 # Constantes de Buckets de Idade
 BUCKET_0_24H = "0-24h"

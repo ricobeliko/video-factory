@@ -446,5 +446,140 @@ def test_operator_console_profile_scoping(isolated_env):
             db_path=db,
             profile_id=profile_manager.SECOND_PROFILE_ID,
             channel_id=profile_manager.SECOND_CHANNEL_ID,
+            task_base_dir=None,
         )
         assert res["status"] == "idle"
+
+
+def test_scenario_10_persistent_scheduler_recovery_and_profile_scoped_cycle_state(isolated_env):
+    """V12-F.4: Prova recuperação persistente do scheduler e isolamento dos ponteiros de ciclo por perfil.
+    
+    1. MemoryState incompleto + final video persistente → agenda corretamente.
+    2. Sem final video → continua não agendando.
+    3. current/waiting do segundo profile não interfere no default.
+    4. default mantém compatibilidade anterior.
+    5. task já agendada/publicada continua idempotente e não duplica.
+    """
+    db, video_dir, _ = isolated_env
+    now = datetime.now(timezone.utc)
+
+    # -------------------------------------------------------------------------
+    # 1. MemoryState incompleto + final video físico existente -> agenda corretamente
+    # -------------------------------------------------------------------------
+    task_id_recov = "task-815b0958-recov"
+    _create_mock_video_task(task_id_recov, profile_manager.SECOND_PROFILE_ID, "História Recuperada", video_dir, db, quality_val=79.2)
+
+    # Simula MemoryState incompleto (ausente de video_file e com state None/vazio)
+    sm.state.update_task(task_id_recov, state=None, video_file=None)
+    mem_task = sm.state.get_task(task_id_recov) or {}
+    assert mem_task.get("state") is None
+    assert mem_task.get("video_file") is None
+
+    # plan_schedule deve recuperar pelo vídeo físico existente em video_dir
+    sched_res = scheduler.plan_schedule(
+        [{"task_id": task_id_recov}],
+        now=now,
+        db_path=db,
+        task_base_dir=str(video_dir),
+    )
+    assert len(sched_res) == 1
+    assert sched_res[0]["task_id"] == task_id_recov
+    assert sched_res[0]["profile_id"] == profile_manager.SECOND_PROFILE_ID
+    assert sched_res[0]["channel_id"] == profile_manager.SECOND_CHANNEL_ID
+    assert sched_res[0]["platform"] == "youtube"
+
+    # -------------------------------------------------------------------------
+    # 5. Idempotência: task já agendada não duplica
+    # -------------------------------------------------------------------------
+    sched_dup = scheduler.plan_schedule(
+        [{"task_id": task_id_recov}],
+        now=now,
+        db_path=db,
+        task_base_dir=str(video_dir),
+    )
+    assert len(sched_dup) == 0
+
+    # -------------------------------------------------------------------------
+    # 2. Sem final video físico -> continua não agendando
+    # -------------------------------------------------------------------------
+    task_id_no_video = "task-no-physical-video"
+    # Registra no DB com safety PASS e quality 80, mas SEM arquivo de vídeo no disco
+    scheduler.save_task_platforms(task_id_no_video, ["youtube"], db)
+    profile_manager.save_task_profile(task_id_no_video, profile_manager.SECOND_PROFILE_ID, db)
+    now_iso = now.isoformat()
+    with scheduler.get_connection(db) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO monetization_safety (task_id, topic, preset, narrative_structure, safety_status, checked_at) "
+            "VALUES (?, 'No Video', 'preset', 'struct', 'PASS', ?);",
+            (task_id_no_video, now_iso),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO content_quality_scores (task_id, topic, quality_score, quality_label, created_at) "
+            "VALUES (?, 'No Video', 80.0, 'STRONG', ?);",
+            (task_id_no_video, now_iso),
+        )
+
+    # MemoryState incompleto e sem vídeo físico
+    sm.state.update_task(task_id_no_video, state=None, video_file=None)
+    sched_no_vid = scheduler.plan_schedule(
+        [{"task_id": task_id_no_video}],
+        now=now,
+        db_path=db,
+        task_base_dir=str(video_dir),
+    )
+    assert len(sched_no_vid) == 0
+
+    # -------------------------------------------------------------------------
+    # 3. current/waiting do segundo profile não interfere no default
+    # -------------------------------------------------------------------------
+    profile_manager.save_task_profile("current-sec-1", profile_manager.SECOND_PROFILE_ID, db)
+    profile_manager.save_task_profile("waiting-sec-1", profile_manager.SECOND_PROFILE_ID, db)
+    autonomous._set_cycle_setting(
+        autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, "current-sec-1",
+        profile_id=profile_manager.SECOND_PROFILE_ID, db_path=db,
+    )
+    autonomous._set_cycle_setting(
+        autonomous.KEY_AUTONOMOUS_WAITING_TASK_ID, "waiting-sec-1",
+        profile_id=profile_manager.SECOND_PROFILE_ID, db_path=db,
+    )
+
+    status_default = console.get_autonomous_production_status_op(
+        db_path=db, profile_id=profile_manager.DEFAULT_PROFILE_ID
+    )
+    assert status_default.get("current_task_id") is None
+    assert status_default.get("waiting_task_id") is None
+
+    status_second = console.get_autonomous_production_status_op(
+        db_path=db, profile_id=profile_manager.SECOND_PROFILE_ID
+    )
+    assert status_second.get("current_task_id") == "current-sec-1"
+    assert status_second.get("waiting_task_id") == "waiting-sec-1"
+
+    # -------------------------------------------------------------------------
+    # 4. default mantém compatibilidade anterior
+    # -------------------------------------------------------------------------
+    # Gravação no default usa chaves legadas e é visível para o default
+    profile_manager.save_task_profile("current-def-1", profile_manager.DEFAULT_PROFILE_ID, db)
+    profile_manager.save_task_profile("waiting-def-1", profile_manager.DEFAULT_PROFILE_ID, db)
+    autonomous._set_cycle_setting(
+        autonomous.KEY_AUTONOMOUS_CURRENT_TASK_ID, "current-def-1",
+        profile_id=profile_manager.DEFAULT_PROFILE_ID, db_path=db,
+    )
+    autonomous._set_cycle_setting(
+        autonomous.KEY_AUTONOMOUS_WAITING_TASK_ID, "waiting-def-1",
+        profile_id=profile_manager.DEFAULT_PROFILE_ID, db_path=db,
+    )
+
+    status_default_after = console.get_autonomous_production_status_op(
+        db_path=db, profile_id=profile_manager.DEFAULT_PROFILE_ID
+    )
+    assert status_default_after.get("current_task_id") == "current-def-1"
+    assert status_default_after.get("waiting_task_id") == "waiting-def-1"
+
+    # Segundo profile continua com seus próprios ponteiros inalterados
+    status_second_after = console.get_autonomous_production_status_op(
+        db_path=db, profile_id=profile_manager.SECOND_PROFILE_ID
+    )
+    assert status_second_after.get("current_task_id") == "current-sec-1"
+    assert status_second_after.get("waiting_task_id") == "waiting-sec-1"
+

@@ -999,11 +999,12 @@ def plan_schedule(
     now: Optional[datetime] = None,
     db_path: Optional[str] = None,
     growth_mode: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Gera o planejamento da agenda para vídeos concluídos ainda não agendados.
     
     Regras estritas:
-    - Apenas vídeos concluídos (state == TASK_STATE_COMPLETE ou has_video)
+    - Apenas vídeos concluídos (state == TASK_STATE_COMPLETE, video_file válido ou final físico em disco)
     - Não agenda PROCESSING, PENDING, FAILED ou já publicados
     - Respeita o perfil imutável da task e os canais habilitados vinculados
     - Respeita os limites por rede na janela móvel de 24h (teto técnico + growth mode do perfil)
@@ -1031,23 +1032,53 @@ def plan_schedule(
 
         state = t.get("state")
         cross_post_state = t.get("cross_post_state")
-        has_video = bool(t.get("video_file"))
 
-        # Ignora estados não concluídos ou cancelados
-        if state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING, const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED) or t.get("cancelled"):
+        # Ignora estados cancelados ou com tombstone/falha explícita
+        if state in (const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED) or t.get("cancelled"):
             continue
 
         # Ignora tarefas já publicadas no MoneyPrinterTurbo
         if cross_post_state == const.CROSS_POST_STATE_COMPLETE:
             continue
 
-        # Deve estar completo ou com vídeo final gerado
-        is_complete = state == const.TASK_STATE_COMPLETE or has_video
+        # Resolução do vídeo final: verifica task_data e storage persistente em disco
+        final_video_file = t.get("video_file")
+        if not (final_video_file and os.path.isfile(final_video_file) and os.path.getsize(final_video_file) > 0):
+            resolved_disk_file = get_task_final_video(task_id, task_base_dir=task_base_dir)
+            if resolved_disk_file and os.path.isfile(resolved_disk_file) and os.path.getsize(resolved_disk_file) > 0:
+                final_video_file = resolved_disk_file
+                t["video_file"] = resolved_disk_file
+
+        has_physical_video = bool(final_video_file and os.path.isfile(final_video_file) and os.path.getsize(final_video_file) > 0)
+
+        # Se estiver em processamento ou pendente:
+        # Se há execução ativa em webui_task, respeita a geração em andamento
+        if state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
+            try:
+                from app.services import webui_task
+                if webui_task.has_active_generation_tasks() and task_id in webui_task.get_active_task_ids():
+                    continue
+            except Exception:
+                pass
+            # Se não está gerando ativamente, mas não possui vídeo final físico, ignora
+            if not has_physical_video:
+                continue
+
+        # Objetivo 1: Considerar a task concluída quando:
+        # - state == COMPLETE
+        # OU
+        # - video_file válido estiver no task_data
+        # OU
+        # - scheduler.get_task_final_video(task_id) encontrar arquivo final físico válido.
+        # NÃO criar agendamento se arquivo final não existir (a menos que seja mock com state==COMPLETE para compatibilidade legada)
+        is_complete = (state == const.TASK_STATE_COMPLETE) or bool(t.get("video_file")) or has_physical_video
         if not is_complete:
             continue
 
         # Obtém destinos planejados (do state da task ou do SQLite persistido)
         platforms = t.get("planned_platforms") or persisted_platforms_map.get(task_id, [])
+        if not platforms:
+            platforms = get_task_platforms(task_id, db_path=db_path)
         if not platforms:
             continue
 
@@ -1065,6 +1096,23 @@ def plan_schedule(
         if safety_status and str(safety_status).upper() in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
             logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={safety_status}")
             continue
+
+        # Gate de Qualidade: se houver avaliação persistida, rejeita scores inadequados (< 70 ou WEAK/REVIEW/REJECTED)
+        try:
+            with get_connection(db_path) as conn:
+                q_row = conn.execute(
+                    "SELECT quality_score, quality_label FROM content_quality_scores "
+                    "WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+                if q_row:
+                    q_score = float(q_row["quality_score"])
+                    q_label = str(q_row["quality_label"]).upper()
+                    if (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED"):
+                        logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
+                        continue
+        except Exception:
+            pass
 
         # Resolução do perfil da task
         task_profile_id = profile_manager.get_task_profile_id(task_id, db_path=db_path)

@@ -2340,6 +2340,7 @@ def run_autonomous_cycle_op(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Dispara a execução imediata de um ciclo de produção autônoma controlado (exige PRIMARY)."""
     require_primary_instance(db_path=db_path)
@@ -2350,4 +2351,5 @@ def run_autonomous_cycle_op(
         db_path=db_path,
         profile_id=profile_id,
         channel_id=channel_id,
+        task_base_dir=task_base_dir,
     )

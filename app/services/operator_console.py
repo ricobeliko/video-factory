@@ -894,6 +894,11 @@ def get_closed_loop_submissions(platform: str, profile_id: str, channel_id: str,
     Missing completion after a crash must not permit another adaptation. Baseline
     generations still proceed; operator review can resolve an ambiguous reservation.
     """
+    clean_platform = str(platform or "").strip().lower()
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
+    if not clean_platform or not clean_profile or not clean_channel:
+        return []
     with get_connection(db_path) as conn:
         rows = conn.execute(
             "SELECT event_type,task_id,metadata_json FROM operational_events "
@@ -901,7 +906,7 @@ def get_closed_loop_submissions(platform: str, profile_id: str, channel_id: str,
             "AND json_extract(metadata_json,'$.platform')=? "
             "AND json_extract(metadata_json,'$.profile_id')=? "
             "AND json_extract(metadata_json,'$.channel_id')=? ORDER BY id DESC",
-            (platform, profile_id, channel_id)).fetchall()
+            (clean_platform, clean_profile, clean_channel)).fetchall()
     submitted, completed = [], set()
     pending = False
     for row in rows:
@@ -918,7 +923,10 @@ def get_closed_loop_submissions(platform: str, profile_id: str, channel_id: str,
 
 def record_closed_loop_decision(task_id: str, metadata: Dict[str, Any], db_path=None) -> int:
     """Reserve a decision atomically against competing submissions/toggle changes."""
-    scope = {k: metadata[k] for k in ("platform", "profile_id", "channel_id")}
+    for k in ("platform", "profile_id", "channel_id"):
+        if not metadata.get(k) or not str(metadata[k]).strip():
+            raise ValueError(f"missing_scope_{k}")
+    scope = {k: str(metadata[k]).strip() for k in ("platform", "profile_id", "channel_id")}
     with get_connection(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         flag = conn.execute("SELECT value FROM autopilot_settings WHERE key='closed_feedback_loop_enabled'").fetchone()
@@ -930,7 +938,8 @@ def record_closed_loop_decision(task_id: str, metadata: Dict[str, Any], db_path=
         if recent != metadata["recent_submissions"]:
             raise ValueError("submission_history_changed")
         channel = conn.execute(
-            "SELECT id FROM publishing_channels WHERE id=? AND profile_id=? AND platform=? AND is_enabled=1",
+            "SELECT c.id FROM publishing_channels c JOIN content_profiles p ON p.id = c.profile_id "
+            "WHERE c.id=? AND c.profile_id=? AND c.platform=? AND c.is_enabled=1 AND p.is_active=1",
             (scope["channel_id"], scope["profile_id"], scope["platform"])).fetchone()
         if not channel:
             raise ValueError("channel_changed")

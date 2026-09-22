@@ -212,6 +212,96 @@ def get_max_attempts_24h(db_path: Optional[str] = None) -> int:
         return DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H
 
 
+def resolve_autonomous_youtube_channel(profile_id: str, db_path: Optional[str] = None) -> Optional[str]:
+    """Resolve com segurança o canal YouTube ativo do perfil.
+
+    Retorna o channel_id somente se houver exatamente um canal habilitado
+    para a plataforma 'youtube' em um perfil ativo. Caso contrário (0 ou múltiplos),
+    retorna None para garantir isolamento estrito e fail-safe para baseline.
+    """
+    clean_profile = str(profile_id or "").strip()
+    if not clean_profile:
+        return None
+    try:
+        with scheduler.get_connection(db_path) as conn:
+            ch_rows = conn.execute(
+                "SELECT c.id FROM publishing_channels c JOIN content_profiles p ON p.id = c.profile_id "
+                "WHERE c.platform = 'youtube' AND c.profile_id = ? AND c.is_enabled = 1 AND p.is_active = 1",
+                (clean_profile,),
+            ).fetchall()
+            if len(ch_rows) == 1:
+                return str(ch_rows[0][0])
+    except Exception:
+        pass
+    return None
+
+
+def get_channel_last_narrative_structure(
+    profile_id: str,
+    channel_id: Optional[str],
+    db_path: Optional[str] = None,
+) -> Optional[str]:
+    """Recupera a última estrutura narrativa isolada por perfil e canal."""
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
+    if clean_profile and clean_channel:
+        scoped_key = f"{KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE}:{clean_profile}:{clean_channel}"
+        val = get_autonomous_setting(scoped_key, None, db_path=db_path)
+        if val:
+            return val
+    if clean_profile == profile_manager.DEFAULT_PROFILE_ID:
+        return get_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, None, db_path=db_path)
+    return None
+
+
+def set_channel_last_narrative_structure(
+    profile_id: str,
+    channel_id: Optional[str],
+    structure: str,
+    db_path: Optional[str] = None,
+) -> None:
+    """Persiste a última estrutura narrativa isolada por perfil e canal."""
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
+    if clean_profile and clean_channel:
+        scoped_key = f"{KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE}:{clean_profile}:{clean_channel}"
+        set_autonomous_setting(scoped_key, structure, db_path=db_path)
+    if clean_profile == profile_manager.DEFAULT_PROFILE_ID or not clean_profile:
+        set_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, structure, db_path=db_path)
+
+
+def get_channel_rejected_narrative_structure(
+    profile_id: str,
+    channel_id: Optional[str],
+    db_path: Optional[str] = None,
+) -> Optional[str]:
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
+    if clean_profile and clean_channel:
+        scoped_key = f"{KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE}:{clean_profile}:{clean_channel}"
+        val = get_autonomous_setting(scoped_key, None, db_path=db_path)
+        if val:
+            return val
+    if clean_profile == profile_manager.DEFAULT_PROFILE_ID:
+        return get_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, None, db_path=db_path)
+    return None
+
+
+def set_channel_rejected_narrative_structure(
+    profile_id: str,
+    channel_id: Optional[str],
+    structure: str,
+    db_path: Optional[str] = None,
+) -> None:
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
+    if clean_profile and clean_channel:
+        scoped_key = f"{KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE}:{clean_profile}:{clean_channel}"
+        set_autonomous_setting(scoped_key, structure, db_path=db_path)
+    if clean_profile == profile_manager.DEFAULT_PROFILE_ID or not clean_profile:
+        set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, structure, db_path=db_path)
+
+
 # ---------------------------------------------------------------------------
 # 2. Telemetria e Status
 # ---------------------------------------------------------------------------
@@ -1194,7 +1284,9 @@ def _run_autonomous_cycle(
                 for term in ["repetição", "repetida", "mesma estrutura", "estrutura narrativa", "narrative_fit"]
             )
             if is_narrative_repetition and rej_struct:
-                set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, str(rej_struct), db_path=db_path)
+                rej_profile_id = rej_task.get("profile_id") or profile_manager.get_task_profile_id(rejected_task_id, db_path=db_path)
+                rej_channel_id = resolve_autonomous_youtube_channel(rej_profile_id, db_path=db_path)
+                set_channel_rejected_narrative_structure(rej_profile_id, rej_channel_id, str(rej_struct), db_path=db_path)
 
             operator_console.log_operational_event(
                 component="autonomous_production",
@@ -1424,9 +1516,12 @@ def _run_autonomous_cycle(
     chosen_topic = candidate["topic"]
     trend_id = candidate.get("trend_id")
 
-    # Recomenda estrutura narrativa diversificada evitando repetições
-    last_struct = get_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, None, db_path=db_path)
-    rejected_struct = get_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, None, db_path=db_path)
+    # Resolve canal YouTube com segurança para o perfil ativo
+    yt_channel_id = resolve_autonomous_youtube_channel(active_profile_id, db_path=db_path)
+
+    # Recomenda estrutura narrativa diversificada evitando repetições (isolada por perfil e canal)
+    last_struct = get_channel_last_narrative_structure(active_profile_id, yt_channel_id, db_path=db_path)
+    rejected_struct = get_channel_rejected_narrative_structure(active_profile_id, yt_channel_id, db_path=db_path)
 
     rec_struct, _ = content_strategy.recommend_narrative_structure(
         topic=chosen_topic,
@@ -1439,9 +1534,9 @@ def _run_autonomous_cycle(
                 rec_struct = alt_st
                 break
 
-    set_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, rec_struct, db_path=db_path)
+    set_channel_last_narrative_structure(active_profile_id, yt_channel_id, rec_struct, db_path=db_path)
     if rejected_struct:
-        set_autonomous_setting(KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE, "", db_path=db_path)
+        set_channel_rejected_narrative_structure(active_profile_id, yt_channel_id, "", db_path=db_path)
 
     # -----------------------------------------------------------------------
     # Etapa D: Criação da Task e Submissão ao Pipeline Existente (Generating)
@@ -1457,15 +1552,6 @@ def _run_autonomous_cycle(
 
     try:
         if operator_console.get_closed_feedback_loop_enabled_op(db_path=db_path):
-            yt_channel_id = None
-            with scheduler.get_connection(db_path) as conn:
-                ch_row = conn.execute(
-                    "SELECT id FROM publishing_channels WHERE platform='youtube' AND profile_id=? AND is_enabled=1",
-                    (active_profile_id,)
-                ).fetchone()
-                if ch_row:
-                    yt_channel_id = ch_row[0]
-
             if yt_channel_id:
                 evidence = analytics.get_learning_evidence(
                     platform="youtube",
@@ -1537,6 +1623,7 @@ def _run_autonomous_cycle(
                     "platform": "youtube",
                     "profile_id": active_profile_id,
                     "channel_id": yt_channel_id,
+                    "task_id": new_task_id,
                     "adapted": bool(selection.get("adapted")),
                     "baseline_topic": baseline_topic,
                     "baseline_structure": baseline_struct,
@@ -1562,10 +1649,13 @@ def _run_autonomous_cycle(
                     "platform": "youtube",
                     "profile_id": active_profile_id,
                     "channel_id": yt_channel_id,
+                    "task_id": new_task_id,
                     "adapted": bool(selection.get("adapted")),
                     "topic_cluster": content_strategy.classify_topic_cluster(chosen_topic),
                     "narrative_structure": rec_struct,
                 }
+            else:
+                logger.info(f"[AUTONOMOUS] Closed feedback loop: channel unresolvable for profile '{active_profile_id}' (using baseline).")
     except Exception as cl_exc:
         logger.warning(f"[AUTONOMOUS] Closed feedback loop fallback to baseline: {cl_exc}")
         chosen_topic = baseline_topic
@@ -1573,7 +1663,7 @@ def _run_autonomous_cycle(
         closed_loop_decision_recorded = False
         closed_loop_meta = None
 
-    set_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, rec_struct, db_path=db_path)
+    set_channel_last_narrative_structure(active_profile_id, yt_channel_id, rec_struct, db_path=db_path)
     params = build_autonomous_video_params(
         topic=chosen_topic,
         profile_id=active_profile_id,

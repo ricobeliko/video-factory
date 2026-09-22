@@ -148,6 +148,26 @@ def is_profile_autonomous_mode_enabled(profile_id: Optional[str] = None, db_path
     return str(val).lower() in ("true", "1", "yes")
 
 
+def _get_cycle_setting(key: str, default: Any = None, profile_id: Optional[str] = None, db_path: Optional[str] = None) -> Any:
+    clean_p = str(profile_id or "").strip()
+    is_default = not clean_p or clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default")
+    if is_default:
+        return get_autonomous_setting(key, default, db_path=db_path)
+    val = get_autonomous_setting(f"{key}:{clean_p}", None, db_path=db_path)
+    if val is not None:
+        return val
+    return default
+
+
+def _set_cycle_setting(key: str, val: Any, profile_id: Optional[str] = None, db_path: Optional[str] = None) -> None:
+    clean_p = str(profile_id or "").strip()
+    is_default = not clean_p or clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default")
+    if is_default:
+        set_autonomous_setting(key, val, db_path=db_path)
+    else:
+        set_autonomous_setting(f"{key}:{clean_p}", val, db_path=db_path)
+
+
 def set_profile_autonomous_mode_enabled(profile_id: str, enabled: bool, db_path: Optional[str] = None) -> None:
     """Ativa ou desativa a produção autônoma de um perfil específico com validação de PRIMARY."""
     operator_console.require_primary_instance(db_path=db_path)
@@ -157,7 +177,11 @@ def set_profile_autonomous_mode_enabled(profile_id: str, enabled: bool, db_path:
         return
     val_str = "True" if enabled else "False"
     set_autonomous_setting(f"{KEY_AUTONOMOUS_ENABLED}:{clean_profile}", val_str, db_path=db_path)
-    msg = f"Produção autônoma do perfil '{clean_profile}' {'ativada' if enabled else 'desativada'} pelo operador"
+    new_state = STATE_IDLE if enabled else STATE_DISABLED
+    msg_state = "ativada" if enabled else "desativada"
+    msg = f"Produção autônoma do perfil '{clean_profile}' {msg_state} pelo operador"
+    set_autonomous_setting(f"{KEY_AUTONOMOUS_STATE}:{clean_profile}", new_state, db_path=db_path)
+    set_autonomous_setting(f"{KEY_AUTONOMOUS_MESSAGE}:{clean_profile}", msg, db_path=db_path)
     operator_console.log_operational_event(
         component="autonomous_production",
         severity=operator_console.SEVERITY_INFO,
@@ -404,17 +428,51 @@ def get_autonomous_status(
 ) -> Dict[str, Any]:
     """Retorna snapshot completo da telemetria de produção autônoma para UI e diagnósticos."""
     scheduler.init_db(db_path)
-    enabled = is_autonomous_mode_enabled(db_path=db_path)
-    state = get_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED if not enabled else STATE_IDLE, db_path=db_path)
-    message = get_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, "Aguardando próximo ciclo", db_path=db_path)
-    last_result = get_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, "Nenhum ciclo executado ainda", db_path=db_path)
-    last_tick = get_autonomous_setting(KEY_AUTONOMOUS_LAST_TICK, None, db_path=db_path)
-    last_error = get_autonomous_setting(KEY_AUTONOMOUS_LAST_ERROR, None, db_path=db_path)
-    current_task_id = get_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, None, db_path=db_path)
-    waiting_task_id = get_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, db_path=db_path)
-
     target_profile = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
     target_channel = channel_id or resolve_autonomous_youtube_channel(target_profile, db_path=db_path)
+
+    enabled = is_profile_autonomous_mode_enabled(target_profile, db_path=db_path)
+    state = _get_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED if not enabled else STATE_IDLE, profile_id=target_profile, db_path=db_path)
+    if not enabled and state != STATE_BLOCKED:
+        state = STATE_DISABLED
+    default_msg = "Aguardando próximo ciclo" if enabled else f"Produção autônoma desativada para perfil '{target_profile}'."
+    message = _get_cycle_setting(KEY_AUTONOMOUS_MESSAGE, default_msg, profile_id=target_profile, db_path=db_path)
+    last_result = _get_cycle_setting(KEY_AUTONOMOUS_LAST_RESULT, "Nenhum ciclo executado ainda", profile_id=target_profile, db_path=db_path)
+    last_tick = _get_cycle_setting(KEY_AUTONOMOUS_LAST_TICK, None, profile_id=target_profile, db_path=db_path)
+    last_error = _get_cycle_setting(KEY_AUTONOMOUS_LAST_ERROR, None, profile_id=target_profile, db_path=db_path)
+    current_task_id = _get_cycle_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, None, profile_id=target_profile, db_path=db_path)
+    waiting_task_id = _get_cycle_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, profile_id=target_profile, db_path=db_path)
+
+    # Scoping de current_task_id e waiting_task_id para o perfil alvo
+    if current_task_id:
+        task_prof = profile_manager.get_task_profile_id(current_task_id, db_path=db_path)
+        if not task_prof:
+            from app.services import state as sm
+            t_obj = sm.state.get_task(current_task_id) or {}
+            task_prof = t_obj.get("profile_id")
+        is_default_target = not target_profile or target_profile in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        is_default_task = not task_prof or task_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        if is_default_target:
+            if not is_default_task:
+                current_task_id = None
+        else:
+            if task_prof != target_profile:
+                current_task_id = None
+
+    if waiting_task_id:
+        task_prof = profile_manager.get_task_profile_id(waiting_task_id, db_path=db_path)
+        if not task_prof:
+            from app.services import state as sm
+            t_obj = sm.state.get_task(waiting_task_id) or {}
+            task_prof = t_obj.get("profile_id")
+        is_default_target = not target_profile or target_profile in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        is_default_task = not task_prof or task_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
+        if is_default_target:
+            if not is_default_task:
+                waiting_task_id = None
+        else:
+            if task_prof != target_profile:
+                waiting_task_id = None
 
     # Contagem de gerações nas últimas 24h
     generated_today = count_generations_in_last_24h(db_path=db_path, profile_id=target_profile)
@@ -1266,9 +1324,9 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
     if not is_profile_autonomous_mode_enabled(target_profile_id, db_path=db_path) and not one_shot:
-        set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED, db_path=db_path)
         msg = f"Produção autônoma desativada para perfil '{target_profile_id}'."
-        set_autonomous_setting(KEY_AUTONOMOUS_MESSAGE, msg, db_path=db_path)
+        _set_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED, profile_id=target_profile_id, db_path=db_path)
+        _set_cycle_setting(KEY_AUTONOMOUS_MESSAGE, msg, profile_id=target_profile_id, db_path=db_path)
         return {
             "status": "disabled",
             "profile_id": target_profile_id,

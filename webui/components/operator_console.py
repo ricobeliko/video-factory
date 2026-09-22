@@ -373,11 +373,16 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
 def _load_telemetry_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, Any]:
     if demo_enabled:
         return _get_mock_fixtures(scenario_choice)
-    sys_status = operator_console.get_system_status()
+    from app.services import profile_manager, autonomous_production
+    active_prof = profile_manager.get_active_profile()
+    active_prof_id = active_prof.get("id") if active_prof else "default"
+    active_channel_id = autonomous_production.resolve_autonomous_youtube_channel(active_prof_id)
+    sys_status = operator_console.get_system_status(profile_id=active_prof_id)
     inst_info = sys_status.get("instance") or operator_console.get_instance_info()
-    stock = operator_console.get_canonical_ready_stock()
+    stock = operator_console.get_canonical_ready_stock(profile_id=active_prof_id, channel_id=active_channel_id)
     provs = operator_console.get_provider_health_summary()
     recent_errs = operator_console.get_recent_errors(limit=10)
+    growth_mode = active_prof.get("growth_mode") if (active_prof and active_prof.get("growth_mode")) else sys_status.get("growth_mode", "normal")
     return {
         "factory_state": sys_status["factory_state"],
         "is_paused": sys_status["is_paused"],
@@ -385,7 +390,7 @@ def _load_telemetry_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, 
         "scheduler_worker": sys_status["scheduler_worker"],
         "auto_publish": sys_status["auto_publish"],
         "dry_run": sys_status["dry_run"],
-        "growth_mode": sys_status["growth_mode"],
+        "growth_mode": growth_mode,
         "heartbeats": sys_status["heartbeats"],
         "last_publication": sys_status.get("last_publication"),
         "stock": stock,
@@ -434,11 +439,16 @@ def _load_queues_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, Any
             "stock": d.get("stock", {}),
             "growth_mode": d.get("growth_mode", "normal"),
         }
+    from app.services import profile_manager, autonomous_production
+    active_prof = profile_manager.get_active_profile()
+    active_prof_id = active_prof.get("id") if active_prof else "default"
+    active_channel_id = autonomous_production.resolve_autonomous_youtube_channel(active_prof_id)
+    growth_mode = active_prof.get("growth_mode") if (active_prof and active_prof.get("growth_mode")) else operator_console.get_system_status(profile_id=active_prof_id).get("growth_mode", "normal")
     return {
         "g_summary": operator_console.get_generation_queue_summary(),
         "s_summary": operator_console.get_scheduler_queue_summary(),
-        "stock": operator_console.get_canonical_ready_stock(),
-        "growth_mode": operator_console.get_system_status().get("growth_mode", "normal"),
+        "stock": operator_console.get_canonical_ready_stock(profile_id=active_prof_id, channel_id=active_channel_id),
+        "growth_mode": growth_mode,
     }
 
 
@@ -1505,7 +1515,15 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
         last_error = None
         message = "Geração autônoma em andamento para YouTube" if state == "generating" else "Estoque em monitoramento"
     else:
-        status_data = operator_console.get_autonomous_production_status_op()
+        from app.services import profile_manager, autonomous_production
+        active_prof = profile_manager.get_active_profile()
+        active_prof_id = active_prof.get("id") if active_prof else "default"
+        active_prof_name = active_prof.get("name") if active_prof else "Video Factory Default"
+        active_channel_id = autonomous_production.resolve_autonomous_youtube_channel(active_prof_id)
+        status_data = operator_console.get_autonomous_production_status_op(
+            profile_id=active_prof_id,
+            channel_id=active_channel_id,
+        )
         enabled = status_data.get("autonomous_mode_enabled", False)
         state = status_data.get("state", "disabled")
         ready_stock = status_data.get("ready_stock_total", 0)
@@ -1528,6 +1546,8 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
         with c1:
             st.markdown(f"**Modo Autônomo:** {mode_badge}", unsafe_allow_html=True)
             st.markdown(f"**Estado Atual:** {state_badge}", unsafe_allow_html=True)
+            if not demo_enabled:
+                st.caption(f"Perfil: **{active_prof_name}**")
             st.caption(f"Status: {message}")
         with c2:
             st.markdown(f"**Estoque Pronto:** `{ready_stock} / {target_stock}` vídeos")
@@ -1545,16 +1565,16 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                 if not enabled:
                     if st.button("▶️ Ativar Produção Autônoma", key="op_enable_autonomous_prod", use_container_width=True):
                         if not demo_enabled:
-                            operator_console.set_autonomous_mode_enabled_op(True)
-                            st.success("Produção autônoma ATIVADA!")
+                            operator_console.set_autonomous_mode_enabled_op(True, profile_id=active_prof_id)
+                            st.success(f"Produção autônoma ATIVADA para perfil '{active_prof_name}'!")
                             st.rerun()
                         else:
                             st.toast("Modo autônomo ativado (simulação demo).", icon="🤖")
                 else:
                     if st.button("⏸️ Desativar Produção Autônoma", key="op_disable_autonomous_prod", use_container_width=True):
                         if not demo_enabled:
-                            operator_console.set_autonomous_mode_enabled_op(False)
-                            st.info("Produção autônoma DESATIVADA.")
+                            operator_console.set_autonomous_mode_enabled_op(False, profile_id=active_prof_id)
+                            st.info(f"Produção autônoma DESATIVADA para perfil '{active_prof_name}'.")
                             st.rerun()
                         else:
                             st.toast("Modo autônomo desativado (simulação demo).", icon="⏸️")
@@ -1562,7 +1582,12 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                 if st.button("⚡ Executar Ciclo Agora (Run Cycle)", key="op_run_autonomous_cycle_now", use_container_width=True):
                     if not demo_enabled:
                         with st.spinner("Executando ciclo autônomo controlado..."):
-                            res = operator_console.run_autonomous_cycle_op(force=True, one_shot=True)
+                            res = operator_console.run_autonomous_cycle_op(
+                                force=True,
+                                one_shot=True,
+                                profile_id=active_prof_id,
+                                channel_id=active_channel_id,
+                            )
                             if res.get("status") in ("scheduled", "generation_started"):
                                 st.success(f"✓ {res.get('message')}")
                             elif res.get("status") == "idle":
@@ -1575,7 +1600,8 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                     else:
                         st.toast("Ciclo executado no modo demo.", icon="⚡")
             with b3:
-                st.caption("Destino Exclusivo: **YouTube** (TikTok bloqueado nesta fase). Publicação realizada pelo Scheduler.")
+                dest_chan = active_channel_id or "—"
+                st.caption(f"Destino: **YouTube** (`{dest_chan}`). TikTok bloqueado nesta fase. Publicação realizada pelo Scheduler.")
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
 
@@ -2186,7 +2212,11 @@ def _render_tabs_section(demo_enabled: bool, scenario_choice: str, is_primary: b
         errs = d.get("errors", [])
         recoverable = d.get("recoverable", [])
     else:
-        stock = operator_console.get_canonical_ready_stock()
+        from app.services import profile_manager, autonomous_production
+        active_prof = profile_manager.get_active_profile()
+        active_prof_id = active_prof.get("id") if active_prof else "default"
+        active_channel_id = autonomous_production.resolve_autonomous_youtube_channel(active_prof_id)
+        stock = operator_console.get_canonical_ready_stock(profile_id=active_prof_id, channel_id=active_channel_id)
         provs = operator_console.get_provider_health_summary()
         recent_errs = operator_console.get_recent_errors(limit=10)
         recent_events = operator_console.get_operational_events(limit=20)

@@ -366,3 +366,85 @@ def test_second_channel_continuous_autonomous_disabled_by_default(isolated_env):
     assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.DEFAULT_PROFILE_ID, db_path=db) is True
     # O segundo canal continua False mesmo com o principal ativo
     assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.SECOND_PROFILE_ID, db_path=db) is False
+
+
+def test_operator_console_profile_scoping(isolated_env):
+    """Cenário 9: Operator Console respeita isolamento estrito de profile_id e channel_id.
+
+    Validações:
+    1. default stock=2, second stock=0 -> UI scoped second retorna 0, default retorna 2, sem soma entre perfis.
+    2. autonomous default ON, second OFF -> status de cada perfil correto (default ON/idle, second OFF/disabled).
+    3. toggle second não altera default (nem ON nem OFF).
+    4. one_shot usa profile/channel ativo correto sem depender de estado global.
+    """
+    db, video_dir, _ = isolated_env
+
+    # 1. Configurar estoque real: 2 vídeos prontos para default, 0 para o segundo canal
+    _create_mock_video_task("task-def-1", profile_manager.DEFAULT_PROFILE_ID, "História 1", video_dir, db)
+    _create_mock_video_task("task-def-2", profile_manager.DEFAULT_PROFILE_ID, "História 2", video_dir, db)
+
+    # Com profile_id explícito
+    stock_second_explicit = console.get_canonical_ready_stock(
+        task_base_dir=str(video_dir), db_path=db, profile_id=profile_manager.SECOND_PROFILE_ID
+    )
+    assert stock_second_explicit["total_ready"] == 0
+
+    stock_default_explicit = console.get_canonical_ready_stock(
+        task_base_dir=str(video_dir), db_path=db, profile_id=profile_manager.DEFAULT_PROFILE_ID
+    )
+    assert stock_default_explicit["total_ready"] == 2
+
+    # Com active_profile alternado: ao selecionar o segundo canal, o card de estoque retorna 0
+    profile_manager.set_active_profile(profile_manager.SECOND_PROFILE_ID, db_path=db)
+    active_stock_second = console.get_canonical_ready_stock(task_base_dir=str(video_dir), db_path=db)
+    assert active_stock_second["total_ready"] == 0
+
+    # Ao voltar para o canal default, retorna 2
+    profile_manager.set_active_profile(profile_manager.DEFAULT_PROFILE_ID, db_path=db)
+    active_stock_default = console.get_canonical_ready_stock(task_base_dir=str(video_dir), db_path=db)
+    assert active_stock_default["total_ready"] == 2
+
+    # 2. Autonomous status isolado por perfil: default ON, second OFF
+    console.set_autonomous_mode_enabled_op(True, db_path=db, profile_id=profile_manager.DEFAULT_PROFILE_ID)
+    status_default = console.get_autonomous_production_status_op(db_path=db, profile_id=profile_manager.DEFAULT_PROFILE_ID)
+    status_second = console.get_autonomous_production_status_op(db_path=db, profile_id=profile_manager.SECOND_PROFILE_ID)
+
+    assert status_default["autonomous_mode_enabled"] is True
+    assert status_default["state"] in ("idle", "running")
+
+    assert status_second["autonomous_mode_enabled"] is False
+    assert status_second["state"] == "disabled"
+    assert "desativada" in status_second["message"].lower()
+
+    # 3. Toggle no segundo canal NÃO altera o default
+    # Ativar no segundo canal
+    console.set_autonomous_mode_enabled_op(True, db_path=db, profile_id=profile_manager.SECOND_PROFILE_ID)
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.SECOND_PROFILE_ID, db_path=db) is True
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.DEFAULT_PROFILE_ID, db_path=db) is True
+
+    # Desativar no segundo canal
+    console.set_autonomous_mode_enabled_op(False, db_path=db, profile_id=profile_manager.SECOND_PROFILE_ID)
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.SECOND_PROFILE_ID, db_path=db) is False
+    # O default permanece intocado e Ativo (True)
+    assert autonomous.is_profile_autonomous_mode_enabled(profile_manager.DEFAULT_PROFILE_ID, db_path=db) is True
+    status_def_after = console.get_autonomous_production_status_op(db_path=db, profile_id=profile_manager.DEFAULT_PROFILE_ID)
+    assert status_def_after["autonomous_mode_enabled"] is True
+
+    # 4. One-shot usa explicitamente o profile e channel informados
+    with patch.object(autonomous, "run_autonomous_cycle") as mock_cycle:
+        mock_cycle.return_value = {"status": "idle", "message": "Ciclo executado"}
+        res = console.run_autonomous_cycle_op(
+            force=True,
+            one_shot=True,
+            db_path=db,
+            profile_id=profile_manager.SECOND_PROFILE_ID,
+            channel_id=profile_manager.SECOND_CHANNEL_ID,
+        )
+        mock_cycle.assert_called_once_with(
+            force=True,
+            one_shot=True,
+            db_path=db,
+            profile_id=profile_manager.SECOND_PROFILE_ID,
+            channel_id=profile_manager.SECOND_CHANNEL_ID,
+        )
+        assert res["status"] == "idle"

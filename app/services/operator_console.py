@@ -1317,12 +1317,14 @@ def get_canonical_ready_stock(
     reconstruindo o estoque a partir das tabelas persistentes (monetization_safety PASS,
     Quality >= 70, canal YouTube ativo e arquivo de vídeo existente), com suporte a isolamento por perfil e canal.
     """
-    from app.services import autonomous_production
+    from app.services import autonomous_production, profile_manager
+    target_prof = profile_id if profile_id is not None else profile_manager.get_active_profile_id(db_path=db_path)
+    target_chan = channel_id if channel_id is not None else autonomous_production.resolve_autonomous_youtube_channel(target_prof, db_path=db_path)
     auto_stock = autonomous_production.get_autonomous_ready_stock(
         task_base_dir=task_base_dir,
         db_path=db_path,
-        profile_id=profile_id,
-        channel_id=channel_id,
+        profile_id=target_prof,
+        channel_id=target_chan,
     )
     ready_total = auto_stock.get("ready_count", 0)
     target = auto_stock.get("target_stock", 3)
@@ -1691,15 +1693,19 @@ def reexecute_task(task_id: str, task_base_dir: Optional[str] = None) -> Optiona
 # 10. Status Global Consolidado (System Status)
 # ---------------------------------------------------------------------------
 
-def get_system_status(db_path: Optional[str] = None) -> Dict[str, Any]:
+def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] = None) -> Dict[str, Any]:
     """Consolida o status completo da Video Factory para o cabeçalho do Operator Console."""
     from app.services import scheduler
     from app.services import webui_task
+    from app.services import profile_manager
+
+    target_prof = profile_id if profile_id is not None else profile_manager.get_active_profile_id(db_path=db_path)
+    active_prof = profile_manager.get_profile(target_prof, db_path=db_path) if target_prof else None
 
     factory_state = get_factory_state(db_path=db_path)
     scheduler_status = scheduler.get_executor_status(db_path=db_path)
     sched_settings = scheduler.get_all_settings(db_path=db_path)
-    growth_mode = scheduler.get_growth_mode(db_path=db_path)
+    growth_mode = active_prof.get("growth_mode") if (active_prof and active_prof.get("growth_mode")) else scheduler.get_growth_mode(db_path=db_path)
     heartbeats = get_heartbeats(db_path=db_path)
     providers = get_provider_health_summary(db_path=db_path)
     recent_errors = get_recent_errors(limit=1, db_path=db_path)
@@ -1747,7 +1753,7 @@ def get_system_status(db_path: Optional[str] = None) -> Dict[str, Any]:
     if len(errs_3) >= 3:
         alerts.append("⚠ 3 ou mais falhas recentes registradas na Central de Erros")
 
-    ready_stock = get_canonical_ready_stock(db_path=db_path)
+    ready_stock = get_canonical_ready_stock(db_path=db_path, profile_id=target_prof)
     if ready_stock["is_below_minimum"]:
         alerts.append(f"⚠ Estoque de vídeos prontos ({ready_stock['total_ready']}) abaixo do mínimo configurado ({ready_stock['minimum_threshold']})")
 
@@ -2296,21 +2302,52 @@ def get_approved_clip_artifact_op(
 # 16. Produção Autônoma (Autonomous Production Loop - Fase V12-E)
 # ---------------------------------------------------------------------------
 
-def get_autonomous_production_status_op(db_path: Optional[str] = None) -> Dict[str, Any]:
+def get_autonomous_production_status_op(
+    db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Retorna snapshot de status da produção autônoma (permitido em PRIMARY e VIEW ONLY)."""
     from app.services import autonomous_production
-    return autonomous_production.get_autonomous_status(db_path=db_path)
+    return autonomous_production.get_autonomous_status(
+        db_path=db_path,
+        profile_id=profile_id,
+        channel_id=channel_id,
+    )
 
 
-def set_autonomous_mode_enabled_op(enabled: bool, db_path: Optional[str] = None) -> None:
+def set_autonomous_mode_enabled_op(
+    enabled: bool,
+    db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+) -> None:
     """Ativa ou desativa a produção autônoma (exige PRIMARY)."""
     require_primary_instance(db_path=db_path)
     from app.services import autonomous_production
-    autonomous_production.set_autonomous_mode_enabled(enabled=enabled, db_path=db_path)
+    if profile_id:
+        autonomous_production.set_profile_autonomous_mode_enabled(
+            profile_id=profile_id,
+            enabled=enabled,
+            db_path=db_path,
+        )
+    else:
+        autonomous_production.set_autonomous_mode_enabled(enabled=enabled, db_path=db_path)
 
 
-def run_autonomous_cycle_op(force: bool = True, one_shot: bool = True, db_path: Optional[str] = None) -> Dict[str, Any]:
+def run_autonomous_cycle_op(
+    force: bool = True,
+    one_shot: bool = True,
+    db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Dispara a execução imediata de um ciclo de produção autônoma controlado (exige PRIMARY)."""
     require_primary_instance(db_path=db_path)
     from app.services import autonomous_production
-    return autonomous_production.run_autonomous_cycle(force=force, one_shot=one_shot, db_path=db_path)
+    return autonomous_production.run_autonomous_cycle(
+        force=force,
+        one_shot=one_shot,
+        db_path=db_path,
+        profile_id=profile_id,
+        channel_id=channel_id,
+    )

@@ -362,3 +362,191 @@ def test_no_schema_changes_and_no_score_rewrite(history):
     with scheduler.get_connection(db) as conn:
         assert [tuple(r) for r in conn.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == before_schema
         assert [tuple(r) for r in conn.execute("SELECT id,performance_score FROM content_analytics ORDER BY id")] == before_scores
+
+
+# ---------------------------------------------------------------------------
+# V12-F.3: Per-Channel Learning Isolation Tests
+# ---------------------------------------------------------------------------
+
+def test_channel_a_does_not_learn_from_channel_b(history):
+    db, scope, cutoff, add, evidence = history
+    now_iso = cutoff.isoformat()
+    # Create Profile B and Channel B
+    with scheduler.get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, slug, niche, default_preset, growth_mode, is_active, created_at, updated_at) "
+            "VALUES ('profile-b', 'Profile B', 'profile-b', 'curiosidades', 'youtube_shorts_original', 'warmup', 1, ?, ?)",
+            (now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO publishing_channels (id, profile_id, platform, display_name, external_profile_name, is_enabled, created_at, updated_at) "
+            "VALUES ('channel-b-youtube', 'profile-b', 'youtube', 'YouTube (B)', 'video-factory', 1, ?, ?)",
+            (now_iso, now_iso),
+        )
+
+    # Seed 12 eligible publications on Channel B
+    for i in range(12):
+        task, external = f"task-b-{i}", f"videob{i:05d}"
+        published = cutoff - timedelta(days=5)
+        profile_manager.save_task_profile(task, "profile-b", db)
+        scheduler.record_publication_event(
+            task_id=task, platform="youtube", status="success",
+            external_id=external, profile_id="profile-b", channel_id="channel-b-youtube",
+            privacy_status="public", published_at=published, db_path=db,
+        )
+        with scheduler.get_connection(db) as conn:
+            conn.execute(
+                "INSERT INTO monetization_safety(task_id,topic,preset,narrative_structure,safety_status,checked_at) VALUES (?,?,?,?,?,?)",
+                (task, "Como funciona o oceano" if i % 2 == 0 else "A historia do imperio",
+                 "youtube_shorts_original", "explainer" if i % 2 == 0 else "short_story", "PASS", published.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO content_quality_scores(task_id,topic,quality_score,quality_label,created_at) VALUES (?,?,?,?,?)",
+                (task, "Como funciona o oceano" if i % 2 == 0 else "A historia do imperio", 80, "GOOD", published.isoformat()),
+            )
+        provider = YouTubeAnalyticsProvider()
+        payload = {"items": [{"id": external, "statistics": {"viewCount": str(100 if i % 2 == 0 else 10), "likeCount": "1", "commentCount": "0"}}]}
+        with patch.object(provider, "fetch_metrics", return_value=payload), patch.object(analytics_ingestion, "get_provider", return_value=provider):
+            analytics_ingestion.ingest_analytics_for_publication(
+                task, "youtube", channel_id="channel-b-youtube",
+                collected_at=(published + timedelta(hours=72)).isoformat(), db_path=db,
+            )
+
+    # Channel B evidence is ELIGIBLE
+    ev_b = analytics.get_learning_evidence("youtube", "profile-b", "channel-b-youtube", cutoff_time=cutoff, db_path=db)
+    assert ev_b["evidence_state"] == "ELIGIBLE"
+    assert ev_b["sample_count"] == 12
+
+    # Channel A evidence MUST be isolated (0 samples, INSUFFICIENT_DATA)
+    ev_a = analytics.get_learning_evidence(**scope, cutoff_time=cutoff, db_path=db)
+    assert ev_a["sample_count"] == 0
+    assert ev_a["evidence_state"] == "INSUFFICIENT_DATA"
+    assert ev_a["recommended_topic_cluster"] is None
+    assert ev_a["recommended_narrative_structure"] is None
+
+    # Selecting candidate for Channel A never adapts based on Channel B
+    base = {"topic": "A historia do imperio", "narrative_structure": "short_story", "trend_data": {"opportunity_score": 70}}
+    candidates = [{"topic": "Como funciona o oceano", "trend_data": {"opportunity_score": 68}}]
+    sel = strategy.select_closed_loop_candidate(base, candidates, ev_a, [])
+    assert not sel["adapted"]
+    assert sel["selected_candidate"]["topic"] == "A historia do imperio"
+
+
+def test_profile_a_does_not_use_decisions_from_profile_b(history):
+    db, scope, cutoff, _, _ = history
+    now_iso = cutoff.isoformat()
+    channel_a = scope["channel_id"]
+    channel_b = "channel-b-youtube"
+    with scheduler.get_connection(db) as conn:
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, slug, niche, default_preset, growth_mode, is_active, created_at, updated_at) "
+            "VALUES ('profile-b', 'Profile B', 'profile-b', 'curiosidades', 'youtube_shorts_original', 'warmup', 1, ?, ?)",
+            (now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO publishing_channels (id, profile_id, platform, display_name, external_profile_name, is_enabled, created_at, updated_at) "
+            "VALUES (?, 'profile-b', 'youtube', 'YouTube (B)', 'video-factory', 1, ?, ?)",
+            (channel_b, now_iso, now_iso),
+        )
+
+    # Record decision and submission on Profile B / Channel B
+    console.set_closed_feedback_loop_enabled_op(True, db)
+    meta_b = {
+        "platform": "youtube",
+        "profile_id": "profile-b",
+        "channel_id": channel_b,
+        "adapted": True,
+        "recent_submissions": [],
+    }
+    console.record_closed_loop_decision("task-b-dec-1", meta_b, db_path=db)
+    console.log_operational_event(
+        "closed_loop", "INFO", "CLOSED_LOOP_SUBMITTED",
+        "test", task_id="task-b-dec-1", metadata=meta_b, db_path=db,
+    )
+
+    # Profile A submissions are strictly empty
+    subs_a = console.get_closed_loop_submissions(platform="youtube", profile_id="default", channel_id=channel_a, db_path=db)
+    assert subs_a == []
+
+    # Profile B submissions have the adapted record
+    subs_b = console.get_closed_loop_submissions(platform="youtube", profile_id="profile-b", channel_id=channel_b, db_path=db)
+    assert len(subs_b) == 1
+    assert subs_b[0]["adapted"] is True
+
+
+def test_independent_cadence_and_diversity_across_channels(history):
+    db, scope, cutoff, _, _ = history
+    seed(history)
+    ev = history[4]()
+    assert ev["evidence_state"] == "ELIGIBLE"
+
+    base = {"topic": "A historia do imperio", "narrative_structure": "short_story", "trend_data": {"opportunity_score": 70}}
+    candidates = [{"topic": "Como funciona o oceano", "trend_data": {"opportunity_score": 68}}]
+
+    # Channel A has recent adapted submission -> cooldown / exploration slot
+    recent_a = [{"adapted": True, "topic_cluster": "oceanos"}]
+    sel_a = strategy.select_closed_loop_candidate(base, candidates, ev, recent_a)
+    assert not sel_a["adapted"]
+    assert sel_a["reason"] == "exploration_slot"
+
+    # Channel B has no recent submissions -> adapts independently
+    recent_b = []
+    sel_b = strategy.select_closed_loop_candidate(base, candidates, ev, recent_b)
+    assert sel_b["adapted"]
+    assert sel_b["selected_candidate"]["topic"] == "Como funciona o oceano"
+
+
+def test_missing_or_unresolvable_channel_falls_back_to_baseline(history):
+    db, scope = history[:2]
+    # Missing / empty channel_id returns invalid_scope and zero samples
+    for bad_ch in (None, "", "   "):
+        ev = analytics.get_learning_evidence("youtube", "default", bad_ch, db_path=db)
+        assert ev["evidence_state"] == "INSUFFICIENT_DATA"
+        assert ev["fallback_reason"] == "invalid_scope"
+        assert ev["sample_count"] == 0
+
+    # Unresolvable channel in autonomous production:
+    # 1. Profile with 0 enabled channels -> resolve returns None
+    with scheduler.get_connection(db) as conn:
+        conn.execute("UPDATE publishing_channels SET is_enabled = 0 WHERE profile_id = 'default'")
+    ch = autonomous.resolve_autonomous_youtube_channel("default", db_path=db)
+    assert ch is None
+
+    # 2. Profile with 2 enabled channels (ambiguity) -> resolve returns None
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with scheduler.get_connection(db) as conn:
+        conn.execute("UPDATE publishing_channels SET is_enabled = 1 WHERE profile_id = 'default'")
+        conn.execute(
+            "INSERT INTO publishing_channels (id, profile_id, platform, display_name, external_profile_name, is_enabled, created_at, updated_at) "
+            "VALUES ('channel-2-youtube', 'default', 'youtube', 'YouTube 2', 'video-factory', 1, ?, ?)",
+            (now_iso, now_iso),
+        )
+    ch_ambiguous = autonomous.resolve_autonomous_youtube_channel("default", db_path=db)
+    assert ch_ambiguous is None  # Safe fail-closed to baseline
+
+
+def test_default_channel_preserved(history):
+    db = history[0]
+    # Verify default profile channel resolves uniquely
+    ch = autonomous.resolve_autonomous_youtube_channel("default", db_path=db)
+    assert ch == "channel-default-youtube"
+
+    # Verify per-channel narrative structure tracking
+    autonomous.set_channel_last_narrative_structure("default", ch, "explainer", db_path=db)
+    assert autonomous.get_channel_last_narrative_structure("default", ch, db_path=db) == "explainer"
+    assert autonomous.get_autonomous_setting(autonomous.KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, db_path=db) == "explainer"
+
+    # Verify run_generation on default channel adapts and audits all 3 scope fields
+    seed(history)
+    params, _ = run_generation(history)
+    assert params.video_subject == "Como funciona o oceano"
+    with scheduler.get_connection(db) as conn:
+        decision_row = conn.execute("SELECT metadata_json FROM operational_events WHERE event_type='CLOSED_LOOP_DECISION'").fetchone()
+        submitted_row = conn.execute("SELECT metadata_json FROM operational_events WHERE event_type='CLOSED_LOOP_SUBMITTED'").fetchone()
+    assert decision_row and submitted_row
+    dec_meta = json.loads(decision_row[0])
+    sub_meta = json.loads(submitted_row[0])
+    for meta in (dec_meta, sub_meta):
+        assert meta["platform"] == "youtube"
+        assert meta["profile_id"] == "default"
+        assert meta["channel_id"] == "channel-default-youtube"

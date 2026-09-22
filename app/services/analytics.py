@@ -77,7 +77,11 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
         "recommended_topic_cluster": None, "recommended_narrative_structure": None,
         "evidence_state": "INSUFFICIENT_DATA", "fallback_reason": "invalid_scope",
     }
-    if platform != "youtube" or not profile_id or not channel_id:
+    clean_platform = str(platform or "").strip().lower()
+    clean_profile_id = str(profile_id or "").strip()
+    clean_channel_id = str(channel_id or "").strip()
+    result["scope"] = {"platform": clean_platform, "profile_id": clean_profile_id, "channel_id": clean_channel_id}
+    if clean_platform != "youtube" or not clean_profile_id or not clean_channel_id:
         return result
     excluded = result["excluded_counts_by_reason"]
 
@@ -98,12 +102,12 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
             channel = conn.execute(
                 "SELECT c.id FROM publishing_channels c JOIN content_profiles p ON p.id=c.profile_id "
                 "WHERE c.id=? AND c.profile_id=? AND c.platform=? AND c.is_enabled=1 AND p.is_active=1",
-                (channel_id, profile_id, platform)).fetchone()
+                (clean_channel_id, clean_profile_id, clean_platform)).fetchone()
             if not channel:
                 return result
             rows = conn.execute(
                 "SELECT * FROM content_analytics WHERE platform=? AND profile_id=? AND channel_id=? ORDER BY id",
-                (platform, profile_id, channel_id)).fetchall()
+                (clean_platform, clean_profile_id, clean_channel_id)).fetchall()
             selected = {}
             for row in rows:
                 item = dict(row)

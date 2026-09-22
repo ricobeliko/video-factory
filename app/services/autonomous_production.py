@@ -194,9 +194,13 @@ def get_cycle_interval_minutes(db_path: Optional[str] = None) -> int:
         return DEFAULT_AUTONOMOUS_CYCLE_INTERVAL_MINUTES
 
 
-def get_consecutive_rejections(db_path: Optional[str] = None) -> int:
+def get_consecutive_rejections(db_path: Optional[str] = None, profile_id: Optional[str] = None) -> int:
     """Retorna a contagem atual de rejeições consecutivas nos Gates."""
-    val = get_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, "0", db_path=db_path)
+    clean_profile = str(profile_id or "").strip()
+    if clean_profile and clean_profile != profile_manager.DEFAULT_PROFILE_ID:
+        val = get_autonomous_setting(f"{KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS}:{clean_profile}", "0", db_path=db_path)
+    else:
+        val = get_autonomous_setting(KEY_AUTONOMOUS_CONSECUTIVE_REJECTIONS, "0", db_path=db_path)
     try:
         return max(0, int(val))
     except (ValueError, TypeError):
@@ -309,6 +313,8 @@ def set_channel_rejected_narrative_structure(
 def get_autonomous_ready_stock(
     task_base_dir: Optional[str] = None,
     db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calcula o estoque pronto elegível para o loop autônomo (YouTube-first, fail-closed em Safety e Quality).
 
@@ -321,6 +327,7 @@ def get_autonomous_ready_stock(
     - Aprovação e destinos persistidos; perfil ativo e canal YouTube habilitado.
     - MemoryState vazio não elimina aprovações recuperáveis.
     - Readiness de TikTok NÃO infle o estoque utilizado pelo loop YouTube.
+    - Isolamento estrito por perfil e canal se especificados.
     """
     scheduler.init_db(db_path)
     quality_score.init_quality_db(db_path)
@@ -335,11 +342,18 @@ def get_autonomous_ready_stock(
             "AND status IN ('published', 'cancelled')"
         )}
     eligible = []
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
     for row in rows:
         if row["task_id"] in excluded:
             continue
         try:
-            eligible.append(_recover_waiting_task(row["task_id"], db_path, task_base_dir))
+            t = _recover_waiting_task(row["task_id"], db_path, task_base_dir)
+            if clean_profile and t.get("profile_id") != clean_profile:
+                continue
+            if clean_channel and t.get("channel_id") != clean_channel:
+                continue
+            eligible.append(t)
         except (ValueError, TypeError, OSError):
             continue
     target = get_target_ready_stock(db_path=db_path)
@@ -348,7 +362,11 @@ def get_autonomous_ready_stock(
             "is_below_target": len(eligible) < target, "youtube_ready": eligible}
 
 
-def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
+def get_autonomous_status(
+    db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Retorna snapshot completo da telemetria de produção autônoma para UI e diagnósticos."""
     scheduler.init_db(db_path)
     enabled = is_autonomous_mode_enabled(db_path=db_path)
@@ -360,14 +378,17 @@ def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
     current_task_id = get_autonomous_setting(KEY_AUTONOMOUS_CURRENT_TASK_ID, None, db_path=db_path)
     waiting_task_id = get_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID, None, db_path=db_path)
 
-    # Contagem de gerações nas últimas 24h
-    generated_today = count_generations_in_last_24h(db_path=db_path)
-    attempts_today = count_generation_attempts_in_last_24h(db_path=db_path)
-    max_24h = get_max_generations_24h(db_path=db_path)
-    consecutive_rejections = get_consecutive_rejections(db_path=db_path)
+    target_profile = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+    target_channel = channel_id or resolve_autonomous_youtube_channel(target_profile, db_path=db_path)
 
-    # Estoque atual e meta (estritamente elegível para YouTube)
-    stock_info = get_autonomous_ready_stock(db_path=db_path)
+    # Contagem de gerações nas últimas 24h
+    generated_today = count_generations_in_last_24h(db_path=db_path, profile_id=target_profile)
+    attempts_today = count_generation_attempts_in_last_24h(db_path=db_path, profile_id=target_profile)
+    max_24h = get_max_generations_24h(db_path=db_path)
+    consecutive_rejections = get_consecutive_rejections(db_path=db_path, profile_id=target_profile)
+
+    # Estoque atual e meta (estritamente elegível para YouTube e para o perfil selecionado)
+    stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
     target_stock = stock_info["target_stock"]
     ready_count = stock_info["ready_count"]
 
@@ -402,14 +423,17 @@ def get_autonomous_status(db_path: Optional[str] = None) -> Dict[str, Any]:
         "consecutive_rejections": consecutive_rejections,
         "max_tasks_per_cycle": get_max_tasks_per_cycle(db_path=db_path),
         "cycle_interval_minutes": interval_min,
+        "profile_id": target_profile,
+        "channel_id": target_channel,
     }
 
 
-def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
+def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None, profile_id: Optional[str] = None) -> int:
     """Conta quantas gerações APROVADAS foram concluídas pelo autonomous loop nas últimas 24 horas.
 
     Separa tentativas/rejeições de vídeos aprovados/prontos para assegurar que
     rejeições não impeçam a fábrica de repor o estoque até a meta.
+    Mantém isolamento por perfil e canal sem quebrar compatibilidade com eventos legados.
     """
     scheduler.init_db(db_path)
     try:
@@ -419,24 +443,55 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
     now_utc = scheduler._normalize_utc(now)
     since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
 
+    clean_profile = str(profile_id or "").strip()
+    is_default = (not clean_profile) or (clean_profile == profile_manager.DEFAULT_PROFILE_ID) or (clean_profile == "default")
+
     try:
         with scheduler.get_connection(db_path) as conn:
-            row = conn.execute(
-                """
-                SELECT count(*) FROM operational_events
-                WHERE component = 'autonomous_production'
-                  AND event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
-                  AND timestamp >= ?;
-                """,
-                (since_iso,),
-            ).fetchone()
+            if not clean_profile:
+                row = conn.execute(
+                    """
+                    SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                    FROM operational_events o
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND o.timestamp >= ?;
+                    """,
+                    (since_iso,),
+                ).fetchone()
+            elif is_default:
+                row = conn.execute(
+                    """
+                    SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                    FROM operational_events o
+                    LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND (tp.profile_id = ? OR tp.profile_id IS NULL OR tp.profile_id = 'default')
+                      AND o.timestamp >= ?;
+                    """,
+                    (profile_manager.DEFAULT_PROFILE_ID, since_iso),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                    FROM operational_events o
+                    JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND tp.profile_id = ?
+                      AND o.timestamp >= ?;
+                    """,
+                    (clean_profile, since_iso),
+                ).fetchone()
             return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar gerações aprovadas 24h: {exc}")
         return 0
 
 
-def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
+def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_path: Optional[str] = None, profile_id: Optional[str] = None) -> int:
     """Conta quantas tentativas de geração foram iniciadas pelo autonomous loop nas últimas 24 horas."""
     scheduler.init_db(db_path)
     try:
@@ -448,15 +503,28 @@ def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_pat
 
     try:
         with scheduler.get_connection(db_path) as conn:
-            row = conn.execute(
-                """
-                SELECT count(*) FROM operational_events
-                WHERE component = 'autonomous_production'
-                  AND event_type = 'generation_started'
-                  AND timestamp >= ?;
-                """,
-                (since_iso,),
-            ).fetchone()
+            if profile_id:
+                row = conn.execute(
+                    """
+                    SELECT count(DISTINCT o.task_id) FROM operational_events o
+                    JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type = 'generation_started'
+                      AND tp.profile_id = ?
+                      AND o.timestamp >= ?;
+                    """,
+                    (profile_id, since_iso),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT count(*) FROM operational_events
+                    WHERE component = 'autonomous_production'
+                      AND event_type = 'generation_started'
+                      AND timestamp >= ?;
+                    """,
+                    (since_iso,),
+                ).fetchone()
             return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar tentativas 24h: {exc}")
@@ -1056,12 +1124,16 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     prof = profile_manager.get_profile(profile["profile_id"], db_path=db_path) if profile else None
     if not prof or not prof.get("is_active"):
         raise ValueError("waiting_profile_unavailable")
-    if not profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path):
+    resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
+    if not resolved_channel:
         raise ValueError("waiting_youtube_channel_unavailable")
+    chan_id = resolved_channel[0].get("channel_id") or resolved_channel[0].get("id")
+    prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
     task.update(task_id=task_id, state=const.TASK_STATE_COMPLETE, video_file=video,
                 safety_status=const.SAFETY_STATUS_PASS, planned_platforms=["youtube"],
-                profile_id=profile["profile_id"], quality_score=score,
-                quality_label=quality["quality_label"])
+                profile_id=prof_id, quality_score=score,
+                quality_label=quality["quality_label"],
+                channel_id=chan_id)
     return task
 
 
@@ -1070,12 +1142,14 @@ def run_autonomous_cycle(
     one_shot: bool = False,
     now: Optional[datetime] = None,
     db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Serialize worker/manual cycles inside the PRIMARY process."""
     if not _cycle_lock.acquire(blocking=False):
         return {"status": "busy", "reason": "cycle_in_progress"}
     try:
-        return _run_autonomous_cycle(force, one_shot, now, db_path)
+        return _run_autonomous_cycle(force, one_shot, now, db_path, profile_id=profile_id, channel_id=channel_id)
     finally:
         _cycle_lock.release()
 
@@ -1085,6 +1159,8 @@ def _run_autonomous_cycle(
     one_shot: bool = False,
     now: Optional[datetime] = None,
     db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Executa um ciclo determinístico e idempotente do loop de produção autônoma.
 
@@ -1325,7 +1401,10 @@ def _run_autonomous_cycle(
             return {"status": "waiting_schedule", "task_id": waiting_task_id,
                     "reason": "waiting_recovery_failed", "message": str(exc), "scheduled_items": 0}
 
-    stock_info = get_autonomous_ready_stock(db_path=db_path)
+    target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+    target_channel_id = channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
+
+    stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile_id, channel_id=target_channel_id)
     pending = []
     for task_data in stock_info.get("youtube_ready", []):
         channels = profile_manager.resolve_task_channels(
@@ -1344,11 +1423,13 @@ def _run_autonomous_cycle(
     set_autonomous_setting(KEY_AUTONOMOUS_WAITING_TASK_ID,
                            pending[0]["task_id"] if pending else "", db_path=db_path)
     for task_data in pending:
+        t_prof = task_data.get("profile_id") or target_profile_id
+        t_chan = task_data.get("channel_id") or target_channel_id
         rate = scheduler.get_platform_rate_limits(
-            "youtube", now=current_time, profile_id=task_data["profile_id"], db_path=db_path)
+            "youtube", now=current_time, profile_id=t_prof, channel_id=t_chan, db_path=db_path)
         if not rate["enabled"] or rate["available_slots"] <= 0:
             scheduler.log_growth_limit_block(
-                task_data["task_id"], task_data["profile_id"], "youtube", rate,
+                task_data["task_id"], t_prof, "youtube", rate,
                 now=current_time, db_path=db_path)
             continue
         retry_key = "autonomous_schedule_retry:" + task_data["task_id"]
@@ -1420,7 +1501,7 @@ def _run_autonomous_cycle(
     # Guarda 5: Limite Diário de Gerações Aprovadas e Proteção contra Loop de Custo
     # -----------------------------------------------------------------------
     # 5.1 Proteção contra loop infinito de falhas consecutivas (Circuit Breaker)
-    consecutive_rejections = get_consecutive_rejections(db_path=db_path)
+    consecutive_rejections = get_consecutive_rejections(db_path=db_path, profile_id=target_profile_id)
     if consecutive_rejections >= DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS:
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
         msg = (
@@ -1432,7 +1513,7 @@ def _run_autonomous_cycle(
 
     # 5.2 Teto de tentativas totais em 24h (para evitar consumo excessivo de API)
     max_attempts_24h = get_max_attempts_24h(db_path=db_path)
-    attempts_today = count_generation_attempts_in_last_24h(now=current_time, db_path=db_path)
+    attempts_today = count_generation_attempts_in_last_24h(now=current_time, db_path=db_path, profile_id=target_profile_id)
     if attempts_today >= max_attempts_24h:
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
         msg = f"Teto diário de tentativas atingido ({attempts_today}/{max_attempts_24h} em 24h). Aguardando liberação da janela."
@@ -1441,7 +1522,7 @@ def _run_autonomous_cycle(
 
     # 5.3 Limite diário de gerações APROVADAS (máximo de vídeos prontos por 24h)
     max_24h = get_max_generations_24h(db_path=db_path)
-    gen_today = count_generations_in_last_24h(now=current_time, db_path=db_path)
+    gen_today = count_generations_in_last_24h(now=current_time, db_path=db_path, profile_id=target_profile_id)
     if gen_today >= max_24h:
         set_autonomous_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, db_path=db_path)
         msg = f"Limite diário de gerações aprovadas atingido ({gen_today}/{max_24h} em 24h). Aguardando liberação da janela."
@@ -1451,11 +1532,11 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Guarda 6: Provedores Críticos Requeridos (FFmpeg, Storage, LLM, TTS, Media)
     # -----------------------------------------------------------------------
-    active_profile_id = profile_manager.get_active_profile_id(db_path=db_path)
+    active_profile_id = target_profile_id
     try:
         probe_params = build_autonomous_video_params(
             topic="probe",
-            profile_id=active_profile_id,
+            profile_id=target_profile_id,
             db_path=db_path,
         )
     except AutonomousConfigError as cfg_err:
@@ -1516,12 +1597,12 @@ def _run_autonomous_cycle(
     chosen_topic = candidate["topic"]
     trend_id = candidate.get("trend_id")
 
-    # Resolve canal YouTube com segurança para o perfil ativo
-    yt_channel_id = resolve_autonomous_youtube_channel(active_profile_id, db_path=db_path)
+    # Resolve canal YouTube com segurança para o perfil alvo
+    yt_channel_id = target_channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
 
     # Recomenda estrutura narrativa diversificada evitando repetições (isolada por perfil e canal)
-    last_struct = get_channel_last_narrative_structure(active_profile_id, yt_channel_id, db_path=db_path)
-    rejected_struct = get_channel_rejected_narrative_structure(active_profile_id, yt_channel_id, db_path=db_path)
+    last_struct = get_channel_last_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
+    rejected_struct = get_channel_rejected_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
 
     rec_struct, _ = content_strategy.recommend_narrative_structure(
         topic=chosen_topic,
@@ -1534,9 +1615,9 @@ def _run_autonomous_cycle(
                 rec_struct = alt_st
                 break
 
-    set_channel_last_narrative_structure(active_profile_id, yt_channel_id, rec_struct, db_path=db_path)
+    set_channel_last_narrative_structure(target_profile_id, yt_channel_id, rec_struct, db_path=db_path)
     if rejected_struct:
-        set_channel_rejected_narrative_structure(active_profile_id, yt_channel_id, "", db_path=db_path)
+        set_channel_rejected_narrative_structure(target_profile_id, yt_channel_id, "", db_path=db_path)
 
     # -----------------------------------------------------------------------
     # Etapa D: Criação da Task e Submissão ao Pipeline Existente (Generating)
@@ -1555,7 +1636,7 @@ def _run_autonomous_cycle(
             if yt_channel_id:
                 evidence = analytics.get_learning_evidence(
                     platform="youtube",
-                    profile_id=active_profile_id,
+                    profile_id=target_profile_id,
                     channel_id=yt_channel_id,
                     cutoff_time=current_time,
                     db_path=db_path,
@@ -1572,7 +1653,7 @@ def _run_autonomous_cycle(
 
                 recent_subs = operator_console.get_closed_loop_submissions(
                     platform="youtube",
-                    profile_id=active_profile_id,
+                    profile_id=target_profile_id,
                     channel_id=yt_channel_id,
                     db_path=db_path,
                 )
@@ -1614,14 +1695,14 @@ def _run_autonomous_cycle(
 
                 temp_params = build_autonomous_video_params(
                     topic=chosen_topic,
-                    profile_id=active_profile_id,
+                    profile_id=target_profile_id,
                     narrative_structure=rec_struct,
                     db_path=db_path,
                 )
 
                 audit_metadata = {
                     "platform": "youtube",
-                    "profile_id": active_profile_id,
+                    "profile_id": target_profile_id,
                     "channel_id": yt_channel_id,
                     "task_id": new_task_id,
                     "adapted": bool(selection.get("adapted")),
@@ -1647,7 +1728,7 @@ def _run_autonomous_cycle(
                 closed_loop_decision_recorded = True
                 closed_loop_meta = {
                     "platform": "youtube",
-                    "profile_id": active_profile_id,
+                    "profile_id": target_profile_id,
                     "channel_id": yt_channel_id,
                     "task_id": new_task_id,
                     "adapted": bool(selection.get("adapted")),
@@ -1655,7 +1736,7 @@ def _run_autonomous_cycle(
                     "narrative_structure": rec_struct,
                 }
             else:
-                logger.info(f"[AUTONOMOUS] Closed feedback loop: channel unresolvable for profile '{active_profile_id}' (using baseline).")
+                logger.info(f"[AUTONOMOUS] Closed feedback loop: channel unresolvable for profile '{target_profile_id}' (using baseline).")
     except Exception as cl_exc:
         logger.warning(f"[AUTONOMOUS] Closed feedback loop fallback to baseline: {cl_exc}")
         chosen_topic = baseline_topic
@@ -1663,10 +1744,10 @@ def _run_autonomous_cycle(
         closed_loop_decision_recorded = False
         closed_loop_meta = None
 
-    set_channel_last_narrative_structure(active_profile_id, yt_channel_id, rec_struct, db_path=db_path)
+    set_channel_last_narrative_structure(target_profile_id, yt_channel_id, rec_struct, db_path=db_path)
     params = build_autonomous_video_params(
         topic=chosen_topic,
-        profile_id=active_profile_id,
+        profile_id=target_profile_id,
         narrative_structure=rec_struct,
         db_path=db_path,
     )
@@ -1742,7 +1823,7 @@ def _run_autonomous_cycle(
         webui_task.submit_generation(
             task_id=new_task_id,
             params=params,
-            profile_id=active_profile_id,
+            profile_id=target_profile_id,
             db_path=db_path,
         )
     except Exception as g_exc:

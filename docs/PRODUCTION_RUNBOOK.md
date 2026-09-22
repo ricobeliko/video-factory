@@ -22,6 +22,40 @@ em 23 suítes, zero falhas (246,12s). Comando reproduzível no handoff.
 Próximo gate seguro: revisão do diff V12-E.3. Não misturar aprovação desta etapa
 com ativação da V12-F.2; produção ainda não homologada para E.3.
 
+## Estado vigente e gate V12-F.2 — 21/09/2026
+
+Baseline PROD `54875c6`, conforme homologação informada pelo operador.
+V12-E e V12-F.1A/B/C homologadas; YouTube Data API, fetch e persistência real homologados.
+Factory RUNNING; PRIMARY headless ativo; Scheduler ON; Auto Publish ON; Dry Run OFF;
+YouTube ON; TikTok OFF; WARMUP; Autonomous ON; Analytics Auto ON; MPT Auto Upload OFF.
+Analytics: 1 fetch/ciclo e intervalo 300s. Autonomous: estoque 3, uma geração/ciclo,
+cinco gerações/24h móveis e intervalo 15 min. Cooldown/daily_limit_reached são esperados.
+Nenhum desses estados/limites foi alterado ou consultado em produção nesta implementação DEV.
+
+V12-F.2 em validação DEV, NÃO deployada, NÃO homologada em produção.
+`closed_feedback_loop_enabled` é uma chave nova opcional de `autopilot_settings`;
+ausente significa False. Nenhuma criação/ativação dessa chave foi executada no banco operacional.
+Leitura: `get_closed_feedback_loop_enabled_op`; alteração futura via
+`set_closed_feedback_loop_enabled_op`, PRIMARY e evento `CLOSED_LOOP_TOGGLED` atômicos.
+
+Após revisão e autorização separada de deploy: manter flag OFF, verificar baseline,
+realizar homologação read-only da evidência e teste controlado com autorização própria.
+Somente autorização posterior permite ON. Não aproveitar deploy para alterar Analytics,
+Autonomous, Auto Publish, Growth Mode, credenciais ou limites.
+
+Rollback funcional futuro: desabilitar somente Closed Loop; novas decisões voltam ao
+baseline. Tasks já submetidas seguem gates/pipeline existentes. Preservar todos os snapshots
+e eventos. Reserva `CLOSED_LOOP_DECISION` adaptada sem `CLOSED_LOOP_SUBMITTED` exige
+revisão operacional antes de qualquer liberação da adaptação; baseline continua disponível.
+Não apagar eventos nem forçar publicação para resolver esse diagnóstico.
+
+Auditoria contém scope, cutoff, IDs elegíveis/excluídos, medianas, estabilidade,
+candidatos/ranks, decisão e parâmetros aplicados. Falha de auditoria implica baseline.
+PRIVATE/UNLISTED/UNKNOWN nunca alimentam aprendizado; Safety PASS e Quality >=70
+GOOD/STRONG continuam obrigatórios. Schema changes NONE.
+
+Os procedimentos e estados OFF históricos abaixo são de manutenção/homologações anteriores,
+não instruções para desligar a produção autônoma vigente. Deploy continua não autorizado.
 
 
 ## V12-F.1C — Publication Privacy Persistence (21/09/2026)

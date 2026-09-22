@@ -36,6 +36,7 @@ from app.models.schema import (
     _get_valid_ui_choice,
 )
 from app.services import (
+    analytics,
     content_strategy,
     operator_console,
     profile_manager,
@@ -1448,6 +1449,131 @@ def _run_autonomous_cycle(
     new_task_id = str(uuid.uuid4())
     chosen_topic = candidate["topic"]
     trend_id = candidate.get("trend_id")
+    baseline_topic = chosen_topic
+    baseline_struct = rec_struct
+
+    closed_loop_decision_recorded = False
+    closed_loop_meta = None
+
+    try:
+        if operator_console.get_closed_feedback_loop_enabled_op(db_path=db_path):
+            yt_channel_id = None
+            with scheduler.get_connection(db_path) as conn:
+                ch_row = conn.execute(
+                    "SELECT id FROM publishing_channels WHERE platform='youtube' AND profile_id=? AND is_enabled=1",
+                    (active_profile_id,)
+                ).fetchone()
+                if ch_row:
+                    yt_channel_id = ch_row[0]
+
+            if yt_channel_id:
+                evidence = analytics.get_learning_evidence(
+                    platform="youtube",
+                    profile_id=active_profile_id,
+                    channel_id=yt_channel_id,
+                    cutoff_time=current_time,
+                    db_path=db_path,
+                )
+                alt_items = trend_radar.get_trend_items(db_path=db_path) or []
+                candidates = []
+                for it in alt_items:
+                    t = it.get("title") or it.get("topic")
+                    if t:
+                        candidates.append({
+                            "topic": t,
+                            "trend_data": {"opportunity_score": it.get("opportunity_score", 50.0)},
+                        })
+
+                recent_subs = operator_console.get_closed_loop_submissions(
+                    platform="youtube",
+                    profile_id=active_profile_id,
+                    channel_id=yt_channel_id,
+                    db_path=db_path,
+                )
+
+                baseline_candidate = {
+                    "topic": baseline_topic,
+                    "origin": candidate.get("origin", "unknown"),
+                    "trend_data": candidate.get("trend_data") or {"opportunity_score": 50.0},
+                    "narrative_structure": baseline_struct,
+                }
+
+                selection = content_strategy.select_closed_loop_candidate(
+                    baseline_candidate=baseline_candidate,
+                    candidates=candidates,
+                    evidence=evidence,
+                    recent_submissions=recent_subs,
+                    niche=probe_params.niche,
+                )
+
+                if selection.get("adapted"):
+                    chosen_topic = selection["selected_candidate"]["topic"]
+                    rec_struct = selection["selected_candidate"]["narrative_structure"]
+                    for it in alt_items:
+                        if (it.get("title") or it.get("topic")) == chosen_topic and it.get("id"):
+                            trend_id = it.get("id")
+                            break
+
+                cand_ranks = [
+                    {
+                        "topic": baseline_candidate["topic"],
+                        "baseline_rank": float((baseline_candidate.get("trend_data") or {}).get("opportunity_score", 50.0)),
+                    }
+                ]
+                for c in candidates:
+                    cand_ranks.append({
+                        "topic": c["topic"],
+                        "baseline_rank": float((c.get("trend_data") or {}).get("opportunity_score", 50.0)),
+                    })
+
+                temp_params = build_autonomous_video_params(
+                    topic=chosen_topic,
+                    profile_id=active_profile_id,
+                    narrative_structure=rec_struct,
+                    db_path=db_path,
+                )
+
+                audit_metadata = {
+                    "platform": "youtube",
+                    "profile_id": active_profile_id,
+                    "channel_id": yt_channel_id,
+                    "adapted": bool(selection.get("adapted")),
+                    "baseline_topic": baseline_topic,
+                    "baseline_structure": baseline_struct,
+                    "selected_topic": chosen_topic,
+                    "selected_structure": rec_struct,
+                    "candidate_ranks": cand_ranks,
+                    "evidence": evidence,
+                    "snapshot_ids": evidence.get("eligible_snapshot_ids", []),
+                    "recent_submissions": recent_subs[:5],
+                    "history_bonus": selection.get("history_bonus", 0.0),
+                    "reason": selection.get("reason", "baseline"),
+                    "policy_version": selection.get("policy_version", analytics.LEARNING_POLICY_VERSION),
+                    "applied_video_params": temp_params.model_dump(),
+                }
+
+                operator_console.record_closed_loop_decision(
+                    new_task_id,
+                    audit_metadata,
+                    db_path=db_path,
+                )
+                closed_loop_decision_recorded = True
+                closed_loop_meta = {
+                    "platform": "youtube",
+                    "profile_id": active_profile_id,
+                    "channel_id": yt_channel_id,
+                    "adapted": bool(selection.get("adapted")),
+                    "topic_cluster": content_strategy.classify_topic_cluster(chosen_topic),
+                    "narrative_structure": rec_struct,
+                }
+    except Exception as cl_exc:
+        logger.warning(f"[AUTONOMOUS] Closed feedback loop fallback to baseline: {cl_exc}")
+        chosen_topic = baseline_topic
+        rec_struct = baseline_struct
+        closed_loop_decision_recorded = False
+        closed_loop_meta = None
+
+    set_autonomous_setting(KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE, rec_struct, db_path=db_path)
     params = build_autonomous_video_params(
         topic=chosen_topic,
         profile_id=active_profile_id,
@@ -1551,6 +1677,20 @@ def _run_autonomous_cycle(
             trend_radar.update_trend_item_status(trend_id, "USED", db_path=db_path)
         except Exception:
             pass
+
+    if closed_loop_decision_recorded and closed_loop_meta:
+        try:
+            operator_console.log_operational_event(
+                component="closed_loop",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="CLOSED_LOOP_SUBMITTED",
+                task_id=new_task_id,
+                message="Closed feedback loop task submitted",
+                metadata=closed_loop_meta,
+                db_path=db_path,
+            )
+        except Exception as cl_sub_err:
+            logger.warning(f"[AUTONOMOUS] Failed to log CLOSED_LOOP_SUBMITTED: {cl_sub_err}")
 
     res_summary = f"Tarefa {new_task_id} submetida com sucesso ao pipeline ('{chosen_topic}')"
     set_autonomous_setting(KEY_AUTONOMOUS_LAST_RESULT, res_summary, db_path=db_path)

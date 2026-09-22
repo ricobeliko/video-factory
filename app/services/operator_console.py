@@ -862,6 +862,85 @@ def log_operational_event(
         return cur.lastrowid
 
 
+def get_closed_feedback_loop_enabled_op(db_path: Optional[str] = None) -> bool:
+    """Read without initializing schemas or enabling the feature implicitly."""
+    try:
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT value FROM autopilot_settings WHERE key=?",
+                               ("closed_feedback_loop_enabled",)).fetchone()
+        return bool(row and str(row[0]).lower() == "true")
+    except Exception:
+        return False
+
+
+def set_closed_feedback_loop_enabled_op(enabled: bool, db_path: Optional[str] = None) -> None:
+    """PRIMARY-only, atomic setting and audit; default remains absent/False."""
+    require_primary_instance(db_path=db_path)
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be bool")
+    init_operator_db(db_path)
+    with get_connection(db_path) as conn:
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings(key,value) VALUES (?,?)",
+                     ("closed_feedback_loop_enabled", str(enabled)))
+        conn.execute(
+            "INSERT INTO operational_events(timestamp,component,severity,event_type,message,metadata_json) VALUES (?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), "closed_loop", "INFO", "CLOSED_LOOP_TOGGLED",
+             "Closed feedback loop setting changed", json.dumps({"enabled": enabled})))
+
+
+def get_closed_loop_submissions(platform: str, profile_id: str, channel_id: str, db_path=None):
+    """Persistent successful submissions, with unresolved adaptation reservations.
+
+    Missing completion after a crash must not permit another adaptation. Baseline
+    generations still proceed; operator review can resolve an ambiguous reservation.
+    """
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT event_type,task_id,metadata_json FROM operational_events "
+            "WHERE event_type IN ('CLOSED_LOOP_DECISION','CLOSED_LOOP_SUBMITTED') "
+            "AND json_extract(metadata_json,'$.platform')=? "
+            "AND json_extract(metadata_json,'$.profile_id')=? "
+            "AND json_extract(metadata_json,'$.channel_id')=? ORDER BY id DESC",
+            (platform, profile_id, channel_id)).fetchall()
+    submitted, completed = [], set()
+    pending = False
+    for row in rows:
+        data = json.loads(row["metadata_json"])
+        if row["event_type"] == "CLOSED_LOOP_SUBMITTED" and row["task_id"] not in completed:
+            completed.add(row["task_id"])
+            submitted.append(data)
+        elif row["event_type"] == "CLOSED_LOOP_DECISION" and data.get("adapted") and row["task_id"] not in completed:
+            pending = True
+    if pending:
+        submitted.insert(0, {"adapted": True, "pending": True})
+    return submitted
+
+
+def record_closed_loop_decision(task_id: str, metadata: Dict[str, Any], db_path=None) -> int:
+    """Reserve a decision atomically against competing submissions/toggle changes."""
+    scope = {k: metadata[k] for k in ("platform", "profile_id", "channel_id")}
+    with get_connection(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        flag = conn.execute("SELECT value FROM autopilot_settings WHERE key='closed_feedback_loop_enabled'").fetchone()
+        if not flag or str(flag[0]).lower() != "true":
+            raise ValueError("closed_loop_disabled")
+        # BEGIN IMMEDIATE excludes writers while the second read connection checks
+        # the same committed submission history used by the pure policy.
+        recent = get_closed_loop_submissions(**scope, db_path=db_path)[:5]
+        if recent != metadata["recent_submissions"]:
+            raise ValueError("submission_history_changed")
+        channel = conn.execute(
+            "SELECT id FROM publishing_channels WHERE id=? AND profile_id=? AND platform=? AND is_enabled=1",
+            (scope["channel_id"], scope["profile_id"], scope["platform"])).fetchone()
+        if not channel:
+            raise ValueError("channel_changed")
+        cursor = conn.execute(
+            "INSERT INTO operational_events(timestamp,component,severity,event_type,task_id,message,metadata_json) VALUES (?,?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), "closed_loop", "INFO", "CLOSED_LOOP_DECISION",
+             task_id, "Versioned content decision before submission", json.dumps(metadata, allow_nan=False)))
+        return cursor.lastrowid
+
+
 def get_operational_events(
     limit: int = 50,
     component: Optional[str] = None,

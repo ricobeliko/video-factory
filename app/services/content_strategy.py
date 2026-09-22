@@ -54,6 +54,69 @@ STRATEGY_WEIGHTS = {
 DB_PATH: Optional[str] = None
 
 
+def select_closed_loop_candidate(baseline_candidate, candidates, evidence, recent_submissions, niche=None):
+    """Pure bounded policy; only topic and official narrative structure may change.
+
+    Trend opportunity remains the primary ranking. Structure heuristics have rank
+    50 (baseline) / 48 (other fitting structures); history can add at most 5.
+    Engagement is descriptive only: it cannot break a views tie.
+    """
+    from app.services import analytics
+    from app.models import const
+    baseline = dict(baseline_candidate)
+    baseline.setdefault("narrative_structure", recommend_narrative_structure(baseline["topic"], niche=niche)[0])
+    result = {"baseline_candidate": baseline, "selected_candidate": dict(baseline),
+              "adapted": False, "reason": evidence.get("fallback_reason") or "baseline",
+              "evidence_summary": evidence, "diversity_result": "not_evaluated",
+              "history_bonus": 0.0, "policy_version": analytics.LEARNING_POLICY_VERSION}
+    if evidence.get("evidence_state") != "ELIGIBLE":
+        return result
+    if any(s.get("adapted") for s in recent_submissions[:analytics.ADAPTATION_INTERVAL - 1]):
+        result.update(reason="exploration_slot", diversity_result="adaptation_interval")
+        return result
+    winner_cluster = evidence.get("recommended_topic_cluster")
+    winner_structure = evidence.get("recommended_narrative_structure")
+    ranked = []
+    for index, candidate in enumerate([baseline] + list(candidates)):
+        topic = candidate.get("topic")
+        if not topic:
+            continue
+        rank = float((candidate.get("trend_data") or {}).get("opportunity_score", 50.0))
+        if not 0 <= rank <= 100:
+            continue
+        bonus = analytics.MAX_HISTORY_RANKING_BONUS if classify_topic_cluster(topic) == winner_cluster else 0.0
+        ranked.append((min(100.0, rank + bonus), -index, candidate, bonus))
+    if not ranked:
+        return result
+    _, _, selected, bonus = max(ranked, key=lambda x: (x[0], x[1]))
+    selected = dict(selected)
+    heuristic = recommend_narrative_structure(selected["topic"], niche=niche)[0]
+    structure = heuristic
+    # Only consider historically supported structures that the topic heuristic
+    # itself accepts as its immediate alternate (no arbitrary format substitution).
+    alternate = recommend_narrative_structure(selected["topic"], niche=niche, last_used_structure=heuristic)[0]
+    if winner_structure in const.NARRATIVE_STRUCTURES and winner_structure in (heuristic, alternate):
+        if winner_structure != heuristic and 48.0 + analytics.MAX_HISTORY_RANKING_BONUS > 50.0:
+            structure = winner_structure
+            bonus = max(bonus, analytics.MAX_HISTORY_RANKING_BONUS)
+    selected["narrative_structure"] = structure
+    changed = selected["topic"] != baseline["topic"] or structure != baseline["narrative_structure"]
+    if not changed:
+        result.update(reason="baseline_already_selected", diversity_result="pass")
+        return result
+    recent = recent_submissions[:analytics.RECENT_SUBMISSIONS - 1]
+    cluster = classify_topic_cluster(selected["topic"])
+    if sum(s.get("topic_cluster") == cluster for s in recent) >= analytics.MAX_CLUSTER_USES:
+        result.update(reason="cluster_saturated", diversity_result="cluster_limit")
+        return result
+    if recent and recent[0].get("narrative_structure") == structure and alternate != heuristic:
+        result.update(reason="structure_repetition", diversity_result="structure_limit")
+        return result
+    result.update(selected_candidate=selected, adapted=True, reason="stable_history",
+                  diversity_result="pass", history_bonus=bonus)
+    return result
+
+
 def _get_default_db_path() -> str:
     if DB_PATH:
         return DB_PATH

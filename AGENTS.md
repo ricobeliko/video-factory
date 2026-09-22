@@ -19,9 +19,27 @@ Este arquivo complementa — e não duplica — a documentação em `docs/` e as
 - Nenhuma operação destrutiva.
 - Nenhum deploy sem autorização.
 - Nenhum acesso ou modificação de secrets.
-- Testes antes de finalizar.
 - Relatar exatamente: arquivos alterados, testes executados, commit (se houver) e o
   próximo gate seguro.
+
+## TEST POLICY — PRECEDÊNCIA ALTA
+
+Esta política de testes prevalece sobre instruções ou referências históricas de testes em `ROADMAP.md`, `PROJECT_HANDOFF.md` e `PRODUCTION_RUNBOOK.md`.
+
+- Por padrão, executar somente teste diretamente relacionado à mudança.
+- Máximo inicial: 1 comando de teste direcionado.
+- Preferir arquivo específico e/ou -k.
+- Se passar, PARAR.
+- Não expandir automaticamente para outras suítes.
+- Full regression somente com autorização humana explícita.
+- Coverage somente com autorização humana explícita.
+- CI não deve ser executado ou monitorado automaticamente.
+- Não repetir teste que já passou sem mudança posterior relevante.
+- Não criar testes novos por reflexo; somente quando houver gap real relacionado à alteração.
+- Mudança somente documental não exige pytest.
+- Concluir um gate NÃO autoriza regressão completa.
+- Nenhuma referência histórica no ROADMAP/HANDOFF/RUNBOOK autoriza executar aquelas suítes novamente.
+- Se houver dúvida entre testar mais e parar: PARAR e informar.
 
 ## Precedência
 

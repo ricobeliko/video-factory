@@ -1,5 +1,13 @@
 # ROADMAP — Video Factory / MoneyPrinterTurbo
 
+## Política atual de validação
+
+- Testes massivos registrados em fases antigas são EVIDÊNCIA HISTÓRICA, não obrigação futura.
+- Menções antigas a "regressão de 22 suítes", centenas de testes ou full regression NÃO são gates automáticos.
+- Validação padrão atual = teste direcionado mínimo.
+- Full regression exige autorização humana explícita.
+- Esta política prevalece sobre registros históricos de validação de fases anteriores.
+
 ## V12-E.3 — gate DEV controlado — 21/09/2026
 
 Hardening independente da V12-F.2: estoque YouTube recuperável por persistência,

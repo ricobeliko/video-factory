@@ -20,10 +20,28 @@ verifique com `git status` e `git log` antes de agir.
 - Preserve a arquitetura atual do projeto.
 - Faça mudanças mínimas e auditáveis; evite refatorações não solicitadas.
 - Investigue a causa raiz antes de corrigir qualquer bug — não aplique correções superficiais.
-- Rode testes direcionados (específicos da área alterada) antes de considerar mudanças maiores
-  ou regressões como resolvidas.
+- Concluir um gate NÃO autoriza regressão completa.
 - Nunca declare uma fase ou etapa do roadmap concluída sem cumprir explicitamente o gate
   correspondente definido na documentação.
+
+## TEST POLICY — PRECEDÊNCIA ALTA
+
+Esta política de testes prevalece sobre qualquer menção ou suíte histórica de testes no repositório.
+
+- Por padrão, executar somente teste diretamente relacionado à mudança ("testes relevantes" significa o teste mínimo diretamente afetado).
+- Máximo inicial: 1 comando de teste direcionado.
+- Preferir arquivo específico e/ou -k.
+- Se passar, PARAR imediatamente.
+- Não expandir automaticamente para outras suítes.
+- Full regression somente com autorização humana explícita.
+- Coverage somente com autorização humana explícita.
+- CI não deve ser executado ou monitorado automaticamente.
+- Não repetir teste que já passou sem mudança posterior relevante.
+- Não criar testes novos por reflexo; somente quando houver gap real relacionado à alteração.
+- Mudança somente documental não exige pytest.
+- Concluir um gate NÃO autoriza regressão completa.
+- Nenhuma referência histórica no ROADMAP/HANDOFF/RUNBOOK autoriza executar aquelas suítes novamente.
+- Se houver dúvida entre testar mais e parar: PARAR e informar.
 
 ## Mecanismos de controle a preservar
 
@@ -52,7 +70,7 @@ e específica para aquela operação:
 
 1. Executar `git status`.
 2. Revisar o diff das mudanças.
-3. Executar os testes relevantes.
+3. Executar o teste mínimo diretamente relacionado (conforme TEST POLICY), se aplicável.
 
 ## Antes de push
 

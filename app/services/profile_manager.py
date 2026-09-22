@@ -23,6 +23,13 @@ DEFAULT_PROFILE_SLUG = "default"
 ALLOWED_PLATFORMS = {"youtube", "tiktok"}
 ACTIVE_PROFILE_SETTING_KEY = "active_profile_id"
 
+SECOND_PROFILE_ID = "profile-historias-misterio"
+SECOND_PROFILE_NAME = "Dose Diária de Histórias e Mistério"
+SECOND_PROFILE_SLUG = "dose-diaria-de-historias-e-misterio"
+SECOND_CHANNEL_ID = "channel-historias-misterio-youtube"
+SECOND_CHANNEL_DISPLAY = "Dose Diária de Histórias e Mistério (YouTube)"
+SECOND_PROFILE_NICHE = "historias_misterio"
+
 
 def get_db_path(custom_path: Optional[str] = None) -> str:
     """Retorna o caminho do banco de dados SQLite."""
@@ -254,6 +261,76 @@ def get_default_profile(db_path: Optional[str] = None) -> Dict[str, Any]:
     if not p:
         return ensure_default_profile(db_path=db_path)
     return p
+
+
+def ensure_second_channel_profile(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Cadastra e configura de forma idempotente o perfil e canal do segundo canal.
+
+    Perfil: Dose Diária de Histórias e Mistério
+    Nicho: historias_misterio
+    Growth Mode: WARMUP ('warmup')
+    Canal YouTube: isolado, sem credenciais reais conectadas.
+    """
+    init_profile_db(db_path)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        p_row = conn.execute(
+            "SELECT * FROM content_profiles WHERE id = ? OR slug = ?;",
+            (SECOND_PROFILE_ID, SECOND_PROFILE_SLUG),
+        ).fetchone()
+        if p_row is None:
+            conn.execute(
+                """
+                INSERT INTO content_profiles (
+                    id, name, slug, niche, language, region,
+                    default_preset, growth_mode, is_active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    SECOND_PROFILE_ID,
+                    SECOND_PROFILE_NAME,
+                    SECOND_PROFILE_SLUG,
+                    SECOND_PROFILE_NICHE,
+                    "pt-BR",
+                    "BR",
+                    const.DEFAULT_MONETIZATION_PRESET,
+                    const.GROWTH_MODE_WARMUP,
+                    1,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            p_row = conn.execute("SELECT * FROM content_profiles WHERE id = ?;", (SECOND_PROFILE_ID,)).fetchone()
+
+        ch_row = conn.execute(
+            "SELECT * FROM publishing_channels WHERE id = ? OR (profile_id = ? AND platform = 'youtube');",
+            (SECOND_CHANNEL_ID, SECOND_PROFILE_ID),
+        ).fetchone()
+        if ch_row is None:
+            conn.execute(
+                """
+                INSERT INTO publishing_channels (
+                    id, profile_id, platform, display_name, external_profile_name,
+                    is_enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    SECOND_CHANNEL_ID,
+                    SECOND_PROFILE_ID,
+                    "youtube",
+                    SECOND_CHANNEL_DISPLAY,
+                    "dose-diaria-misterio",
+                    1,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            ch_row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (SECOND_CHANNEL_ID,)).fetchone()
+
+    return {
+        "profile": dict(p_row) if p_row else {},
+        "channel": _normalize_channel_dict(dict(ch_row)) if ch_row else {},
+    }
 
 
 def create_profile(

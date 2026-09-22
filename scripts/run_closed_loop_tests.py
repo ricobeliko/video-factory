@@ -1,5 +1,10 @@
 """Run targeted regression in a disposable source copy, without local secrets.
 
+ATENÇÃO — TEST POLICY / GOVERNANÇA:
+Este runner de regressão ampla SOMENTE deve ser executado mediante autorização
+humana explícita. Não executar automaticamente. Por padrão, executar apenas
+o teste mínimo direcionado diretamente afetado pela alteração.
+
 Uses the current interpreter/dependencies. Config is an empty synthetic TOML;
 all application storage lives in the temporary copy. Socket connections are
 blocked before pytest imports application modules. No production paths are used.

@@ -1120,7 +1120,7 @@ def get_scheduler_queue_summary(
         return summary
 
 
-def get_profile_operations_overview(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_profile_operations_overview(db_path: Optional[str] = None, task_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retorna visão operacional resumida e leve por perfil (canais, estoque, tarefas e agendamentos)."""
     init_operator_db(db_path)
     from app.services import profile_manager, scheduler
@@ -1190,7 +1190,7 @@ def get_profile_operations_overview(db_path: Optional[str] = None) -> List[Dict[
             "is_active_profile": (pid == active_id),
             "channels_count": total_ch_map.get(pid, 0),
             "channels_enabled": enabled_ch_map.get(pid, 0),
-            "ready_stock": t_counts.get("ready_stock", 0),
+            "ready_stock": get_canonical_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=pid)["total_ready"],
             "pending_processing": t_counts.get("pending_processing", 0),
             "scheduled": s_counts.get("planned", 0) + s_counts.get("ready", 0),
             "failed": t_counts.get("failed", 0) + s_counts.get("failed", 0),
@@ -1308,17 +1308,21 @@ def get_ready_stock(
 def get_canonical_ready_stock(
     task_base_dir: Optional[str] = None,
     db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Retorna o estoque pronto usando a fonte canônica da produção autônoma (YouTube-first, fail-closed).
 
     Alinha a telemetria do Operator Console com o buffer real da Produção Autônoma,
     reconstruindo o estoque a partir das tabelas persistentes (monetization_safety PASS,
-    Quality >= 70, canal YouTube ativo e arquivo de vídeo existente).
+    Quality >= 70, canal YouTube ativo e arquivo de vídeo existente), com suporte a isolamento por perfil e canal.
     """
     from app.services import autonomous_production
     auto_stock = autonomous_production.get_autonomous_ready_stock(
         task_base_dir=task_base_dir,
         db_path=db_path,
+        profile_id=profile_id,
+        channel_id=channel_id,
     )
     ready_total = auto_stock.get("ready_count", 0)
     target = auto_stock.get("target_stock", 3)

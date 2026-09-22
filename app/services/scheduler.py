@@ -610,6 +610,7 @@ def get_platform_rate_limits(
     current_time: Optional[datetime] = None,
     growth_mode: Optional[str] = None,
     profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calcula a janela móvel de 24 horas para uma plataforma específica.
     
@@ -685,7 +686,25 @@ def get_platform_rate_limits(
         if profile_id:
             from app.services import profile_manager
             prof_norm = profile_id.strip()
-            if prof_norm == profile_manager.DEFAULT_PROFILE_ID:
+            chan_norm = channel_id.strip() if channel_id else None
+            if chan_norm:
+                prof_pub_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM publication_events
+                    WHERE platform = ? AND status = 'success' AND profile_id = ? AND channel_id = ?
+                    AND published_at >= ? AND published_at <= ?;
+                    """,
+                    (clean_platform, prof_norm, chan_norm, iso_past, iso_now),
+                ).fetchone()
+                prof_sched_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM scheduled_posts
+                    WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ? AND channel_id = ?
+                    AND scheduled_at >= ? AND scheduled_at <= ?;
+                    """,
+                    (clean_platform, prof_norm, chan_norm, iso_now, iso_future),
+                ).fetchone()
+            elif prof_norm == profile_manager.DEFAULT_PROFILE_ID:
                 prof_pub_row = conn.execute(
                     """
                     SELECT COUNT(*) AS cnt FROM publication_events
@@ -728,7 +747,8 @@ def get_platform_rate_limits(
             raw_mode_limit = mode_limits.get(clean_platform)
             profile_mode_limit = technical_limit if raw_mode_limit is None else raw_mode_limit
             profile_slots = max(0, profile_mode_limit - total_used) if enabled else 0
-            available_slots = min(global_slots, profile_slots)
+            # V12-F.4: Isolamento total entre canais/perfis. O consumo de um canal não bloqueia nem drena as vagas de outro.
+            available_slots = profile_slots
         else:
             used_past = global_used_past
             scheduled_count = global_sched_count
@@ -1118,22 +1138,8 @@ def plan_schedule(
         if not candidates:
             continue
 
-        # Encontra a última publicação real e o último agendamento existente para essa plataforma
-        with get_connection(db_path) as conn:
-            last_sched_row = conn.execute(
-                """
-                SELECT MAX(scheduled_at) AS max_time FROM scheduled_posts
-                WHERE platform = ? AND status IN ('planned', 'ready');
-                """,
-                (clean_plat,),
-            ).fetchone()
-            last_pub_row = conn.execute(
-                """
-                SELECT MAX(published_at) AS max_pub FROM publication_events
-                WHERE platform = ? AND status = 'success';
-                """,
-                (clean_plat,),
-            ).fetchone()
+        # Rastreia o último agendamento por (plataforma, perfil, canal) para isolamento estrito de cadência
+        target_sched_tracker: Dict[Tuple[str, str, Optional[str]], str] = {}
 
         # Enfileira slots para os candidatos
         for task_id, task_data, task_profile_id, channel_id in candidates:
@@ -1147,13 +1153,14 @@ def plan_schedule(
                 ):
                     continue
 
-            # 2. Consulta limites específicos do perfil no modo de crescimento ativo
+            # 2. Consulta limites específicos do perfil/canal no modo de crescimento ativo
             rate_info = get_platform_rate_limits(
                 clean_plat,
                 db_path=db_path,
                 now=current_time,
                 growth_mode=growth_mode,
                 profile_id=task_profile_id,
+                channel_id=channel_id,
             )
             if not rate_info["enabled"] or rate_info["available_slots"] <= 0:
                 log_growth_limit_block(task_id, task_profile_id, clean_plat, rate_info,
@@ -1165,17 +1172,43 @@ def plan_schedule(
             uniform_interval_seconds = max(60, int(86400 / max(1, limit_24h)))
             step_seconds = max(min_interval_seconds, uniform_interval_seconds)
 
+            target_key = (clean_plat, task_profile_id, channel_id)
+            with get_connection(db_path) as conn:
+                if channel_id:
+                    cand_pub_row = conn.execute(
+                        "SELECT MAX(published_at) AS max_pub FROM publication_events "
+                        "WHERE platform = ? AND status = 'success' AND profile_id = ? AND channel_id = ?;",
+                        (clean_plat, task_profile_id, channel_id),
+                    ).fetchone()
+                    cand_sched_row = conn.execute(
+                        "SELECT MAX(scheduled_at) AS max_time FROM scheduled_posts "
+                        "WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ? AND channel_id = ?;",
+                        (clean_plat, task_profile_id, channel_id),
+                    ).fetchone()
+                else:
+                    cand_pub_row = conn.execute(
+                        "SELECT MAX(published_at) AS max_pub FROM publication_events "
+                        "WHERE platform = ? AND status = 'success' AND profile_id = ?;",
+                        (clean_plat, task_profile_id),
+                    ).fetchone()
+                    cand_sched_row = conn.execute(
+                        "SELECT MAX(scheduled_at) AS max_time FROM scheduled_posts "
+                        "WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ?;",
+                        (clean_plat, task_profile_id),
+                    ).fetchone()
+
             candidate_base = current_time
-            if last_pub_row and last_pub_row["max_pub"]:
+            if cand_pub_row and cand_pub_row["max_pub"]:
                 try:
-                    p_dt = _from_iso(last_pub_row["max_pub"])
+                    p_dt = _from_iso(cand_pub_row["max_pub"])
                     candidate_base = max(candidate_base, p_dt + timedelta(seconds=min_interval_seconds))
                 except Exception:
                     pass
 
-            if last_sched_row and last_sched_row["max_time"]:
+            last_sched_time = target_sched_tracker.get(target_key) or (cand_sched_row["max_time"] if cand_sched_row else None)
+            if last_sched_time:
                 try:
-                    s_dt = _from_iso(last_sched_row["max_time"])
+                    s_dt = _from_iso(last_sched_time)
                     candidate_base = max(candidate_base, s_dt + timedelta(seconds=step_seconds))
                 except Exception:
                     candidate_base = max(candidate_base, current_time + timedelta(seconds=step_seconds))
@@ -1211,8 +1244,8 @@ def plan_schedule(
             }
             created_schedule.append(record)
 
-            # Atualiza last_sched_row para o próximo candidato desta plataforma
-            last_sched_row = {"max_time": iso_slot}
+            # Atualiza tracker para o próximo candidato deste perfil/canal
+            target_sched_tracker[target_key] = iso_slot
 
     return created_schedule
 
@@ -1634,12 +1667,20 @@ def run_scheduler_cycle(
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado por idempotência (já publicado)", db_path=db_path)
         return {"status": "skipped", "reason": "already_published", "task_id": task_id, "platform": platform}
 
-    # 8. Revalidação da Janela Móvel de 24 horas (Técnica + Growth Mode do perfil)
-    rate_info = get_platform_rate_limits(platform, db_path, now=current_time, profile_id=profile_id)
+    # 8. Revalidação da Janela Móvel de 24 horas (Técnica + Growth Mode do perfil/canal)
+    rate_info = get_platform_rate_limits(platform, db_path, now=current_time, profile_id=profile_id, channel_id=channel_id)
     if rate_info["available_slots"] <= 0:
         window_past = current_time - timedelta(hours=24)
         with get_connection(db_path) as conn:
-            if profile_id and profile_id != profile_manager.DEFAULT_PROFILE_ID:
+            if channel_id:
+                oldest_row = conn.execute(
+                    """
+                    SELECT MIN(published_at) AS oldest_pub FROM publication_events
+                    WHERE platform = ? AND profile_id = ? AND channel_id = ? AND status = 'success' AND published_at >= ?;
+                    """,
+                    (platform, profile_id, channel_id, _to_iso(window_past)),
+                ).fetchone()
+            elif profile_id and profile_id != profile_manager.DEFAULT_PROFILE_ID:
                 oldest_row = conn.execute(
                     """
                     SELECT MIN(published_at) AS oldest_pub FROM publication_events
@@ -1698,11 +1739,19 @@ def run_scheduler_cycle(
             "next_eligible": _to_iso(next_eligible),
         }
 
-    # 8.1 Revalidação de Intervalo Mínimo (Growth Mode Anti-Burst do perfil)
+    # 8.1 Revalidação de Intervalo Mínimo (Growth Mode Anti-Burst do perfil/canal)
     min_interval_hours = rate_info.get("min_interval_hours", 0)
     if min_interval_hours > 0:
         with get_connection(db_path) as conn:
-            if profile_id and profile_id != profile_manager.DEFAULT_PROFILE_ID:
+            if channel_id:
+                last_pub = conn.execute(
+                    """
+                    SELECT MAX(published_at) AS last_pub FROM publication_events
+                    WHERE platform = ? AND profile_id = ? AND channel_id = ? AND status = 'success';
+                    """,
+                    (platform, profile_id, channel_id),
+                ).fetchone()
+            elif profile_id and profile_id != profile_manager.DEFAULT_PROFILE_ID:
                 last_pub = conn.execute(
                     """
                     SELECT MAX(published_at) AS last_pub FROM publication_events

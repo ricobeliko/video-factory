@@ -375,7 +375,7 @@ def _load_telemetry_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, 
         return _get_mock_fixtures(scenario_choice)
     sys_status = operator_console.get_system_status()
     inst_info = sys_status.get("instance") or operator_console.get_instance_info()
-    stock = operator_console.get_ready_stock()
+    stock = operator_console.get_canonical_ready_stock()
     provs = operator_console.get_provider_health_summary()
     recent_errs = operator_console.get_recent_errors(limit=10)
     return {
@@ -437,7 +437,7 @@ def _load_queues_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, Any
     return {
         "g_summary": operator_console.get_generation_queue_summary(),
         "s_summary": operator_console.get_scheduler_queue_summary(),
-        "stock": operator_console.get_ready_stock(),
+        "stock": operator_console.get_canonical_ready_stock(),
         "growth_mode": operator_console.get_system_status().get("growth_mode", "normal"),
     }
 
@@ -2186,7 +2186,7 @@ def _render_tabs_section(demo_enabled: bool, scenario_choice: str, is_primary: b
         errs = d.get("errors", [])
         recoverable = d.get("recoverable", [])
     else:
-        stock = operator_console.get_ready_stock()
+        stock = operator_console.get_canonical_ready_stock()
         provs = operator_console.get_provider_health_summary()
         recent_errs = operator_console.get_recent_errors(limit=10)
         recent_events = operator_console.get_operational_events(limit=20)

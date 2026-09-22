@@ -1296,6 +1296,44 @@ def get_ready_stock(
     }
 
 
+def get_canonical_ready_stock(
+    task_base_dir: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retorna o estoque pronto usando a fonte canônica da produção autônoma (YouTube-first, fail-closed).
+
+    Alinha a telemetria do Operator Console com o buffer real da Produção Autônoma,
+    reconstruindo o estoque a partir das tabelas persistentes (monetization_safety PASS,
+    Quality >= 70, canal YouTube ativo e arquivo de vídeo existente).
+    """
+    from app.services import autonomous_production
+    auto_stock = autonomous_production.get_autonomous_ready_stock(
+        task_base_dir=task_base_dir,
+        db_path=db_path,
+    )
+    ready_total = auto_stock.get("ready_count", 0)
+    target = auto_stock.get("target_stock", 3)
+    is_low = auto_stock.get("is_below_target", ready_total < target)
+    youtube_items = auto_stock.get("youtube_ready", [])
+    return {
+        "total_ready": ready_total,
+        "youtube_count": auto_stock.get("youtube_count", ready_total),
+        "tiktok_count": 0,
+        "cross_platform_count": 0,
+        "minimum_threshold": target,
+        "is_below_minimum": is_low,
+        "youtube_items": youtube_items[:5],
+        "tiktok_items": [],
+        "cross_platform_items": [],
+        "youtube_ready": youtube_items,
+        "tiktok_ready": [],
+        "cross_platform_ready": [],
+        "youtube_tasks": youtube_items,
+        "tiktok_tasks": [],
+        "cross_platform_tasks": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # 7. Saúde dos Provedores (Provider Health)
 # ---------------------------------------------------------------------------
@@ -1696,7 +1734,7 @@ def get_system_status(db_path: Optional[str] = None) -> Dict[str, Any]:
     if len(errs_3) >= 3:
         alerts.append("⚠ 3 ou mais falhas recentes registradas na Central de Erros")
 
-    ready_stock = get_ready_stock(db_path=db_path)
+    ready_stock = get_canonical_ready_stock(db_path=db_path)
     if ready_stock["is_below_minimum"]:
         alerts.append(f"⚠ Estoque de vídeos prontos ({ready_stock['total_ready']}) abaixo do mínimo configurado ({ready_stock['minimum_threshold']})")
 

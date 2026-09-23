@@ -18,17 +18,20 @@
 
 ---
 
-## 2. Direção de Arte e Atributos Físicos
+## 2. Direção de Arte e Atributos Físicos Canônicos (Fase V14-C.3)
 
 | Elemento | Descrição |
 | :--- | :--- |
-| **Idade Aparente** | Jovem adulto (25–28 anos). |
-| **Expressão Base** | Olhar penetrante e atento, sobrancelhas expressivas, leve sorriso curioso. |
-| **Cabelo** | Castanho escuro / grafite, corte moderno levemente despenteado no topo. |
-| **Vestimenta** | Casaco/sobretudo casual grafite escuro (`#1E2229`) com gola alta vinho/borgonha escuro (`#42121E`); sem logotipos ou elementos datados. |
-| **Paleta de Cores** | - **Roupa Principal:** `#1E2229` (Grafite Escuro)<br>- **Segunda Camada:** `#42121E` (Vinho Suspense)<br>- **Pele:** `#F3C8A0` (Tom quente natural de desenho)<br>- **Olhos:** `#2C3E50` (Castanho escuro / azul petróleo)<br>- **Sombras Cel:** `#14171C` (Preto azulado suave) |
-| **Enquadramento** | *Waist-up* (cintura para cima) ou *Bust* (do peito para cima), com braços visíveis para suporte a gesticulação e apontamentos. |
-| **Proporção** | Otimizado para vídeos verticais 9:16 (resolução nativa de tela 1080x1920). Renderizado com margem segura de 4% lateral e 6% inferior. |
+| **Idade Aparente** | Jovem adulto (faixa aparente 20–30 anos). |
+| **Expressão Base** | Olhar penetrante e atento, sobrancelhas expressivas, curioso, amigável e levemente misterioso. |
+| **Rosto e Corpo** | Rosto fino, visual moderno, corpo magro. |
+| **Pele** | Morena clara. |
+| **Cabelo** | Preto escuro, corte bagunçado com leves reflexos roxos sutis. |
+| **Olhos** | Castanhos escuros expressivos. |
+| **Vestimenta Oficial**| Jaqueta/moletom preto sobre camiseta preta, com detalhes discretos em tom roxo escuro; sem logotipos ou elementos datados. |
+| **Paleta Canônica** | - **Preto Base:** `#111115`<br>- **Roxo Escuro:** `#2B143E`<br>- **Lilás / Acento:** `#6B3FA0`<br>- **Azul Petróleo:** `#183040` |
+| **Enquadramento** | *Busto / Cintura para cima* (waist-up), braços visíveis para gesticulação, reações e apontamentos. |
+| **Proporção** | Otimizado para vídeos verticais 9:16 (resolução nativa 1080x1920) com margem segura de 4% lateral e 6% inferior. Source canônico em 1024x1024 ou proporcional. |
 
 ---
 
@@ -109,3 +112,49 @@ O controlador `build_presenter_expression_timeline` sincroniza as expressões do
    - Canal Padrão / Geral: Mais expressivo, alternância rápida e reação `surprised`.
    - `profile-historias-misterio`: Reações mais contidas e sóbrias (palavras de surpresa mapeiam para `serious`/`thinking` com motivo `mystery_contained_reaction`).
 6. **Robustez e Fail-Safe:** Se o SRT estiver corrompido ou ausente, o pipeline recorre suavemente aos segmentos estruturais (hook, return, cta) sem interromper a renderização.
+
+---
+
+## 7. Fundação do Asset Pack Canônico (Fase V14-C.3)
+
+### 7.1. Estrutura Canônica de Diretórios
+```
+assets/presenter/nox_v1/
+├── manifest.json
+├── reference/
+│   └── nox_v1_reference.png   (Âncora visual fornecida pelo operador)
+├── poses/
+│   ├── neutral.png            (Core)
+│   ├── talking_1.png          (Core)
+│   ├── talking_2.png          (Core)
+│   ├── surprised.png          (Core)
+│   ├── serious.png            (Core)
+│   ├── thinking.png           (Core)
+│   ├── pointing_left.png      (Core)
+│   ├── pointing_right.png     (Core)
+│   └── cta.png                (Core)
+└── previews/
+    └── nox_contact_sheet.png  (Contact sheet gerada localmente)
+```
+
+### 7.2. Core Poses (Obrigatórias) e Extended Motion Pack (Opcionais)
+- **Core Poses (9):** `neutral`, `talking_1`, `talking_2`, `surprised`, `serious`, `thinking`, `pointing_left`, `pointing_right`, `cta`.
+- **Extended Motion Pack (13):** `blink`, `talking_3`, `talking_4`, `half_smile`, `confused`, `skeptical`, `looking_left`, `looking_right`, `hand_up`, `open_hands`, `lean_forward`, `warning`, `excited`.
+
+### 7.3. Fallback Graph Determinístico
+Quando uma pose estendida for solicitada na timeline mas não estiver presente no pack físico, o pipeline recorre deterministicamente através da cadeia:
+- `talking_4` → `talking_2` → `talking_1` → `neutral`
+- `talking_3` → `talking_1` → `talking_2` → `neutral`
+- `blink` → `neutral`
+- `confused` → `thinking` → `neutral`
+- `skeptical` → `thinking` → `neutral`
+- `looking_left` / `looking_right` → `neutral`
+- `hand_up` / `open_hands` → `talking_1` → `neutral`
+- `lean_forward` → `neutral`
+- `warning` → `serious` → `neutral`
+- `excited` → `surprised` → `neutral`
+- `half_smile` → `neutral`
+
+### 7.4. Validação de Consistência e Preview
+- `validate_character_pack_assets`: Executa validação de formato (PNG), canal alfa real (RGBA com transparência) e uniformidade rigorosa de dimensões de tela entre todas as poses do pack.
+- `generate_contact_sheet`: Produz contact sheet visual em grid organizada (Core Poses 3x3 no topo + Extended Poses abaixo) para validação rápida pelo operador humano antes de aprovação de assets.

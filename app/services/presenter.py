@@ -41,13 +41,60 @@ STANDARD_PRESENTER_POSES = [
     "cta",
 ]
 
-# Poses mínimas requeridas para que um character pack seja considerado válido
+# Poses mínimas legadas requeridas para que um character pack seja considerado válido
 REQUIRED_CORE_POSES = [
     "neutral",
     "talking_1",
     "talking_2",
     "cta",
 ]
+
+# Poses canônicas obrigatórias (Core Pack - Fase V14-C.3)
+CANONICAL_CORE_POSES = [
+    "neutral",
+    "talking_1",
+    "talking_2",
+    "surprised",
+    "serious",
+    "thinking",
+    "pointing_left",
+    "pointing_right",
+    "cta",
+]
+
+# Poses canônicas estendidas (Extended Motion Pack - Fase V14-C.3)
+CANONICAL_EXTENDED_POSES = [
+    "blink",
+    "talking_3",
+    "talking_4",
+    "half_smile",
+    "confused",
+    "skeptical",
+    "looking_left",
+    "looking_right",
+    "hand_up",
+    "open_hands",
+    "lean_forward",
+    "warning",
+    "excited",
+]
+
+# Fallback Graph determinístico para poses estendidas ausentes (Fase V14-C.3)
+EXTENDED_POSE_FALLBACKS: Dict[str, List[str]] = {
+    "talking_4": ["talking_2", "talking_1", "neutral"],
+    "talking_3": ["talking_1", "talking_2", "neutral"],
+    "blink": ["neutral"],
+    "confused": ["thinking", "neutral"],
+    "skeptical": ["thinking", "neutral"],
+    "looking_left": ["neutral"],
+    "looking_right": ["neutral"],
+    "hand_up": ["talking_1", "neutral"],
+    "open_hands": ["talking_1", "neutral"],
+    "lean_forward": ["neutral"],
+    "warning": ["serious", "neutral"],
+    "excited": ["surprised", "neutral"],
+    "half_smile": ["neutral"],
+}
 
 # Mapeamento de palavras-chave determinísticas para reação de poses (PT-BR)
 REACTION_KEYWORDS = {
@@ -115,6 +162,7 @@ def get_character_pack_search_dirs() -> List[str]:
     """Retorna a lista de diretórios padrão de busca para character packs."""
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return [
+        os.path.join(base_dir, "assets", "presenter"),
         os.path.join(base_dir, "resource", "presenter_assets"),
         os.path.join(base_dir, "storage", "presenter_assets"),
     ]
@@ -225,21 +273,34 @@ def resolve_character_pack(
 
     resolved_pack_dir = os.path.realpath(pack_dir)
 
-    # Lê config.json se presente
+    # Lê manifest.json (V14-C.3) ou config.json (retrocompatibilidade)
+    manifest_file = os.path.join(resolved_pack_dir, "manifest.json")
     config_file = os.path.join(resolved_pack_dir, "config.json")
     pack_config: Dict[str, Any] = {}
-    if os.path.isfile(config_file):
+
+    target_config_file = manifest_file if os.path.isfile(manifest_file) else config_file
+    if os.path.isfile(target_config_file):
         try:
-            with open(config_file, "r", encoding="utf-8") as f:
+            with open(target_config_file, "r", encoding="utf-8") as f:
                 pack_config = json.load(f)
         except Exception as exc:
-            logger.warning(f"[PRESENTER] Falha ao ler config.json de {clean_id}: {exc}")
+            logger.warning(f"[PRESENTER] Falha ao ler manifest/config de {clean_id}: {exc}")
 
-    # Mapeia poses disponíveis
-    poses_config = pack_config.get("poses", {})
+    # Mapeia poses disponíveis considerando core_poses, extended_poses e poses legado
+    poses_config: Dict[str, str] = {}
+    if "core_poses" in pack_config:
+        poses_config.update(pack_config.get("core_poses", {}))
+    if "extended_poses" in pack_config:
+        poses_config.update(pack_config.get("extended_poses", {}))
+    if "poses" in pack_config:
+        poses_config.update(pack_config.get("poses", {}))
+
     resolved_poses: Dict[str, str] = {}
+    all_pose_candidates = list(
+        dict.fromkeys(CANONICAL_CORE_POSES + CANONICAL_EXTENDED_POSES + list(poses_config.keys()))
+    )
 
-    for pose_name in STANDARD_PRESENTER_POSES:
+    for pose_name in all_pose_candidates:
         filename = poses_config.get(pose_name)
         if filename:
             file_path = os.path.join(resolved_pack_dir, filename)
@@ -247,7 +308,18 @@ def resolve_character_pack(
                 resolved_poses[pose_name] = file_path
                 continue
 
-        # Procura convenção direta <pose_name>.png ou <pose_name>.webp
+        # Procura convenção em subdiretório poses/
+        found_sub = False
+        for ext in (".png", ".webp"):
+            sub_candidate = os.path.join(resolved_pack_dir, "poses", f"{pose_name}{ext}")
+            if os.path.isfile(sub_candidate):
+                resolved_poses[pose_name] = sub_candidate
+                found_sub = True
+                break
+        if found_sub:
+            continue
+
+        # Procura convenção direta na raiz: <pose_name>.png ou <pose_name>.webp
         for ext in (".png", ".webp"):
             candidate_file = os.path.join(resolved_pack_dir, f"{pose_name}{ext}")
             if os.path.isfile(candidate_file):
@@ -255,7 +327,12 @@ def resolve_character_pack(
                 break
 
     # Validação de integridade do pack: poses obrigatórias
-    missing_core = [p for p in REQUIRED_CORE_POSES if p not in resolved_poses]
+    core_req = (
+        CANONICAL_CORE_POSES
+        if ("core_poses" in pack_config or os.path.isfile(manifest_file))
+        else REQUIRED_CORE_POSES
+    )
+    missing_core = [p for p in core_req if p not in resolved_poses]
     if missing_core:
         raise ValueError(
             f"Character pack '{clean_id}' incompleto. Poses obrigatórias ausentes: {missing_core}"
@@ -403,13 +480,25 @@ def resolve_pose_with_fallback(
     pose: str,
     available_poses: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Resolve pose garantindo fallback em cadeia segura:
-    specific_pose -> talking_1 -> neutral.
+    """Resolve pose garantindo fallback em cadeia segura através do Fallback Graph (Fase V14-C.3).
+
+    1. Pose solicitada (se presente).
+    2. Fallback Graph para poses estendidas (ex: confused -> thinking -> neutral).
+    3. talking_1 (se presente).
+    4. neutral (se presente).
+    5. Primeira pose disponível no pack.
     """
     if not available_poses:
         return pose
     if pose in available_poses:
         return pose
+
+    # Consulta grafo de fallbacks para poses estendidas
+    if pose in EXTENDED_POSE_FALLBACKS:
+        for fb in EXTENDED_POSE_FALLBACKS[pose]:
+            if fb in available_poses:
+                return fb
+
     if "talking_1" in available_poses:
         return "talking_1"
     if "neutral" in available_poses:
@@ -1173,4 +1262,225 @@ def render_presenter_preview(
         logger=None,
     )
     clip.close()
+    return str(out_p)
+
+
+def validate_character_pack_assets(
+    pack_dir_or_id: Union[str, Path],
+    custom_root: Optional[str] = None,
+) -> Tuple[bool, List[str]]:
+    """Valida a consistência visual e integridade dos assets do Character Pack (Fase V14-C.3).
+
+    Regras de validação:
+    1. Diretório do pack existe.
+    2. manifest.json ou config.json existe e possui JSON válido.
+    3. Todas as poses do core pack (9 poses) existem fisicamente.
+    4. Cada arquivo de pose existente é um PNG válido.
+    5. Cada pose possui canal alfa com transparência (RGBA e píxeis transparentes).
+    6. Todas as poses compartilham as mesmas dimensões de tela/canvas (consistência de escala).
+    7. Poses estendidas ausentes NÃO causam erro (são opcionais).
+
+    Retorna: (is_valid, lista_de_erros)
+    """
+    errors: List[str] = []
+    p_path = Path(pack_dir_or_id)
+
+    if not p_path.is_dir():
+        resolved_dir = None
+        for s_root in ([custom_root] if custom_root else []) + get_character_pack_search_dirs():
+            cand = Path(s_root) / str(pack_dir_or_id)
+            if cand.is_dir():
+                resolved_dir = cand
+                break
+        if not resolved_dir:
+            return False, [f"Diretório do character pack não encontrado: '{pack_dir_or_id}'"]
+        p_path = resolved_dir
+
+    manifest_file = p_path / "manifest.json"
+    config_file = p_path / "config.json"
+    target_config = manifest_file if manifest_file.is_file() else (config_file if config_file.is_file() else None)
+
+    if not target_config:
+        errors.append("Manifest (manifest.json ou config.json) não encontrado no diretório do pack.")
+        return False, errors
+
+    config_data: Dict[str, Any] = {}
+    try:
+        config_data = json.loads(target_config.read_text(encoding="utf-8"))
+    except Exception as exc:
+        errors.append(f"Erro ao analisar JSON do manifest: {exc}")
+        return False, errors
+
+    poses_map: Dict[str, str] = {}
+    if "core_poses" in config_data:
+        poses_map.update(config_data.get("core_poses", {}))
+    if "extended_poses" in config_data:
+        poses_map.update(config_data.get("extended_poses", {}))
+    if "poses" in config_data:
+        poses_map.update(config_data.get("poses", {}))
+
+    # 1. Validação de Core Poses (obrigatórias)
+    resolved_core_files: Dict[str, Path] = {}
+    for pose in CANONICAL_CORE_POSES:
+        rel_target = poses_map.get(pose)
+        candidate = None
+        if rel_target and (p_path / rel_target).is_file():
+            candidate = p_path / rel_target
+        elif (p_path / "poses" / f"{pose}.png").is_file():
+            candidate = p_path / "poses" / f"{pose}.png"
+        elif (p_path / f"{pose}.png").is_file():
+            candidate = p_path / f"{pose}.png"
+
+        if candidate:
+            resolved_core_files[pose] = candidate
+        else:
+            errors.append(f"Pose obrigatória do Core Pack ausente: '{pose}'")
+
+    # 2. Resolução de Extended Poses (opcionais, mas se existirem devem ser validadas)
+    resolved_extended_files: Dict[str, Path] = {}
+    for pose in CANONICAL_EXTENDED_POSES:
+        rel_target = poses_map.get(pose)
+        candidate = None
+        if rel_target and (p_path / rel_target).is_file():
+            candidate = p_path / rel_target
+        elif (p_path / "poses" / f"{pose}.png").is_file():
+            candidate = p_path / "poses" / f"{pose}.png"
+        elif (p_path / f"{pose}.png").is_file():
+            candidate = p_path / f"{pose}.png"
+
+        if candidate:
+            resolved_extended_files[pose] = candidate
+
+    all_files_to_check = {**resolved_core_files, **resolved_extended_files}
+
+    # 3. Validação gráfica (formato, RGBA, transparência, dimensões consistentes)
+    from PIL import Image
+
+    ref_size: Optional[Tuple[int, int]] = None
+    ref_pose_name: Optional[str] = None
+
+    for pose_name, file_path in all_files_to_check.items():
+        try:
+            with Image.open(file_path) as img:
+                if img.format != "PNG":
+                    errors.append(f"Pose '{pose_name}' deve ser formato PNG (encontrado: {img.format})")
+
+                if img.mode != "RGBA":
+                    errors.append(f"Pose '{pose_name}' deve possuir canal alfa RGBA (encontrado modo: '{img.mode}')")
+                else:
+                    alpha = img.split()[-1]
+                    extrema = alpha.getextrema()
+                    if extrema[0] == 255:
+                        errors.append(f"Pose '{pose_name}' não possui fundo transparente (canal alfa 100% opaco)")
+
+                if ref_size is None:
+                    ref_size = img.size
+                    ref_pose_name = pose_name
+                elif img.size != ref_size:
+                    errors.append(
+                        f"Dimensões incompatíveis na pose '{pose_name}': {img.size} != dimensão de referência {ref_size} (de '{ref_pose_name}')"
+                    )
+        except Exception as exc:
+            errors.append(f"Falha ao ler imagem da pose '{pose_name}' ({file_path.name}): {exc}")
+
+    is_valid = len(errors) == 0
+    return is_valid, errors
+
+
+def generate_contact_sheet(
+    character_id_or_pack: Any,
+    output_path: str,
+    custom_root: Optional[str] = None,
+    thumbnail_size: Tuple[int, int] = (240, 240),
+    include_extended: bool = True,
+    bg_color: Tuple[int, int, int] = (20, 22, 30),
+) -> str:
+    """Gera uma folha de contato (contact sheet / preview local) reunindo todas as poses do pack.
+
+    Organiza:
+    - Seção Superior: Core Poses em grid 3x3 com rótulos
+    - Seção Inferior: Extended Poses (se houver no pack)
+    Salva imagem PNG de alta fidelidade para inspeção visual do operador.
+    """
+    from PIL import Image, ImageDraw
+
+    if isinstance(character_id_or_pack, dict) and "poses" in character_id_or_pack:
+        pack = character_id_or_pack
+    else:
+        pack = resolve_character_pack(str(character_id_or_pack), custom_root=custom_root)
+
+    poses_dict = pack.get("poses", {})
+
+    core_poses_to_draw = [p for p in CANONICAL_CORE_POSES if p in poses_dict]
+    extended_poses_to_draw = (
+        [p for p in CANONICAL_EXTENDED_POSES if p in poses_dict] if include_extended else []
+    )
+
+    thumb_w, thumb_h = thumbnail_size
+    cols = 3
+    pad = 16
+    label_h = 28
+    cell_w = thumb_w + pad * 2
+    cell_h = thumb_h + label_h + pad * 2
+
+    core_rows = (len(core_poses_to_draw) + cols - 1) // cols if core_poses_to_draw else 1
+    ext_rows = (len(extended_poses_to_draw) + cols - 1) // cols if extended_poses_to_draw else 0
+
+    header_h = 50
+    section_divider_h = 40 if ext_rows > 0 else 0
+
+    total_w = cols * cell_w
+    total_h = header_h + (core_rows * cell_h) + section_divider_h + (ext_rows * cell_h) + pad
+
+    sheet = Image.new("RGBA", (total_w, total_h), (*bg_color, 255))
+    draw = ImageDraw.Draw(sheet)
+
+    char_name = pack.get("name", pack.get("character_id", "Nox"))
+    char_id = pack.get("character_id", "nox_v1")
+    title_text = f"Character Asset Pack: {char_name} ({char_id}) - Core Poses"
+    draw.text((pad, 16), title_text, fill=(240, 240, 250, 255))
+
+    def _draw_pose_cell(x0, y0, pose_name, file_path):
+        draw.rounded_rectangle(
+            [x0, y0, x0 + cell_w - 8, y0 + cell_h - 8],
+            radius=8,
+            fill=(32, 35, 48, 255),
+        )
+
+        try:
+            with Image.open(file_path) as img:
+                img_rgba = img.convert("RGBA")
+                img_rgba.thumbnail((thumb_w, thumb_h), Image.Resampling.LANCZOS)
+                offset_x = x0 + (cell_w - 8 - img_rgba.width) // 2
+                offset_y = y0 + pad + (thumb_h - img_rgba.height) // 2
+                sheet.alpha_composite(img_rgba, (offset_x, offset_y))
+        except Exception:
+            pass
+
+        draw.text(
+            (x0 + pad, y0 + cell_h - label_h - 4),
+            pose_name,
+            fill=(180, 190, 210, 255),
+        )
+
+    for idx, p_name in enumerate(core_poses_to_draw):
+        r = idx // cols
+        c = idx % cols
+        x = c * cell_w + 4
+        y = header_h + r * cell_h
+        _draw_pose_cell(x, y, p_name, poses_dict[p_name])
+
+    if ext_rows > 0:
+        ext_y_start = header_h + (core_rows * cell_h) + pad
+        draw.text((pad, ext_y_start), "Extended Motion Poses", fill=(160, 200, 255, 255))
+        for idx, p_name in enumerate(extended_poses_to_draw):
+            r = idx // cols
+            c = idx % cols
+            x = c * cell_w + 4
+            y = ext_y_start + 30 + r * cell_h
+            _draw_pose_cell(x, y, p_name, poses_dict[p_name])
+
+    out_p = Path(output_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(out_p, "PNG")
     return str(out_p)

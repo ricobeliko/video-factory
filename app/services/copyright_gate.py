@@ -582,6 +582,8 @@ def get_copyright_provenance_summary(
         "copyright_source": c_source,
         "copyright_note": c_note,
         "feedback_loop_eligible": feedback_eligible,
+        "publication_event_id": c_info.get("publication_event_id"),
+        "external_id": c_info.get("external_id"),
         "presenter_mode": presenter_mode,
         "presenter_character_id": presenter_character_id or "none",
         "presenter_provider": presenter_provider,

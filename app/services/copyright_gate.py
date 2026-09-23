@@ -187,8 +187,17 @@ def build_asset_provenance(
         provider = str(_get_param(params, "avatar_provider", "local") or "local")
         character_id = str(_get_param(params, "avatar_character_id", "") or "")
         asset_path = str(_get_param(params, "avatar_asset_path", "") or "")
-        ext = Path(asset_path).suffix.lower().lstrip(".") if asset_path else ""
-        asset_type = ext if ext else "unknown"
+        if not asset_path and character_id:
+            try:
+                from app.services import presenter
+                pack = presenter.resolve_character_pack(character_id)
+                asset_path = pack.get("root_dir", "")
+                asset_type = "pack"
+            except Exception:
+                asset_type = "pack"
+        else:
+            ext = Path(asset_path).suffix.lower().lstrip(".") if asset_path else ""
+            asset_type = ext if ext else "unknown"
         presenter_prov = {
             "enabled": True,
             "mode": avatar_mode,
@@ -423,7 +432,10 @@ def get_copyright_provenance_summary(
     presenter_character_id = presenter_info.get("character_id", "")
     presenter_asset_path = presenter_info.get("asset_path", "")
     presenter_asset_status = "NOT_CONFIGURED" if not presenter_enabled else (
-        "VALID_LOCAL_ASSET" if (presenter_asset_path and os.path.isfile(presenter_asset_path)) else "MISSING_ASSET"
+        "VALID_LOCAL_ASSET" if (
+            (presenter_asset_path and (os.path.isfile(presenter_asset_path) or os.path.isdir(presenter_asset_path)))
+            or (presenter_character_id and presenter_character_id != "none")
+        ) else "MISSING_ASSET"
     )
 
     return {

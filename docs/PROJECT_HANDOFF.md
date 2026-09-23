@@ -25,6 +25,7 @@
 - **V14-C.3 Nox Foundation** = EXPERIMENT ARCHIVED / DORMANT
 - **Presenter autonomous**: OFF (`avatar_mode="none"`)
 - **TikTok**: OFF / NOT HOMOLOGATED
+- **V15-A Production Observability Baseline** = DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
 
 ### Produção Atual (Estado Operacional Consolidado):
 - **PC forte** = autoridade de produção (`C:\Projetos\MoneyPrinterTurbo`)
@@ -70,20 +71,16 @@
   - Metodologia: `OBSERVAR → MEDIR → IDENTIFICAR GARGALO REAL → PRIORIZAR → OTIMIZAR`
   - Evitar rigorosamente: otimização prematura, novos providers, novos avatares, novos canais, TikTok ou aumento de volume sem evidências.
 - **Subfase Ativa:** **V15-A — Production Observability Baseline**
-  - **Objetivo:** Diagnóstico PASSIVO e estruturado do comportamento real dos dois canais:
-    - Canal Principal: `profile_id = default`
-    - Canal Secundário: `profile_id = profile-historias-misterio`
-  - **9 Dimensões de Observação Passiva:**
-    1. Autonomous Production (estado, último ciclo, geração atual, waiting task, estoque pronto)
-    2. Scheduler (scheduled, published, failed, retry, próximos slots)
-    3. Gates (Safety, Quality, Copyright Provenance)
-    4. Produção 24h (tentativas, aprovações, rejeições, razões)
-    5. Publicações (sucessos, falhas, visibilidade pública, status de copyright)
-    6. Analytics (snapshots coletados, idade do fetch, provider, erros)
-    7. Closed Feedback Loop (baseline/adaptive, amostras elegíveis, decisões de tema/estrutura, isolamento por canal)
-    8. Multi-Channel (confirmação de que a UI NÃO controla worker, independência dos perfis)
-    9. Cost Guard (limites por perfil WARMUP/SCALE e teto global)
-  - **Critérios de Aceite para V15-A:** Coleta estritamente passiva e sem mutação de produção de status, estoque, scheduler, publicações, métricas, copyright, feedback loop e contadores 24h, preferencialmente via Operator Console e serviços existentes. Zero alteração de schema.
+  - **Status:** DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
+  - **Implementação Realizada:**
+    1. Serviço read-only criado: `app/services/production_observability.py` com função `get_production_observability_snapshot()`.
+    2. Coleta passiva completa das 9 dimensões operacionais para os dois canais (`default` e `profile-historias-misterio`).
+    3. Alertas factuais observáveis sem score arbitrário: `READY_STOCK_EMPTY`, `COPYRIGHT_BLOCKED`, `SCHEDULER_FAILURES_PRESENT`, `CLOSED_LOOP_BASELINE`, `ANALYTICS_STALE`, `GLOBAL_COST_GUARD_NEAR_LIMIT`.
+    4. CLI read-only com saída estritamente JSON em stdout e logs silenciados: `python -m app.services.production_observability --json`.
+    5. Seção no Operator Console: `"📊 Production Observability — V15"` com visualização lado a lado.
+    6. Fail-safe por seção (`status="unavailable"` sem derrubar snapshot) e distinção estrita entre 0, "unknown" e "unavailable".
+    7. Validação direcionada: 7 testes PASS (`test/services/test_production_observability.py`) cobrindo isolamento, zero mutações, zero network, e serialização JSON.
+  - **Próximo Gate:** Deploy seguro via `scripts/update_production.ps1` e execução read-only no PC forte.
 
 ---
 

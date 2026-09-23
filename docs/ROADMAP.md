@@ -37,6 +37,7 @@
 - **Presenter autonomous**: OFF
 - **avatar_mode**: `none`
 - **TikTok**: OFF / NOT HOMOLOGATED
+- **V15-A Production Observability Baseline** = DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
 
 ## Produção Atual (Estado Operacional Consolidado)
 
@@ -113,7 +114,18 @@ Evitar rigorosamente:
 
 ## V15-A — Production Observability Baseline
 
-**Status:** OPEN (Próxima fase ativa)
+**Status:** DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
+
+- **Implementação DEV Concluída:**
+  - Serviço read-only: `app/services/production_observability.py`.
+  - Função principal: `get_production_observability_snapshot()`.
+  - CLI com saída JSON estrita e sanitizada: `python -m app.services.production_observability --json`.
+  - Coleta passiva das 9 dimensões operacionais para `default` e `profile-historias-misterio`.
+  - Alertas factuais observáveis (sem score arbitrário): `READY_STOCK_EMPTY`, `COPYRIGHT_BLOCKED`, `SCHEDULER_FAILURES_PRESENT`, `CLOSED_LOOP_BASELINE`, `ANALYTICS_STALE`, `GLOBAL_COST_GUARD_NEAR_LIMIT`.
+  - Seção read-only no Operator Console: `"📊 Production Observability — V15"` com visualização lado a lado.
+  - Zero mutações, zero alteração de schema, zero network.
+  - Validação direcionada: 7 testes PASS (`test/services/test_production_observability.py`).
+- **Próximo Gate:** Deploy seguro via `scripts/update_production.ps1` e execução read-only no PC forte.
 
 ### Objetivo
 Criar um diagnóstico PASSIVO e estruturado do comportamento real dos dois canais em produção contínua:

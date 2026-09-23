@@ -368,7 +368,18 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   7. Backlog: exclusão no Closed Feedback Loop de publicações com reivindicação comprovada.
   8. Card "Copyright / Assets" no Operator Console.
 
+## V14-B.1 — Legacy Stock Copyright Quarantine (Hotfix)
+
+- **Status:** ✅ Implementado
+- **Causa Raiz:** Vídeos antigos já renderizados (23 assets não publicados) possuíam `bgm_type="random"` ou `bgm_type="custom"` e ausência de `asset_provenance`. O loop autônomo recuperava esses vídeos no `get_autonomous_ready_stock()` e `_recover_waiting_task()`. Além disso, `build_asset_provenance` não lia corretamente parâmetros quando em formato `dict`.
+- **Correções:**
+  1. Suporte universal a `dict` e objetos em `build_asset_provenance()` via `_get_param()`.
+  2. Tarefas antigas com `bgm_type="random"` e `bgm_type="custom"` sem proveniência avaliam estritamente como `COPYRIGHT_PROVENANCE_GATE = FAIL`.
+  3. `_recover_waiting_task()` e `get_autonomous_ready_stock()` agora exigem `evaluate_copyright_provenance_gate == PASS`, excluindo automaticamente os 23 vídeos legados do estoque autônomo e do agendamento autônomo.
+  4. Preservação física e histórica: nenhum arquivo apagado, nenhum registro cancelado. Fluxo manual legado preservado.
+
 ## V14-C — Hybrid Character Overlay MVP (Próxima Fase)
+
 
 - **Status:** 🔵 planejado
 - **Arquitetura Selecionada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG loop).

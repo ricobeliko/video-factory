@@ -1204,7 +1204,7 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
     from app.services import copyright_gate
     cp_approved, cp_reason, cp_metrics = copyright_gate.evaluate_copyright_provenance_gate(
         task_id=task_id,
-        task_base_dir=None,
+        task_base_dir=task_base_dir,
         db_path=db_path,
     )
     if not cp_approved:
@@ -1576,11 +1576,24 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         raise ValueError("waiting_youtube_channel_unavailable")
     chan_id = resolved_channel[0].get("channel_id") or resolved_channel[0].get("id")
     prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
+
+    # Validação do Copyright Provenance Gate (V14-B.1: fail-closed para assets existentes)
+    from app.services import copyright_gate
+    cp_ok, cp_reason, _ = copyright_gate.evaluate_copyright_provenance_gate(
+        task_id=task_id,
+        task_data=task,
+        task_base_dir=task_base_dir,
+        db_path=db_path,
+    )
+    if not cp_ok:
+        raise ValueError(f"waiting_copyright_provenance_failed: {cp_reason}")
+
     task.update(task_id=task_id, state=const.TASK_STATE_COMPLETE, video_file=video,
                 safety_status=const.SAFETY_STATUS_PASS, planned_platforms=["youtube"],
                 profile_id=prof_id, quality_score=score,
                 quality_label=quality["quality_label"],
-                channel_id=chan_id)
+                channel_id=chan_id,
+                copyright_provenance_gate="PASS")
     return task
 
 

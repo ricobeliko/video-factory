@@ -1,5 +1,26 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
+## V14-B.2 — Manual Copyright Status + Closed Feedback Loop Exclusion — MERGED
+
+- **Baseline:** `150056215fcbd8296fcdeac56abac0d37f787cc8`
+- **Contexto Operacional:** Produção parada após homologação da V14-B e V14-B.1. Evidência real conhecida: task `815b0958-b94e-457b-932d-b10dfb0e8dba` (YouTube `XVy8MbpJFqw`) publicada com sucesso e posteriormente bloqueada mundialmente via Content ID no YouTube Studio. O YouTube Data API não fornece status detalhado de Content ID, exigindo status manual/auditável do operador.
+- **Implementação Realizada:**
+  1. Status de copyright suportados: `unknown`, `clean_manual`, `claimed`, `blocked`, `strike` (com source `operator` e espaço futuro para `future_provider`).
+  2. Persistência auditável em `operational_events` com `metadata_json` completo (`task_id`, `publication_event_id`, `platform`, `external_id`, `copyright_status`, `source`, `timestamp`, `note`) sem migrações ou tabelas novas no SQLite.
+  3. Operações no Console do Operador:
+     - `set_publication_copyright_status_op(...)`: PRIMARY only, valida status permitido, valida publicação existente no YouTube em status `success`, idempotente quando o mesmo status é reaplicado, nunca chama rede.
+     - `get_publication_copyright_status(...)`: leitura do status mais recente (read-only), retornando `unknown` para publicações sem registro.
+  4. Regra crítica no Closed Feedback Loop (`analytics.get_learning_evidence`):
+     - `clean_manual` => elegível de copyright para compor amostras de aprendizado.
+     - `claimed`, `blocked`, `strike` => SEMPRE EXCLUÍDOS.
+     - `unknown` (inclusive publicações legadas sem status) => FAIL CLOSED (EXCLUÍDOS).
+     - Auditoria explícita em `excluded_counts_by_reason`: `copyright_unknown`, `copyright_claimed`, `copyright_blocked`, `copyright_strike`.
+  5. Preservação integral de histórico: métricas e registros de publicação nunca são apagados.
+  6. Operator Console UI: card Copyright / Assets atualizado com badges de status, source e elegibilidade do loop, e formulário auditável não-destrutivo para marcação manual.
+  7. Preparação para o vídeo bloqueado conhecido: task `815b0958-b94e-457b-932d-b10dfb0e8dba` (YouTube `XVy8MbpJFqw`) pronta para marcação como `blocked` pós-deploy.
+  8. Presenter: DORMANT (experimento arquivado em branch separada, produção e main mantidas com `avatar_mode="none"`).
+- **Próximo Passo:** V13 — Headless Remote Deployment / Safe Update.
+
 ## V14-C.3 — Nox Canonical Visual Asset Pack + Real Local Preview — DEV FOUNDATION
 
 - **Baseline:** `447a36789850857a66422ad06f1800f18cccd96a`

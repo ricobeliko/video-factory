@@ -8,6 +8,24 @@
 - Full regression exige autorização humana explícita.
 - Esta política prevalece sobre registros históricos de validação de fases anteriores.
 
+## V14-B.2 — Manual Copyright Status + Closed Feedback Loop Exclusion — 23/09/2026
+
+Implementação concluída em desenvolvimento: rastreamento persistente e auditável de status de direitos autorais por publicação/tarefa (`unknown`, `clean_manual`, `claimed`, `blocked`, `strike`), com fail-closed para o Closed Feedback Loop.
+
+- **Status de Direitos Autorais Auditáveis:** `set_publication_copyright_status_op` e `get_publication_copyright_status` persistidos em `operational_events` com metadata estruturado completo (`task_id`, `publication_event_id`, `platform`, `external_id`, `copyright_status`, `source='operator'`, `timestamp`, `note`).
+- **Zero Schema Change:** Reutiliza `operational_events` existente sem migrações ou tabelas novas. Idempotente quando o mesmo status e nota são reaplicados.
+- **Regra Crítica do Closed Feedback Loop:**
+  - `clean_manual`: elegível do ponto de vista de copyright (pode compor amostras de aprendizado).
+  - `claimed`, `blocked`, `strike`: SEMPRE EXCLUÍDOS.
+  - `unknown` (incluindo publicações legadas sem status): FAIL CLOSED (EXCLUÍDOS).
+  - Razões explícitas de auditoria registradas: `copyright_unknown`, `copyright_claimed`, `copyright_blocked`, `copyright_strike`.
+- **Preservação de Dados:** Nenhum evento de publicação, métrica de analytics ou histórico de tarefas é apagado ou modificado.
+- **Operator Console:** Exibição clara no card Copyright / Assets com badges de status, source e elegibilidade do loop, além de formulário auditável não-destrutivo para o operador marcar status manualmente (PRIMARY only).
+- **Vídeo Bloqueado Conhecido:** Fluxo preparado para marcação manual pós-deploy da task `815b0958-b94e-457b-932d-b10dfb0e8dba` (YouTube `XVy8MbpJFqw`) como `blocked`.
+- **Presenter:** DORMANT (experimento arquivado em branch separada, produção e main mantidas com `avatar_mode="none"`).
+- **Próxima fase após V14-B.2:** V13 — Headless Remote Deployment / Safe Update.
+
+
 ## V12-E.3 — gate DEV controlado — 21/09/2026
 
 Hardening independente da V12-F.2: estoque YouTube recuperável por persistência,

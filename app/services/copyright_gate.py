@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,15 +25,28 @@ from app.utils import utils
 # Provedores visuais autorizados para o fluxo autônomo
 ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS = frozenset({"pexels", "pixabay", "coverr"})
 
-# Conceitos para status futuro de direitos autorais (sem polling automático)
+# Conceitos para status de direitos autorais (V14-B.2 - Manual / Operador / Auditável)
 COPYRIGHT_STATUS_UNKNOWN = "unknown"
 COPYRIGHT_STATUS_CLEAN_MANUAL = "clean_manual"
 COPYRIGHT_STATUS_CLAIMED = "claimed"
 COPYRIGHT_STATUS_BLOCKED = "blocked"
 COPYRIGHT_STATUS_STRIKE = "strike"
 
+ALLOWED_COPYRIGHT_STATUSES = frozenset({
+    COPYRIGHT_STATUS_UNKNOWN,
+    COPYRIGHT_STATUS_CLEAN_MANUAL,
+    COPYRIGHT_STATUS_CLAIMED,
+    COPYRIGHT_STATUS_BLOCKED,
+    COPYRIGHT_STATUS_STRIKE,
+})
+
 COPYRIGHT_SOURCE_OPERATOR = "operator"
 COPYRIGHT_SOURCE_FUTURE_PROVIDER = "future_provider"
+
+ALLOWED_COPYRIGHT_SOURCES = frozenset({
+    COPYRIGHT_SOURCE_OPERATOR,
+    COPYRIGHT_SOURCE_FUTURE_PROVIDER,
+})
 
 
 def _get_param(params: Any, key: str, default: Any = None) -> Any:
@@ -287,7 +301,6 @@ def evaluate_copyright_provenance_gate(
     # 1. Verificação de BGM
     bgm_type = str(_get_param(params_data, "bgm_type", "") or "").lower().strip()
 
-
     if bgm_info.get("enabled"):
         bgm_source = str(bgm_info.get("source", "")).lower()
         if "legacy" in bgm_source or "songs" in bgm_source or bgm_type in ("random", "preset"):
@@ -356,6 +369,113 @@ def evaluate_copyright_provenance_gate(
     )
 
 
+def get_publication_copyright_status(
+    publication_event_id: Optional[int] = None,
+    task_id: Optional[str] = None,
+    external_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Consulta o status de copyright persistido e auditável para uma publicação/tarefa (V14-B.2).
+
+    Recupera o registro mais recente em `operational_events` com event_type='PUBLICATION_COPYRIGHT_STATUS_SET'.
+    Se nenhum registro auditado existir (como em publicações legadas), retorna status efetivo 'unknown'.
+    Nunca chama rede nem APIs externas.
+    """
+    from app.services import scheduler
+
+    clean_task_id = str(task_id).strip() if task_id else None
+    clean_external_id = str(external_id).strip() if external_id else None
+    clean_pub_id = int(publication_event_id) if publication_event_id is not None else None
+
+    # Garante tabela operational_events se banco já existir
+    try:
+        from app.services import operator_console
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
+
+    with scheduler.get_connection(db_path) as conn:
+        pub_row = None
+        if clean_pub_id is not None:
+            pub_row = conn.execute("SELECT * FROM publication_events WHERE id = ?", (clean_pub_id,)).fetchone()
+        elif clean_task_id:
+            pub_row = conn.execute(
+                "SELECT * FROM publication_events WHERE task_id = ? AND platform = 'youtube' ORDER BY id DESC LIMIT 1",
+                (clean_task_id,),
+            ).fetchone()
+        elif clean_external_id:
+            pub_row = conn.execute(
+                "SELECT * FROM publication_events WHERE external_id = ? AND platform = 'youtube' ORDER BY id DESC LIMIT 1",
+                (clean_external_id,),
+            ).fetchone()
+
+        resolved_pub_id = clean_pub_id or (pub_row["id"] if pub_row else None)
+        resolved_task_id = clean_task_id or (pub_row["task_id"] if pub_row else None)
+        resolved_external_id = clean_external_id or (pub_row["external_id"] if pub_row else None)
+        resolved_platform = (pub_row["platform"] if pub_row else "youtube")
+
+        try:
+            op_rows = conn.execute(
+                "SELECT id, timestamp, metadata_json FROM operational_events "
+                "WHERE event_type = 'PUBLICATION_COPYRIGHT_STATUS_SET' "
+                "ORDER BY id DESC"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            op_rows = []
+
+        for row in op_rows:
+            try:
+                meta = json.loads(row["metadata_json"] or "{}")
+                m_pub_id = meta.get("publication_event_id")
+                m_task_id = meta.get("task_id")
+                m_ext_id = meta.get("external_id")
+
+                match = False
+                if resolved_pub_id is not None and m_pub_id is not None:
+                    if int(m_pub_id) == int(resolved_pub_id):
+                        match = True
+                elif resolved_task_id and m_task_id:
+                    if str(m_task_id) == str(resolved_task_id):
+                        match = True
+                elif resolved_external_id and m_ext_id:
+                    if str(m_ext_id) == str(resolved_external_id):
+                        match = True
+
+                if match:
+                    c_status = str(meta.get("copyright_status") or COPYRIGHT_STATUS_UNKNOWN).strip().lower()
+                    if c_status not in ALLOWED_COPYRIGHT_STATUSES:
+                        c_status = COPYRIGHT_STATUS_UNKNOWN
+                    return {
+                        "publication_event_id": resolved_pub_id if resolved_pub_id is not None else m_pub_id,
+                        "task_id": resolved_task_id or m_task_id,
+                        "platform": meta.get("platform", resolved_platform),
+                        "external_id": resolved_external_id or m_ext_id,
+                        "copyright_status": c_status,
+                        "source": meta.get("source", COPYRIGHT_SOURCE_OPERATOR),
+                        "timestamp": meta.get("timestamp") or row["timestamp"],
+                        "note": meta.get("note") or meta.get("optional_note"),
+                    }
+            except Exception:
+                continue
+
+    return {
+        "publication_event_id": resolved_pub_id,
+        "task_id": resolved_task_id,
+        "platform": resolved_platform,
+        "external_id": resolved_external_id,
+        "copyright_status": COPYRIGHT_STATUS_UNKNOWN,
+        "source": None,
+        "timestamp": None,
+        "note": None,
+    }
+
+
+def set_publication_copyright_status_op(*args, **kwargs):
+    """Encaminha para a operação auditável em operator_console (PRIMARY only)."""
+    from app.services import operator_console
+    return operator_console.set_publication_copyright_status_op(*args, **kwargs)
+
+
 def get_copyright_provenance_summary(
     task_id: Optional[str] = None,
     profile_id: Optional[str] = None,
@@ -367,7 +487,6 @@ def get_copyright_provenance_summary(
 
     resolved_task_id = task_id
     if not resolved_task_id:
-        # Tenta pegar a tarefa atual do perfil ou a última tarefa registrada
         try:
             from app.services import autonomous_production
             status_data = autonomous_production.get_autonomous_status(
@@ -390,7 +509,13 @@ def get_copyright_provenance_summary(
             "provenance_status": "SAFE_NO_BGM",
             "copyright_gate_status": "PASS",
             "copyright_status": COPYRIGHT_STATUS_UNKNOWN,
-            "feedback_loop_eligible": True,
+            "copyright_source": "—",
+            "copyright_note": None,
+            "feedback_loop_eligible": False,
+            "presenter_mode": "none",
+            "presenter_character_id": "none",
+            "presenter_provider": "local",
+            "presenter_asset_status": "NOT_CONFIGURED",
         }
 
     task_mem = sm.state.get_task(resolved_task_id) or {}
@@ -438,6 +563,12 @@ def get_copyright_provenance_summary(
         ) else "MISSING_ASSET"
     )
 
+    c_info = get_publication_copyright_status(task_id=resolved_task_id, db_path=db_path)
+    c_status = c_info.get("copyright_status") or COPYRIGHT_STATUS_UNKNOWN
+    c_source = c_info.get("source") or "—"
+    c_note = c_info.get("note")
+    feedback_eligible = (c_status == COPYRIGHT_STATUS_CLEAN_MANUAL)
+
     return {
         "task_id": resolved_task_id,
         "bgm_mode": "none" if not bgm_info.get("enabled") else "custom",
@@ -447,10 +578,13 @@ def get_copyright_provenance_summary(
         "clips_count": len(visual_clips),
         "provenance_status": asset_prov.get("provenance_status", "SAFE_NO_BGM"),
         "copyright_gate_status": "PASS" if gate_pass else "FAIL",
-        "copyright_status": COPYRIGHT_STATUS_UNKNOWN,
-        "feedback_loop_eligible": True,
+        "copyright_status": c_status,
+        "copyright_source": c_source,
+        "copyright_note": c_note,
+        "feedback_loop_eligible": feedback_eligible,
         "presenter_mode": presenter_mode,
         "presenter_character_id": presenter_character_id or "none",
         "presenter_provider": presenter_provider,
         "presenter_asset_status": presenter_asset_status,
     }
+

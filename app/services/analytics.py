@@ -108,6 +108,29 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
             rows = conn.execute(
                 "SELECT * FROM content_analytics WHERE platform=? AND profile_id=? AND channel_id=? ORDER BY id",
                 (clean_platform, clean_profile_id, clean_channel_id)).fetchall()
+
+            # V14-B.2: Consulta status de copyright auditados persistidos em operational_events
+            pub_copyright: Dict[int, str] = {}
+            task_copyright: Dict[str, str] = {}
+            try:
+                op_rows = conn.execute(
+                    "SELECT timestamp, metadata_json FROM operational_events "
+                    "WHERE event_type = 'PUBLICATION_COPYRIGHT_STATUS_SET' ORDER BY id ASC"
+                ).fetchall()
+                for op_r in op_rows:
+                    try:
+                        op_meta = json.loads(op_r["metadata_json"] or "{}")
+                        c_st = str(op_meta.get("copyright_status") or "").strip().lower()
+                        if c_st:
+                            if op_meta.get("publication_event_id") is not None:
+                                pub_copyright[int(op_meta["publication_event_id"])] = c_st
+                            if op_meta.get("task_id"):
+                                task_copyright[str(op_meta["task_id"])] = c_st
+                    except Exception:
+                        pass
+            except sqlite3.OperationalError:
+                pass
+
             selected = {}
             for row in rows:
                 item = dict(row)
@@ -125,6 +148,27 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
                 if not mapping or mapping[0] != profile_id:
                     exclude("task_profile_mismatch")
                     continue
+
+                # V14-B.2: Regra Crítica de Copyright para o Closed Feedback Loop
+                # Status clean_manual => elegível do ponto de vista de copyright
+                # Status claimed, blocked, strike => sempre excluir com razão explícita
+                # Status unknown (ou legado sem status) => FAIL CLOSED com razão copyright_unknown
+                c_status = pub_copyright.get(pub["id"]) or task_copyright.get(str(pub["task_id"])) or "unknown"
+                if c_status == "clean_manual":
+                    pass
+                elif c_status == "claimed":
+                    exclude("copyright_claimed")
+                    continue
+                elif c_status == "blocked":
+                    exclude("copyright_blocked")
+                    continue
+                elif c_status == "strike":
+                    exclude("copyright_strike")
+                    continue
+                else:
+                    exclude("copyright_unknown")
+                    continue
+
                 try:
                     published = _learning_time(pub["published_at"])
                     collected = _learning_time(item["collected_at"])
@@ -167,7 +211,7 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
                               "topic_cluster": classify_topic_cluster(item["topic"]),
                               "narrative_structure": item["narrative_structure"] if item["narrative_structure"] in const.NARRATIVE_STRUCTURES else None,
                               "views": item["views"], "engagement": (item["likes"] + item["comments"]) / item["views"] if item["views"] else 0,
-                              "age_hours": age}
+                              "age_hours": age, "copyright_status": c_status}
                     # Duplicate publication events for the same external video cannot multiply evidence.
                     key = pub["external_id"]
                     previous = selected.get(key)

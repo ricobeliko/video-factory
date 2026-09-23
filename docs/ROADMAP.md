@@ -348,16 +348,14 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
 
 # V14 — Virtual Presenter & Copyright Hardening
 
-## V14-A — Auditoria e Plano Técnico (Concluído)
-
-- **Status:** ✅ Concluído
+## V14-A — Auditoria e Plano Técnico
+- **Status:** ✅ AUDIT COMPLETED
 - **Evidência Real:** Task `815b0958-b94e-457b-932d-b10dfb0e8dba`, vídeo YouTube `XVy8MbpJFqw` publicado com sucesso, porém posteriormente bloqueado mundialmente por Content ID (conteúdo reivindicado; sem evidência de strike).
 - **Causa Raiz Identificada:** Faixas padrão de `resource/songs/*.mp3` originadas de vídeos do YouTube conforme aviso do README upstream, associadas ao sorteio `bgm_type="random"`.
 - **Arquitetura Recomendada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG) + Copyright Baseline Hardening.
 
-## V14-B — Copyright Baseline Hardening (Implementado)
-
-- **Status:** ✅ Implementado
+## V14-B — Copyright Baseline Hardening
+- **Status:** ✅ PRODUCTION HOMOLOGATED
 - **Escopo:**
   1. Bloqueio estrito de faixas legadas (`resource/songs/`) em novas gerações autônomas (`resolve_autonomous_bgm` com `bgm_type="none"`, `volume=0.0`, `SAFE_NO_BGM`).
   2. Uso manual legado preservado sem exclusão física dos arquivos.
@@ -369,8 +367,7 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   8. Card "Copyright / Assets" no Operator Console.
 
 ## V14-B.1 — Legacy Stock Copyright Quarantine (Hotfix)
-
-- **Status:** ✅ Implementado
+- **Status:** ✅ PRODUCTION HOMOLOGATED
 - **Causa Raiz:** Vídeos antigos já renderizados (23 assets não publicados) possuíam `bgm_type="random"` ou `bgm_type="custom"` e ausência de `asset_provenance`. O loop autônomo recuperava esses vídeos no `get_autonomous_ready_stock()` e `_recover_waiting_task()`. Além disso, `build_asset_provenance` não lia corretamente parâmetros quando em formato `dict`.
 - **Correções:**
   1. Suporte universal a `dict` e objetos em `build_asset_provenance()` via `_get_param()`.
@@ -378,53 +375,18 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   3. `_recover_waiting_task()` e `get_autonomous_ready_stock()` agora exigem `evaluate_copyright_provenance_gate == PASS`, excluindo automaticamente os 23 vídeos legados do estoque autônomo e do agendamento autônomo.
   4. Preservação física e histórica: nenhum arquivo apagado, nenhum registro cancelado. Fluxo manual legado preservado.
 
-## V14-C — Hybrid Character Overlay MVP (Próxima Fase)
-
-
-- **Status:** 🔵 planejado
-- **Arquitetura Selecionada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG loop).
-- **Custo e Dependências:** R$ 0,00; sem chamadas pagas, 100% offline via FFmpeg/MoviePy.
-- **Objetivo:** Adicionar personagem/apresentador virtual intercalado estrategicamente na composição 9:16 (modo Hybrid: hook inicial 0-3s, alternância com B-roll e encerramento).
-
-Modos previstos:
-
-```text
-none
-corner
-hybrid
-full
-```
-
-Preferência inicial:
-`hybrid`
-
-
-Campos previstos:
-
-```text
-avatar_mode
-avatar_provider
-avatar_character_id
-avatar_position
-avatar_scale
-avatar_opacity
-```
-
-Métricas previstas:
-
-```text
-lip_sync_score
-subtitle_sync_score
-presenter_visibility_score
-presenter_overlap_score
-narration_coverage_score
-```
-
-Default:
-`avatar_mode=none`
-
-Requisito:
-não quebrar o pipeline atual quando Presenter estiver desativado.
+## V14-C — Hybrid Character Overlay MVP
+- **Status:** 🟡 HYBRID PRESENTER MVP — DEV
+- **Arquitetura Selecionada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG transparente).
+- **Custo e Dependências:** R$ 0,00; sem chamadas pagas, 100% offline via MoviePy 2.x existente.
+- **Implementação:**
+  1. Suporte completo em `VideoParams` (`avatar_mode`, `avatar_provider`, `avatar_character_id`, `avatar_asset_path`, `avatar_position`, `avatar_scale`, `avatar_opacity`).
+  2. Módulo dedicado `app/services/presenter.py` com validação de config, bloqueio de traversal, layout seguro (safe margins para Shorts) e timeline híbrida determinística (`build_hybrid_presenter_segments`).
+  3. Composição Z-Order no `video.generate_video()` com legendas renderizadas no topo (`source_video_clip` -> `presenter_clips` -> `text_clips`).
+  4. Proveniência de presenter integrada a `build_asset_provenance()` em `copyright_gate.py`.
+  5. Telemetria no Operator Console: Mode, Character ID, Provider e Asset Status.
+  6. Modo autônomo estritamente mantido em `avatar_mode="none"`.
+- **Próxima Etapa:** V14-C.1 — Character Asset Selection / Creation + Production Preview.
 
 ---
 

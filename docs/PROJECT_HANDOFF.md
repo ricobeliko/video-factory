@@ -1,6 +1,19 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## V14-B.1 — Legacy Stock Copyright Quarantine (Hotfix) — DEV controlado
+## V14-C — Hybrid Character Overlay MVP — DEV controlado
+
+- **Baseline:** `4ba4a8db0314bdd8ace5c54072f1b69b5c11a791`
+- **Contexto Operacional:** Produção parada após homologação da V14-B e V14-B.1. Objetivo: habilitar infraestrutura técnica para personagem/apresentador virtual sobre o vídeo final sem dependências pagas nem lip-sync neural.
+- **Implementação Realizada:**
+  1. `VideoParams` expandido com campos: `avatar_mode` (`none`, `corner`, `hybrid`, `full`), `avatar_provider` (`local`), `avatar_character_id`, `avatar_asset_path`, `avatar_position` (`bottom_right`, `bottom_left`, `bottom_center`), `avatar_scale` (0.1 a 1.0), `avatar_opacity` (0.0 a 1.0) com validações robustas.
+  2. Serviço dedicado `app/services/presenter.py` com validação de config, bloqueio de path traversal, cálculo determinístico de timeline (`build_hybrid_presenter_segments`) e layout com safe margins para Shorts.
+  3. Composição Z-Order em `video.generate_video()` com suporte a MoviePy 2.x: B-roll (base) -> Presenter Overlay -> Subtitles (topo), evitando render duplo.
+  4. Proveniência de Presenter integrada em `build_asset_provenance()` e `get_copyright_provenance_summary()` em `copyright_gate.py`.
+  5. Telemetria no Operator Console: Mode, Character ID, Provider e Asset Status.
+  6. Modo autônomo estritamente fixado em `avatar_mode="none"`.
+- **Próximo Passo:** V14-C.1 — Character Asset Selection / Creation + Production Preview.
+
+## V14-B.1 — Legacy Stock Copyright Quarantine (Hotfix) — PRODUCTION HOMOLOGATED
 
 - **Baseline:** `2e285cf43bfd01dc10e04a74a35572ee6f2fab19`
 - **Contexto Operacional:** Produção parada após identificação de 23 vídeos legados não publicados contendo `bgm_type="random"` ou `bgm_type="custom"` e sem `asset_provenance`.
@@ -9,10 +22,8 @@
   2. Tarefas antigas com `bgm_type="random"` ou `bgm_type="custom"` sem proveniência avaliam estritamente como `COPYRIGHT_PROVENANCE_GATE = FAIL`.
   3. `_recover_waiting_task()` e `get_autonomous_ready_stock()` passam a validar `evaluate_copyright_provenance_gate == PASS`, excluindo automaticamente os 23 vídeos legados do estoque autônomo e impedindo sua adoção/recuperação no Scheduler pelo Autonomous.
   4. Preservação física e histórica completa: nenhum arquivo apagado, nenhum registro SQLite destruído. Caminho manual legado preservado.
-- **Próximo Passo:** V14-C — Hybrid Character Overlay MVP.
 
-## V14-B — Copyright Baseline Hardening — DEV controlado
-
+## V14-B — Copyright Baseline Hardening — PRODUCTION HOMOLOGATED
 
 - **Baseline:** `ceb64fa441f68f722d7cc2c21b986997c5cd2177`
 - **Evidência Real:** Task `815b0958-b94e-457b-932d-b10dfb0e8dba`, vídeo YouTube `XVy8MbpJFqw` (publicação tecnicamente correta, posteriormente bloqueada mundialmente por conteúdo reivindicado; sem evidência de strike).
@@ -26,7 +37,6 @@
   6. Preparação conceitual de status futuro (`unknown`, `clean_manual`, `claimed`, `blocked`, `strike`) e fontes (`operator`, `future_provider`).
   7. Backlog: exclusão no Closed Feedback Loop de publicações com reivindicação comprovada.
   8. Card "Copyright / Assets" no Operator Console.
-- **Próximo Passo:** V14-C — Hybrid Character Overlay MVP.
 
 ## V12-E.3 — Autonomous Stock Buffer Hardening — DEV controlado
 

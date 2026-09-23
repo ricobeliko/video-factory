@@ -1411,6 +1411,11 @@ def build_autonomous_video_params(
         bgm_type=bgm_type,
         bgm_file=bgm_file,
         bgm_volume=bgm_volume,
+        # Virtual Presenter (V14-C): estritamente desativado para novas gerações autônomas
+        avatar_mode="none",
+        avatar_provider="local",
+        avatar_character_id="",
+        avatar_asset_path="",
     )
 
 

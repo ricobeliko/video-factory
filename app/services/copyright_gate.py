@@ -176,6 +176,29 @@ def build_asset_provenance(
             "used_duration_sec": used_duration,
         })
 
+    # Proveniência do Presenter / Character Overlay (Fase V14-C)
+    avatar_mode = str(_get_param(params, "avatar_mode", "none") or "none").lower().strip()
+    if avatar_mode in ("", "none"):
+        presenter_prov = {
+            "enabled": False,
+            "mode": "none",
+        }
+    else:
+        provider = str(_get_param(params, "avatar_provider", "local") or "local")
+        character_id = str(_get_param(params, "avatar_character_id", "") or "")
+        asset_path = str(_get_param(params, "avatar_asset_path", "") or "")
+        ext = Path(asset_path).suffix.lower().lstrip(".") if asset_path else ""
+        asset_type = ext if ext else "unknown"
+        presenter_prov = {
+            "enabled": True,
+            "mode": avatar_mode,
+            "provider": provider,
+            "character_id": character_id,
+            "asset_path": asset_path,
+            "asset_type": asset_type,
+            "provenance_status": "LOCAL_OPERATOR_ASSET",
+        }
+
     prov_status = (
         "SAFE_NO_BGM"
         if not bgm_is_enabled and visual_clips
@@ -185,6 +208,7 @@ def build_asset_provenance(
     return {
         "bgm": bgm_prov,
         "visual_clips": visual_clips,
+        "presenter": presenter_prov,
         "provenance_status": prov_status,
     }
 
@@ -392,6 +416,16 @@ def get_copyright_provenance_summary(
         db_path=db_path,
     )
 
+    presenter_info = asset_prov.get("presenter", {})
+    presenter_mode = presenter_info.get("mode", "none")
+    presenter_enabled = presenter_info.get("enabled", False)
+    presenter_provider = presenter_info.get("provider", "local")
+    presenter_character_id = presenter_info.get("character_id", "")
+    presenter_asset_path = presenter_info.get("asset_path", "")
+    presenter_asset_status = "NOT_CONFIGURED" if not presenter_enabled else (
+        "VALID_LOCAL_ASSET" if (presenter_asset_path and os.path.isfile(presenter_asset_path)) else "MISSING_ASSET"
+    )
+
     return {
         "task_id": resolved_task_id,
         "bgm_mode": "none" if not bgm_info.get("enabled") else "custom",
@@ -403,4 +437,8 @@ def get_copyright_provenance_summary(
         "copyright_gate_status": "PASS" if gate_pass else "FAIL",
         "copyright_status": COPYRIGHT_STATUS_UNKNOWN,
         "feedback_loop_eligible": True,
+        "presenter_mode": presenter_mode,
+        "presenter_character_id": presenter_character_id or "none",
+        "presenter_provider": presenter_provider,
+        "presenter_asset_status": presenter_asset_status,
     }

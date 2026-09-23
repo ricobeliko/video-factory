@@ -293,6 +293,106 @@ class TestSafeProductionUpdate(unittest.TestCase):
             )
             self.assertIn("Fast-Forward", result.stdout + result.stderr)
 
+    # 14. Separação de Stdout (JSON) e Stderr (Logs INFO do Loguru) no Backup
+    def test_14_backup_handles_stdout_json_with_loguru_stderr_info(self):
+        # 14.1 Verificação de Contrato Estático no script
+        self.assertIn("RedirectStandardOutput = $true", self.script_content)
+        self.assertIn("RedirectStandardError = $true", self.script_content)
+        self.assertIn("$BackupStdout = $Process.StandardOutput.ReadToEnd()", self.script_content)
+        self.assertIn("$BackupStderr = $Process.StandardError.ReadToEnd()", self.script_content)
+        self.assertIn("$BackupData = $BackupStdout | ConvertFrom-Json", self.script_content)
+
+        # 14.2 Execução Funcional Simulando Backup com Loguru em stderr e JSON em stdout
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            mock_py = temp_path / "mock_backup.py"
+            mock_py.write_text(
+                'import sys, json\n'
+                'sys.stderr.write("2026-09-23 06:04:11.123 | INFO | app.services.production_backup:238 - [BACKUP] Backup SQLite criado com sucesso: video_factory_20260923_060411.db\\n")\n'
+                'sys.stderr.flush()\n'
+                'res = {\n'
+                '    "success": True,\n'
+                '    "database_file": "video_factory_20260923_060411.db",\n'
+                '    "database_path": r"C:\\fake\\video_factory_20260923_060411.db",\n'
+                '    "manifest_file": "video_factory_20260923_060411.json",\n'
+                '    "manifest_path": r"C:\\fake\\video_factory_20260923_060411.json",\n'
+                '    "size_bytes": 2387968,\n'
+                '    "sha256": "9e4a205626abcdef",\n'
+                '    "integrity_check": "ok",\n'
+                '    "created_at": "2026-09-23T06:04:11+00:00",\n'
+                '    "pruned_files": []\n'
+                '}\n'
+                'sys.stdout.write(json.dumps(res))\n'
+                'sys.stdout.flush()\n'
+                'sys.exit(0)\n',
+                encoding="utf-8",
+            )
+
+            import sys as _sys
+            python_exe_str = str(_sys.executable).replace('\\', '\\\\')
+            mock_py_str = str(mock_py).replace('\\', '\\\\')
+            ps_script = f"""
+            $ProcessInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $ProcessInfo.FileName = "{python_exe_str}"
+            $ProcessInfo.Arguments = "{mock_py_str}"
+            $ProcessInfo.RedirectStandardOutput = $true
+            $ProcessInfo.RedirectStandardError = $true
+            $ProcessInfo.UseShellExecute = $false
+            $ProcessInfo.CreateNoWindow = $true
+
+            $Process = [System.Diagnostics.Process]::Start($ProcessInfo)
+            $BackupStdout = $Process.StandardOutput.ReadToEnd()
+            $BackupStderr = $Process.StandardError.ReadToEnd()
+            $Process.WaitForExit()
+            $BackupExit = $Process.ExitCode
+
+            if ($BackupExit -ne 0) {{
+                Write-Host "FAIL: ExitCode=$BackupExit"
+                exit 1
+            }}
+
+            try {{
+                $BackupData = $BackupStdout | ConvertFrom-Json
+            }} catch {{
+                Write-Host "FAIL: JSON_PARSE_ERROR"
+                exit 2
+            }}
+
+            $PathNotEmpty = (-not [string]::IsNullOrWhiteSpace($BackupData.database_path))
+            $ShaNotEmpty = (-not [string]::IsNullOrWhiteSpace($BackupData.sha256))
+            $SuccessTrue = ($BackupData.success -eq $true)
+            $IntegrityOk = ($BackupData.integrity_check -eq "ok")
+
+            if ($SuccessTrue -and $IntegrityOk -and $PathNotEmpty -and $ShaNotEmpty) {{
+                $BackupSummary = "PASS ($($BackupData.database_path), sha256=$($BackupData.sha256))"
+                Write-Host "RESULT: $BackupSummary"
+                if ($BackupStderr -match "BACKUP") {{
+                    Write-Host "STDERR_INFO_CAPTURED: YES"
+                }}
+                exit 0
+            }} else {{
+                Write-Host "FAIL: VALIDATION_FAILED"
+                exit 3
+            }}
+            """
+
+            cmd = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-Command", ps_script,
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(
+                res.returncode,
+                0,
+                f"Captura do backup deve aceitar stderr com INFO e parsear stdout JSON. Erro: {res.stderr}\nSaída: {res.stdout}",
+            )
+            self.assertIn("RESULT: PASS", res.stdout)
+            self.assertIn("sha256=9e4a205626abcdef", res.stdout)
+            self.assertIn("STDERR_INFO_CAPTURED: YES", res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
+

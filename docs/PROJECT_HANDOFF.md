@@ -1,15 +1,47 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## V13-A — Headless Remote Deployment / Safe Update Foundation — DEV IMPLEMENTED
+## V13-B — Production Homologation / Safe Remote Deployment Active — HOMOLOGATED
+
+- **Baseline:** `46e44c2495a8fe38484977ad1aa7cff439e26679`
+- **Contexto Operacional e Ambientes:**
+  - DEV / Notebook: `D:\Projetos\MoneyPrinterTurbo`
+  - PRODUÇÃO / PC Forte: `C:\Projetos\MoneyPrinterTurbo`
+  - Scheduled Task de Produção: `VideoFactory Production`
+  - Status dos Componentes:
+    - `V13-A` = MERGED
+    - `V13-A.1` = MERGED (hotfix de separação stdout/stderr no backup)
+    - `V13-B` = PRODUCTION HOMOLOGATED
+    - `V14-B.2` = PRODUCTION HOMOLOGATED
+    - `V14-B.2.1` = PRODUCTION HOMOLOGATED
+    - `Presenter/Nox` = DORMANT / OFF (`avatar_mode="none"`)
+- **Evidência Operacional Real da Homologação:**
+  - `CURRENT_SHA`: `e3f024938c5338c197a1f1654775686227f3eb05`
+  - `TARGET/FINAL_SHA`: `46e44c2495a8fe38484977ad1aa7cff439e26679`
+  - `BACKUP`: PASS
+  - `BACKUP_FILE`: `storage/backups/database/video_factory_20260923_061728.db`
+  - `BACKUP_SHA256`: `c87539c365193b09a41bfdf44f44afd55a78f6ab085b5c8ead8df7eb457429be`
+  - `SQLITE_INTEGRITY`: OK
+  - `SAFE_STOP`: PASS (`schtasks /End /TN "VideoFactory Production"`)
+  - `FAST_FORWARD_UPDATE`: PASS (`git merge --ff-only 46e44c2495a8fe38484977ad1aa7cff439e26679`)
+  - `SAFE_START`: PASS (`schtasks /Run /TN "VideoFactory Production"`)
+  - `HEALTH`: PASS (HTTP 200 / ok em `http://127.0.0.1:8501/_stcore/health`)
+  - `ROLLBACK`: NOT_REQUIRED
+  - `DEPLOY_STATUS`: DEPLOY_SUCCESS
+- **Novo Contrato Operacional de Produção:**
+  - Atualizações futuras da produção devem obrigatoriamente utilizar `scripts/update_production.ps1`.
+  - Fluxo oficial obrigatório: Preflight -> Backup SQLite -> integrity_check -> Stop -> Fast-Forward Update -> Start -> Health Check -> Rollback automático se necessário.
+  - Proibido pull manual como fluxo padrão.
+
+## V13-A — Headless Remote Deployment / Safe Update Foundation — MERGED
 
 - **Baseline:** `ee32d801bfd8a5b9b6f7ecbb57c556aa803327f5`
 - **Contexto Operacional e Ambientes:**
   - DEV / Notebook: `D:\Projetos\MoneyPrinterTurbo`
-  - PRODUÇÃO / PC Forte: `C:\Projetos\MoneyPrinterTurbo` (NÃO acessado nem tocado nesta fase)
+  - PRODUÇÃO / PC Forte: `C:\Projetos\MoneyPrinterTurbo`
   - Scheduled Task de Produção: `VideoFactory Production`
-  - Status desta fase: **DEV IMPLEMENTED / NOT PRODUCTION HOMOLOGATED**
+  - Status desta fase: **MERGED** (homologada em produção na V13-B)
   - `V14-B.2` = PRODUCTION HOMOLOGATED
-  - `V14-B.2.1` = MERGED / NOT YET DEPLOYED
+  - `V14-B.2.1` = PRODUCTION HOMOLOGATED
   - `Presenter/Nox` = DORMANT (experimento arquivado em branch separada, produção e main com `avatar_mode="none"`)
 - **Implementação Realizada:**
   1. Script de atualização criado em `scripts/update_production.ps1` aceitando `-TargetRef` (default `origin/main`), `-RepoPath` (default `C:\Projetos\MoneyPrinterTurbo`), `-TaskName` (default `VideoFactory Production`), `-HealthUrl` (default `http://127.0.0.1:8501/_stcore/health`) e `-PreflightOnly`.

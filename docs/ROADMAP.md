@@ -8,10 +8,41 @@
 - Full regression exige autorização humana explícita.
 - Esta política prevalece sobre registros históricos de validação de fases anteriores.
 
+## V13-B — Production Homologation / Safe Remote Deployment Active — 23/09/2026
+
+Homologação real executada com sucesso no PC forte de produção (`C:\Projetos\MoneyPrinterTurbo`) utilizando `scripts/update_production.ps1` com o hotfix de captura de JSON (V13-A.1).
+Status: **PRODUCTION HOMOLOGATED**.
+
+- **Evidência Operacional Real:**
+  - `CURRENT_SHA`: `e3f024938c5338c197a1f1654775686227f3eb05`
+  - `TARGET/FINAL_SHA`: `46e44c2495a8fe38484977ad1aa7cff439e26679`
+  - `BACKUP`: PASS
+  - `BACKUP_FILE`: `storage/backups/database/video_factory_20260923_061728.db`
+  - `BACKUP_SHA256`: `c87539c365193b09a41bfdf44f44afd55a78f6ab085b5c8ead8df7eb457429be`
+  - `SQLITE_INTEGRITY`: OK
+  - `SAFE_STOP`: PASS (`schtasks /End /TN "VideoFactory Production"`)
+  - `FAST_FORWARD_UPDATE`: PASS (`git merge --ff-only 46e44c2495a8fe38484977ad1aa7cff439e26679`)
+  - `SAFE_START`: PASS (`schtasks /Run /TN "VideoFactory Production"`)
+  - `HEALTH`: PASS — HTTP 200 / ok em `http://127.0.0.1:8501/_stcore/health`
+  - `ROLLBACK`: NOT_REQUIRED
+  - `DEPLOY_STATUS`: DEPLOY_SUCCESS
+- **Histórico e Status Consolidado dos Componentes:**
+  - `V13-A` = MERGED
+  - `V13-A.1` = MERGED (hotfix de separação de stdout e stderr no backup)
+  - `V13-B` = PRODUCTION HOMOLOGATED
+  - `V14-B.2` = PRODUCTION HOMOLOGATED
+  - `V14-B.2.1` = PRODUCTION HOMOLOGATED
+  - `Presenter/Nox` = DORMANT / OFF (`avatar_mode="none"`)
+- **Novo Contrato Operacional Obrigatório:**
+  - Todas as atualizações futuras da produção devem usar estritamente `scripts/update_production.ps1`.
+  - Fluxo oficial obrigatório: Preflight -> Backup SQLite -> integrity_check -> Stop -> Fast-Forward Update -> Start -> Health Check -> Rollback automático se necessário.
+  - Proibido uso de git pull manual ou intervenção destrutiva como fluxo padrão.
+
+
 ## V13-A — Safe Update Foundation — 23/09/2026
 
 Implementação concluída em desenvolvimento: fundação para atualização remota e headless segura da produção via `scripts/update_production.ps1`.
-Status nesta fase: **DEV IMPLEMENTED / NOT PRODUCTION HOMOLOGATED**.
+Status nesta fase: **MERGED** (V13-A e V13-A.1 homologados na V13-B).
 
 - **Pipeline Seguro:** `PRE-FLIGHT -> BACKUP -> STOP -> UPDATE FF-ONLY -> START -> HEALTH CHECK -> SUCCESS`.
 - **Pre-flight Fail-Closed:** Valida repo Git, working tree limpa (sem alterações não commitadas ou arquivos críticos untracked), ambiente virtual (.venv), existência e resolução de `CURRENT_SHA` e `TARGET_SHA`. Flag `-PreflightOnly` executa apenas diagnósticos e exibe o plano sem mutações.

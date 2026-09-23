@@ -1455,6 +1455,7 @@ def generate_video(
                 total_duration=source_video_clip.duration,
                 canvas_size=(video_width, video_height),
                 clip_stack=clip_stack,
+                subtitle_path=subtitle_path,
             )
 
         text_clips = []

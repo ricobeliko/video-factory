@@ -1,6 +1,21 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## V14-C.1 — Cartoon Character Asset Pack + Preview — DEV controlado
+## V14-C.2 — Expressive Presenter + Subtitle Interaction — DEV controlado
+
+- **Baseline:** `def541870a598ee8984a6a2b98bed39688434691`
+- **Contexto Operacional:** Produção parada. Objetivo: dotar o Nox de capacidade expressiva sincronizada com legendas e narração (SRT), alternância de fala, reações semânticas e apontamentos geométricos sem lip-sync neural.
+- **Implementação Realizada:**
+  1. Parser determinístico e tolerante a falhas de SRT (`parse_srt_timeline`), convertendo legendas para estrutura temporal unificada.
+  2. Classificador prioritário de legendas (`classify_subtitle_reaction`) com categorias PT-BR (SURPRISE, THINKING, SERIOUS, CTA, DEFAULT) e precedência estrita (`CTA > SERIOUS > SURPRISE > THINKING > TALKING > NEUTRAL`).
+  3. Alternância determinística de fala (`talking_1` e `talking_2` em fatias de 0.35s) ativa somente durante trechos falados e visíveis.
+  4. Interação de apontamento (`pointing_left` para `bottom_right`, `pointing_right` para `bottom_left`) para direcionar o espectador para a legenda.
+  5. Tom de canal respeitado: `profile-historias-misterio` utiliza reações sóbrias e contidas (`mystery_contained_reaction`).
+  6. Construção da timeline de expressões (`build_presenter_expression_timeline`) respeitando estritamente os segmentos do presenter e sem sobreposição temporal inválida.
+  7. Performance otimizada no MoviePy via cache único de clips de pose no ExitStack.
+  8. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
+- **Próximo Passo:** V14-C.3 — Nox Visual Asset Pack + Real Local Preview.
+
+## V14-C.1 — Cartoon Character Asset Pack + Preview — MERGED
 
 - **Baseline:** `b9e73e2a98f020e54be304396749e5c86e67cbb1`
 - **Contexto Operacional:** Produção parada após entrega da infraestrutura básica do presenter (V14-C). Objetivo: criar especificação do personagem unificado **Nox** (`nox_v1` / `misterio_host_v1`, `SINGLE_CHARACTER_ALL_CHANNELS = YES`), estruturar contrato de asset pack local, controller de poses e modo de preview controlado.
@@ -11,7 +26,6 @@
   4. Pose Controller determinístico (`select_presenter_pose`) selecionando poses por segmento narrativo (hook, return, cta, corner).
   5. Suporte a Preview controlado (`render_presenter_preview` e `generate_presenter_preview_frame`) para validação estática e render sem tocar produção.
   6. Produção autônoma estritamente preservada com `avatar_mode="none"`.
-- **Próximo Passo:** V14-C.2 — Expressive Presenter Logic + Subtitle Interaction.
 
 ## V14-C — Hybrid Character Overlay MVP — MERGED
 

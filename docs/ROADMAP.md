@@ -388,7 +388,7 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   6. Modo autônomo estritamente mantido em `avatar_mode="none"`.
 
 ## V14-C.1 — Cartoon Character Asset Pack + Preview
-- **Status:** 🟡 Cartoon Character Asset Pack + Preview (DEV)
+- **Status:** ✅ MERGED
 - **Personagem:** **Nox** (`nox_v1` / `misterio_host_v1`), estilo cartoon / semi-cartoon, definido como personagem-base unificado para todos os canais (`SINGLE_CHARACTER_ALL_CHANNELS = YES`).
 - **Implementação:**
   1. Especificação completa do personagem documentada em `docs/CHARACTER_PRESENTER_SPEC.md` (direção visual, paleta de cores sóbrias, vestimenta grafite/vinho, enquadramento waist-up e lista de poses).
@@ -397,7 +397,19 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   4. Pose Controller determinístico (`select_presenter_pose`) selecionando poses por segmento narrativo (hook, return, cta, corner).
   5. Suporte a Preview controlado (`render_presenter_preview` e `generate_presenter_preview_frame`) para validação estática e render sem tocar produção.
   6. Produção autônoma estritamente preservada com `avatar_mode="none"`.
-- **Próxima Fase:** V14-C.2 = Expressive Presenter Logic + Subtitle Interaction.
+
+## V14-C.2 — Expressive Presenter + Subtitle Interaction
+- **Status:** 🟡 Expressive Presenter + Subtitle Interaction (DEV)
+- **Implementação:**
+  1. Parser determinístico e tolerante a falhas de SRT (`parse_srt_timeline`), convertendo legendas para estrutura temporal unificada.
+  2. Classificador prioritário de legendas (`classify_subtitle_reaction`) com categorias PT-BR: SURPRISE, THINKING, SERIOUS, CTA e DEFAULT com precedência estrita (`CTA > SERIOUS > SURPRISE > THINKING > TALKING > NEUTRAL`).
+  3. Alternância determinística de fala (`talking_1` e `talking_2` em intervalos de 0.35s) sem requerer lip-sync neural.
+  4. Interação de apontamento (`pointing_left` para `bottom_right`, `pointing_right` para `bottom_left`).
+  5. Tom de canal respeitado: `profile-historias-misterio` utiliza reações sóbrias e contidas (`mystery_contained_reaction`).
+  6. Construção da timeline de expressões (`build_presenter_expression_timeline`) respeitando estritamente os segmentos do presenter e sem sobreposição temporal inválida.
+  7. Performance otimizada no MoviePy via cache único de clips de pose no ExitStack.
+  8. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
+- **Próxima Fase:** V14-C.3 — Nox Visual Asset Pack + Real Local Preview.
 
 ---
 

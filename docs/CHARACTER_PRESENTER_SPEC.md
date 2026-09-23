@@ -88,3 +88,24 @@ O character pack deve residir em um dos diretórios padrão:
 2. **Resolução de cada pose:** Mínimo 600x900px, recomendado 800x1200px (proporção aproximada 2:3).
 3. **Ponto de ancoragem:** Base inferior alinhada horizontalmente entre todas as poses, permitindo alternância fluida entre falas sem "pulos" de altura.
 4. **Sem fundo:** Fundo 100% transparente em todos os frames.
+
+---
+
+## 6. Controlador Expressivo e Interação com Legendas (Fase V14-C.2)
+
+### 6.1. Pipeline Temporal de Expressões
+O controlador `build_presenter_expression_timeline` sincroniza as expressões do Nox com o áudio narrado e as legendas (SRT), garantindo:
+1. **Alternância de fala determinística:** Enquanto o narrador fala em trecho neutro, alterna `talking_1` e `talking_2` a cada ~0.35s, dando dinamismo visual sem requerer lip-sync neural.
+2. **Reações de significado (Keywords):**
+   - **SURPRISE:** Palavras de impacto/choque (`inacreditável`, `assustador`, `chocante`, etc.) ativam pose `surprised`.
+   - **THINKING:** Dúvidas/hipóteses (`teoria`, `hipótese`, `ninguém sabe`, etc.) ativam pose `thinking`.
+   - **SERIOUS:** Temas graves/solenes (`morte`, `morreu`, `tragédia`, `crime`, etc.) ativam pose `serious`.
+   - **CTA:** Chamadas para ação (`inscreva-se`, `comenta`, `compartilhe`, etc.) ativam gestos de CTA e apontamento.
+3. **Prioridade Estrita:** `CTA > SERIOUS > SURPRISE > THINKING > TALKING > NEUTRAL`.
+4. **Interação Geométrica de Apontamento:**
+   - Se `avatar_position = bottom_right`, Nox aponta para a esquerda (`pointing_left`), direcionando o olhar do espectador para a legenda centralizada.
+   - Se `avatar_position = bottom_left`, Nox aponta para a direita (`pointing_right`).
+5. **Ajuste de Tom por Canal:**
+   - Canal Padrão / Geral: Mais expressivo, alternância rápida e reação `surprised`.
+   - `profile-historias-misterio`: Reações mais contidas e sóbrias (palavras de surpresa mapeiam para `serious`/`thinking` com motivo `mystery_contained_reaction`).
+6. **Robustez e Fail-Safe:** Se o SRT estiver corrompido ou ausente, o pipeline recorre suavemente aos segmentos estruturais (hook, return, cta) sem interromper a renderização.

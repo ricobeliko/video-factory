@@ -1661,6 +1661,17 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
             st.markdown(f"**Provenance Gate:** {gate_badge}", unsafe_allow_html=True)
             st.caption("Content ID Guarantee: **NENHUMA** (Prevenção Local)")
 
+        st.divider()
+        cp1, cp2, cp3, cp4 = st.columns(4)
+        with cp1:
+            st.markdown(f"**Presenter Mode:** `{prov_summary.get('presenter_mode', 'none')}`")
+        with cp2:
+            st.markdown(f"**Character ID:** `{prov_summary.get('presenter_character_id', 'none')}`")
+        with cp3:
+            st.markdown(f"**Provider:** `{prov_summary.get('presenter_provider', 'local')}`")
+        with cp4:
+            st.markdown(f"**Asset Status:** `{prov_summary.get('presenter_asset_status', 'NOT_CONFIGURED')}`")
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 

@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, List, Literal, Optional, Union
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import config
 from app.models import const
@@ -167,6 +167,49 @@ class VideoParams(BaseModel):
     profile_id: Optional[str] = None
     niche: Optional[str] = None
     region: Optional[str] = None
+
+    # Virtual Presenter / Character Overlay (Fase V14-C)
+    avatar_mode: str = Field(default=const.DEFAULT_AVATAR_MODE)
+    avatar_provider: str = Field(default="local")
+    avatar_character_id: str = Field(default="")
+    avatar_asset_path: str = Field(default="")
+    avatar_position: str = Field(default=const.DEFAULT_AVATAR_POSITION)
+    avatar_scale: float = Field(default=0.38, ge=0.1, le=1.0)
+    avatar_opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("avatar_mode", mode="before")
+    @classmethod
+    def validate_avatar_mode(cls, v: Any) -> str:
+        clean = str(v or const.DEFAULT_AVATAR_MODE).lower().strip()
+        if clean not in const.AVATAR_MODES:
+            return const.DEFAULT_AVATAR_MODE
+        return clean
+
+    @field_validator("avatar_position", mode="before")
+    @classmethod
+    def validate_avatar_position(cls, v: Any) -> str:
+        clean = str(v or const.DEFAULT_AVATAR_POSITION).lower().strip()
+        if clean not in const.AVATAR_POSITIONS:
+            return const.DEFAULT_AVATAR_POSITION
+        return clean
+
+    @field_validator("avatar_scale", mode="before")
+    @classmethod
+    def validate_avatar_scale(cls, v: Any) -> float:
+        try:
+            val = float(v)
+            return max(0.1, min(1.0, val))
+        except (ValueError, TypeError):
+            return 0.38
+
+    @field_validator("avatar_opacity", mode="before")
+    @classmethod
+    def validate_avatar_opacity(cls, v: Any) -> float:
+        try:
+            val = float(v)
+            return max(0.0, min(1.0, val))
+        except (ValueError, TypeError):
+            return 1.0
 
 
 

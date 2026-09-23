@@ -1441,6 +1441,23 @@ def generate_video(
                 font_size=params.font_size,
             )
 
+        # Virtual Presenter / Character Overlay (Fase V14-C)
+        presenter_clips = []
+        if getattr(params, "avatar_mode", const.DEFAULT_AVATAR_MODE) not in (
+            const.AVATAR_MODE_NONE,
+            "",
+            None,
+        ):
+            from app.services import presenter
+
+            presenter_clips = presenter.build_presenter_clips(
+                params=params,
+                total_duration=source_video_clip.duration,
+                canvas_size=(video_width, video_height),
+                clip_stack=clip_stack,
+            )
+
+        text_clips = []
         if subtitle_path and os.path.exists(subtitle_path):
             sub = clip_stack.enter_context(
                 SubtitlesClip(
@@ -1449,11 +1466,15 @@ def generate_video(
                     make_textclip=make_textclip,
                 )
             )
-            text_clips = []
             for item in sub.subtitles:
                 clip = create_text_clip(subtitle_item=item)
                 text_clips.append(clip)
-            video_clip = CompositeVideoClip([video_clip, *text_clips])
+
+        # Composição Z-Order: 1. B-roll (base), 2. Presenter Overlay, 3. Subtitles
+        if presenter_clips or text_clips:
+            video_clip = CompositeVideoClip(
+                [source_video_clip, *presenter_clips, *text_clips]
+            )
             clip_stack.callback(video_clip.close)
 
         bgm_enabled = bgm_service.should_use_bgm(

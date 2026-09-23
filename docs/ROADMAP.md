@@ -8,6 +8,159 @@
 - Full regression exige autorização humana explícita.
 - Esta política prevalece sobre registros históricos de validação de fases anteriores.
 
+---
+
+# Estado Atual Canônico — 23/09/2026
+
+> [!IMPORTANT]
+> **Precedência Canônica:** Esta seção reflete o estado real, auditado e vigente da fábrica de vídeos. Ela prevalece formalmente sobre quaisquer menções, metas pendentes ou notas de snapshots históricos mantidos nas seções inferiores para rastreabilidade de engenharia.
+
+## Status Consolidado por Componente
+
+- **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
+- **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
+- **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
+- **V12-F.3 Per-Channel Learning Isolation** = IMPLEMENTED / ACTIVE
+- **V12-F.4 Second Channel Warm-Up** = PRODUCTION HOMOLOGATED
+- **V12-F.5 Multi-Channel Capacity** = IMPLEMENTED / ACTIVE
+- **V13-A Safe Update Foundation** = MERGED
+- **V13-A.1 Backup JSON Capture Hotfix** = MERGED
+- **V13-B Safe Production Update** = PRODUCTION HOMOLOGATED
+- **V14-A Copyright Audit** = COMPLETED
+- **V14-B Copyright Baseline Hardening** = PRODUCTION HOMOLOGATED
+- **V14-B.1 Legacy Stock Quarantine** = PRODUCTION HOMOLOGATED
+- **V14-B.2 Copyright Status + Closed Feedback Loop Exclusion** = PRODUCTION HOMOLOGATED
+- **V14-B.2.1 Copyright UI Feedback** = PRODUCTION HOMOLOGATED
+- **V14-C Presenter Framework** = MERGED BUT DORMANT
+- **V14-C.1 / C.2 Presenter Expression Framework** = MERGED BUT DORMANT
+- **V14-C.3 Nox Foundation** = EXPERIMENT ARCHIVED / DORMANT
+- **Presenter autonomous**: OFF
+- **avatar_mode**: `none`
+- **TikTok**: OFF / NOT HOMOLOGATED
+
+## Produção Atual (Estado Operacional Consolidado)
+
+- **PC forte** = autoridade de produção (`C:\Projetos\MoneyPrinterTurbo`)
+- **Scheduler** = ON
+- **Auto Publish** = ON
+- **Dry Run** = OFF
+- **YouTube** = ON
+- **TikTok** = OFF
+- **Autonomous Production** = ON
+- **Analytics Auto** = ON
+- **Closed Feedback Loop** = ON
+- **Growth Mode** = WARMUP
+- **MPT Auto Upload** = OFF
+- **Presenter/Nox** = OFF
+- **Multi-profile autonomous worker** = ACTIVE
+- **Copyright provenance gate** = ACTIVE
+- **Copyright status exclusion** = ACTIVE
+- **Safe updater** = ACTIVE
+
+**Safe updater oficial:**
+`scripts/update_production.ps1`
+Fluxo mandatário: Preflight → Backup SQLite → integrity_check → Stop → Fast-Forward Update → Start → Health Check → Rollback automático se necessário. Proibido git pull manual como fluxo padrão.
+
+**Última homologação real de produção (V13-B):**
+- **TARGET/FINAL_SHA:** `46e44c2495a8fe38484977ad1aa7cff439e26679`
+- **BACKUP:** PASS (`storage/backups/database/video_factory_20260923_061728.db`, SHA-256: `c87539c365193b09a41bfdf44f44afd55a78f6ab085b5c8ead8df7eb457429be`)
+- **SQLITE_INTEGRITY:** OK
+- **STOP:** PASS
+- **FF UPDATE:** PASS
+- **START:** PASS
+- **HEALTH:** PASS — HTTP 200 / ok em `http://127.0.0.1:8501/_stcore/health`
+- **ROLLBACK:** NOT_REQUIRED
+- **DEPLOY:** SUCCESS
+- **Documentação posterior:** main `d88578d5131b41c7b56e435e7d6a3e3a87b27fbc`
+
+---
+
+# V15 — Production Observation & Optimization
+
+**Status:** OPEN / OBSERVATION FIRST
+
+## Objetivo
+Observar a fábrica completa em funcionamento real no PC forte antes de adicionar grandes features.
+
+A V15 deve medir se o sistema atual está:
+- produzindo de forma autônoma e sustentável
+- aprovando dentro dos critérios de Safety, Quality e Copyright
+- estocando adequadamente por perfil
+- agendando dentro das janelas operacionais
+- publicando com sucesso no YouTube
+- coletando métricas de analytics pontualmente
+- aprendendo com o Closed Feedback Loop sem sobreajuste
+- mantendo isolamento estrito por canal
+- respeitando direitos autorais e políticas de conteúdo
+- respeitando limites de custo e volume (Cost Guard)
+
+## Princípio Fundamental da V15
+A V15 **NÃO** deve começar criando novas features ou alterando parâmetros de forma especulativa.
+
+Fluxo metodológico:
+> **OBSERVAR → MEDIR → IDENTIFICAR GARGALO REAL → PRIORIZAR → OTIMIZAR**
+
+Evitar rigorosamente:
+- Otimização prematura
+- Adição de novos provedores sem necessidade
+- Novo avatar ou insistência no Nox neste ciclo
+- Criação de novos canais
+- Ativação ou dependência de TikTok
+- Aumento forçado de volume
+- Alteração de thresholds sem evidência empírica coletada
+
+---
+
+## V15-A — Production Observability Baseline
+
+**Status:** OPEN (Próxima fase ativa)
+
+### Objetivo
+Criar um diagnóstico PASSIVO e estruturado do comportamento real dos dois canais em produção contínua:
+- **Canal Principal:** `profile_id = default`
+- **Canal Secundário:** `profile_id = profile-historias-misterio`
+
+### 9 Dimensões de Observação Passiva:
+1. **Autonomous Production:** Estado, último ciclo, geração atual, waiting task, estoque pronto por perfil.
+2. **Scheduler:** Contagem de posts agendados, publicados, com falha, em retry e próximos slots por canal.
+3. **Gates:** Telemetria de aprovação e rejeição nos gates de Safety, Quality e Copyright Provenance.
+4. **Produção 24h:** Tentativas (attempts), aprovações, rejeições e principais motivos agregados e por perfil.
+5. **Publicações:** Sucessos, falhas, visibilidade (público comprovado) e status de direitos autorais (`unknown`, `clean_manual`, `claimed`, `blocked`, `strike`).
+6. **Analytics:** Snapshots coletados, idade do último fetch, provider utilizado e erros de coleta.
+7. **Closed Feedback Loop:** Modo atual (baseline/adaptive), quantidade de amostras elegíveis, decisões recentes de tema/estrutura narrativa, razões de fallback e garantia de isolamento por canal.
+8. **Multi-Channel:** Confirmação de que a seleção visual da UI no Operator Console NÃO controla nem interfere no worker em background, e confirmação de atividade independente dos perfis.
+9. **Cost Guard:** Validação do cumprimento dos limites por perfil (WARMUP / SCALE) e do limite mestre global, garantindo ausência de explosão de chamadas ou gastos descontrolados.
+
+### Critérios de Aceite para V15-A:
+V15-A será considerada concluída com sucesso quando conseguirmos obter, de forma estritamente passiva e sem alterar o estado da produção:
+- Status operacional dos dois perfis
+- Estoque de cada perfil
+- Estado do scheduler
+- Histórico das últimas publicações
+- Últimas métricas de analytics
+- Status de copyright das publicações ativas
+- Estado do Closed Feedback Loop por perfil
+- Contadores de produção em 24h
+- Principais problemas e rejeições recentes identificados
+
+*Preferência técnica:* Reutilizar o Operator Console e serviços de diagnóstico existentes (`production_health.py`, `operator_console.py`). Zero adições de tabelas ou alterações de schema no SQLite sem necessidade comprovada.
+
+### Próximas Decisões (Pós V15-A):
+Somente após a consolidação da observação real e identificação de gargalos empíricos serão priorizadas as frentes de evolução:
+- Otimização de geração
+- Melhoria de hooks e roteiros
+- Diversidade visual
+- Qualidade de assets
+- Frequência de publicação
+- Estratégia dedicada por canal
+- Monetização
+- Revisão de fornecedores de stock/áudio
+- Melhorias na UI/UX do Operator Console
+
+*Não antecipar decisões nem escolher caminhos prioritários antes das medições da V15-A.*
+
+---
+
 ## V13-B — Production Homologation / Safe Remote Deployment Active — 23/09/2026
 
 Homologação real executada com sucesso no PC forte de produção (`C:\Projetos\MoneyPrinterTurbo`) utilizando `scripts/update_production.ps1` com o hotfix de captura de JSON (V13-A.1).
@@ -54,10 +207,10 @@ Status nesta fase: **MERGED** (V13-A e V13-A.1 homologados na V13-B).
 - **Lock e Logging Local Sanitizado:** Lock exclusivo em `storage/locks/update_production.lock` com limpeza em bloco `finally`. Logs timestampados em `logs/deploy/` sem exposição de credenciais, tokens ou dumps de configuração.
 - **Ambientes e Status Vigentes:**
   - `V14-B.2` = PRODUCTION HOMOLOGATED
-  - `V14-B.2.1` = MERGED / NOT YET DEPLOYED
+  - `V14-B.2.1` = PRODUCTION HOMOLOGATED
   - `Presenter/Nox` = DORMANT
-  - Produção física (`C:\Projetos\MoneyPrinterTurbo`) não acessada nem modificada.
-- **Próxima Fase:** V13-B = primeira instalação/homologação real no PC forte.
+  - Produção física (`C:\Projetos\MoneyPrinterTurbo`) homologada no commit `46e44c2`.
+- **Próxima Fase Global:** V15 — Production Observation & Optimization.
 
 
 ## V14-B.2 — Manual Copyright Status + Closed Feedback Loop Exclusion — 23/09/2026
@@ -75,7 +228,7 @@ Implementação concluída em desenvolvimento: rastreamento persistente e audit�
 - **Operator Console:** Exibição clara no card Copyright / Assets com badges de status, source e elegibilidade do loop, além de formulário auditável não-destrutivo para o operador marcar status manualmente (PRIMARY only).
 - **Vídeo Bloqueado Conhecido:** Fluxo preparado para marcação manual pós-deploy da task `815b0958-b94e-457b-932d-b10dfb0e8dba` (YouTube `XVy8MbpJFqw`) como `blocked`.
 - **Presenter:** DORMANT (experimento arquivado em branch separada, produção e main mantidas com `avatar_mode="none"`).
-- **Próxima fase após V14-B.2:** V13 — Headless Remote Deployment / Safe Update.
+- **Próxima fase subsequente:** V13 (concluída e homologada na V13-B); Fase global atual: V15.
 
 
 ## V12-E.3 — gate DEV controlado — 21/09/2026
@@ -91,7 +244,10 @@ em 23 suítes (246,12s), com geração fake e rede bloqueada; 16 testes novos E.
 Próximo gate: revisão do diff E.3 isolado.
 Sem commit/push/deploy e sem acesso à produção. A fase V12-F.2 permanece separada.
 
-## Estado vigente — 21/09/2026
+## [HISTORICAL SNAPSHOT / SUPERSEDED] Estado vigente — 21/09/2026
+
+> [!NOTE]
+> **SUPERSEDED:** Este bloco registra o estado histórico em 21/09/2026. As fases V12-F.2 (Closed Feedback Loop), V12-F.3 (Per-Channel Isolation), V12-F.4 (Second Channel Warm-Up), V12-F.5 (Multi-Channel Capacity), V13-A/A.1/B (Safe Production Update) e V14-A/B/B.1/B.2/B.2.1 (Copyright Hardening) foram posteriormente implementadas e homologadas em produção. O **Estado Atual Canônico** no topo prevalece.
 
 V12-E e V12-F.1A/B/C HOMOLOGADAS EM PRODUÇÃO na baseline `54875c6`, conforme
 evidências do operador. YouTube Data API, fetch e persistência real homologados.
@@ -181,6 +337,22 @@ Princípio central:
 - V12-D.1 PRIMARY Guard ✅
 - V12-D.2 Legacy Cancellation Compatibility ✅
 - V12-E Autonomous Production Loop ✅ — homologada em produção; PUBLIC GATE PASS
+- V12-F.1 Analytics Auto Collection ✅ — homologada em produção
+- V12-F.2 Closed Feedback Loop ✅ — homologada em produção
+- V12-F.3 Per-Channel Learning Isolation ✅ — implementada / ativa
+- V12-F.4 Second Channel Warm-Up ✅ — homologada em produção
+- V12-F.5 Multi-Channel Capacity ✅ — implementada / ativa
+- V13-A Safe Update Foundation ✅ — merged
+- V13-A.1 Backup JSON Capture Hotfix ✅ — merged
+- V13-B Safe Production Update ✅ — homologada em produção
+- V14-A Copyright Audit ✅ — concluída
+- V14-B Copyright Baseline Hardening ✅ — homologada em produção
+- V14-B.1 Legacy Stock Quarantine ✅ — homologada em produção
+- V14-B.2 Copyright Status + Closed Feedback Loop Exclusion ✅ — homologada em produção
+- V14-B.2.1 Copyright UI Feedback Hotfix ✅ — homologada em produção
+- V14-C Presenter Framework ✅ — merged (dormant)
+- V14-C.1 / C.2 Presenter Expression Framework ✅ — merged (dormant)
+- V14-C.3 Nox Foundation ⏸️ — experiment archived / dormant
 
 ---
 
@@ -267,15 +439,16 @@ Fluxo real validado: Autonomous Production → geração → Safety Gate → Qua
 
 Estado operacional atual: Factory RUNNING; Scheduler ON; Auto Publish ON; Dry Run OFF; YouTube ON; TikTok OFF; Growth Mode WARMUP; Autonomous Production ON; MPT Auto Upload OFF. Produção em modo autônomo contínuo.
 
-Próxima fase: **V12-F — Adaptive Learning + Multi-Channel Warm-Up**, somente planejamento nesta tarefa. Existe feedback parcial; o closed loop automático ainda precisa ser homologado. V13 e V14 permanecem posteriores.
+Próxima fase (à época da homologação V12-E): **V12-F — Adaptive Learning + Multi-Channel Warm-Up**. *(Nota histórica: As fases V12-F, V13 e V14 foram subsequentemente homologadas em produção. O Estado Atual Canônico no topo prevalece).*
 
 ---
 
-# V12-F — Adaptive Learning + Multi-Channel Warm-Up
+# [HISTORICAL SNAPSHOT / SUPERSEDED] V12-F — Adaptive Learning + Multi-Channel Warm-Up
 
-**Status: planejamento formal aberto; nenhuma implementação nesta tarefa.**
+> [!NOTE]
+> **SUPERSEDED:** Este bloco registra o planejamento inicial histórico da V12-F em 21/09/2026. As subfases V12-F.1 (Analytics Auto Collection), V12-F.2 (Closed Feedback Loop), V12-F.3 (Per-Channel Learning Isolation), V12-F.4 (Second Channel Warm-Up) e V12-F.5 (Multi-Channel Capacity) foram subsequentemente implementadas, ativadas e homologadas em produção. O **Estado Atual Canônico** no topo prevalece formalmente sobre este registro.
 
-Objetivo: transformar o feedback de desempenho em um ciclo fechado de otimização, sem treinamento de pesos do modelo e sem sacrificar segurança, diversidade ou controle por canal.
+Objetivo original: transformar o feedback de desempenho em um ciclo fechado de otimização, sem treinamento de pesos do modelo e sem sacrificar segurança, diversidade ou controle por canal.
 
 ## V12-F.1 — Analytics Auto-Collection Audit & Activation
 
@@ -313,7 +486,12 @@ Cria fonte persistente e auditável de `privacy_status` em `publication_events` 
 
 ## V12-F.2 — Closed Feedback Loop
 
-Fluxo desejado: YouTube publication → automatic analytics collection → performance history → content strategy → próximas decisões de tema/hook/estrutura/duração → novos vídeos → nova medição.
+**Status: ✅ IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED (22/09/2026)**
+
+> [!NOTE]
+> *(Nota de atualização: O Closed Feedback Loop foi implementado, integrado à estratégia de conteúdo autônoma e homologado com exclusão fail-closed de copyright na V14-B.2. O Estado Atual Canônico no topo prevalece).*
+
+Fluxo implementado: YouTube publication → automatic analytics collection → performance history → content strategy → próximas decisões de tema/hook/estrutura/duração → novos vídeos → nova medição.
 
 A infraestrutura em `analytics.py`, `analytics_scheduler.py`, `content_strategy.py` e `quality_score.py` oferece feedback parcial; o closed loop automático ainda precisa ser homologado.
 
@@ -327,6 +505,11 @@ Regras:
 Gate futuro: demonstrar que métricas persistidas influenciam decisões futuras de forma rastreável, com amostras suficientes e diversidade preservada.
 
 ## V12-F.3 — Per-Channel Learning Isolation
+
+**Status: ✅ IMPLEMENTED / ACTIVE (22/09/2026)**
+
+> [!NOTE]
+> *(Nota de atualização: O isolamento de aprendizado por canal está implementado e ativo no Content Strategy e Analytics, garantindo aprendizado independente entre perfis sem contaminação cruzada de métricas. O Estado Atual Canônico no topo prevalece).*
 
 Cada canal deve aprender separadamente. Não misturar automaticamente métricas, performance histórica, nicho, hooks vencedores, estruturas narrativas, duração ótima ou frequência entre canais/perfis.
 
@@ -388,11 +571,14 @@ Capacidade multi-canal e governança de custos implementada:
 
 ---
 
-# V13 — Headless Remote Deployment / Safe Update
+# [HISTORICAL SNAPSHOT / SUPERSEDED] V13 — Headless Remote Deployment / Safe Update
 
-**Status:** 🔵 planejado
+**Status: ✅ HOMOLOGADA EM PRODUÇÃO — 23/09/2026 (V13-A / V13-A.1 / V13-B)**
 
-Objetivo:
+> [!NOTE]
+> **SUPERSEDED:** Este bloco registra o planejamento original da V13. A fundação de atualização remota e headless segura (`scripts/update_production.ps1`) foi integralmente desenvolvida, testada (V13-A e V13-A.1) e homologada com sucesso no PC forte de produção (V13-B, commit `46e44c2`). O **Estado Atual Canônico** no topo prevalece sobre este registro histórico.
+
+Objetivo original (concluído e homologado):
 - atualizar produção sem monitor físico
 - deploy remoto controlado
 - backup antes de update
@@ -404,15 +590,13 @@ Objetivo:
 - rollback seguro
 - zero interação física no PC forte
 
-Possíveis entregáveis:
+Entregáveis homologados:
 - `scripts/update_production.ps1`
 - gate de worktree clean
-- backup automático
-- validação do commit alvo
-- teste pós-deploy
-- rollback documentado
-
-V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização próprios.
+- backup automático com SQLite integrity check e sidecar SHA-256
+- validação Fast-Forward estrita do commit alvo
+- health check delimitado (HTTP 200 / ok)
+- rollback não-destrutivo via git switch detach
 
 ---
 
@@ -481,8 +665,11 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   8. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
 
 ## V14-C.3 — Nox Canonical Visual Asset Pack + Real Local Preview
-- **Status:** 🟡 DEV FOUNDATION
-- **Implementação:**
+- **Status: ⏸️ EXPERIMENT ARCHIVED / DORMANT**
+- **Observação Crítica:** O experimento visual estático com Nox não atingiu o resultado desejado de qualidade e dinamismo para operação em produção. Por este motivo, **V14-C.4 NÃO é a próxima fase ativa**.
+- **Presenter/Nox DORMANT:** Os frameworks de apresentador e expressões (V14-C, V14-C.1, V14-C.2) permanecem no código, mas o modo autônomo está estritamente fixado em `avatar_mode="none"` (OFF).
+- **Branch de Arquivamento:** Todos os assets experimentais e tuning visual de Nox foram preservados na branch de arquivo: `archive/v14-c3-nox-presenter-experiment`. Não há novos trabalhos de desenvolvimento planejados para Nox nesta etapa.
+- **Implementação Realizada (Histórico):**
   1. Estrutura canônica de diretórios criada em `assets/presenter/nox_v1/` com `manifest.json`, `reference/`, `poses/` e `previews/`.
   2. Manifest declarativo versionado com metadados de identidade visual canônica (idade 20-30 anos, pele morena clara, cabelo preto com reflexos roxos, olhos castanhos, roupa jaqueta/moletom preto).
   3. Contrato estrito de Core Poses (9 poses obrigatórias) e catálogo de Extended Motion Pack (13 poses opcionais).
@@ -490,7 +677,7 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   5. Validação rigorosa de consistência de assets (`validate_character_pack_assets`) checando formato PNG, canal alfa real e uniformidade de dimensões entre poses.
   6. Gerador local de Contact Sheet (`generate_contact_sheet`) para inspeção de layout e coerência visual pelo operador.
   7. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
-- **Próxima Fase:** V14-C.4 — Real Nox Artwork Generation & Final Operator Ingestion.
+- **Próxima Fase Global:** V15-A — Production Observability Baseline (V15 — Production Observation & Optimization).
 
 ---
 

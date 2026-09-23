@@ -2124,7 +2124,16 @@ def _run_pipeline(
             "failed to prepare video materials",
         )
 
+    # Salva proveniência inicial dos ativos (Fase V14-B)
+    try:
+        from app.services import copyright_gate
+        initial_prov = copyright_gate.build_asset_provenance(task_id, params)
+        task_artifacts.patch_script_data(task_id, asset_provenance=initial_prov)
+    except Exception as prov_exc:
+        logger.warning(f"[COPYRIGHT] Falha ao persistir asset_provenance inicial: {prov_exc}")
+
     if stop_at == "materials":
+
         sm.state.update_task(
             task_id,
             state=const.TASK_STATE_COMPLETE,
@@ -2187,6 +2196,15 @@ def _run_pipeline(
         )
     cross_post_state = const.CROSS_POST_STATE_PENDING if should_cross_post else None
 
+    # Atualiza proveniência dos ativos com renderização final (Fase V14-B)
+    final_prov = None
+    try:
+        from app.services import copyright_gate
+        final_prov = copyright_gate.build_asset_provenance(task_id, params)
+        task_artifacts.patch_script_data(task_id, asset_provenance=final_prov)
+    except Exception as prov_exc:
+        logger.warning(f"[COPYRIGHT] Falha ao persistir asset_provenance final: {prov_exc}")
+
     kwargs = {
         "videos": final_video_paths,
         "combined_videos": combined_video_paths,
@@ -2196,12 +2214,14 @@ def _run_pipeline(
         "audio_duration": audio_duration,
         "subtitle_path": subtitle_path,
         "materials": downloaded_videos,
+        "asset_provenance": final_prov,
         "cross_post_state": cross_post_state,
         "cross_post_results": None,
         "cross_post_error": None,
         "cross_post_owner": _cross_post_process_owner if should_cross_post else None,
         "warnings": generation_warnings or None,
     }
+
     sm.state.update_task(
         task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs
     )

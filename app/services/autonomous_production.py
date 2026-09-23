@@ -1200,12 +1200,30 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
     except Exception as p_exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao assegurar persistência de quality score: {p_exc}")
 
-    return True, "Aprovado nos Gates de Qualidade e Segurança", {
+    # 4. Avalia Copyright Provenance Gate (Fase V14-B: fail-closed)
+    from app.services import copyright_gate
+    cp_approved, cp_reason, cp_metrics = copyright_gate.evaluate_copyright_provenance_gate(
+        task_id=task_id,
+        task_base_dir=None,
+        db_path=db_path,
+    )
+    if not cp_approved:
+        return False, f"Copyright Provenance Gate REPROVADO: {cp_reason}", {
+            "quality_score": q_score,
+            "quality_label": q_label,
+            "safety_status": clean_status,
+            "copyright_provenance_gate": "FAIL",
+            "copyright_reason": cp_reason,
+        }
+
+    return True, "Aprovado nos Gates de Qualidade, Segurança e Copyright", {
         "quality_score": q_score,
         "quality_label": q_label,
         "safety_status": clean_status,
         "video_path": video_path,
+        "copyright_provenance_gate": "PASS",
     }
+
 
 
 def build_autonomous_video_params(
@@ -1352,18 +1370,12 @@ def build_autonomous_video_params(
     text_background_color = subtitle_bg_color if subtitle_bg_enabled else False
     rounded_subtitle_background = bool(config.ui.get("rounded_subtitle_background", False))
 
-    # 9. Trilha Sonora (BGM)
-    bgm_type = str(config.ui.get("bgm_type", "random"))
-    bgm_file = str(config.ui.get("bgm_file", "") or "")
-    try:
-        bgm_volume = float(config.ui.get("bgm_volume", 0.2))
-    except (ValueError, TypeError):
-        bgm_volume = 0.2
-
-    # Se bgm_type for custom mas o arquivo não existir fisicamente, fallback para "random"
-    if bgm_type == "custom" and (not bgm_file or not os.path.isfile(bgm_file)):
-        bgm_type = "random"
-        bgm_file = ""
+    # 9. Trilha Sonora (BGM) - Fail-closed para modo autônomo (V14-B)
+    from app.services import bgm as bgm_service
+    auto_bgm = bgm_service.resolve_autonomous_bgm(config.ui)
+    bgm_type = auto_bgm["type"]
+    bgm_file = auto_bgm["file"]
+    bgm_volume = auto_bgm["volume"]
 
     return VideoParams(
         video_subject=topic,

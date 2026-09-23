@@ -2362,3 +2362,24 @@ def get_global_cost_guard_status_op(
     from app.services import autonomous_production
     return autonomous_production.get_global_cost_guard_status(db_path=db_path)
 
+
+# ---------------------------------------------------------------------------
+# 17. Copyright & Asset Provenance (Fase V14-B)
+# ---------------------------------------------------------------------------
+
+def get_copyright_provenance_summary_op(
+    task_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retorna o resumo de Copyright e Provenance (permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import copyright_gate
+    return copyright_gate.get_copyright_provenance_summary(
+        task_id=task_id,
+        profile_id=profile_id,
+        task_base_dir=task_base_dir,
+        db_path=db_path,
+    )
+
+

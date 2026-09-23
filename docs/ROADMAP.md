@@ -399,7 +399,7 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   6. Produção autônoma estritamente preservada com `avatar_mode="none"`.
 
 ## V14-C.2 — Expressive Presenter + Subtitle Interaction
-- **Status:** 🟡 Expressive Presenter + Subtitle Interaction (DEV)
+- **Status:** ✅ MERGED
 - **Implementação:**
   1. Parser determinístico e tolerante a falhas de SRT (`parse_srt_timeline`), convertendo legendas para estrutura temporal unificada.
   2. Classificador prioritário de legendas (`classify_subtitle_reaction`) com categorias PT-BR: SURPRISE, THINKING, SERIOUS, CTA e DEFAULT com precedência estrita (`CTA > SERIOUS > SURPRISE > THINKING > TALKING > NEUTRAL`).
@@ -409,7 +409,18 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   6. Construção da timeline de expressões (`build_presenter_expression_timeline`) respeitando estritamente os segmentos do presenter e sem sobreposição temporal inválida.
   7. Performance otimizada no MoviePy via cache único de clips de pose no ExitStack.
   8. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
-- **Próxima Fase:** V14-C.3 — Nox Visual Asset Pack + Real Local Preview.
+
+## V14-C.3 — Nox Canonical Visual Asset Pack + Real Local Preview
+- **Status:** 🟡 DEV FOUNDATION
+- **Implementação:**
+  1. Estrutura canônica de diretórios criada em `assets/presenter/nox_v1/` com `manifest.json`, `reference/`, `poses/` e `previews/`.
+  2. Manifest declarativo versionado com metadados de identidade visual canônica (idade 20-30 anos, pele morena clara, cabelo preto com reflexos roxos, olhos castanhos, roupa jaqueta/moletom preto).
+  3. Contrato estrito de Core Poses (9 poses obrigatórias) e catálogo de Extended Motion Pack (13 poses opcionais).
+  4. Fallback Graph determinístico implementado para poses estendidas (`EXTENDED_POSE_FALLBACKS`).
+  5. Validação rigorosa de consistência de assets (`validate_character_pack_assets`) checando formato PNG, canal alfa real e uniformidade de dimensões entre poses.
+  6. Gerador local de Contact Sheet (`generate_contact_sheet`) para inspeção de layout e coerência visual pelo operador.
+  7. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
+- **Próxima Fase:** V14-C.4 — Real Nox Artwork Generation & Final Operator Ingestion.
 
 ---
 

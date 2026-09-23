@@ -1,6 +1,20 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## V14-C.2 — Expressive Presenter + Subtitle Interaction — DEV controlado
+## V14-C.3 — Nox Canonical Visual Asset Pack + Real Local Preview — DEV FOUNDATION
+
+- **Baseline:** `447a36789850857a66422ad06f1800f18cccd96a`
+- **Contexto Operacional:** Produção parada. Objetivo: estruturar os fundamentos canônicos do asset pack do Nox v1 (diretórios, manifest versionado, poses core e extended, fallback graph, validação de transparência/dimensão e preview de contact sheet) sem gerar imagens por IA ainda nem tocar produção.
+- **Implementação Realizada:**
+  1. Estrutura canônica de diretórios criada em `assets/presenter/nox_v1/` (`manifest.json`, `reference/`, `poses/`, `previews/`).
+  2. Manifest canônico estruturado com metadados de identidade visual (pele morena clara, cabelo preto com reflexos roxos, olhos castanhos, roupa jaqueta/moletom preto).
+  3. Contrato de 9 Core Poses obrigatórias e catálogo de 13 Extended Motion Poses opcionais.
+  4. Fallback Graph determinístico implementado para poses estendidas ausentes (`EXTENDED_POSE_FALLBACKS`).
+  5. Validação rigorosa de integridade e consistência gráfica (`validate_character_pack_assets`) verificando PNG, canal alfa real e conformidade dimensional.
+  6. Gerador local de Contact Sheet (`generate_contact_sheet`) renderizando grid com Core Poses e Extended Poses rotuladas.
+  7. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
+- **Próximo Passo:** V14-C.4 — Real Nox Artwork Generation & Final Operator Ingestion.
+
+## V14-C.2 — Expressive Presenter + Subtitle Interaction — MERGED
 
 - **Baseline:** `def541870a598ee8984a6a2b98bed39688434691`
 - **Contexto Operacional:** Produção parada. Objetivo: dotar o Nox de capacidade expressiva sincronizada com legendas e narração (SRT), alternância de fala, reações semânticas e apontamentos geométricos sem lip-sync neural.
@@ -13,7 +27,6 @@
   6. Construção da timeline de expressões (`build_presenter_expression_timeline`) respeitando estritamente os segmentos do presenter e sem sobreposição temporal inválida.
   7. Performance otimizada no MoviePy via cache único de clips de pose no ExitStack.
   8. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
-- **Próximo Passo:** V14-C.3 — Nox Visual Asset Pack + Real Local Preview.
 
 ## V14-C.1 — Cartoon Character Asset Pack + Preview — MERGED
 

@@ -1,0 +1,53 @@
+{
+  "character_id": "nox_v1",
+  "character_name": "Nox",
+  "version": 1,
+  "style": "cartoon_semi_cartoon",
+  "default_pose": "neutral",
+  "default_scale": 0.38,
+  "default_position": "bottom_right",
+  "default_opacity": 1.0,
+  "reference_image": "reference/nox_v1_reference.png",
+  "visual_identity": {
+    "apparent_age": "20-30",
+    "skin_tone": "morena clara",
+    "hair": "preto escuro, bagunçado, leves reflexos roxos",
+    "eyes": "castanhos escuros",
+    "face": "fino, visual moderno",
+    "expression": "curiosa, amigável, levemente misterioso",
+    "body": "corpo magro, enquadramento busto / cintura para cima",
+    "outfit": "jaqueta/moletom preto, camiseta preta, detalhes discretos roxos",
+    "palette": [
+      "#111115",
+      "#2B143E",
+      "#6B3FA0",
+      "#183040"
+    ]
+  },
+  "core_poses": {
+    "neutral": "poses/neutral.png",
+    "talking_1": "poses/talking_1.png",
+    "talking_2": "poses/talking_2.png",
+    "surprised": "poses/surprised.png",
+    "serious": "poses/serious.png",
+    "thinking": "poses/thinking.png",
+    "pointing_left": "poses/pointing_left.png",
+    "pointing_right": "poses/pointing_right.png",
+    "cta": "poses/cta.png"
+  },
+  "extended_poses": {
+    "blink": "poses/blink.png",
+    "talking_3": "poses/talking_3.png",
+    "talking_4": "poses/talking_4.png",
+    "half_smile": "poses/half_smile.png",
+    "confused": "poses/confused.png",
+    "skeptical": "poses/skeptical.png",
+    "looking_left": "poses/looking_left.png",
+    "looking_right": "poses/looking_right.png",
+    "hand_up": "poses/hand_up.png",
+    "open_hands": "poses/open_hands.png",
+    "lean_forward": "poses/lean_forward.png",
+    "warning": "poses/warning.png",
+    "excited": "poses/excited.png"
+  }
+}

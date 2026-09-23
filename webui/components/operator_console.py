@@ -1640,7 +1640,47 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
         from app.services import profile_manager
         active_prof = profile_manager.get_active_profile()
         active_prof_id = active_prof.get("id") if active_prof else "default"
-        prov_summary = operator_console.get_copyright_provenance_summary_op(profile_id=active_prof_id)
+
+        # Prioriza a publicação inspecionada/alterada pelo operador, se houver
+        inspected_task_id = st.session_state.get("cp_inspected_task_id")
+        inspected_pub_id = st.session_state.get("cp_inspected_pub_id")
+        target_task_for_summary = inspected_task_id if inspected_task_id else None
+        if not target_task_for_summary and inspected_pub_id:
+            try:
+                c_stat = operator_console.get_publication_copyright_status_op(publication_event_id=int(inspected_pub_id))
+                target_task_for_summary = c_stat.get("task_id")
+            except Exception:
+                pass
+        prov_summary = operator_console.get_copyright_provenance_summary_op(
+            task_id=target_task_for_summary, profile_id=active_prof_id
+        )
+
+    # Feedback persistente pós-rerun (Flash State)
+    flash = st.session_state.get("cp_status_flash")
+    if flash:
+        f_status = str(flash.get("copyright_status", "unknown")).upper()
+        f_loop = "ELIGIBLE" if flash.get("copyright_status") == "clean_manual" else "EXCLUDED"
+        f_badge_color = "green" if flash.get("copyright_status") == "clean_manual" else ("orange" if flash.get("copyright_status") == "unknown" else "red")
+        f_header = "ℹ️ **CONSULTA DE COPYRIGHT**" if flash.get("consultation_only") else (
+            "✅ **STATUS REGISTRADO (idempotente — status já registrado)**" if flash.get("idempotent") else "✅ **STATUS REGISTRADO COM SUCESSO**"
+        )
+        with st.container(border=True):
+            st.markdown(
+                f"{f_header}\n\n"
+                f"- **Task ID:** `{flash.get('task_id') or '—'}`\n"
+                f"- **Publication Event ID:** `{flash.get('publication_event_id') or '—'}`\n"
+                f"- **External ID:** `{flash.get('external_id') or '—'}`\n"
+                f"- **Copyright Status:** <span class='op-badge op-badge-{f_badge_color}'>{f_status}</span>\n"
+                f"- **Source:** `{flash.get('source') or 'operator'}`\n"
+                f"- **Closed Loop:** <span class='op-badge op-badge-{'green' if f_loop == 'ELIGIBLE' else 'red'}'>{f_loop}</span>"
+                + (f"\n- **Nota:** _{flash.get('note')}_" if flash.get("note") else ""),
+                unsafe_allow_html=True,
+            )
+            col_dismiss, _ = st.columns([1, 4])
+            with col_dismiss:
+                if st.button("✖ Fechar Feedback", key="btn_dismiss_cp_flash"):
+                    st.session_state.pop("cp_status_flash", None)
+                    st.rerun()
 
     bgm_filename = prov_summary.get("bgm_filename", "Nenhuma")
     bgm_prov = prov_summary.get("bgm_provenance", "SAFE_NO_BGM")
@@ -1650,6 +1690,20 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
     gate_badge = "<span class='op-badge op-badge-green'>PASS</span>" if gate_status == "PASS" else "<span class='op-badge op-badge-red'>FAIL</span>"
 
     with st.container(border=True):
+        if st.session_state.get("cp_inspected_task_id") or st.session_state.get("cp_inspected_pub_id"):
+            c_insp_txt, c_insp_btn = st.columns([4, 1])
+            with c_insp_txt:
+                st.caption(
+                    f"📍 **Exibindo publicação selecionada:** Task `{prov_summary.get('task_id', '—')}` "
+                    + (f"| Event `{prov_summary.get('publication_event_id')}` " if prov_summary.get('publication_event_id') else "")
+                    + (f"| Ext `{prov_summary.get('external_id')}`" if prov_summary.get('external_id') else "")
+                )
+            with c_insp_btn:
+                if st.button("↩ Task Atual", key="btn_revert_current_task", help="Voltar para a task em andamento do perfil"):
+                    st.session_state.pop("cp_inspected_task_id", None)
+                    st.session_state.pop("cp_inspected_pub_id", None)
+                    st.rerun()
+
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown(f"**BGM:** `{bgm_filename}`")
@@ -1696,27 +1750,33 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
             st.caption("clean_manual=ELIGIBLE | others=EXCLUDED")
 
         if is_primary:
-            with st.expander("⚖️ Atualizar Status de Copyright (Manual / Auditável)", expanded=False):
+            with st.expander("⚖️ Atualizar / Consultar Status de Copyright (Manual / Auditável)", expanded=bool(st.session_state.get("cp_inspected_task_id") or st.session_state.get("cp_inspected_pub_id"))):
                 st.caption("Registra evento auditável não-destrutivo. Exclui vídeos claimed/blocked/strike/unknown do Closed Feedback Loop.")
                 col_inp1, col_inp2 = st.columns(2)
                 with col_inp1:
+                    default_pub_val = str(prov_summary.get("publication_event_id") or "") if (st.session_state.get("cp_inspected_pub_id") or prov_summary.get("publication_event_id")) else ""
+                    default_task_val = str(prov_summary.get("task_id", "")) if prov_summary.get("task_id") != "—" else ""
                     target_pub_id = st.text_input(
                         "Publication Event ID (ou deixe vazio se usar Task ID)",
-                        value="",
+                        value=default_pub_val,
                         key="cp_pub_id_input",
                         help="ID numérico do evento na tabela publication_events",
                     )
                     target_task_id = st.text_input(
                         "Task ID",
-                        value=prov_summary.get("task_id", "") if prov_summary.get("task_id") != "—" else "",
+                        value=default_task_val,
                         key="cp_task_id_input",
                         help="UUID da tarefa para localizar a publicação no YouTube",
                     )
                 with col_inp2:
+                    current_idx = 0
+                    opts = ["clean_manual", "claimed", "blocked", "strike", "unknown"]
+                    if raw_c_status in opts:
+                        current_idx = opts.index(raw_c_status)
                     selected_status = st.selectbox(
                         "Novo Copyright Status",
-                        options=["clean_manual", "claimed", "blocked", "strike", "unknown"],
-                        index=0,
+                        options=opts,
+                        index=current_idx,
                         key="cp_status_select",
                     )
                     status_note = st.text_input(
@@ -1726,26 +1786,70 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
                         placeholder="Ex: Bloqueado mundialmente Content ID YouTube Studio",
                     )
 
-                if st.button("Registrar Status de Copyright", key="btn_set_cp_status"):
-                    try:
-                        pub_id_val = int(target_pub_id.strip()) if target_pub_id.strip() else None
-                        t_id_val = target_task_id.strip() if target_task_id.strip() else None
-                        if pub_id_val is None and not t_id_val:
-                            st.error("Informe pelo menos o Publication Event ID ou o Task ID.")
-                        else:
-                            res = operator_console.set_publication_copyright_status_op(
-                                publication_event_id=pub_id_val,
-                                task_id=t_id_val,
-                                copyright_status=selected_status,
-                                note=status_note.strip() if status_note.strip() else None,
-                            )
-                            if res.get("idempotent"):
-                                st.info(f"Status já estava registrado como '{selected_status}' (idempotente).")
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    if st.button("Registrar Status de Copyright", key="btn_set_cp_status"):
+                        try:
+                            pub_id_val = int(target_pub_id.strip()) if target_pub_id.strip() else None
+                            t_id_val = target_task_id.strip() if target_task_id.strip() else None
+                            if pub_id_val is None and not t_id_val:
+                                st.error("Informe pelo menos o Publication Event ID ou o Task ID.")
                             else:
-                                st.success(f"Status '{selected_status}' registrado com sucesso para task={res.get('task_id')} (pub_id={res.get('publication_event_id')})!")
-                            st.rerun()
-                    except Exception as exc:
-                        st.error(f"Erro ao registrar status: {exc}")
+                                res = operator_console.set_publication_copyright_status_op(
+                                    publication_event_id=pub_id_val,
+                                    task_id=t_id_val,
+                                    copyright_status=selected_status,
+                                    note=status_note.strip() if status_note.strip() else None,
+                                )
+                                st.session_state["cp_status_flash"] = {
+                                    "success": True,
+                                    "idempotent": bool(res.get("idempotent")),
+                                    "task_id": res.get("task_id"),
+                                    "publication_event_id": res.get("publication_event_id"),
+                                    "external_id": res.get("external_id"),
+                                    "copyright_status": res.get("copyright_status"),
+                                    "source": res.get("source"),
+                                    "timestamp": res.get("timestamp"),
+                                    "note": res.get("note"),
+                                }
+                                if res.get("task_id"):
+                                    st.session_state["cp_inspected_task_id"] = str(res["task_id"])
+                                if res.get("publication_event_id"):
+                                    st.session_state["cp_inspected_pub_id"] = str(res["publication_event_id"])
+                                st.rerun()
+                        except Exception as exc:
+                            st.error(f"Erro ao registrar status: {exc}")
+
+                with btn_col2:
+                    if st.button("🔍 Consultar / Inspecionar Publicação", key="btn_query_cp_status"):
+                        try:
+                            pub_id_val = int(target_pub_id.strip()) if target_pub_id.strip() else None
+                            t_id_val = target_task_id.strip() if target_task_id.strip() else None
+                            if pub_id_val is None and not t_id_val:
+                                st.error("Informe pelo menos o Publication Event ID ou o Task ID para consultar.")
+                            else:
+                                info = operator_console.get_publication_copyright_status_op(
+                                    publication_event_id=pub_id_val,
+                                    task_id=t_id_val,
+                                )
+                                st.session_state["cp_status_flash"] = {
+                                    "success": True,
+                                    "consultation_only": True,
+                                    "task_id": info.get("task_id"),
+                                    "publication_event_id": info.get("publication_event_id"),
+                                    "external_id": info.get("external_id"),
+                                    "copyright_status": info.get("copyright_status"),
+                                    "source": info.get("source") or "—",
+                                    "timestamp": info.get("timestamp"),
+                                    "note": info.get("note"),
+                                }
+                                if info.get("task_id"):
+                                    st.session_state["cp_inspected_task_id"] = str(info["task_id"])
+                                if info.get("publication_event_id"):
+                                    st.session_state["cp_inspected_pub_id"] = str(info["publication_event_id"])
+                                st.rerun()
+                        except Exception as exc:
+                            st.error(f"Erro ao consultar status: {exc}")
         else:
             st.caption("ℹ️ Alteração manual de status de copyright permitida apenas na instância PRIMARY.")
 

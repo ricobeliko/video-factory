@@ -1,5 +1,31 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
+## V13-A — Headless Remote Deployment / Safe Update Foundation — DEV IMPLEMENTED
+
+- **Baseline:** `ee32d801bfd8a5b9b6f7ecbb57c556aa803327f5`
+- **Contexto Operacional e Ambientes:**
+  - DEV / Notebook: `D:\Projetos\MoneyPrinterTurbo`
+  - PRODUÇÃO / PC Forte: `C:\Projetos\MoneyPrinterTurbo` (NÃO acessado nem tocado nesta fase)
+  - Scheduled Task de Produção: `VideoFactory Production`
+  - Status desta fase: **DEV IMPLEMENTED / NOT PRODUCTION HOMOLOGATED**
+  - `V14-B.2` = PRODUCTION HOMOLOGATED
+  - `V14-B.2.1` = MERGED / NOT YET DEPLOYED
+  - `Presenter/Nox` = DORMANT (experimento arquivado em branch separada, produção e main com `avatar_mode="none"`)
+- **Implementação Realizada:**
+  1. Script de atualização criado em `scripts/update_production.ps1` aceitando `-TargetRef` (default `origin/main`), `-RepoPath` (default `C:\Projetos\MoneyPrinterTurbo`), `-TaskName` (default `VideoFactory Production`), `-HealthUrl` (default `http://127.0.0.1:8501/_stcore/health`) e `-PreflightOnly`.
+  2. **Pipeline de Execução Completo:**
+     - `PRE-FLIGHT`: Verificação fail-closed de working tree limpa (rejeita alterações não commitadas ou arquivos untracked críticos), branch/HEAD válida, .venv existente, resolução de commits e verificação de Fast-Forward (`git merge-base --is-ancestor`).
+     - `BACKUP`: Snapshot transacional SQLite pré-stop via `app.services.production_backup` com `PRAGMA integrity_check` e manifesto sidecar com SHA-256. Se integridade != ok, aborta antes de qualquer mutação.
+     - `STOP`: Parada controlada e delimitada via `schtasks /End /TN "VideoFactory Production"`, aguardando encerramento sem matar processos aleatórios.
+     - `UPDATE`: Atualização estritamente Fast-Forward (`git merge --ff-only TARGET_SHA`) com validação de `git rev-parse HEAD == TARGET_SHA`.
+     - `START`: Inicialização segura via `schtasks /Run /TN "VideoFactory Production"`.
+     - `HEALTH CHECK`: Avaliação delimitada em `http://127.0.0.1:8501/_stcore/health` (timeout 75s, HTTP 200 + corpo contendo `ok`).
+     - `ROLLBACK`: Se o health check falhar pós-update, para a Scheduled Task, retorna para `CURRENT_SHA` via `git switch --detach CURRENT_SHA` (zero `git reset`, `git restore` ou `git clean`, preservando a branch `main`), reinicia a tarefa e repete o health check. Se passar: `ROLLBACK_SUCCESS`; se falhar: `ROLLBACK_FAILED` com parada e exigência de intervenção humana.
+  3. **Lock e Logging Local:** Lock exclusivo em `storage/locks/update_production.lock` com limpeza garantida em bloco `finally`. Logs timestampados em `logs/deploy/` estritamente sanitizados (sem API keys, tokens ou secrets).
+- **Validação:**
+  - Teste direcionado único criado em `test/services/test_safe_production_update.py` cobrindo 13 verificações estáticas e funcionais em repositório temporário isolado (13 passed in 6.68s).
+- **Próximo Passo:** V13-B = Primeira instalação e homologação real no PC forte.
+
 ## V14-B.2 — Manual Copyright Status + Closed Feedback Loop Exclusion — MERGED
 
 - **Baseline:** `150056215fcbd8296fcdeac56abac0d37f787cc8`

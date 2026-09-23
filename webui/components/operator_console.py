@@ -2446,6 +2446,99 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------------------
+# Section 5.7: Production Observability Baseline (STATIC - Fase V15-A)
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    """Seção de Observabilidade de Produção (Fase V15-A).
+
+    Exibe snapshot passivo e consolidado dos dois canais lado a lado.
+    Estritamente somente leitura: zero controles de escrita ou botões mutantes.
+    """
+    st.markdown("### 📊 Production Observability — V15")
+    from app.services import production_observability
+    try:
+        snapshot = production_observability.get_production_observability_snapshot()
+    except Exception as exc:
+        st.error(f"Erro ao obter snapshot de observabilidade: {exc}")
+        return
+
+    # Warnings globais observáveis
+    warnings = snapshot.get("global", {}).get("warnings", [])
+    if warnings:
+        warn_text = " • ".join(f"`{w}`" for w in warnings)
+        st.warning(f"**Avisos Observados:** {warn_text}")
+
+    profiles = snapshot.get("profiles", {})
+    p1 = profiles.get(production_observability.PROFILE_DEFAULT, {})
+    p2 = profiles.get(production_observability.PROFILE_MYSTERY, {})
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(f"#### 📺 Canal Principal (`{production_observability.PROFILE_DEFAULT}`)")
+        if p1.get("status") == "unavailable":
+            st.warning(f"Dados indisponíveis: {p1.get('reason')}")
+        else:
+            p_prof = p1.get("profile", {})
+            p_auto = p1.get("autonomous", {})
+            p_stock = p1.get("ready_stock", {})
+            p_sched = p1.get("scheduler", {})
+            p_24h = p1.get("production_24h", {})
+            p_copy = p1.get("copyright", {})
+            p_anal = p1.get("analytics", {})
+            p_cl = p1.get("closed_feedback_loop", {})
+            p_cost = p1.get("cost_guard", {})
+
+            auto_badge = "🟢 Ativo" if p_auto.get("enabled") else "⚪ Desativado"
+            st.write(f"**Nome:** {p_prof.get('name')} | **Growth:** `{p_prof.get('growth_mode')}`")
+            st.write(f"**Autônomo:** {auto_badge} (Estado: `{p_auto.get('state')}`)")
+            st.write(f"**Estoque Pronto:** {p_stock.get('count')} / Meta: {p_stock.get('target')}")
+            st.write(f"**Scheduler:** Agendados: {p_sched.get('scheduled')} | Publicados: {p_sched.get('published')} | Falhas: {p_sched.get('failed')}")
+            st.write(f"**Produção 24h:** {p_24h.get('approvals')} aprovados / {p_24h.get('attempts')} tentativas")
+            st.write(f"**Copyright:** Status: `{p_copy.get('effective_status')}` (Elegível Loop: `{p_copy.get('feedback_loop_eligible')}`)")
+            an_snap = p_anal.get("latest_snapshot")
+            if an_snap:
+                st.write(f"**Analytics:** Views: {an_snap.get('metrics', {}).get('views')} | Likes: {an_snap.get('metrics', {}).get('likes')}")
+            else:
+                st.write(f"**Analytics:** Sem snapshots recentes")
+            st.write(f"**Feedback Loop:** Modo: `{p_cl.get('mode')}` | Amostras: {p_cl.get('sample_count')} (`{p_cl.get('evidence_state')}`)")
+            st.write(f"**Cost Guard:** {p_cost.get('approvals_24h')}/{p_cost.get('max_approvals_24h')} aprovados | {p_cost.get('attempts_24h')}/{p_cost.get('max_attempts_24h')} tentativas")
+
+    with col2:
+        st.markdown(f"#### 📺 Canal Secundário (`{production_observability.PROFILE_MYSTERY}`)")
+        if p2.get("status") == "unavailable":
+            st.warning(f"Dados indisponíveis: {p2.get('reason')}")
+        else:
+            p_prof = p2.get("profile", {})
+            p_auto = p2.get("autonomous", {})
+            p_stock = p2.get("ready_stock", {})
+            p_sched = p2.get("scheduler", {})
+            p_24h = p2.get("production_24h", {})
+            p_copy = p2.get("copyright", {})
+            p_anal = p2.get("analytics", {})
+            p_cl = p2.get("closed_feedback_loop", {})
+            p_cost = p2.get("cost_guard", {})
+
+            auto_badge = "🟢 Ativo" if p_auto.get("enabled") else "⚪ Desativado"
+            st.write(f"**Nome:** {p_prof.get('name')} | **Growth:** `{p_prof.get('growth_mode')}`")
+            st.write(f"**Autônomo:** {auto_badge} (Estado: `{p_auto.get('state')}`)")
+            st.write(f"**Estoque Pronto:** {p_stock.get('count')} / Meta: {p_stock.get('target')}")
+            st.write(f"**Scheduler:** Agendados: {p_sched.get('scheduled')} | Publicados: {p_sched.get('published')} | Falhas: {p_sched.get('failed')}")
+            st.write(f"**Produção 24h:** {p_24h.get('approvals')} aprovados / {p_24h.get('attempts')} tentativas")
+            st.write(f"**Copyright:** Status: `{p_copy.get('effective_status')}` (Elegível Loop: `{p_copy.get('feedback_loop_eligible')}`)")
+            an_snap = p_anal.get("latest_snapshot")
+            if an_snap:
+                st.write(f"**Analytics:** Views: {an_snap.get('metrics', {}).get('views')} | Likes: {an_snap.get('metrics', {}).get('likes')}")
+            else:
+                st.write(f"**Analytics:** Sem snapshots recentes")
+            st.write(f"**Feedback Loop:** Modo: `{p_cl.get('mode')}` | Amostras: {p_cl.get('sample_count')} (`{p_cl.get('evidence_state')}`)")
+            st.write(f"**Cost Guard:** {p_cost.get('approvals_24h')}/{p_cost.get('max_approvals_24h')} aprovados | {p_cost.get('attempts_24h')}/{p_cost.get('max_attempts_24h')} tentativas")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Section 6: Alerts, Timeline, Errors & Recovery (STATIC - Sem auto-refresh)
@@ -2731,6 +2824,8 @@ def render_operator_console():
     # 5.6. Clip Mode Foundation (STATIC)
     _render_clip_mode_section(demo_enabled, scenario_choice, is_primary)
 
+    # 5.7. Production Observability Baseline (STATIC - Fase V15-A)
+    _render_observability_section(demo_enabled, scenario_choice, is_primary)
 
     # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
     _render_tabs_section(demo_enabled, scenario_choice, is_primary)

@@ -1966,6 +1966,173 @@ def confirm_publication_privacy_op(
     }
 
 
+def set_publication_copyright_status_op(
+    publication_event_id: Optional[int] = None,
+    copyright_status: str = "unknown",
+    note: Optional[str] = None,
+    expected_task_id: Optional[str] = None,
+    expected_external_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    source: str = "operator",
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Define o status de direitos autorais de forma auditável e persistente (V14-B.2).
+
+    Requisitos:
+    - PRIMARY only: fail-closed via require_primary_instance.
+    - Valida status permitido (unknown, clean_manual, claimed, blocked, strike).
+    - Valida publication event existente em status 'success' e plataforma 'youtube'.
+    - Valida source (padrão 'operator', aceita 'future_provider').
+    - Idempotente: se já estiver no mesmo status com a mesma nota, não duplica evento.
+    - Grava evento auditável em operational_events com metadata completo.
+    - Zero rede / chamadas externas.
+    """
+    require_primary_instance(db_path=db_path)
+
+    from app.services import copyright_gate, scheduler
+
+    clean_status = str(copyright_status or "").strip().lower()
+    if clean_status not in copyright_gate.ALLOWED_COPYRIGHT_STATUSES:
+        raise ValueError(
+            f"copyright_status inválido: '{copyright_status}'. "
+            f"Valores aceitos: {sorted(copyright_gate.ALLOWED_COPYRIGHT_STATUSES)}."
+        )
+
+    clean_source = str(source or copyright_gate.COPYRIGHT_SOURCE_OPERATOR).strip().lower()
+    if clean_source not in copyright_gate.ALLOWED_COPYRIGHT_SOURCES:
+        raise ValueError(
+            f"source inválida: '{source}'. "
+            f"Valores aceitos: {sorted(copyright_gate.ALLOWED_COPYRIGHT_SOURCES)}."
+        )
+
+    clean_pub_id = int(publication_event_id) if publication_event_id is not None else None
+    target_task = expected_task_id or task_id
+
+    scheduler.init_db(db_path)
+    init_operator_db(db_path)
+
+    with get_connection(db_path) as conn:
+        row = None
+        if clean_pub_id is not None:
+            row = conn.execute(
+                "SELECT * FROM publication_events WHERE id = ?;",
+                (clean_pub_id,),
+            ).fetchone()
+        elif target_task:
+            row = conn.execute(
+                "SELECT * FROM publication_events WHERE task_id = ? AND platform = 'youtube' AND status = 'success' ORDER BY id DESC LIMIT 1;",
+                (str(target_task),),
+            ).fetchone()
+
+        if not row:
+            identifier_desc = f"id={clean_pub_id}" if clean_pub_id is not None else f"task_id={target_task}"
+            raise ValueError(f"publication_event {identifier_desc} não encontrado.")
+
+        row_dict = dict(row)
+        resolved_pub_id = int(row_dict["id"])
+
+        if (row_dict.get("status") or "").strip().lower() != "success":
+            raise ValueError(
+                f"publication_event id={resolved_pub_id} não está em status 'success' "
+                f"(status={row_dict.get('status')})."
+            )
+        if (row_dict.get("platform") or "").strip().lower() != "youtube":
+            raise ValueError(
+                f"publication_event id={resolved_pub_id} não é da plataforma 'youtube' "
+                f"(platform={row_dict.get('platform')})."
+            )
+        if expected_task_id and str(row_dict.get("task_id") or "") != str(expected_task_id):
+            raise ValueError(
+                f"task_id informado não corresponde ao publication_event id={resolved_pub_id}."
+            )
+        if expected_external_id and str(row_dict.get("external_id") or "") != str(expected_external_id):
+            raise ValueError(
+                f"external_id informado não corresponde ao publication_event id={resolved_pub_id}."
+            )
+
+    # Verifica idempotência
+    current = copyright_gate.get_publication_copyright_status(
+        publication_event_id=resolved_pub_id, db_path=db_path
+    )
+    clean_note = str(note).strip() if note is not None else None
+    current_note = current.get("note")
+
+    if current.get("copyright_status") == clean_status and (clean_note is None or current_note == clean_note):
+        return {
+            "success": True,
+            "idempotent": True,
+            "publication_event_id": resolved_pub_id,
+            "task_id": row_dict.get("task_id"),
+            "platform": "youtube",
+            "external_id": row_dict.get("external_id"),
+            "copyright_status": clean_status,
+            "source": current.get("source") or clean_source,
+            "timestamp": current.get("timestamp"),
+            "note": current_note,
+        }
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    task_id_val = str(row_dict.get("task_id") or "")
+    ext_id_val = str(row_dict.get("external_id") or "")
+    severity = SEVERITY_WARNING if clean_status in (
+        copyright_gate.COPYRIGHT_STATUS_BLOCKED,
+        copyright_gate.COPYRIGHT_STATUS_STRIKE,
+        copyright_gate.COPYRIGHT_STATUS_CLAIMED,
+    ) else SEVERITY_INFO
+
+    log_operational_event(
+        component="copyright",
+        severity=severity,
+        event_type="PUBLICATION_COPYRIGHT_STATUS_SET",
+        task_id=task_id_val,
+        message=(
+            f"Status de copyright definido para '{clean_status}' no publication_event id={resolved_pub_id} "
+            f"(task={task_id_val}, platform=youtube, external_id={ext_id_val}) por source='{clean_source}'."
+        ),
+        metadata={
+            "publication_event_id": resolved_pub_id,
+            "task_id": task_id_val,
+            "platform": "youtube",
+            "external_id": ext_id_val,
+            "copyright_status": clean_status,
+            "source": clean_source,
+            "timestamp": now_iso,
+            "optional_note": clean_note,
+            "note": clean_note,
+        },
+        db_path=db_path,
+    )
+
+    return {
+        "success": True,
+        "idempotent": False,
+        "publication_event_id": resolved_pub_id,
+        "task_id": task_id_val,
+        "platform": "youtube",
+        "external_id": ext_id_val,
+        "copyright_status": clean_status,
+        "source": clean_source,
+        "timestamp": now_iso,
+        "note": clean_note,
+    }
+
+
+def get_publication_copyright_status_op(
+    publication_event_id: Optional[int] = None,
+    task_id: Optional[str] = None,
+    external_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Consulta o status de copyright de uma publicação/tarefa (read-only, permitido em PRIMARY e VIEW ONLY)."""
+    from app.services import copyright_gate
+    return copyright_gate.get_publication_copyright_status(
+        publication_event_id=publication_event_id,
+        task_id=task_id,
+        external_id=external_id,
+        db_path=db_path,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 13. Operações de Clip Mode (Fase V11-A)
 # ---------------------------------------------------------------------------

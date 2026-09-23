@@ -1672,6 +1672,83 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
         with cp4:
             st.markdown(f"**Asset Status:** `{prov_summary.get('presenter_asset_status', 'NOT_CONFIGURED')}`")
 
+        st.divider()
+        st.markdown("**Copyright Status & Closed Feedback Loop (V14-B.2)**")
+        raw_c_status = prov_summary.get("copyright_status", "unknown")
+        c_status_display = str(raw_c_status).upper()
+        c_source_display = prov_summary.get("copyright_source", "—")
+        loop_eligible = prov_summary.get("feedback_loop_eligible", False)
+
+        status_color = "green" if raw_c_status == "clean_manual" else ("orange" if raw_c_status == "unknown" else "red")
+        status_badge = f"<span class='op-badge op-badge-{status_color}'>{c_status_display}</span>"
+        loop_badge = "<span class='op-badge op-badge-green'>ELIGIBLE</span>" if loop_eligible else "<span class='op-badge op-badge-red'>EXCLUDED</span>"
+
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            st.markdown(f"**Copyright Status:** {status_badge}", unsafe_allow_html=True)
+            if prov_summary.get("copyright_note"):
+                st.caption(f"Nota: {prov_summary.get('copyright_note')}")
+        with cc2:
+            st.markdown(f"**Source:** `{c_source_display}`")
+            st.caption("Origem da evidência auditada")
+        with cc3:
+            st.markdown(f"**Closed Loop:** {loop_badge}", unsafe_allow_html=True)
+            st.caption("clean_manual=ELIGIBLE | others=EXCLUDED")
+
+        if is_primary:
+            with st.expander("⚖️ Atualizar Status de Copyright (Manual / Auditável)", expanded=False):
+                st.caption("Registra evento auditável não-destrutivo. Exclui vídeos claimed/blocked/strike/unknown do Closed Feedback Loop.")
+                col_inp1, col_inp2 = st.columns(2)
+                with col_inp1:
+                    target_pub_id = st.text_input(
+                        "Publication Event ID (ou deixe vazio se usar Task ID)",
+                        value="",
+                        key="cp_pub_id_input",
+                        help="ID numérico do evento na tabela publication_events",
+                    )
+                    target_task_id = st.text_input(
+                        "Task ID",
+                        value=prov_summary.get("task_id", "") if prov_summary.get("task_id") != "—" else "",
+                        key="cp_task_id_input",
+                        help="UUID da tarefa para localizar a publicação no YouTube",
+                    )
+                with col_inp2:
+                    selected_status = st.selectbox(
+                        "Novo Copyright Status",
+                        options=["clean_manual", "claimed", "blocked", "strike", "unknown"],
+                        index=0,
+                        key="cp_status_select",
+                    )
+                    status_note = st.text_input(
+                        "Nota do Operador (opcional)",
+                        value="",
+                        key="cp_note_input",
+                        placeholder="Ex: Bloqueado mundialmente Content ID YouTube Studio",
+                    )
+
+                if st.button("Registrar Status de Copyright", key="btn_set_cp_status"):
+                    try:
+                        pub_id_val = int(target_pub_id.strip()) if target_pub_id.strip() else None
+                        t_id_val = target_task_id.strip() if target_task_id.strip() else None
+                        if pub_id_val is None and not t_id_val:
+                            st.error("Informe pelo menos o Publication Event ID ou o Task ID.")
+                        else:
+                            res = operator_console.set_publication_copyright_status_op(
+                                publication_event_id=pub_id_val,
+                                task_id=t_id_val,
+                                copyright_status=selected_status,
+                                note=status_note.strip() if status_note.strip() else None,
+                            )
+                            if res.get("idempotent"):
+                                st.info(f"Status já estava registrado como '{selected_status}' (idempotente).")
+                            else:
+                                st.success(f"Status '{selected_status}' registrado com sucesso para task={res.get('task_id')} (pub_id={res.get('publication_event_id')})!")
+                            st.rerun()
+                    except Exception as exc:
+                        st.error(f"Erro ao registrar status: {exc}")
+        else:
+            st.caption("ℹ️ Alteração manual de status de copyright permitida apenas na instância PRIMARY.")
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 

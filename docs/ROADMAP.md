@@ -376,7 +376,7 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   4. Preservação física e histórica: nenhum arquivo apagado, nenhum registro cancelado. Fluxo manual legado preservado.
 
 ## V14-C — Hybrid Character Overlay MVP
-- **Status:** 🟡 HYBRID PRESENTER MVP — DEV
+- **Status:** ✅ MERGED
 - **Arquitetura Selecionada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG transparente).
 - **Custo e Dependências:** R$ 0,00; sem chamadas pagas, 100% offline via MoviePy 2.x existente.
 - **Implementação:**
@@ -386,7 +386,18 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
   4. Proveniência de presenter integrada a `build_asset_provenance()` em `copyright_gate.py`.
   5. Telemetria no Operator Console: Mode, Character ID, Provider e Asset Status.
   6. Modo autônomo estritamente mantido em `avatar_mode="none"`.
-- **Próxima Etapa:** V14-C.1 — Character Asset Selection / Creation + Production Preview.
+
+## V14-C.1 — Cartoon Character Asset Pack + Preview
+- **Status:** 🟡 Cartoon Character Asset Pack + Preview (DEV)
+- **Personagem:** **Nox** (`nox_v1` / `misterio_host_v1`), estilo cartoon / semi-cartoon, definido como personagem-base unificado para todos os canais (`SINGLE_CHARACTER_ALL_CHANNELS = YES`).
+- **Implementação:**
+  1. Especificação completa do personagem documentada em `docs/CHARACTER_PRESENTER_SPEC.md` (direção visual, paleta de cores sóbrias, vestimenta grafite/vinho, enquadramento waist-up e lista de poses).
+  2. Contrato de Asset Pack local estabelecido em `storage/presenter_assets/<character_id>/` e `resource/presenter_assets/<character_id>/` com catálogo de poses (`neutral`, `talking_1`, `talking_2`, `surprised`, `serious`, `thinking`, `pointing_left`, `pointing_right`, `cta`) e `config.json`.
+  3. Resolução de Character Pack por `character_id` em `presenter.py` (`resolve_character_pack`) com fail-closed para poses obrigatórias ausentes.
+  4. Pose Controller determinístico (`select_presenter_pose`) selecionando poses por segmento narrativo (hook, return, cta, corner).
+  5. Suporte a Preview controlado (`render_presenter_preview` e `generate_presenter_preview_frame`) para validação estática e render sem tocar produção.
+  6. Produção autônoma estritamente preservada com `avatar_mode="none"`.
+- **Próxima Fase:** V14-C.2 = Expressive Presenter Logic + Subtitle Interaction.
 
 ---
 

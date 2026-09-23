@@ -1,6 +1,19 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## V14-C — Hybrid Character Overlay MVP — DEV controlado
+## V14-C.1 — Cartoon Character Asset Pack + Preview — DEV controlado
+
+- **Baseline:** `b9e73e2a98f020e54be304396749e5c86e67cbb1`
+- **Contexto Operacional:** Produção parada após entrega da infraestrutura básica do presenter (V14-C). Objetivo: criar especificação do personagem unificado **Nox** (`nox_v1` / `misterio_host_v1`, `SINGLE_CHARACTER_ALL_CHANNELS = YES`), estruturar contrato de asset pack local, controller de poses e modo de preview controlado.
+- **Implementação Realizada:**
+  1. Especificação completa do personagem documentada em `docs/CHARACTER_PRESENTER_SPEC.md` (Nox `nox_v1`, estilo cartoon/semi-cartoon, paleta sóbria grafite/vinho, proporções waist-up).
+  2. Contrato de Asset Pack local estabelecido em `storage/presenter_assets/<character_id>/` e `resource/presenter_assets/<character_id>/` com catálogo de poses (`neutral`, `talking_1`, `talking_2`, `surprised`, `serious`, `thinking`, `pointing_left`, `pointing_right`, `cta`) e `config.json`.
+  3. Resolução de Character Pack por `character_id` em `presenter.py` (`resolve_character_pack`) com fail-closed para poses obrigatórias ausentes.
+  4. Pose Controller determinístico (`select_presenter_pose`) selecionando poses por segmento narrativo (hook, return, cta, corner).
+  5. Suporte a Preview controlado (`render_presenter_preview` e `generate_presenter_preview_frame`) para validação estática e render sem tocar produção.
+  6. Produção autônoma estritamente preservada com `avatar_mode="none"`.
+- **Próximo Passo:** V14-C.2 — Expressive Presenter Logic + Subtitle Interaction.
+
+## V14-C — Hybrid Character Overlay MVP — MERGED
 
 - **Baseline:** `4ba4a8db0314bdd8ace5c54072f1b69b5c11a791`
 - **Contexto Operacional:** Produção parada após homologação da V14-B e V14-B.1. Objetivo: habilitar infraestrutura técnica para personagem/apresentador virtual sobre o vídeo final sem dependências pagas nem lip-sync neural.
@@ -11,7 +24,6 @@
   4. Proveniência de Presenter integrada em `build_asset_provenance()` e `get_copyright_provenance_summary()` em `copyright_gate.py`.
   5. Telemetria no Operator Console: Mode, Character ID, Provider e Asset Status.
   6. Modo autônomo estritamente fixado em `avatar_mode="none"`.
-- **Próximo Passo:** V14-C.1 — Character Asset Selection / Creation + Production Preview.
 
 ## V14-B.1 — Legacy Stock Copyright Quarantine (Hotfix) — PRODUCTION HOMOLOGATED
 

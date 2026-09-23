@@ -8,6 +8,27 @@
 - Full regression exige autorização humana explícita.
 - Esta política prevalece sobre registros históricos de validação de fases anteriores.
 
+## V13-A — Safe Update Foundation — 23/09/2026
+
+Implementação concluída em desenvolvimento: fundação para atualização remota e headless segura da produção via `scripts/update_production.ps1`.
+Status nesta fase: **DEV IMPLEMENTED / NOT PRODUCTION HOMOLOGATED**.
+
+- **Pipeline Seguro:** `PRE-FLIGHT -> BACKUP -> STOP -> UPDATE FF-ONLY -> START -> HEALTH CHECK -> SUCCESS`.
+- **Pre-flight Fail-Closed:** Valida repo Git, working tree limpa (sem alterações não commitadas ou arquivos críticos untracked), ambiente virtual (.venv), existência e resolução de `CURRENT_SHA` e `TARGET_SHA`. Flag `-PreflightOnly` executa apenas diagnósticos e exibe o plano sem mutações.
+- **Fast-Forward Only:** Validação prévia estrita via `git merge-base --is-ancestor`. Zero merges ou rebases automáticos.
+- **Backup Transacional Pré-Stop:** Criação de snapshot do SQLite via `app.services.production_backup` com `PRAGMA integrity_check` obrigatório e hash SHA-256 registrado antes de parar o serviço.
+- **Parada e Inicialização Seguras:** Controle exclusivo via Scheduled Task do Windows (`schtasks /End` e `schtasks /Run`), aguardando encerramento sem matar processos aleatórios.
+- **Health Check Delimitado:** Verificação com timeout finito (75s) em `http://127.0.0.1:8501/_stcore/health` aguardando HTTP 200 e corpo contendo `ok`.
+- **Rollback Não-Destrutivo:** Se o health check pós-update falhar, a Scheduled Task é parada, a working tree é retornada para `CURRENT_SHA` via `git switch --detach CURRENT_SHA` (zero `git reset`, `git restore` ou `git clean`, preservando a branch `main`), e a aplicação é reiniciada. Se o health check pós-rollback passar: `ROLLBACK_SUCCESS`; se falhar: `ROLLBACK_FAILED` exigindo intervenção humana.
+- **Lock e Logging Local Sanitizado:** Lock exclusivo em `storage/locks/update_production.lock` com limpeza em bloco `finally`. Logs timestampados em `logs/deploy/` sem exposição de credenciais, tokens ou dumps de configuração.
+- **Ambientes e Status Vigentes:**
+  - `V14-B.2` = PRODUCTION HOMOLOGATED
+  - `V14-B.2.1` = MERGED / NOT YET DEPLOYED
+  - `Presenter/Nox` = DORMANT
+  - Produção física (`C:\Projetos\MoneyPrinterTurbo`) não acessada nem modificada.
+- **Próxima Fase:** V13-B = primeira instalação/homologação real no PC forte.
+
+
 ## V14-B.2 — Manual Copyright Status + Closed Feedback Loop Exclusion — 23/09/2026
 
 Implementação concluída em desenvolvimento: rastreamento persistente e auditável de status de direitos autorais por publicação/tarefa (`unknown`, `clean_manual`, `claimed`, `blocked`, `strike`), com fail-closed para o Closed Feedback Loop.

@@ -3,7 +3,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 from uuid import uuid4
 
 from loguru import logger
@@ -358,3 +358,21 @@ def resolve_bgm_file(unsafe_path: str) -> str:
             except ValueError as exc:
                 last_error = exc
     raise ValueError(str(last_error)) from last_error
+
+
+def resolve_autonomous_bgm(config_ui: dict | None = None) -> dict[str, Any]:
+    """
+    Resolve a configuração de BGM estritamente para o modo autônomo (Fase V14-B).
+
+    Fail-closed: novas gerações autônomas NÃO podem usar faixas legadas de resource/songs.
+    Até que exista uma biblioteca formalmente licenciada e whitelisted, o modo autônomo
+    utiliza exclusivamente bgm_type='none', volume=0.0 e provenance='SAFE_NO_BGM'.
+    """
+    return {
+        "enabled": False,
+        "type": "none",
+        "file": "",
+        "volume": 0.0,
+        "provenance_status": "SAFE_NO_BGM",
+    }
+

@@ -1,6 +1,23 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
+## V14-B — Copyright Baseline Hardening — DEV controlado
+
+- **Baseline:** `ceb64fa441f68f722d7cc2c21b986997c5cd2177`
+- **Evidência Real:** Task `815b0958-b94e-457b-932d-b10dfb0e8dba`, vídeo YouTube `XVy8MbpJFqw` (publicação tecnicamente correta, posteriormente bloqueada mundialmente por conteúdo reivindicado; sem evidência de strike).
+- **Causa Raiz:** Músicas padrão de `resource/songs/*.mp3` originadas de vídeos do YouTube e selecionadas por `bgm_type="random"`.
+- **Implementação Realizada:**
+  1. Bloqueio fail-closed de faixas legadas em novas gerações autônomas via `resolve_autonomous_bgm(...)` (`bgm_type="none"`, `volume=0.0`, `SAFE_NO_BGM`).
+  2. Preservação do uso manual legado (sem deleção de `resource/songs/`).
+  3. `asset_provenance` persistido em `script.json` e memória (`bgm` e `visual_clips` com provedor, ID externo se disponível, URL, arquivo local e termo de busca).
+  4. Copyright Provenance Gate no pipeline autônomo (fail-closed antes da aprovação da tarefa; valida BGM segura e lista de provedores permitidos: Pexels, Pixabay, Coverr).
+  5. Sem promessa de ausência de claim (`COPYRIGHT_PROVENANCE_GATE = PASS`, jamais `CONTENT_ID_SAFE`).
+  6. Preparação conceitual de status futuro (`unknown`, `clean_manual`, `claimed`, `blocked`, `strike`) e fontes (`operator`, `future_provider`).
+  7. Backlog: exclusão no Closed Feedback Loop de publicações com reivindicação comprovada.
+  8. Card "Copyright / Assets" no Operator Console.
+- **Próximo Passo:** V14-C — Hybrid Character Overlay MVP.
+
 ## V12-E.3 — Autonomous Stock Buffer Hardening — DEV controlado
+
 
 Implementação separada da V12-F.2, sobre o worktree existente em `54875c6`.
 Produção não acessada; sem deploy, commit ou push. Os registros de produção abaixo

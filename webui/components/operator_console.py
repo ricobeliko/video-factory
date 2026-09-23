@@ -1615,12 +1615,61 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------------------
+# Section 5.56: Copyright & Asset Provenance (Fase V14-B)
+# ---------------------------------------------------------------------------
+
+def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    st.markdown("#### 🛡️ Copyright / Asset Provenance (V14-B)")
+    st.caption("Rastreabilidade de mídias, bloqueio de BGM legada no modo autônomo e auditabilidade de direitos autorais.")
+
+    if demo_enabled:
+        prov_summary = {
+            "task_id": "demo-task-1",
+            "bgm_mode": "none",
+            "bgm_filename": "Nenhuma (SAFE_NO_BGM)",
+            "bgm_provenance": "SAFE_NO_BGM",
+            "visual_providers": ["Pexels", "Pixabay"],
+            "clips_count": 4,
+            "provenance_status": "SAFE_NO_BGM",
+            "copyright_gate_status": "PASS",
+            "copyright_status": "unknown",
+            "feedback_loop_eligible": True,
+        }
+    else:
+        from app.services import profile_manager
+        active_prof = profile_manager.get_active_profile()
+        active_prof_id = active_prof.get("id") if active_prof else "default"
+        prov_summary = operator_console.get_copyright_provenance_summary_op(profile_id=active_prof_id)
+
+    bgm_filename = prov_summary.get("bgm_filename", "Nenhuma")
+    bgm_prov = prov_summary.get("bgm_provenance", "SAFE_NO_BGM")
+    visual_providers = ", ".join(prov_summary.get("visual_providers", [])) or "—"
+    clips_count = prov_summary.get("clips_count", 0)
+    gate_status = prov_summary.get("copyright_gate_status", "PASS")
+    gate_badge = "<span class='op-badge op-badge-green'>PASS</span>" if gate_status == "PASS" else "<span class='op-badge op-badge-red'>FAIL</span>"
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"**BGM:** `{bgm_filename}`")
+            st.caption(f"BGM Provenance: **{bgm_prov}**")
+        with c2:
+            st.markdown(f"**Provedores Visuais:** `{visual_providers}`")
+            st.caption(f"Clips Utilizados: **{clips_count}**")
+        with c3:
+            st.markdown(f"**Provenance Gate:** {gate_badge}", unsafe_allow_html=True)
+            st.caption("Content ID Guarantee: **NENHUMA** (Prevenção Local)")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Section 5.6: Clip Mode Foundation (Fase V11-A - STATIC - Sem auto-refresh)
 # ---------------------------------------------------------------------------
 
 def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+
     st.markdown("#### 🎬 Clip Mode (Reaproveitamento de Vídeos Longos)")
     st.caption("Biblioteca de mídias longas autorizadas e cadastro de segmentos para cortes verticais.")
 
@@ -2484,8 +2533,12 @@ def render_operator_console():
     # 5.55. Autonomous Production Loop (STATIC - Fase V12-E)
     _render_autonomous_production_section(demo_enabled, scenario_choice, is_primary)
 
+    # 5.56. Copyright & Asset Provenance (STATIC - Fase V14-B)
+    _render_copyright_provenance_section(demo_enabled, scenario_choice, is_primary)
+
     # 5.6. Clip Mode Foundation (STATIC)
     _render_clip_mode_section(demo_enabled, scenario_choice, is_primary)
+
 
     # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
     _render_tabs_section(demo_enabled, scenario_choice, is_primary)

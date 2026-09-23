@@ -346,12 +346,34 @@ V12-E homologada; V13 permanece posterior à V12-F, com escopo e autorização p
 
 ---
 
-# V14 — Virtual Presenter / Character Narrator
+# V14 — Virtual Presenter & Copyright Hardening
 
-**Status:** 🔵 planejado
+## V14-A — Auditoria e Plano Técnico (Concluído)
 
-Objetivo:
-adicionar personagem/apresentador virtual sincronizado com a narração.
+- **Status:** ✅ Concluído
+- **Evidência Real:** Task `815b0958-b94e-457b-932d-b10dfb0e8dba`, vídeo YouTube `XVy8MbpJFqw` publicado com sucesso, porém posteriormente bloqueado mundialmente por Content ID (conteúdo reivindicado; sem evidência de strike).
+- **Causa Raiz Identificada:** Faixas padrão de `resource/songs/*.mp3` originadas de vídeos do YouTube conforme aviso do README upstream, associadas ao sorteio `bgm_type="random"`.
+- **Arquitetura Recomendada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG) + Copyright Baseline Hardening.
+
+## V14-B — Copyright Baseline Hardening (Implementado)
+
+- **Status:** ✅ Implementado
+- **Escopo:**
+  1. Bloqueio estrito de faixas legadas (`resource/songs/`) em novas gerações autônomas (`resolve_autonomous_bgm` com `bgm_type="none"`, `volume=0.0`, `SAFE_NO_BGM`).
+  2. Uso manual legado preservado sem exclusão física dos arquivos.
+  3. Rastreabilidade auditável (`asset_provenance` com BGM e clips visuais persistidos em `script.json` e memória).
+  4. Copyright Provenance Gate no pipeline autônomo (fail-closed antes da aprovação da tarefa).
+  5. Nenhum mecanismo local de evasão de Content ID; resposta formal `COPYRIGHT_PROVENANCE_GATE = PASS` (sem falsas promessas de `CONTENT_ID_SAFE`).
+  6. Preparação conceitual de status futuro (`unknown`, `clean_manual`, `claimed`, `blocked`, `strike`) e fontes (`operator`, `future_provider`).
+  7. Backlog: exclusão no Closed Feedback Loop de publicações com reivindicação comprovada.
+  8. Card "Copyright / Assets" no Operator Console.
+
+## V14-C — Hybrid Character Overlay MVP (Próxima Fase)
+
+- **Status:** 🔵 planejado
+- **Arquitetura Selecionada:** Character Overlay Transparente Local (WebM VP9 alfa / PNG loop).
+- **Custo e Dependências:** R$ 0,00; sem chamadas pagas, 100% offline via FFmpeg/MoviePy.
+- **Objetivo:** Adicionar personagem/apresentador virtual intercalado estrategicamente na composição 9:16 (modo Hybrid: hook inicial 0-3s, alternância com B-roll e encerramento).
 
 Modos previstos:
 
@@ -364,6 +386,7 @@ full
 
 Preferência inicial:
 `hybrid`
+
 
 Campos previstos:
 

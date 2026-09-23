@@ -10,9 +10,11 @@ Totalmente local, sem dependências externas pagas ou lip-sync neural.
 
 import json
 import os
+import re
+import unicodedata
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from loguru import logger
@@ -46,6 +48,67 @@ REQUIRED_CORE_POSES = [
     "talking_2",
     "cta",
 ]
+
+# Mapeamento de palavras-chave determinísticas para reação de poses (PT-BR)
+REACTION_KEYWORDS = {
+    "CTA": [
+        "comenta",
+        "o que você acha",
+        "o que voce acha",
+        "você acredita",
+        "voce acredita",
+        "siga",
+        "compartilhe",
+        "inscreva-se",
+        "inscreva se",
+        "deixa nos comentários",
+        "deixa nos comentarios",
+        "curta",
+        "inscreva",
+    ],
+    "SERIOUS": [
+        "morreu",
+        "morte",
+        "acidente",
+        "desapareceu",
+        "tragédia",
+        "tragedia",
+        "perigo",
+        "crime",
+        "assassinato",
+        "vítima",
+        "vitima",
+    ],
+    "SURPRISE": [
+        "inacreditável",
+        "inacreditavel",
+        "impressionante",
+        "absurdo",
+        "ninguém esperava",
+        "ninguem esperava",
+        "estranho",
+        "assustador",
+        "chocante",
+        "surpreendente",
+    ],
+    "THINKING": [
+        "teoria",
+        "hipótese",
+        "hipotese",
+        "talvez",
+        "poderia",
+        "ninguém sabe",
+        "ninguem sabe",
+        "explicação",
+        "explicacao",
+        "acredita",
+        "mistério",
+        "misterio",
+    ],
+}
+
+# Ordem de precedência estrita para reações expressivas (Fase V14-C.2)
+REACTION_PRIORITY = ["CTA", "SERIOUS", "SURPRISE", "THINKING"]
 
 
 def get_character_pack_search_dirs() -> List[str]:
@@ -271,6 +334,424 @@ def select_presenter_pose(
     return _pick("neutral", ["talking_1", "talking_2"])
 
 
+def _normalize_text_for_search(text: str) -> str:
+    """Remove pontuação e acentos para comparação determinística."""
+    if not text:
+        return ""
+    text_lower = text.lower()
+    nfkd = unicodedata.normalize("NFKD", text_lower)
+    without_accents = "".join(c for c in nfkd if not unicodedata.combining(c))
+    cleaned = re.sub(r"[^\w\s]", " ", without_accents)
+    return " " + " ".join(cleaned.split()) + " "
+
+
+def classify_subtitle_reaction(
+    text: str,
+    channel_context: Optional[str] = None,
+    avatar_position: str = const.DEFAULT_AVATAR_POSITION,
+) -> Tuple[str, str]:
+    """Classifica determinística e prioritariamente a reação expressiva baseada no texto da legenda.
+
+    Prioridade: CTA > SERIOUS > SURPRISE > THINKING > DEFAULT (talking).
+    Retorna: (pose_name, reason)
+    """
+    if not text or not str(text).strip():
+        return "talking", "talking_default"
+
+    norm_text = _normalize_text_for_search(text)
+    raw_lower = " " + text.lower() + " "
+
+    matched_cat = None
+    for category in REACTION_PRIORITY:
+        for kw in REACTION_KEYWORDS[category]:
+            kw_norm = _normalize_text_for_search(kw).strip()
+            kw_raw = " " + kw.lower().strip() + " "
+            if f" {kw_norm} " in norm_text or kw_raw in raw_lower:
+                matched_cat = category
+                break
+        if matched_cat:
+            break
+
+    if not matched_cat:
+        return "talking", "talking_default"
+
+    if matched_cat == "CTA":
+        pos_clean = str(avatar_position or const.DEFAULT_AVATAR_POSITION).lower().strip()
+        if pos_clean == const.AVATAR_POSITION_BOTTOM_RIGHT:
+            return "pointing_left", "cta_pointing"
+        elif pos_clean == const.AVATAR_POSITION_BOTTOM_LEFT:
+            return "pointing_right", "cta_pointing"
+        else:
+            return "cta", "cta_keyword"
+
+    if matched_cat == "SERIOUS":
+        return "serious", "serious_keyword"
+
+    if matched_cat == "SURPRISE":
+        ctx = str(channel_context or "").lower().strip()
+        if "misterio" in ctx or "mystery" in ctx or ctx == "profile-historias-misterio":
+            return "serious", "mystery_contained_reaction"
+        return "surprised", "surprise_keyword"
+
+    if matched_cat == "THINKING":
+        return "thinking", "thinking_keyword"
+
+    return "talking", "talking_default"
+
+
+def resolve_pose_with_fallback(
+    pose: str,
+    available_poses: Optional[Dict[str, str]] = None,
+) -> str:
+    """Resolve pose garantindo fallback em cadeia segura:
+    specific_pose -> talking_1 -> neutral.
+    """
+    if not available_poses:
+        return pose
+    if pose in available_poses:
+        return pose
+    if "talking_1" in available_poses:
+        return "talking_1"
+    if "neutral" in available_poses:
+        return "neutral"
+    return list(available_poses.keys())[0]
+
+
+def _generate_talking_slices(
+    start_t: float,
+    end_t: float,
+    step: float = 0.35,
+    reason: str = "talking_animation",
+    available_poses: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Gera fatias determinísticas alternando talking_1 e talking_2."""
+    duration = round(end_t - start_t, 2)
+    if duration <= 0:
+        return []
+
+    events = []
+    curr = round(start_t, 2)
+    idx = 0
+    while curr < end_t - 0.05:
+        nxt = round(min(curr + step, end_t), 2)
+        pose_candidate = "talking_1" if (idx % 2 == 0) else "talking_2"
+        resolved = resolve_pose_with_fallback(pose_candidate, available_poses)
+        events.append({
+            "start": curr,
+            "end": nxt,
+            "pose": resolved,
+            "reason": reason,
+        })
+        curr = nxt
+        idx += 1
+    return events
+
+
+def parse_srt_timeline(srt_input: Any) -> List[Dict[str, Any]]:
+    """Transforma arquivo, texto ou estrutura de legenda em timeline temporal determinística.
+
+    Formato retornado:
+    [
+        {"start": 0.0, "end": 2.8, "text": "Você sabia que..."},
+        ...
+    ]
+    Fail-safe: em caso de arquivo ausente, formato inválido ou vazio, retorna [].
+    """
+    if not srt_input:
+        return []
+
+    if isinstance(srt_input, list):
+        if not srt_input:
+            return []
+        first = srt_input[0]
+        if isinstance(first, dict):
+            parsed = []
+            for item in srt_input:
+                try:
+                    st = float(item.get("start", item.get("start_time", 0.0)))
+                    en = float(item.get("end", item.get("end_time", 0.0)))
+                    txt = str(item.get("text", item.get("msg", ""))).strip()
+                    if en > st and txt:
+                        parsed.append({"start": round(st, 2), "end": round(en, 2), "text": txt})
+                except Exception:
+                    continue
+            parsed.sort(key=lambda x: x["start"])
+            return parsed
+        if isinstance(first, (tuple, list)) and len(first) >= 2:
+            parsed = []
+            for item in srt_input:
+                try:
+                    time_tuple = item[0]
+                    st = float(time_tuple[0])
+                    en = float(time_tuple[1])
+                    txt = str(item[1]).strip()
+                    if en > st and txt:
+                        parsed.append({"start": round(st, 2), "end": round(en, 2), "text": txt})
+                except Exception:
+                    continue
+            parsed.sort(key=lambda x: x["start"])
+            return parsed
+
+    raw_text = ""
+    if isinstance(srt_input, (str, Path)):
+        s_path = Path(srt_input)
+        if s_path.is_file():
+            try:
+                for enc in ("utf-8", "utf-8-sig", "latin-1"):
+                    try:
+                        raw_text = s_path.read_text(encoding=enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+            except Exception as e:
+                logger.warning(f"[PRESENTER] Falha ao ler arquivo SRT '{srt_input}': {e}")
+                return []
+        elif isinstance(srt_input, str) and "-->" in srt_input:
+            raw_text = srt_input
+        else:
+            return []
+
+    if not raw_text.strip():
+        return []
+
+    timestamp_pattern = re.compile(
+        r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})"
+    )
+
+    def _to_sec(h, m, s, ms):
+        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.ljust(3, "0")[:3]) / 1000.0
+
+    lines = raw_text.splitlines()
+    subtitles = []
+    current_start = None
+    current_end = None
+    current_lines = []
+
+    for line in lines:
+        match = timestamp_pattern.search(line)
+        if match:
+            if current_start is not None and current_end is not None:
+                txt = " ".join(" ".join(current_lines).split()).strip()
+                if current_end > current_start and txt:
+                    subtitles.append({
+                        "start": round(current_start, 2),
+                        "end": round(current_end, 2),
+                        "text": txt,
+                    })
+            current_start = _to_sec(match.group(1), match.group(2), match.group(3), match.group(4))
+            current_end = _to_sec(match.group(5), match.group(6), match.group(7), match.group(8))
+            current_lines = []
+        elif current_start is not None:
+            stripped = line.strip()
+            if stripped.isdigit() and not current_lines:
+                continue
+            if stripped:
+                current_lines.append(stripped)
+
+    if current_start is not None and current_end is not None and current_lines:
+        txt = " ".join(" ".join(current_lines).split()).strip()
+        if current_end > current_start and txt:
+            subtitles.append({
+                "start": round(current_start, 2),
+                "end": round(current_end, 2),
+                "text": txt,
+            })
+
+    subtitles.sort(key=lambda x: x["start"])
+    return subtitles
+
+
+def build_presenter_expression_timeline(
+    subtitle_items: Optional[Any] = None,
+    total_duration: float = 0.0,
+    presenter_segments: Optional[List[Tuple[float, float]]] = None,
+    character_id: str = "nox_v1",
+    channel_context: Optional[str] = None,
+    avatar_position: str = const.DEFAULT_AVATAR_POSITION,
+    available_poses: Optional[Dict[str, str]] = None,
+    mode: str = const.AVATAR_MODE_HYBRID,
+) -> List[Dict[str, Any]]:
+    """Constrói a timeline determinística de expressões e poses do presenter."""
+    total_dur = round(float(total_duration), 2)
+    if total_dur <= 0:
+        return []
+
+    if presenter_segments is None:
+        if mode == const.AVATAR_MODE_CORNER:
+            presenter_segments = [(0.0, total_dur)]
+        else:
+            presenter_segments = build_hybrid_presenter_segments(total_dur)
+
+    if not presenter_segments:
+        return []
+
+    subtitles = parse_srt_timeline(subtitle_items)
+    events: List[Dict[str, Any]] = []
+
+    # Caso 1: Sem legendas válidas -> Fallback determinístico por segmento
+    if not subtitles:
+        for idx, (seg_st, seg_en) in enumerate(presenter_segments):
+            seg_dur = round(seg_en - seg_st, 2)
+            if seg_dur <= 0:
+                continue
+
+            if idx == 0 and mode == const.AVATAR_MODE_HYBRID:
+                events.extend(
+                    _generate_talking_slices(
+                        seg_st, seg_en, step=0.35, reason="fallback_hook_talking", available_poses=available_poses
+                    )
+                )
+            elif idx == len(presenter_segments) - 1 and mode == const.AVATAR_MODE_HYBRID and len(presenter_segments) > 1:
+                pos_clean = str(avatar_position or const.DEFAULT_AVATAR_POSITION).lower().strip()
+                if pos_clean == const.AVATAR_POSITION_BOTTOM_RIGHT:
+                    cta_pose = "pointing_left"
+                elif pos_clean == const.AVATAR_POSITION_BOTTOM_LEFT:
+                    cta_pose = "pointing_right"
+                else:
+                    cta_pose = "cta"
+                resolved = resolve_pose_with_fallback(cta_pose, available_poses)
+                events.append({
+                    "start": seg_st,
+                    "end": seg_en,
+                    "pose": resolved,
+                    "reason": "fallback_cta_pointing",
+                })
+            else:
+                pose_candidate = "serious" if (idx % 2 == 0) else "thinking"
+                resolved = resolve_pose_with_fallback(pose_candidate, available_poses)
+                events.append({
+                    "start": seg_st,
+                    "end": seg_en,
+                    "pose": resolved,
+                    "reason": "fallback_segment_pose",
+                })
+        return events
+
+    # Caso 2: Legendas disponíveis
+    for seg_idx, (seg_st, seg_en) in enumerate(presenter_segments):
+        seg_dur = round(seg_en - seg_st, 2)
+        if seg_dur <= 0:
+            continue
+
+        subs_in_seg = []
+        for s in subtitles:
+            if s["end"] <= seg_st or s["start"] >= seg_en:
+                continue
+            c_st = round(max(seg_st, s["start"]), 2)
+            c_en = round(min(seg_en, s["end"]), 2)
+            if c_en > c_st:
+                subs_in_seg.append({
+                    "start": c_st,
+                    "end": c_en,
+                    "text": s["text"],
+                })
+
+        if not subs_in_seg:
+            if seg_idx == 0:
+                events.extend(
+                    _generate_talking_slices(
+                        seg_st, seg_en, step=0.35, reason="hook_talking", available_poses=available_poses
+                    )
+                )
+            elif seg_idx == len(presenter_segments) - 1 and len(presenter_segments) > 1:
+                pos_clean = str(avatar_position or const.DEFAULT_AVATAR_POSITION).lower().strip()
+                p = "pointing_left" if pos_clean == const.AVATAR_POSITION_BOTTOM_RIGHT else ("pointing_right" if pos_clean == const.AVATAR_POSITION_BOTTOM_LEFT else "cta")
+                events.append({
+                    "start": seg_st,
+                    "end": seg_en,
+                    "pose": resolve_pose_with_fallback(p, available_poses),
+                    "reason": "cta_pointing",
+                })
+            else:
+                events.append({
+                    "start": seg_st,
+                    "end": seg_en,
+                    "pose": resolve_pose_with_fallback("neutral", available_poses),
+                    "reason": "neutral_pause",
+                })
+            continue
+
+        cursor = seg_st
+        for sub in subs_in_seg:
+            sub_st = sub["start"]
+            sub_en = sub["end"]
+
+            if sub_st > cursor:
+                gap = round(sub_st - cursor, 2)
+                if gap >= 0.15:
+                    events.append({
+                        "start": cursor,
+                        "end": sub_st,
+                        "pose": resolve_pose_with_fallback("neutral", available_poses),
+                        "reason": "neutral_pause",
+                    })
+                cursor = sub_st
+
+            if sub_en > cursor:
+                pose, reason = classify_subtitle_reaction(sub["text"], channel_context, avatar_position)
+                if pose == "talking":
+                    r_desc = "hook_talking" if (seg_idx == 0) else "talking_animation"
+                    talking_slices = _generate_talking_slices(
+                        cursor, sub_en, step=0.35, reason=r_desc, available_poses=available_poses
+                    )
+                    events.extend(talking_slices)
+                else:
+                    resolved = resolve_pose_with_fallback(pose, available_poses)
+                    events.append({
+                        "start": cursor,
+                        "end": sub_en,
+                        "pose": resolved,
+                        "reason": reason,
+                    })
+                cursor = sub_en
+
+        if cursor < seg_en:
+            tail = round(seg_en - cursor, 2)
+            if tail >= 0.15:
+                if seg_idx == len(presenter_segments) - 1 and len(presenter_segments) > 1:
+                    pos_clean = str(avatar_position or const.DEFAULT_AVATAR_POSITION).lower().strip()
+                    p = "pointing_left" if pos_clean == const.AVATAR_POSITION_BOTTOM_RIGHT else ("pointing_right" if pos_clean == const.AVATAR_POSITION_BOTTOM_LEFT else "cta")
+                    events.append({
+                        "start": cursor,
+                        "end": seg_en,
+                        "pose": resolve_pose_with_fallback(p, available_poses),
+                        "reason": "cta_tail",
+                    })
+                else:
+                    events.append({
+                        "start": cursor,
+                        "end": seg_en,
+                        "pose": resolve_pose_with_fallback("neutral", available_poses),
+                        "reason": "segment_tail_neutral",
+                    })
+
+    cleaned_events: List[Dict[str, Any]] = []
+    for ev in events:
+        if ev["end"] > ev["start"]:
+            cleaned_events.append(ev)
+
+    return cleaned_events
+
+
+def summarize_presenter_timeline(
+    timeline: List[Dict[str, Any]],
+    character_id: str = "nox_v1",
+    mode: str = const.AVATAR_MODE_HYBRID,
+) -> Dict[str, Any]:
+    """Gera resumo compacto de telemetria da timeline de expressões."""
+    reactions: Dict[str, int] = {}
+    for ev in timeline:
+        pose = ev.get("pose", "")
+        if pose in ("surprised", "thinking", "serious", "cta", "pointing_left", "pointing_right"):
+            reactions[pose] = reactions.get(pose, 0) + 1
+    return {
+        "character_id": character_id,
+        "mode": mode,
+        "events_count": len(timeline),
+        "reactions": reactions,
+    }
+
+
 def build_hybrid_presenter_segments(total_duration: float) -> List[Tuple[float, float]]:
     """Calcula determinística e proporcionalmente os segmentos de exibição do presenter no modo Hybrid.
 
@@ -385,11 +866,12 @@ def build_presenter_clips(
     total_duration: float,
     canvas_size: Tuple[int, int],
     clip_stack: Optional[ExitStack] = None,
+    subtitle_path: Optional[str] = None,
 ) -> List[Any]:
     """Constrói a lista de MoviePy clips posicionados e temporizados do Presenter Overlay.
 
     Suporta:
-    1. Character Pack via avatar_character_id (V14-C.1) com seleção dinâmica de poses.
+    1. Character Pack via avatar_character_id (V14-C.1/C.2) com expression timeline determinística.
     2. Asset estático direto via avatar_asset_path (V14-C retrocompatível).
 
     Retorna lista vazia se avatar_mode for 'none'.
@@ -422,7 +904,7 @@ def build_presenter_clips(
         position = params.get("avatar_position", position)
         opacity = params.get("avatar_opacity", opacity)
 
-    # Caso A: Character Pack Completo (Fase V14-C.1)
+    # Caso A: Character Pack Completo (Fase V14-C.1 / V14-C.2 Expression Timeline)
     if char_id and str(char_id).strip():
         pack = resolve_character_pack(char_id)
         scale = scale or pack.get("default_scale", 0.38)
@@ -430,52 +912,69 @@ def build_presenter_clips(
         opacity = opacity if opacity is not None else pack.get("default_opacity", 1.0)
         available_poses = pack["poses"]
 
-        clips = []
-        if mode == const.AVATAR_MODE_CORNER:
-            pose_name = select_presenter_pose("corner", 0, available_poses=available_poses)
-            pose_file = available_poses[pose_name]
-            base_clip, is_video = load_presenter_base_clip(pose_file, clip_stack=clip_stack)
-            orig_w, orig_h = base_clip.size
-            target_size, pos = calculate_presenter_layout(
-                canvas_size, (orig_w, orig_h), scale, position, mode
-            )
-            resized = base_clip.resized(target_size)
-            if float(opacity) < 1.0:
-                resized = resized.with_opacity(float(opacity))
-            c = resized.with_position(pos).with_start(0.0).with_duration(total_duration).with_end(total_duration)
-            if clip_stack:
-                clip_stack.callback(c.close)
-            clips.append(c)
+        channel_context = getattr(params, "channel_context", "") or getattr(params, "profile_id", "")
+        sub_input = subtitle_path or getattr(params, "subtitle_path", "")
+        if isinstance(params, dict):
+            channel_context = params.get("channel_context", "") or params.get("profile_id", "")
+            sub_input = subtitle_path or params.get("subtitle_path", "")
 
-        elif mode == const.AVATAR_MODE_HYBRID:
-            segments = build_hybrid_presenter_segments(total_duration)
-            seg_types = ["hook", "return", "cta"]
-            for idx, (st_t, en_t) in enumerate(segments):
-                dur = max(0.01, round(en_t - st_t, 2))
-                st_type = seg_types[idx] if idx < len(seg_types) else "middle"
-                script_hint = getattr(params, "video_subject", "") if isinstance(params, VideoParams) else ""
-                pose_name = select_presenter_pose(st_type, idx, script_hint, available_poses)
-                pose_file = available_poses[pose_name]
+        timeline = build_presenter_expression_timeline(
+            subtitle_items=sub_input,
+            total_duration=total_duration,
+            character_id=char_id,
+            channel_context=channel_context,
+            avatar_position=position,
+            available_poses=available_poses,
+            mode=mode,
+        )
 
-                base_clip, is_video = load_presenter_base_clip(pose_file, clip_stack=clip_stack)
-                orig_w, orig_h = base_clip.size
+        if not timeline:
+            return []
+
+        # Performance: carrega cada base clip de pose apenas UMA vez no ExitStack
+        cached_base_clips = {}
+        for ev in timeline:
+            p_name = ev["pose"]
+            if p_name not in cached_base_clips and p_name in available_poses:
+                pose_file = available_poses[p_name]
+                base_c, is_vid = load_presenter_base_clip(pose_file, clip_stack=clip_stack)
+                cached_base_clips[p_name] = (base_c, is_vid)
+
+        # Memoiza layout e resize por pose
+        cached_resized_clips = {}
+        target_size, pos = None, None
+
+        for p_name, (base_c, is_vid) in cached_base_clips.items():
+            if target_size is None or pos is None:
+                orig_w, orig_h = base_c.size
                 target_size, pos = calculate_presenter_layout(
                     canvas_size, (orig_w, orig_h), scale, position, mode
                 )
-                resized = base_clip.resized(target_size)
-                if float(opacity) < 1.0:
-                    resized = resized.with_opacity(float(opacity))
+            resized = base_c.resized(target_size)
+            if float(opacity) < 1.0:
+                resized = resized.with_opacity(float(opacity))
+            cached_resized_clips[p_name] = (resized, is_vid)
 
-                if is_video:
-                    vid_dur = getattr(resized, "duration", dur)
-                    sub = resized.subclipped(0, min(dur, vid_dur))
-                    c = sub.with_position(pos).with_start(st_t).with_duration(dur).with_end(en_t)
-                else:
-                    c = resized.with_position(pos).with_start(st_t).with_duration(dur).with_end(en_t)
+        clips = []
+        for ev in timeline:
+            p_name = ev["pose"]
+            if p_name not in cached_resized_clips:
+                continue
+            resized, is_vid = cached_resized_clips[p_name]
+            st = ev["start"]
+            en = ev["end"]
+            dur = max(0.01, round(en - st, 2))
 
-                if clip_stack:
-                    clip_stack.callback(c.close)
-                clips.append(c)
+            if is_vid:
+                vid_dur = getattr(resized, "duration", dur)
+                sub = resized.subclipped(0, min(dur, vid_dur))
+                c = sub.with_position(pos).with_start(st).with_duration(dur).with_end(en)
+            else:
+                c = resized.with_position(pos).with_start(st).with_duration(dur).with_end(en)
+
+            if clip_stack:
+                clip_stack.callback(c.close)
+            clips.append(c)
 
         return clips
 
@@ -575,9 +1074,87 @@ def render_presenter_preview(
     duration: float = 3.0,
     bg_color: Tuple[int, int, int] = (25, 25, 35),
     custom_root: Optional[str] = None,
+    timeline: Optional[List[Dict[str, Any]]] = None,
+    subtitle_items: Optional[Any] = None,
+    channel_context: Optional[str] = None,
+    position: str = const.DEFAULT_AVATAR_POSITION,
 ) -> str:
     """Renderiza um vídeo ou imagem de preview local para inspeção manual do operador."""
     pack = resolve_character_pack(character_id, custom_root=custom_root)
+    out_p = Path(output_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+
+    if out_p.suffix.lower() in (".png", ".jpg", ".jpeg"):
+        selected_pose = pose or pack.get("default_pose", "neutral")
+        frame = generate_presenter_preview_frame(
+            character_id=character_id,
+            pose=selected_pose,
+            canvas_size=canvas_size,
+            custom_root=custom_root,
+            bg_color=bg_color,
+        )
+        from PIL import Image
+        img = Image.fromarray(frame)
+        img.save(out_p)
+        return str(out_p)
+
+    # Se vídeo (.mp4):
+    if timeline is None and subtitle_items is not None:
+        timeline = build_presenter_expression_timeline(
+            subtitle_items=subtitle_items,
+            total_duration=duration,
+            presenter_segments=[(0.0, duration)],
+            character_id=character_id,
+            channel_context=channel_context,
+            avatar_position=position,
+            available_poses=pack.get("poses", {}),
+            mode=const.AVATAR_MODE_HYBRID,
+        )
+
+    if timeline:
+        with ExitStack() as stack:
+            bg_clip = stack.enter_context(
+                ColorClip(size=canvas_size, color=bg_color, duration=duration)
+            )
+            char_clips = []
+            cached_clips = {}
+            for ev in timeline:
+                p_name = ev["pose"]
+                if p_name not in cached_clips and p_name in pack["poses"]:
+                    p_file = pack["poses"][p_name]
+                    c_clip, _ = load_presenter_base_clip(p_file, clip_stack=stack)
+                    cached_clips[p_name] = c_clip
+
+            cached_resized = {}
+            target_size, pos_xy = None, None
+            for p_name, c_clip in cached_clips.items():
+                if target_size is None:
+                    orig_w, orig_h = c_clip.size
+                    target_size, pos_xy = calculate_presenter_layout(
+                        canvas_size, (orig_w, orig_h), pack.get("default_scale", 0.38), position, const.AVATAR_MODE_HYBRID
+                    )
+                cached_resized[p_name] = c_clip.resized(target_size)
+
+            for ev in timeline:
+                p_name = ev["pose"]
+                if p_name not in cached_resized:
+                    continue
+                st = ev["start"]
+                en = ev["end"]
+                dur = max(0.01, round(en - st, 2))
+                c = cached_resized[p_name].with_position(pos_xy).with_start(st).with_duration(dur).with_end(en)
+                char_clips.append(c)
+
+            composite = stack.enter_context(CompositeVideoClip([bg_clip, *char_clips]))
+            composite.write_videofile(
+                str(out_p),
+                fps=24,
+                codec="libx264",
+                audio=False,
+                logger=None,
+            )
+            return str(out_p)
+
     selected_pose = pose or pack.get("default_pose", "neutral")
     frame = generate_presenter_preview_frame(
         character_id=character_id,
@@ -586,17 +1163,6 @@ def render_presenter_preview(
         custom_root=custom_root,
         bg_color=bg_color,
     )
-
-    out_p = Path(output_path)
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-
-    if out_p.suffix.lower() in (".png", ".jpg", ".jpeg"):
-        from PIL import Image
-        img = Image.fromarray(frame)
-        img.save(out_p)
-        return str(out_p)
-
-    # Se vídeo (.mp4):
     from moviepy import ImageClip
     clip = ImageClip(frame).with_duration(duration)
     clip.write_videofile(

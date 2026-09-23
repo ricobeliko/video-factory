@@ -270,18 +270,51 @@ Gate futuro: confirmar métricas e decisões associadas ao profile/channel corre
 
 ## V12-F.4 — Second Channel Warm-Up
 
-**Status: DEV preparado — setup completo; autenticação real e publicação supervisionada pendentes.**
+**Status: ✅ COMPLETED / PRODUCTION HOMOLOGATED (22/09/2026).**
 
-Preparação do segundo canal concluída em desenvolvimento:
-- Perfil separado: `profile-historias-misterio` ("Dose Diária de Histórias e Mistério", nicho `historias_misterio`).
-- Canal separado: `channel-historias-misterio-youtube` (handle `@DoseDiáriadeHistóriasemistério`, plataforma YouTube).
-- Growth Mode: `warmup` isolado por perfil/canal (1 pub/24h, min interval 8h).
-- Produção contínua autônoma: estritamente OFF por padrão para o segundo perfil.
-- Isolamento completo: estoque pronto, limites 24h, agendamento, analytics, Closed Loop, histórico e estruturas narrativas (foco em `investigative_mystery` e `short_story`).
-- Credenciais reais não conectadas; segredos não acessados.
-- Canal principal `default` 100% preservado.
+Homologação do segundo canal concluída em produção com sucesso. Evidências reais registradas:
+- **Segundo perfil isolado:** `profile-historias-misterio` ("Dose Diária de Histórias e Mistério", nicho `historias_misterio`).
+- **Canal YouTube isolado:** `channel-historias-misterio-youtube` (handle `@DoseDiáriadeHistóriasemistério`, Upload-Post `dose-diaria-misterio`).
+- **Geração real em produção:** task_id `815b0958-b94e-457b-932d-b10dfb0e8dba`.
+- **Safety Gate:** PASS.
+- **Quality Gate:** 79.2 (Strong Quality, limiar >= 70).
+- **Scheduler:** Adoção e agendamento automático para YouTube.
+- **Publicação pública real:** Vídeo `XVy8MbpJFqw` publicado com visibilidade pública no YouTube.
+- **Analytics youtube_api:** Coleta e métricas isoladas por canal via YouTube Data API.
+- **PR #9 Recovery:** Recuperação de tasks aprovadas mesmo após reinicialização de processos sem dependência de MemoryState volátil.
+- **Autonomous secondary ON:** Produção autônoma do perfil secundário ativada e operacional em produção.
+- **Canal principal preservado:** Perfil `default` 100% isolado e inalterado.
 
-Próximo gate: autenticação manual do segundo canal no YouTube via Upload-Post/OAuth → primeira publicação supervisionada.
+## V12-F.5 — Multi-Channel Capacity & True Multi-Profile Autonomous Worker
+
+**Status: ✅ COMPLETED / IMPLEMENTED (22/09/2026).**
+
+> [!IMPORTANT]
+> **UI PROFILE SELECTION IS NOT A BACKGROUND EXECUTION SELECTOR.**
+> A seleção de perfil na UI do Operator Console serve exclusivamente para inspeção visual, telemetria, controles manuais e disparos supervisionados pontuais daquele perfil. O worker em segundo plano processa de forma determinística e independente todos os perfis ativos e habilitados (`run_enabled_profiles_autonomous_cycle`).
+
+Capacidade multi-canal e governança de custos implementada:
+- **True Multi-Profile Background Worker:** Loop do scheduler worker desacoplado de `get_active_profile_id()`. O worker itera de forma determinística sobre todos os perfis ativos com `autonomous_mode_enabled=True`, executando no máximo 1 transição por perfil por ciclo com isolamento de falha (falha em um canal não aborta os demais).
+- **Ready Stock por perfil:** Configuração `autonomous_target_ready_stock:<profile_id>` (WARMUP default 3, SCALE default 5; intervalo configurável [3, 6]). Fallback backward-compatible para a chave legada no perfil `default`.
+- **Limites de produção por perfil (24h):**
+  - WARMUP: 2 gerações aprovadas / 24h; 8 tentativas / 24h.
+  - SCALE: 5 gerações aprovadas / 24h; 15 tentativas / 24h.
+  - Configurações isoladas: `autonomous_max_generations_24h:<profile_id>` e `autonomous_max_attempts_24h:<profile_id>`.
+- **Global Cost Guard:** Freio mestre agregado somando todos os perfis (`autonomous_global_max_generations_24h = 10`, `autonomous_global_max_attempts_24h = 25`). Contadores agregados explícitos (`count_all_profiles_generations_24h`, `count_all_profiles_attempts_24h`). Protege o início de novas gerações sem bloquear agendamento, recuperação de vídeos já prontos ou publicação.
+- **Elegibilidade de destinos multi-plataforma:** Conceito arquitetural `check_asset_eligibility_for_destination` permitindo futuro reuso de 1 asset aprovado para múltiplos destinos sem re-renderização.
+- **TikTok estritamente OFF:** Nenhuma publicação, chamada de API ou credencial criada para TikTok.
+- **Ponteiros e estado isolados:** `current_task_id`, `waiting_task_id`, `autonomous_state` e mensagens 100% isolados por perfil.
+
+### Pendência Futura: Copyright / Content ID Hardening + Character Narrator
+
+- **Evidência Real:** Task `815b0958-b94e-457b-932d-b10dfb0e8dba`, vídeo YouTube `XVy8MbpJFqw` publicado com sucesso porém bloqueado mundialmente por Content ID / direitos autorais reivindicados.
+- **Backlog Futuro:**
+  - Identificar mídia e faixa musical (BGM) causadora da reivindicação.
+  - Personagem / apresentador narrador virtual (V14 Hybrid Presenter) para enriquecer teor transformativo.
+  - Composição visual e de áudio mais original, revisando fontes e licenças.
+  - Gate preventivo de verificação de copyright.
+  - Vídeos bloqueados/reivindicados não devem alimentar o Closed Feedback Loop.
+- **Observação:** Nenhum filtro ou mitigação implementado na V12-F.5 (pendência estritamente documentada).
 
 ---
 

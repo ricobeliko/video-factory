@@ -2353,3 +2353,12 @@ def run_autonomous_cycle_op(
         channel_id=channel_id,
         task_base_dir=task_base_dir,
     )
+
+
+def get_global_cost_guard_status_op(
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retorna o estado agregado do Global Cost Guard somando todos os perfis."""
+    from app.services import autonomous_production
+    return autonomous_production.get_global_cost_guard_status(db_path=db_path)
+

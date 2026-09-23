@@ -35,18 +35,38 @@ COPYRIGHT_SOURCE_OPERATOR = "operator"
 COPYRIGHT_SOURCE_FUTURE_PROVIDER = "future_provider"
 
 
+def _get_param(params: Any, key: str, default: Any = None) -> Any:
+    """Helper unificado para extrair campos de params seja dict ou objeto."""
+    if params is None:
+        return default
+    if isinstance(params, dict):
+        if key not in params and "params" in params and isinstance(params["params"], dict):
+            val = params["params"].get(key, default)
+            return default if val is None else val
+        val = params.get(key, default)
+        return default if val is None else val
+    val = getattr(params, key, default)
+    return default if val is None else val
+
+
 def build_asset_provenance(
     task_id: str,
     params: Any,
     material_sources: Optional[List[Dict[str, Any]]] = None,
     bgm_file_used: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Constrói a estrutura padronizada de proveniência de ativos da tarefa."""
-    bgm_type = getattr(params, "bgm_type", None) or "none"
+    raw_type = _get_param(params, "bgm_type", None)
+    bgm_type = str(raw_type or "none").lower().strip()
     try:
-        bgm_volume = float(getattr(params, "bgm_volume", 0.0) or 0.0)
+        raw_vol = _get_param(params, "bgm_volume", None)
+        if raw_vol is None:
+            bgm_volume = 0.2 if bgm_type not in ("", "none") else 0.0
+        else:
+            bgm_volume = float(raw_vol)
     except (ValueError, TypeError):
-        bgm_volume = 0.0
+        bgm_volume = 0.2 if bgm_type not in ("", "none") else 0.0
 
     bgm_is_enabled = bool(
         bgm_type
@@ -63,12 +83,12 @@ def build_asset_provenance(
             "provenance_status": "SAFE_NO_BGM",
         }
     else:
-        raw_bgm_file = bgm_file_used or getattr(params, "bgm_file", "") or ""
+        raw_bgm_file = bgm_file_used or _get_param(params, "bgm_file", "") or ""
         filename = Path(raw_bgm_file).name if raw_bgm_file else None
-        
+
         # Identifica se é faixa legada de resource/songs
         is_legacy = bool(
-            raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file)
+            (raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file))
             or (filename and filename.lower().startswith("output") and filename.lower().endswith(".mp3"))
             or bgm_type in ("random", "preset")
         )
@@ -80,21 +100,61 @@ def build_asset_provenance(
             "filename": filename,
             "source": source,
             "license_type": "unknown",
-            "provenance_status": "UNAUDITED_LEGACY" if is_legacy else "UNKNOWN",
+            "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
         }
 
     # Se material_sources não foi fornecido, tenta ler do script.json
     if material_sources is None:
-        from app.services import task_artifacts
+        base_dir = task_base_dir or utils.task_dir()
+        script_file = os.path.join(base_dir, task_id, "script.json")
         script_data: Dict[str, Any] = {}
-        try:
-            target = task_artifacts._script_file(task_id)
-            if target.is_file():
-                with target.open("r", encoding="utf-8") as f:
+        if os.path.isfile(script_file):
+            try:
+                with open(script_file, "r", encoding="utf-8") as f:
                     script_data = json.load(f)
-        except Exception as exc:
-            logger.debug(f"[COPYRIGHT] Não foi possível ler script.json para task {task_id}: {exc}")
+            except Exception as exc:
+                logger.debug(f"[COPYRIGHT] Não foi possível ler script.json para task {task_id}: {exc}")
+        else:
+            from app.services import task_artifacts
+            try:
+                target = task_artifacts._script_file(task_id)
+                if target.is_file():
+                    with target.open("r", encoding="utf-8") as f:
+                        script_data = json.load(f)
+            except Exception:
+                pass
         material_sources = script_data.get("material_sources", [])
+        if not params and script_data.get("params"):
+            params = script_data.get("params")
+            raw_type = _get_param(params, "bgm_type", None)
+            bgm_type = str(raw_type or "none").lower().strip()
+            raw_vol = _get_param(params, "bgm_volume", None)
+            bgm_volume = float(0.2 if raw_vol is None else raw_vol) if bgm_type not in ("", "none") else 0.0
+            bgm_is_enabled = bool(bgm_type and bgm_type != "none" and bgm_volume > 0)
+            if not bgm_is_enabled:
+                bgm_prov = {
+                    "enabled": False,
+                    "filename": None,
+                    "source": "none",
+                    "license_type": "not_applicable",
+                    "provenance_status": "SAFE_NO_BGM",
+                }
+            else:
+                raw_bgm_file = bgm_file_used or _get_param(params, "bgm_file", "") or ""
+                filename = Path(raw_bgm_file).name if raw_bgm_file else None
+                is_legacy = bool(
+                    (raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file))
+                    or (filename and filename.lower().startswith("output") and filename.lower().endswith(".mp3"))
+                    or bgm_type in ("random", "preset")
+                )
+                source = "legacy_resource_songs" if is_legacy else ("custom_upload" if bgm_type == "custom" else str(bgm_type))
+                bgm_prov = {
+                    "enabled": True,
+                    "filename": filename,
+                    "source": source,
+                    "license_type": "unknown",
+                    "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
+                }
 
     visual_clips: List[Dict[str, Any]] = []
     for item in (material_sources or []):
@@ -167,6 +227,14 @@ def evaluate_copyright_provenance_gate(
                 script_data = json.load(f)
         except Exception as exc:
             logger.warning(f"[COPYRIGHT_GATE] Falha ao ler script.json para {task_id}: {exc}")
+    else:
+        try:
+            target = task_artifacts._script_file(task_id)
+            if target.is_file():
+                with target.open("r", encoding="utf-8") as f:
+                    script_data = json.load(f)
+        except Exception:
+            pass
 
     params_data = script_data.get("params") or task_mem.get("params") or {}
     asset_prov = script_data.get("asset_provenance") or task_mem.get("asset_provenance")
@@ -177,17 +245,15 @@ def evaluate_copyright_provenance_gate(
             task_id=task_id,
             params=params_data,
             material_sources=script_data.get("material_sources"),
+            task_base_dir=task_base_dir,
         )
 
     bgm_info = asset_prov.get("bgm", {})
     visual_clips = asset_prov.get("visual_clips", [])
 
     # 1. Verificação de BGM
-    bgm_type = str(
-        params_data.get("bgm_type")
-        if isinstance(params_data, dict)
-        else getattr(params_data, "bgm_type", "") or ""
-    ).lower().strip()
+    bgm_type = str(_get_param(params_data, "bgm_type", "") or "").lower().strip()
+
 
     if bgm_info.get("enabled"):
         bgm_source = str(bgm_info.get("source", "")).lower()
@@ -312,6 +378,7 @@ def get_copyright_provenance_summary(
             task_id=resolved_task_id,
             params=script_data.get("params") or task_mem.get("params") or {},
             material_sources=script_data.get("material_sources"),
+            task_base_dir=task_base_dir,
         )
 
     bgm_info = asset_prov.get("bgm", {})

@@ -1,6 +1,18 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
+## V14-B.1 — Legacy Stock Copyright Quarantine (Hotfix) — DEV controlado
+
+- **Baseline:** `2e285cf43bfd01dc10e04a74a35572ee6f2fab19`
+- **Contexto Operacional:** Produção parada após identificação de 23 vídeos legados não publicados contendo `bgm_type="random"` ou `bgm_type="custom"` e sem `asset_provenance`.
+- **Implementação Realizada:**
+  1. `_get_param()` implementado em `copyright_gate.py` para suportar uniformemente parâmetros em formato `dict` e instâncias de objeto (`VideoParams`).
+  2. Tarefas antigas com `bgm_type="random"` ou `bgm_type="custom"` sem proveniência avaliam estritamente como `COPYRIGHT_PROVENANCE_GATE = FAIL`.
+  3. `_recover_waiting_task()` e `get_autonomous_ready_stock()` passam a validar `evaluate_copyright_provenance_gate == PASS`, excluindo automaticamente os 23 vídeos legados do estoque autônomo e impedindo sua adoção/recuperação no Scheduler pelo Autonomous.
+  4. Preservação física e histórica completa: nenhum arquivo apagado, nenhum registro SQLite destruído. Caminho manual legado preservado.
+- **Próximo Passo:** V14-C — Hybrid Character Overlay MVP.
+
 ## V14-B — Copyright Baseline Hardening — DEV controlado
+
 
 - **Baseline:** `ceb64fa441f68f722d7cc2c21b986997c5cd2177`
 - **Evidência Real:** Task `815b0958-b94e-457b-932d-b10dfb0e8dba`, vídeo YouTube `XVy8MbpJFqw` (publicação tecnicamente correta, posteriormente bloqueada mundialmente por conteúdo reivindicado; sem evidência de strike).

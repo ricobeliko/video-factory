@@ -96,6 +96,11 @@ EXTENDED_POSE_FALLBACKS: Dict[str, List[str]] = {
     "half_smile": ["neutral"],
 }
 
+# Escalas dinâmicas determinísticas por segmento (Fase V14-C.3 Tuning)
+DEFAULT_HOOK_SCALE = 0.40       # Presenter maior e claramente visível no hook (0.38 - 0.42)
+DEFAULT_REACTION_SCALE = 0.30   # Presenter compacto em reações/explicações para reduzir colisão (0.28 - 0.32)
+DEFAULT_CTA_SCALE = 0.40        # Presenter ampliado no CTA final (0.38 - 0.42)
+
 # Mapeamento de palavras-chave determinísticas para reação de poses (PT-BR)
 REACTION_KEYWORDS = {
     "CTA": [
@@ -116,12 +121,18 @@ REACTION_KEYWORDS = {
     "SERIOUS": [
         "morreu",
         "morte",
+        "mortes",
         "acidente",
+        "acidentes",
         "desapareceu",
         "tragédia",
         "tragedia",
+        "tragédias",
+        "tragedias",
         "perigo",
+        "perigos",
         "crime",
+        "crimes",
         "assassinato",
         "vítima",
         "vitima",
@@ -130,16 +141,21 @@ REACTION_KEYWORDS = {
         "inacreditável",
         "inacreditavel",
         "impressionante",
+        "impressionantes",
         "absurdo",
         "ninguém esperava",
         "ninguem esperava",
         "estranho",
+        "estranhos",
         "assustador",
+        "assustadores",
         "chocante",
+        "chocantes",
         "surpreendente",
     ],
     "THINKING": [
         "teoria",
+        "teorias",
         "hipótese",
         "hipotese",
         "talvez",
@@ -151,11 +167,18 @@ REACTION_KEYWORDS = {
         "acredita",
         "mistério",
         "misterio",
+        "mistérios",
+        "misterios",
+        "segredo",
+        "segredos",
+        "enigma",
+        "enigmas",
     ],
 }
 
 # Ordem de precedência estrita para reações expressivas (Fase V14-C.2)
 REACTION_PRIORITY = ["CTA", "SERIOUS", "SURPRISE", "THINKING"]
+
 
 
 def get_character_pack_search_dirs() -> List[str]:
@@ -454,12 +477,18 @@ def classify_subtitle_reaction(
 
     if matched_cat == "CTA":
         pos_clean = str(avatar_position or const.DEFAULT_AVATAR_POSITION).lower().strip()
-        if pos_clean == const.AVATAR_POSITION_BOTTOM_RIGHT:
-            return "pointing_left", "cta_pointing"
-        elif pos_clean == const.AVATAR_POSITION_BOTTOM_LEFT:
-            return "pointing_right", "cta_pointing"
-        else:
-            return "cta", "cta_keyword"
+        pointing_kws = [
+            "comenta",
+            "o que voce acha",
+            "deixa nos comentarios",
+            "compartilhe",
+        ]
+        if any(pk in norm_text for pk in pointing_kws):
+            if pos_clean == const.AVATAR_POSITION_BOTTOM_RIGHT:
+                return "pointing_left", "cta_pointing"
+            elif pos_clean == const.AVATAR_POSITION_BOTTOM_LEFT:
+                return "pointing_right", "cta_pointing"
+        return "cta", "cta_keyword"
 
     if matched_cat == "SERIOUS":
         return "serious", "serious_keyword"
@@ -512,6 +541,8 @@ def _generate_talking_slices(
     step: float = 0.35,
     reason: str = "talking_animation",
     available_poses: Optional[Dict[str, str]] = None,
+    segment_type: str = "hook",
+    scale: float = DEFAULT_HOOK_SCALE,
 ) -> List[Dict[str, Any]]:
     """Gera fatias determinísticas alternando talking_1 e talking_2."""
     duration = round(end_t - start_t, 2)
@@ -530,6 +561,8 @@ def _generate_talking_slices(
             "end": nxt,
             "pose": resolved,
             "reason": reason,
+            "segment_type": segment_type,
+            "scale": scale,
         })
         curr = nxt
         idx += 1
@@ -659,8 +692,9 @@ def build_presenter_expression_timeline(
     avatar_position: str = const.DEFAULT_AVATAR_POSITION,
     available_poses: Optional[Dict[str, str]] = None,
     mode: str = const.AVATAR_MODE_HYBRID,
+    avatar_scale: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
-    """Constrói a timeline determinística de expressões e poses do presenter."""
+    """Constrói a timeline determinística de expressões e poses do presenter com Dynamic Scale."""
     total_dur = round(float(total_duration), 2)
     if total_dur <= 0:
         return []
@@ -669,7 +703,9 @@ def build_presenter_expression_timeline(
         if mode == const.AVATAR_MODE_CORNER:
             presenter_segments = [(0.0, total_dur)]
         else:
-            presenter_segments = build_hybrid_presenter_segments(total_dur)
+            presenter_segments = build_hybrid_presenter_segments(
+                total_dur, subtitle_items=subtitle_items, channel_context=channel_context
+            )
 
     if not presenter_segments:
         return []
@@ -684,10 +720,26 @@ def build_presenter_expression_timeline(
             if seg_dur <= 0:
                 continue
 
+            if seg_st == 0.0 and mode == const.AVATAR_MODE_HYBRID:
+                seg_type = "hook"
+                base_scale = DEFAULT_HOOK_SCALE
+            elif idx == len(presenter_segments) - 1 and mode == const.AVATAR_MODE_HYBRID and len(presenter_segments) > 1:
+                seg_type = "cta"
+                base_scale = DEFAULT_CTA_SCALE
+            elif mode == const.AVATAR_MODE_CORNER:
+                seg_type = "corner"
+                base_scale = 0.28
+            else:
+                seg_type = "reaction"
+                base_scale = DEFAULT_REACTION_SCALE
+
+            seg_scale = round(base_scale * (float(avatar_scale) / 0.38), 3) if (avatar_scale and avatar_scale != 0.38) else base_scale
+
             if idx == 0 and mode == const.AVATAR_MODE_HYBRID:
                 events.extend(
                     _generate_talking_slices(
-                        seg_st, seg_en, step=0.35, reason="fallback_hook_talking", available_poses=available_poses
+                        seg_st, seg_en, step=0.35, reason="fallback_hook_talking", available_poses=available_poses,
+                        segment_type=seg_type, scale=seg_scale,
                     )
                 )
             elif idx == len(presenter_segments) - 1 and mode == const.AVATAR_MODE_HYBRID and len(presenter_segments) > 1:
@@ -704,6 +756,8 @@ def build_presenter_expression_timeline(
                     "end": seg_en,
                     "pose": resolved,
                     "reason": "fallback_cta_pointing",
+                    "segment_type": seg_type,
+                    "scale": seg_scale,
                 })
             else:
                 pose_candidate = "serious" if (idx % 2 == 0) else "thinking"
@@ -713,6 +767,8 @@ def build_presenter_expression_timeline(
                     "end": seg_en,
                     "pose": resolved,
                     "reason": "fallback_segment_pose",
+                    "segment_type": seg_type,
+                    "scale": seg_scale,
                 })
         return events
 
@@ -721,6 +777,21 @@ def build_presenter_expression_timeline(
         seg_dur = round(seg_en - seg_st, 2)
         if seg_dur <= 0:
             continue
+
+        if seg_st == 0.0 and mode == const.AVATAR_MODE_HYBRID:
+            seg_type = "hook"
+            base_scale = DEFAULT_HOOK_SCALE
+        elif seg_idx == len(presenter_segments) - 1 and len(presenter_segments) > 1 and mode == const.AVATAR_MODE_HYBRID:
+            seg_type = "cta"
+            base_scale = DEFAULT_CTA_SCALE
+        elif mode == const.AVATAR_MODE_CORNER:
+            seg_type = "corner"
+            base_scale = 0.28
+        else:
+            seg_type = "reaction"
+            base_scale = DEFAULT_REACTION_SCALE
+
+        seg_scale = round(base_scale * (float(avatar_scale) / 0.38), 3) if (avatar_scale and avatar_scale != 0.38) else base_scale
 
         subs_in_seg = []
         for s in subtitles:
@@ -739,7 +810,8 @@ def build_presenter_expression_timeline(
             if seg_idx == 0:
                 events.extend(
                     _generate_talking_slices(
-                        seg_st, seg_en, step=0.35, reason="hook_talking", available_poses=available_poses
+                        seg_st, seg_en, step=0.35, reason="hook_talking", available_poses=available_poses,
+                        segment_type=seg_type, scale=seg_scale,
                     )
                 )
             elif seg_idx == len(presenter_segments) - 1 and len(presenter_segments) > 1:
@@ -750,6 +822,8 @@ def build_presenter_expression_timeline(
                     "end": seg_en,
                     "pose": resolve_pose_with_fallback(p, available_poses),
                     "reason": "cta_pointing",
+                    "segment_type": seg_type,
+                    "scale": seg_scale,
                 })
             else:
                 events.append({
@@ -757,6 +831,8 @@ def build_presenter_expression_timeline(
                     "end": seg_en,
                     "pose": resolve_pose_with_fallback("neutral", available_poses),
                     "reason": "neutral_pause",
+                    "segment_type": seg_type,
+                    "scale": seg_scale,
                 })
             continue
 
@@ -773,6 +849,8 @@ def build_presenter_expression_timeline(
                         "end": sub_st,
                         "pose": resolve_pose_with_fallback("neutral", available_poses),
                         "reason": "neutral_pause",
+                        "segment_type": seg_type,
+                        "scale": seg_scale,
                     })
                 cursor = sub_st
 
@@ -781,7 +859,8 @@ def build_presenter_expression_timeline(
                 if pose == "talking":
                     r_desc = "hook_talking" if (seg_idx == 0) else "talking_animation"
                     talking_slices = _generate_talking_slices(
-                        cursor, sub_en, step=0.35, reason=r_desc, available_poses=available_poses
+                        cursor, sub_en, step=0.35, reason=r_desc, available_poses=available_poses,
+                        segment_type=seg_type, scale=seg_scale,
                     )
                     events.extend(talking_slices)
                 else:
@@ -791,6 +870,8 @@ def build_presenter_expression_timeline(
                         "end": sub_en,
                         "pose": resolved,
                         "reason": reason,
+                        "segment_type": seg_type,
+                        "scale": seg_scale,
                     })
                 cursor = sub_en
 
@@ -805,6 +886,8 @@ def build_presenter_expression_timeline(
                         "end": seg_en,
                         "pose": resolve_pose_with_fallback(p, available_poses),
                         "reason": "cta_tail",
+                        "segment_type": seg_type,
+                        "scale": seg_scale,
                     })
                 else:
                     events.append({
@@ -812,6 +895,8 @@ def build_presenter_expression_timeline(
                         "end": seg_en,
                         "pose": resolve_pose_with_fallback("neutral", available_poses),
                         "reason": "segment_tail_neutral",
+                        "segment_type": seg_type,
+                        "scale": seg_scale,
                     })
 
     cleaned_events: List[Dict[str, Any]] = []
@@ -827,27 +912,43 @@ def summarize_presenter_timeline(
     character_id: str = "nox_v1",
     mode: str = const.AVATAR_MODE_HYBRID,
 ) -> Dict[str, Any]:
-    """Gera resumo compacto de telemetria da timeline de expressões."""
+    """Gera resumo compacto de telemetria da timeline de expressões com escalas dinâmicas."""
     reactions: Dict[str, int] = {}
+    segment_types: Dict[str, int] = {}
+    scales_used: List[float] = []
     for ev in timeline:
         pose = ev.get("pose", "")
         if pose in ("surprised", "thinking", "serious", "cta", "pointing_left", "pointing_right"):
             reactions[pose] = reactions.get(pose, 0) + 1
+        stype = ev.get("segment_type", "")
+        if stype:
+            segment_types[stype] = segment_types.get(stype, 0) + 1
+        sc = ev.get("scale")
+        if sc and sc not in scales_used:
+            scales_used.append(sc)
     return {
         "character_id": character_id,
         "mode": mode,
         "events_count": len(timeline),
         "reactions": reactions,
+        "segment_types": segment_types,
+        "scales_used": scales_used,
     }
 
 
-def build_hybrid_presenter_segments(total_duration: float) -> List[Tuple[float, float]]:
+def build_hybrid_presenter_segments(
+    total_duration: float,
+    subtitle_items: Optional[Any] = None,
+    channel_context: Optional[str] = None,
+    max_popins: int = 2,
+) -> List[Tuple[float, float]]:
     """Calcula determinística e proporcionalmente os segmentos de exibição do presenter no modo Hybrid.
 
     Estrutura:
     - HOOK: Início do vídeo (0.0 -> 3.5s para vídeos >= 25s)
     - RETURN: Meio do vídeo (~35% -> ~45%)
     - CTA: Final do vídeo (últimos ~4.5s)
+    - REACTIVE POP-INS: Pequenas reações pontuais (1.5–3.0s) em trechos de B-roll com palavras de impacto
     - Intermediários: Presenter oculto para destacar o B-roll
     """
     if total_duration <= 0:
@@ -864,7 +965,7 @@ def build_hybrid_presenter_segments(total_duration: float) -> List[Tuple[float, 
         cta_start = round(max(ret_end + 0.5, total_duration - 4.5), 2)
         cta_end = total_duration
         s3 = (cta_start, cta_end)
-        return [s1, s2, s3]
+        base_segments = [s1, s2, s3]
     else:
         hook_end = round(min(2.5, total_duration * 0.15), 2)
         ret_start = round(total_duration * 0.40, 2)
@@ -872,14 +973,59 @@ def build_hybrid_presenter_segments(total_duration: float) -> List[Tuple[float, 
         cta_start = round(max(ret_end + 0.2, total_duration * 0.85), 2)
         cta_end = total_duration
 
-        segments = []
+        base_segments = []
         if hook_end > 0:
-            segments.append((0.0, hook_end))
+            base_segments.append((0.0, hook_end))
         if ret_start > hook_end and ret_end > ret_start:
-            segments.append((ret_start, ret_end))
-        if cta_start > (segments[-1][1] if segments else 0) and cta_end > cta_start:
-            segments.append((cta_start, cta_end))
-        return segments
+            base_segments.append((ret_start, ret_end))
+        if cta_start > (base_segments[-1][1] if base_segments else 0) and cta_end > cta_start:
+            base_segments.append((cta_start, cta_end))
+
+    if not subtitle_items or max_popins <= 0:
+        return base_segments
+
+    # Pop-ins reativos derivados da timeline de legendas (Fase V14-C.3 Tuning)
+    subtitles = parse_srt_timeline(subtitle_items)
+    if not subtitles:
+        return base_segments
+
+    popin_candidates: List[Tuple[float, float]] = []
+    # Analisa os intervalos (gaps) entre os segmentos base
+    for i in range(len(base_segments) - 1):
+        if len(popin_candidates) >= max_popins:
+            break
+        gap_st = base_segments[i][1]
+        gap_en = base_segments[i + 1][0]
+        gap_dur = round(gap_en - gap_st, 2)
+        if gap_dur < 3.2:
+            continue
+
+        for sub in subtitles:
+            sub_st = sub["start"]
+            sub_en = sub["end"]
+            # O pop-in deve ficar confortável dentro do gap (margem segura das bordas)
+            if sub_st >= gap_st + 0.6 and sub_en <= gap_en - 0.4:
+                pose, _ = classify_subtitle_reaction(sub["text"], channel_context=channel_context)
+                if pose in ("surprised", "thinking", "serious"):
+                    pop_dur = max(1.5, min(3.0, round(sub_en - sub_st, 2)))
+                    pop_end = round(min(sub_st + pop_dur, gap_en - 0.4), 2)
+                    if pop_end - sub_st >= 1.2:
+                        popin_candidates.append((sub_st, pop_end))
+                        break  # No máximo 1 pop-in por gap
+
+    if not popin_candidates:
+        return base_segments
+
+    all_segments = sorted(base_segments + popin_candidates, key=lambda x: x[0])
+    merged: List[Tuple[float, float]] = []
+    for seg in all_segments:
+        if not merged:
+            merged.append(seg)
+        else:
+            prev_st, prev_en = merged[-1]
+            if seg[0] >= prev_en + 0.2:
+                merged.append(seg)
+    return merged
 
 
 def calculate_presenter_layout(
@@ -1015,6 +1161,7 @@ def build_presenter_clips(
             avatar_position=position,
             available_poses=available_poses,
             mode=mode,
+            avatar_scale=scale,
         )
 
         if not timeline:
@@ -1029,27 +1176,30 @@ def build_presenter_clips(
                 base_c, is_vid = load_presenter_base_clip(pose_file, clip_stack=clip_stack)
                 cached_base_clips[p_name] = (base_c, is_vid)
 
-        # Memoiza layout e resize por pose
+        # Memoiza layout e resize por pose e escala dinâmica
         cached_resized_clips = {}
-        target_size, pos = None, None
-
-        for p_name, (base_c, is_vid) in cached_base_clips.items():
-            if target_size is None or pos is None:
-                orig_w, orig_h = base_c.size
-                target_size, pos = calculate_presenter_layout(
-                    canvas_size, (orig_w, orig_h), scale, position, mode
-                )
-            resized = base_c.resized(target_size)
-            if float(opacity) < 1.0:
-                resized = resized.with_opacity(float(opacity))
-            cached_resized_clips[p_name] = (resized, is_vid)
-
         clips = []
+
         for ev in timeline:
             p_name = ev["pose"]
-            if p_name not in cached_resized_clips:
+            if p_name not in cached_base_clips:
                 continue
-            resized, is_vid = cached_resized_clips[p_name]
+
+            ev_scale = ev.get("scale", scale)
+            cache_key = (p_name, round(float(ev_scale), 3))
+
+            if cache_key not in cached_resized_clips:
+                base_c, is_vid = cached_base_clips[p_name]
+                orig_w, orig_h = base_c.size
+                t_size, pos_xy = calculate_presenter_layout(
+                    canvas_size, (orig_w, orig_h), ev_scale, position, mode
+                )
+                resized = base_c.resized(t_size)
+                if float(opacity) < 1.0:
+                    resized = resized.with_opacity(float(opacity))
+                cached_resized_clips[cache_key] = (resized, is_vid, pos_xy)
+
+            resized, is_vid, pos_xy = cached_resized_clips[cache_key]
             st = ev["start"]
             en = ev["end"]
             dur = max(0.01, round(en - st, 2))
@@ -1057,9 +1207,9 @@ def build_presenter_clips(
             if is_vid:
                 vid_dur = getattr(resized, "duration", dur)
                 sub = resized.subclipped(0, min(dur, vid_dur))
-                c = sub.with_position(pos).with_start(st).with_duration(dur).with_end(en)
+                c = sub.with_position(pos_xy).with_start(st).with_duration(dur).with_end(en)
             else:
-                c = resized.with_position(pos).with_start(st).with_duration(dur).with_end(en)
+                c = resized.with_position(pos_xy).with_start(st).with_duration(dur).with_end(en)
 
             if clip_stack:
                 clip_stack.callback(c.close)

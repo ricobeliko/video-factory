@@ -274,3 +274,45 @@ def test_10_no_network_or_external_api_called(tmp_path):
             thumbnail_size=(60, 60),
         )
         mock_urlopen.assert_not_called()
+
+
+def test_11_real_imported_nox_pack_is_valid():
+    """11. Validação estrita do pack real importado do Nox v1 e preview."""
+    canonical_dir = Path("assets/presenter/nox_v1")
+    assert canonical_dir.is_dir(), "Diretório canonical de nox_v1 deve existir"
+
+    # Valida assets e manifest usando a função de integridade do presenter
+    is_valid, errors = presenter.validate_character_pack_assets(canonical_dir)
+    assert is_valid is True, f"Erros na validação de assets reais: {errors}"
+    assert len(errors) == 0
+
+    # Valida imagem de referência
+    ref_img_path = canonical_dir / "reference" / "nox_v1_reference.png"
+    assert ref_img_path.is_file(), "reference/nox_v1_reference.png deve existir"
+    with Image.open(ref_img_path) as ref_img:
+        assert ref_img.format == "PNG"
+        assert ref_img.mode == "RGBA"
+        assert ref_img.size[0] > 0 and ref_img.size[1] > 0
+
+    # Valida as 9 poses core
+    poses_dir = canonical_dir / "poses"
+    for pose in presenter.CANONICAL_CORE_POSES:
+        p_file = poses_dir / f"{pose}.png"
+        assert p_file.is_file(), f"Pose core '{pose}.png' deve existir"
+        assert p_file.stat().st_size > 0
+
+    # Valida contact sheet real
+    sheet_path = canonical_dir / "previews" / "nox_v1_contact_sheet_real.png"
+    assert sheet_path.is_file(), "Contact sheet real deve existir"
+    assert sheet_path.stat().st_size > 0
+
+    # Valida preview local real (v1 e v2 tuning)
+    preview_path = canonical_dir / "previews" / "nox_v1_preview_hybrid.mp4"
+    assert preview_path.is_file(), "Vídeo de preview local real deve existir"
+    assert preview_path.stat().st_size > 1_000_000, "Vídeo de preview deve ter tamanho substancial (>1MB)"
+
+    preview_v2_path = canonical_dir / "previews" / "nox_v1_preview_hybrid_v2.mp4"
+    assert preview_v2_path.is_file(), "Vídeo de preview local v2 deve existir"
+    assert preview_v2_path.stat().st_size > 1_000_000, "Vídeo de preview v2 deve ter tamanho substancial (>1MB)"
+
+

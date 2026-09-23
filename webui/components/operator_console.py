@@ -1530,11 +1530,17 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
         target_stock = status_data.get("target_ready_stock", 3)
         generated_today = status_data.get("generated_today_24h", 0)
         max_24h = status_data.get("max_generations_24h", 5)
+        attempts_today = status_data.get("generation_attempts_24h", 0)
+        max_att = status_data.get("max_attempts_24h", 15)
         current_task = status_data.get("current_task_id") or "—"
         last_cycle = status_data.get("last_tick") or "—"
         next_cycle = status_data.get("next_cycle_at") or "—"
         last_error = status_data.get("last_error")
         message = status_data.get("message") or "—"
+        global_gen = status_data.get("global_approved_24h", 0)
+        global_max_gen = status_data.get("global_max_generations_24h", 10)
+        global_att = status_data.get("global_attempts_24h", 0)
+        global_max_att = status_data.get("global_max_attempts_24h", 25)
 
     # Badges
     mode_badge = "<span class='op-badge op-badge-green'>🟢 ON (Ativado)</span>" if enabled else "<span class='op-badge op-badge-gray'>⚪ OFF (Desativado)</span>"
@@ -1547,11 +1553,12 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
             st.markdown(f"**Modo Autônomo:** {mode_badge}", unsafe_allow_html=True)
             st.markdown(f"**Estado Atual:** {state_badge}", unsafe_allow_html=True)
             if not demo_enabled:
-                st.caption(f"Perfil: **{active_prof_name}**")
+                st.caption(f"Perfil: **{active_prof_name}** | Canal: `{active_channel_id or '—'}`")
             st.caption(f"Status: {message}")
         with c2:
             st.markdown(f"**Estoque Pronto:** `{ready_stock} / {target_stock}` vídeos")
-            st.markdown(f"**Gerados Hoje (24h):** `{generated_today} / {max_24h}`")
+            st.markdown(f"**Aprovados (24h):** `{generated_today} / {max_24h}` | **Tentativas:** `{attempts_today} / {max_att}`")
+            st.caption(f"🛡️ **Global Cost Guard:** Aprovados `{global_gen}/{global_max_gen}` | Tentativas `{global_att}/{global_max_att}`")
             st.caption(f"Tarefa Atual: `{current_task[:25]}`" if current_task != "—" else "Tarefa Atual: Nenhuma")
         with c3:
             st.markdown(f"**Último Ciclo:** `{last_cycle}`")

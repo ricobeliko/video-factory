@@ -109,8 +109,14 @@ KEY_AUTONOMOUS_MAX_ATTEMPTS_24H = "autonomous_max_attempts_24h"
 KEY_AUTONOMOUS_LAST_NARRATIVE_STRUCTURE = "autonomous_last_narrative_structure"
 KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE = "autonomous_rejected_narrative_structure"
 
+# Chaves de persistência Global Cost Guard (Fase V12-F.5)
+KEY_AUTONOMOUS_GLOBAL_MAX_24H = "autonomous_global_max_generations_24h"
+KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = "autonomous_global_max_attempts_24h"
+
 DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS = 10
 DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H = 15
+DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H = 10
+DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = 25
 _cycle_lock = threading.Lock()
 
 
@@ -215,15 +221,84 @@ def set_autonomous_mode_enabled(enabled: bool, db_path: Optional[str] = None) ->
     logger.info(f"[AUTONOMOUS_PRODUCTION] {msg}")
 
 
-def get_target_ready_stock(db_path: Optional[str] = None) -> int:
-    """Retorna a meta de estoque pronto, priorizando minimum_ready_stock existente."""
-    stored = get_autonomous_setting(KEY_AUTONOMOUS_TARGET_STOCK, None, db_path=db_path)
+def get_profile_growth_mode(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> str:
+    """Retorna o Growth Mode associado ao perfil de forma isolada."""
+    clean_p = str(profile_id or "").strip()
+    if clean_p and clean_p not in (profile_manager.DEFAULT_PROFILE_ID, "default"):
+        try:
+            prof = profile_manager.get_profile(clean_p, db_path=db_path)
+            if prof and prof.get("growth_mode"):
+                return str(prof.get("growth_mode")).lower().strip()
+        except Exception:
+            pass
+    try:
+        gm = scheduler.get_growth_mode("youtube", db_path=db_path)
+        if gm:
+            return str(gm).lower().strip()
+    except Exception:
+        pass
+    return const.DEFAULT_GROWTH_MODE
+
+
+def get_target_ready_stock(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
+    """Retorna a meta de estoque pronto para um perfil específico (ou default).
+
+    Regras V12-F.5:
+    - WARMUP: default conservador = 3 (configurável de 3 a 6)
+    - SCALE: default sugerido = 5 (configurável de 3 a 6)
+    - Perfil default mantém fallback backward-compatible para a chave legada KEY_AUTONOMOUS_TARGET_STOCK.
+    - Valores persistidos de produção não são alterados automaticamente.
+    """
+    clean_p = str(profile_id or "").strip()
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+
+    stored = None
+    if not is_default:
+        stored = get_autonomous_setting(f"{KEY_AUTONOMOUS_TARGET_STOCK}:{clean_p}", None, db_path=db_path)
+    else:
+        if clean_p:
+            stored = get_autonomous_setting(f"{KEY_AUTONOMOUS_TARGET_STOCK}:{clean_p}", None, db_path=db_path)
+        if stored is None:
+            stored = get_autonomous_setting(KEY_AUTONOMOUS_TARGET_STOCK, None, db_path=db_path)
+        if stored is None:
+            try:
+                min_stock = operator_console.get_minimum_ready_stock(db_path=db_path)
+                if min_stock is not None:
+                    stored = min_stock
+            except Exception:
+                pass
+
     if stored is not None:
         try:
-            return max(1, int(stored))
+            val = int(stored)
+            if not is_default:
+                return max(3, min(6, val))
+            return max(1, val)
         except (ValueError, TypeError):
             pass
-    return operator_console.get_minimum_ready_stock(db_path=db_path)
+
+    gm = get_profile_growth_mode(clean_p, db_path=db_path)
+    if gm == const.GROWTH_MODE_SCALE:
+        return 5
+    return 3
+
+
+def set_target_ready_stock(
+    target: int,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    """Grava a meta de estoque pronto isolada por perfil, validando o intervalo [3, 6]."""
+    operator_console.require_primary_instance(db_path=db_path)
+    clean_p = str(profile_id or "").strip()
+    clamped_target = max(3, min(6, int(target)))
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+    if not is_default:
+        set_autonomous_setting(f"{KEY_AUTONOMOUS_TARGET_STOCK}:{clean_p}", str(clamped_target), db_path=db_path)
+    else:
+        if clean_p:
+            set_autonomous_setting(f"{KEY_AUTONOMOUS_TARGET_STOCK}:{clean_p}", str(clamped_target), db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_TARGET_STOCK, str(clamped_target), db_path=db_path)
 
 
 def get_max_tasks_per_cycle(db_path: Optional[str] = None) -> int:
@@ -235,13 +310,57 @@ def get_max_tasks_per_cycle(db_path: Optional[str] = None) -> int:
         return DEFAULT_AUTONOMOUS_MAX_NEW_TASKS_PER_CYCLE
 
 
-def get_max_generations_24h(db_path: Optional[str] = None) -> int:
-    """Retorna o teto de gerações em 24h para segurança de custos e infra."""
-    val = get_autonomous_setting(KEY_AUTONOMOUS_MAX_24H, str(DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H), db_path=db_path)
-    try:
-        return min(DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H, max(1, int(val)))
-    except (ValueError, TypeError):
-        return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H
+def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
+    """Retorna o teto de gerações aprovadas em 24h para um perfil específico (ou default).
+
+    Regras V12-F.5:
+    - WARMUP: 2 / 24h
+    - SCALE: 5 / 24h
+    - Configuração isolada por perfil: autonomous_max_generations_24h:<profile_id>
+    - Perfil default mantém compatibilidade com KEY_AUTONOMOUS_MAX_24H quando não houver override.
+    """
+    clean_p = str(profile_id or "").strip()
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+
+    stored = None
+    if not is_default:
+        stored = get_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_24H}:{clean_p}", None, db_path=db_path)
+    else:
+        if clean_p:
+            stored = get_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_24H}:{clean_p}", None, db_path=db_path)
+        if stored is None:
+            stored = get_autonomous_setting(KEY_AUTONOMOUS_MAX_24H, None, db_path=db_path)
+
+    if stored is not None:
+        try:
+            return max(1, int(stored))
+        except (ValueError, TypeError):
+            pass
+
+    gm = get_profile_growth_mode(clean_p, db_path=db_path)
+    if gm == const.GROWTH_MODE_SCALE:
+        return 5
+    elif gm == const.GROWTH_MODE_WARMUP:
+        return 2
+    return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H if is_default else 2
+
+
+def set_max_generations_24h(
+    val: int,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    """Grava o teto de gerações aprovadas em 24h para um perfil específico."""
+    operator_console.require_primary_instance(db_path=db_path)
+    clean_p = str(profile_id or "").strip()
+    clamped = max(1, int(val))
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+    if not is_default:
+        set_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_24H}:{clean_p}", str(clamped), db_path=db_path)
+    else:
+        if clean_p:
+            set_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_24H}:{clean_p}", str(clamped), db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_MAX_24H, str(clamped), db_path=db_path)
 
 
 def get_cycle_interval_minutes(db_path: Optional[str] = None) -> int:
@@ -266,13 +385,87 @@ def get_consecutive_rejections(db_path: Optional[str] = None, profile_id: Option
         return 0
 
 
-def get_max_attempts_24h(db_path: Optional[str] = None) -> int:
-    """Retorna o teto de tentativas totais de geração em 24h para proteção de custos."""
-    val = get_autonomous_setting(KEY_AUTONOMOUS_MAX_ATTEMPTS_24H, str(DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H), db_path=db_path)
+def get_max_attempts_24h(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
+    """Retorna o teto de tentativas totais de geração em 24h para um perfil específico (ou default).
+
+    Regras V12-F.5:
+    - WARMUP: 8 / 24h
+    - SCALE: 15 / 24h
+    - Configuração isolada por perfil: autonomous_max_attempts_24h:<profile_id>
+    - Perfil default mantém compatibilidade com KEY_AUTONOMOUS_MAX_ATTEMPTS_24H quando não houver override.
+    """
+    clean_p = str(profile_id or "").strip()
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+
+    stored = None
+    if not is_default:
+        stored = get_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_p}", None, db_path=db_path)
+    else:
+        if clean_p:
+            stored = get_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_p}", None, db_path=db_path)
+        if stored is None:
+            stored = get_autonomous_setting(KEY_AUTONOMOUS_MAX_ATTEMPTS_24H, None, db_path=db_path)
+
+    if stored is not None:
+        try:
+            return max(1, int(stored))
+        except (ValueError, TypeError):
+            pass
+
+    gm = get_profile_growth_mode(clean_p, db_path=db_path)
+    if gm == const.GROWTH_MODE_SCALE:
+        return 15
+    elif gm == const.GROWTH_MODE_WARMUP:
+        return 8
+    return DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H if is_default else 8
+
+
+def set_max_attempts_24h(
+    val: int,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    """Grava o teto de tentativas totais em 24h para um perfil específico."""
+    operator_console.require_primary_instance(db_path=db_path)
+    clean_p = str(profile_id or "").strip()
+    clamped = max(1, int(val))
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+    if not is_default:
+        set_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_p}", str(clamped), db_path=db_path)
+    else:
+        if clean_p:
+            set_autonomous_setting(f"{KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_p}", str(clamped), db_path=db_path)
+        set_autonomous_setting(KEY_AUTONOMOUS_MAX_ATTEMPTS_24H, str(clamped), db_path=db_path)
+
+
+def get_global_max_generations_24h(db_path: Optional[str] = None) -> int:
+    """Retorna o teto global de gerações aprovadas em 24h somando todos os perfis."""
+    val = get_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_24H, str(DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H), db_path=db_path)
     try:
         return max(1, int(val))
     except (ValueError, TypeError):
-        return DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H
+        return DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H
+
+
+def set_global_max_generations_24h(max_gen: int, db_path: Optional[str] = None) -> None:
+    """Define o teto global de gerações aprovadas em 24h somando todos os perfis."""
+    operator_console.require_primary_instance(db_path=db_path)
+    set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_24H, str(max(1, int(max_gen))), db_path=db_path)
+
+
+def get_global_max_attempts_24h(db_path: Optional[str] = None) -> int:
+    """Retorna o teto global de tentativas de geração em 24h somando todos os perfis."""
+    val = get_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H, str(DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H), db_path=db_path)
+    try:
+        return max(1, int(val))
+    except (ValueError, TypeError):
+        return DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H
+
+
+def set_global_max_attempts_24h(max_att: int, db_path: Optional[str] = None) -> None:
+    """Define o teto global de tentativas de geração em 24h somando todos os perfis."""
+    operator_console.require_primary_instance(db_path=db_path)
+    set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H, str(max(1, int(max_att))), db_path=db_path)
 
 
 def resolve_autonomous_youtube_channel(profile_id: str, db_path: Optional[str] = None) -> Optional[str]:
@@ -415,7 +608,7 @@ def get_autonomous_ready_stock(
             eligible.append(t)
         except (ValueError, TypeError, OSError):
             continue
-    target = get_target_ready_stock(db_path=db_path)
+    target = get_target_ready_stock(profile_id=clean_profile, db_path=db_path)
     return {"ready_count": len(eligible), "youtube_count": len(eligible),
             "tiktok_count": 0, "target_stock": target,
             "is_below_target": len(eligible) < target, "youtube_ready": eligible}
@@ -475,13 +668,20 @@ def get_autonomous_status(
     # Contagem de gerações nas últimas 24h
     generated_today = count_generations_in_last_24h(db_path=db_path, profile_id=target_profile)
     attempts_today = count_generation_attempts_in_last_24h(db_path=db_path, profile_id=target_profile)
-    max_24h = get_max_generations_24h(db_path=db_path)
+    max_24h = get_max_generations_24h(profile_id=target_profile, db_path=db_path)
+    max_att = get_max_attempts_24h(profile_id=target_profile, db_path=db_path)
     consecutive_rejections = get_consecutive_rejections(db_path=db_path, profile_id=target_profile)
 
     # Estoque atual e meta (estritamente elegível para YouTube e para o perfil selecionado)
     stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
     target_stock = stock_info["target_stock"]
     ready_count = stock_info["ready_count"]
+
+    # Global Cost Guard snapshot
+    global_approved = count_all_profiles_generations_24h(db_path=db_path)
+    global_max_gen = get_global_max_generations_24h(db_path=db_path)
+    global_attempts = count_all_profiles_attempts_24h(db_path=db_path)
+    global_max_att = get_global_max_attempts_24h(db_path=db_path)
 
     # Próximo ciclo previsto
     interval_min = get_cycle_interval_minutes(db_path=db_path)
@@ -511,6 +711,11 @@ def get_autonomous_status(
         "generated_today_24h": generated_today,
         "max_generations_24h": max_24h,
         "generation_attempts_24h": attempts_today,
+        "max_attempts_24h": max_att,
+        "global_approved_24h": global_approved,
+        "global_max_generations_24h": global_max_gen,
+        "global_attempts_24h": global_attempts,
+        "global_max_attempts_24h": global_max_att,
         "consecutive_rejections": consecutive_rejections,
         "max_tasks_per_cycle": get_max_tasks_per_cycle(db_path=db_path),
         "cycle_interval_minutes": interval_min,
@@ -638,6 +843,120 @@ def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_pat
     except Exception as exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar tentativas 24h: {exc}")
         return 0
+
+
+def count_all_profiles_generations_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
+    """Conta de forma explícita e agregada quantas gerações APROVADAS foram concluídas
+    por TODOS os perfis combinados nas últimas 24 horas."""
+    scheduler.init_db(db_path)
+    try:
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
+    now_utc = scheduler._normalize_utc(now)
+    since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
+    try:
+        with scheduler.get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                FROM operational_events o
+                WHERE o.component = 'autonomous_production'
+                  AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                  AND o.timestamp >= ?;
+                """,
+                (since_iso,),
+            ).fetchone()
+            return int(row[0]) if (row and row[0] is not None) else 0
+    except Exception as exc:
+        logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar gerações globais 24h: {exc}")
+        return 0
+
+
+def count_all_profiles_attempts_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
+    """Conta de forma explícita e agregada quantas tentativas de geração foram iniciadas
+    por TODOS os perfis combinados nas últimas 24 horas."""
+    scheduler.init_db(db_path)
+    try:
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
+    now_utc = scheduler._normalize_utc(now)
+    since_iso = scheduler._to_iso(now_utc - timedelta(hours=24))
+    try:
+        with scheduler.get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
+                FROM operational_events o
+                WHERE o.component = 'autonomous_production'
+                  AND o.event_type = 'generation_started'
+                  AND o.timestamp >= ?;
+                """,
+                (since_iso,),
+            ).fetchone()
+            return int(row[0]) if (row and row[0] is not None) else 0
+    except Exception as exc:
+        logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao contar tentativas globais 24h: {exc}")
+        return 0
+
+
+def get_global_cost_guard_status(now: Optional[datetime] = None, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna o estado agregado do Global Cost Guard somando todos os perfis."""
+    global_approved = count_all_profiles_generations_24h(now=now, db_path=db_path)
+    global_max_gen = get_global_max_generations_24h(db_path=db_path)
+    global_attempts = count_all_profiles_attempts_24h(now=now, db_path=db_path)
+    global_max_att = get_global_max_attempts_24h(db_path=db_path)
+    is_blocked = (global_attempts >= global_max_att) or (global_approved >= global_max_gen)
+    return {
+        "global_approved_24h": global_approved,
+        "global_max_generations_24h": global_max_gen,
+        "global_attempts_24h": global_attempts,
+        "global_max_attempts_24h": global_max_att,
+        "is_limit_reached": is_blocked,
+    }
+
+
+def check_asset_eligibility_for_destination(
+    task_data: Dict[str, Any],
+    platform: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Avalia a elegibilidade de um asset aprovado para um destino específico.
+
+    Conceito arquitetural multi-destino (V12-F.5):
+    Prepara a distribuição de 1 asset aprovado para múltiplos destinos (ex: YouTube e futuramente TikTok)
+    sem necessidade de re-renderização, validando critérios como:
+    - aspect ratio (ex: 9:16 vertical para Shorts / TikTok)
+    - duração (ex: <= 60s para Shorts / TikTok)
+    - áudio / legendas
+    - políticas da plataforma
+
+    Nesta fase (V12-F.5):
+    - YouTube é o único destino efetivamente habilitado.
+    - TikTok permanece estritamente OFF (eligible=False, enabled=False).
+    """
+    clean_plat = str(platform or "").lower().strip()
+    if clean_plat == "youtube":
+        return {
+            "platform": "youtube",
+            "eligible": True,
+            "enabled": True,
+            "reasons": [],
+        }
+    elif clean_plat == "tiktok":
+        return {
+            "platform": "tiktok",
+            "eligible": False,
+            "enabled": False,
+            "reasons": ["tiktok_disabled_in_v12_f5"],
+        }
+    return {
+        "platform": clean_plat,
+        "eligible": False,
+        "enabled": False,
+        "reasons": [f"unsupported_platform_{clean_plat}"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1669,23 +1988,40 @@ def _run_autonomous_cycle(
         _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {"status": "blocked", "reason": "consecutive_rejections_limit", "message": msg}
 
-    # 5.2 Teto de tentativas totais em 24h (para evitar consumo excessivo de API)
-    max_attempts_24h = get_max_attempts_24h(db_path=db_path)
+    # 5.2 Teto de tentativas totais em 24h do perfil (para evitar consumo excessivo de API)
+    max_attempts_24h = get_max_attempts_24h(profile_id=target_profile_id, db_path=db_path)
     attempts_today = count_generation_attempts_in_last_24h(now=current_time, db_path=db_path, profile_id=target_profile_id)
     if attempts_today >= max_attempts_24h:
         _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
-        msg = f"Teto diário de tentativas atingido ({attempts_today}/{max_attempts_24h} em 24h). Aguardando liberação da janela."
+        msg = f"Teto diário de tentativas atingido para perfil '{target_profile_id}' ({attempts_today}/{max_attempts_24h} em 24h). Aguardando liberação da janela."
         _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
-        return {"status": "blocked", "reason": "daily_attempt_limit_reached", "message": msg}
+        return {"status": "blocked", "reason": "daily_attempt_limit_reached", "message": msg, "profile_id": target_profile_id}
 
-    # 5.3 Limite diário de gerações APROVADAS (máximo de vídeos prontos por 24h)
-    max_24h = get_max_generations_24h(db_path=db_path)
+    # 5.3 Limite diário de gerações APROVADAS do perfil (máximo de vídeos prontos por 24h)
+    max_24h = get_max_generations_24h(profile_id=target_profile_id, db_path=db_path)
     gen_today = count_generations_in_last_24h(now=current_time, db_path=db_path, profile_id=target_profile_id)
     if gen_today >= max_24h:
         _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
-        msg = f"Limite diário de gerações aprovadas atingido ({gen_today}/{max_24h} em 24h). Aguardando liberação da janela."
+        msg = f"Limite diário de gerações aprovadas atingido para perfil '{target_profile_id}' ({gen_today}/{max_24h} em 24h). Aguardando liberação da janela."
         _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
-        return {"status": "blocked", "reason": "daily_limit_reached", "message": msg}
+        return {"status": "blocked", "reason": "daily_limit_reached", "message": msg, "profile_id": target_profile_id}
+
+    # 5.4 Global Cost Guard (Teto Agregado de Todos os Perfis)
+    global_max_att = get_global_max_attempts_24h(db_path=db_path)
+    global_att = count_all_profiles_attempts_24h(now=current_time, db_path=db_path)
+    if global_att >= global_max_att:
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        msg = f"Global Cost Guard: teto global de tentativas atingido ({global_att}/{global_max_att} em 24h). Nenhuma nova geração iniciada."
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+        return {"status": "blocked", "reason": "global_attempt_limit_reached", "message": msg, "profile_id": target_profile_id}
+
+    global_max_gen = get_global_max_generations_24h(db_path=db_path)
+    global_gen = count_all_profiles_generations_24h(now=current_time, db_path=db_path)
+    if global_gen >= global_max_gen:
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        msg = f"Global Cost Guard: teto global de gerações aprovadas atingido ({global_gen}/{global_max_gen} em 24h). Nenhuma nova geração iniciada."
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+        return {"status": "blocked", "reason": "global_generation_limit_reached", "message": msg, "profile_id": target_profile_id}
 
     # -----------------------------------------------------------------------
     # Guarda 6: Provedores Críticos Requeridos (FFmpeg, Storage, LLM, TTS, Media)
@@ -2030,3 +2366,62 @@ def _run_autonomous_cycle(
         "niche": params.niche,
         "message": res_summary,
     }
+
+
+def run_enabled_profiles_autonomous_cycle(
+    now: Optional[datetime] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Executa um tick do worker para todos os perfis ativos com autonomous mode ativado.
+
+    Contrato V12-F.5:
+    1. ZERO dependência de get_active_profile_id(). O perfil visual do Console não interfere.
+    2. Lista perfis ativos de forma determinística (ordenados por profile_id/id).
+    3. Para cada perfil:
+       - Se autonomous_mode_enabled estiver OFF, ignora com segurança.
+       - Resolve o canal do perfil explicitamente.
+       - Executa no máximo UMA transição de ciclo para aquele perfil.
+    4. Falha em um perfil NÃO interrompe nem afeta o processamento dos demais (try/except isolado).
+    5. current_task, waiting_task, state e messages permanecem 100% isolados por perfil.
+    """
+    scheduler.init_db(db_path)
+    profile_manager.init_profile_db(db_path)
+
+    if not operator_console.is_primary_instance(db_path=db_path):
+        return {"status": "skipped", "reason": "secondary_view_only"}
+
+    all_profiles = profile_manager.list_profiles(active_only=True, db_path=db_path)
+    sorted_profiles = sorted(all_profiles, key=lambda p: str(p.get("id") or ""))
+
+    results: Dict[str, Any] = {}
+    for prof in sorted_profiles:
+        p_id = str(prof.get("id") or "").strip()
+        if not p_id:
+            continue
+
+        if not is_profile_autonomous_mode_enabled(p_id, db_path=db_path):
+            results[p_id] = {"status": "disabled", "skipped": True}
+            continue
+
+        chan_id = resolve_autonomous_youtube_channel(p_id, db_path=db_path)
+        try:
+            res = run_autonomous_cycle(
+                force=False,
+                one_shot=False,
+                now=now,
+                db_path=db_path,
+                profile_id=p_id,
+                channel_id=chan_id,
+                task_base_dir=task_base_dir,
+            )
+            results[p_id] = res
+        except Exception as exc:
+            logger.exception(f"[AUTONOMOUS_PRODUCTION] Erro no ciclo do perfil '{p_id}': {exc}")
+            results[p_id] = {
+                "status": "error",
+                "error": str(exc),
+                "profile_id": p_id,
+            }
+
+    return {"status": "completed", "profiles_processed": len(results), "results": results}

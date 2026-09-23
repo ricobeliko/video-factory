@@ -302,25 +302,54 @@ try {
     # ==============================================================================
 
     Write-DeployLog "Executando backup transacional consistente do banco SQLite antes de parar produção..."
-    $BackupArgs = @("-m", "app.services.production_backup", "--json")
-    $BackupOutputRaw = & $VenvPython $BackupArgs 2>&1
-    $BackupExit = $LASTEXITCODE
+    $BackupSummary = "NOT_ATTEMPTED"
+
+    $ProcessInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $ProcessInfo.FileName = $VenvPython
+    $ProcessInfo.Arguments = "-m app.services.production_backup --json"
+    $ProcessInfo.WorkingDirectory = $RepoPathResolved
+    $ProcessInfo.RedirectStandardOutput = $true
+    $ProcessInfo.RedirectStandardError = $true
+    $ProcessInfo.UseShellExecute = $false
+    $ProcessInfo.CreateNoWindow = $true
+
+    $Process = [System.Diagnostics.Process]::Start($ProcessInfo)
+    $BackupStdout = $Process.StandardOutput.ReadToEnd()
+    $BackupStderr = $Process.StandardError.ReadToEnd()
+    $Process.WaitForExit()
+    $BackupExit = $Process.ExitCode
+
+    if ($BackupStderr -and $BackupStderr.Trim() -ne "") {
+        foreach ($errLine in ($BackupStderr -split "`r?`n")) {
+            if ($errLine.Trim() -ne "") {
+                Write-DeployLog "  [BACKUP-LOG] $errLine" -Level "INFO"
+            }
+        }
+    }
 
     if ($BackupExit -ne 0) {
-        Write-DeployLog "ABORT: Falha na geração do backup SQLite: $BackupOutputRaw" -Level "ERROR" -IsError
+        $BackupSummary = "FAIL (código de saída $BackupExit)"
+        Write-DeployLog "ABORT: Falha na geração do backup SQLite (código $BackupExit): $BackupStderr" -Level "ERROR" -IsError
         throw "Falha ao gerar backup de produção."
     }
 
     try {
-        $BackupData = $BackupOutputRaw | ConvertFrom-Json
+        $BackupData = $BackupStdout | ConvertFrom-Json
     } catch {
-        Write-DeployLog "ABORT: Falha ao interpretar manifesto do backup SQLite: $BackupOutputRaw" -Level "ERROR" -IsError
+        $BackupSummary = "FAIL (erro de decodificação JSON do manifesto)"
+        Write-DeployLog "ABORT: Falha ao interpretar manifesto JSON do backup SQLite. Saída stdout: $BackupStdout" -Level "ERROR" -IsError
         throw "Manifesto de backup inválido."
     }
 
-    if (-not $BackupData.success -or $BackupData.integrity_check -ne "ok") {
-        Write-DeployLog "ABORT: PRAGMA integrity_check do backup falhou: $($BackupData.integrity_check)" -Level "ERROR" -IsError
-        throw "Integridade do backup SQLite violada."
+    $PathNotEmpty = (-not [string]::IsNullOrWhiteSpace($BackupData.database_path))
+    $ShaNotEmpty = (-not [string]::IsNullOrWhiteSpace($BackupData.sha256))
+    $SuccessTrue = ($BackupData.success -eq $true)
+    $IntegrityOk = ($BackupData.integrity_check -eq "ok")
+
+    if (-not $SuccessTrue -or -not $IntegrityOk -or -not $PathNotEmpty -or -not $ShaNotEmpty) {
+        $BackupSummary = "FAIL (validação de integridade ou metadados)"
+        Write-DeployLog "ABORT: Validação dos metadados do backup SQLite falhou: success=$SuccessTrue, integrity=$($BackupData.integrity_check), path_present=$PathNotEmpty, sha_present=$ShaNotEmpty" -Level "ERROR" -IsError
+        throw "Integridade ou metadados do backup SQLite violados."
     }
 
     $BackupPath = $BackupData.database_path

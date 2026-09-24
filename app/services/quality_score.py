@@ -533,6 +533,191 @@ def determine_quality_label(quality_score: float) -> str:
         return LABEL_WEAK
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Verifica de forma idempotente e segura se uma tabela existe no SQLite."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _get_isolated_recent_safety_history(
+    conn: sqlite3.Connection,
+    task_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    limit: int = 15,
+) -> List[Any]:
+    """Recupera histórico recente de monetization_safety isolado estritamente por perfil e canal.
+
+    Preserva V15-C (self-task exclusion) e V15-C.2 (cross-channel history isolation).
+    """
+    if not _table_exists(conn, "monetization_safety"):
+        return []
+
+    clean_tid = str(task_id or "").strip()
+    clean_profile = str(profile_id or "").strip()
+    clean_channel = str(channel_id or "").strip()
+
+    has_tp = _table_exists(conn, "task_profiles")
+    has_sp = _table_exists(conn, "scheduled_posts")
+    has_pe = _table_exists(conn, "publication_events")
+    has_pc = _table_exists(conn, "publishing_channels")
+    has_cp = _table_exists(conn, "content_profiles")
+
+    # 1. Resolução canônica de profile_id se ausente
+    if not clean_profile and clean_tid:
+        if has_tp:
+            try:
+                row = conn.execute(
+                    "SELECT profile_id FROM task_profiles WHERE task_id = ?;",
+                    (clean_tid,),
+                ).fetchone()
+                if row and row["profile_id"]:
+                    clean_profile = str(row["profile_id"]).strip()
+            except Exception:
+                pass
+        if not clean_profile and has_sp:
+            try:
+                row = conn.execute(
+                    "SELECT profile_id, channel_id FROM scheduled_posts WHERE task_id = ? LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if row:
+                    if row["profile_id"]:
+                        clean_profile = str(row["profile_id"]).strip()
+                    if not clean_channel and row["channel_id"]:
+                        clean_channel = str(row["channel_id"]).strip()
+            except Exception:
+                pass
+        if not clean_profile and has_pe:
+            try:
+                row = conn.execute(
+                    "SELECT profile_id, channel_id FROM publication_events WHERE task_id = ? LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if row:
+                    if row["profile_id"]:
+                        clean_profile = str(row["profile_id"]).strip()
+                    if not clean_channel and row["channel_id"]:
+                        clean_channel = str(row["channel_id"]).strip()
+            except Exception:
+                pass
+
+    # 2. Resolução canônica de channel_id se ausente
+    if not clean_channel and clean_tid:
+        if has_sp:
+            try:
+                row = conn.execute(
+                    "SELECT channel_id FROM scheduled_posts WHERE task_id = ? AND channel_id IS NOT NULL AND channel_id <> '' LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if row and row["channel_id"]:
+                    clean_channel = str(row["channel_id"]).strip()
+            except Exception:
+                pass
+        if not clean_channel and has_pe:
+            try:
+                row = conn.execute(
+                    "SELECT channel_id FROM publication_events WHERE task_id = ? AND channel_id IS NOT NULL AND channel_id <> '' LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if row and row["channel_id"]:
+                    clean_channel = str(row["channel_id"]).strip()
+            except Exception:
+                pass
+
+    if not clean_channel and clean_profile and has_pc:
+        try:
+            ch_rows = conn.execute(
+                "SELECT c.id FROM publishing_channels c "
+                "LEFT JOIN content_profiles p ON p.id = c.profile_id "
+                "WHERE (c.profile_id = ? OR (? = 'default' AND (c.profile_id IS NULL OR c.profile_id = 'default' OR c.profile_id = ''))) "
+                "AND c.platform = 'youtube' AND c.is_enabled = 1 "
+                "AND (p.is_active = 1 OR p.is_active IS NULL);",
+                (clean_profile, clean_profile),
+            ).fetchall()
+            if len(ch_rows) == 1:
+                clean_channel = str(ch_rows[0]["id"]).strip()
+        except Exception:
+            pass
+
+    if not clean_profile and clean_channel and has_pc:
+        try:
+            row = conn.execute(
+                "SELECT profile_id FROM publishing_channels WHERE id = ?;",
+                (clean_channel,),
+            ).fetchone()
+            if row and row["profile_id"]:
+                clean_profile = str(row["profile_id"]).strip()
+        except Exception:
+            pass
+
+    # Caso 1: Chamadas manuais/legadas sem task_id, profile ou channel
+    # Preservam backward-compatibility total consultando os últimos registros
+    if not clean_tid and not clean_profile and not clean_channel:
+        return conn.execute(
+            "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
+            "ORDER BY checked_at DESC LIMIT ?;",
+            (limit,),
+        ).fetchall()
+
+    # Caso 2: Banco minimalista sem infraestrutura de múltiplos perfis
+    if not has_tp and not has_cp and not has_pc:
+        return conn.execute(
+            "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
+            "WHERE task_id IS NULL OR task_id <> ? "
+            "ORDER BY checked_at DESC LIMIT ?;",
+            (clean_tid, limit),
+        ).fetchall()
+
+    # Caso 3: Identidade não pôde ser resolvida no banco multi-perfil
+    # Comportamento fail-safe mais conservador: histórico vazio para não misturar canais
+    if not clean_profile and not clean_channel:
+        return []
+
+    # Caso 4: Perfil e/ou Canal resolvidos
+    is_default = 1 if clean_profile in ("default", "") else 0
+
+    # Construir subconsulta de exclusão caso haja tarefas explicitamente associadas a outros canais
+    ch_tables = []
+    if has_sp:
+        ch_tables.append(
+            "SELECT channel_id FROM scheduled_posts WHERE task_id = ms.task_id AND channel_id IS NOT NULL AND channel_id <> ''"
+        )
+    if has_pe:
+        ch_tables.append(
+            "SELECT channel_id FROM publication_events WHERE task_id = ms.task_id AND channel_id IS NOT NULL AND channel_id <> ''"
+        )
+
+    if ch_tables and clean_channel:
+        combined_ch = " UNION ALL ".join(ch_tables)
+        channel_filter = f"AND NOT EXISTS (SELECT 1 FROM ({combined_ch}) oc WHERE oc.channel_id <> ?)"
+        channel_params = [clean_channel]
+    else:
+        channel_filter = ""
+        channel_params = []
+
+    sql = f"""
+        SELECT ms.task_id, ms.topic, ms.hook_text, ms.narrative_structure
+        FROM monetization_safety ms
+        LEFT JOIN task_profiles tp ON tp.task_id = ms.task_id
+        WHERE (ms.task_id IS NULL OR ms.task_id <> ?)
+          AND (
+              (? = 1 AND (tp.profile_id = 'default' OR tp.profile_id IS NULL OR tp.profile_id = ''))
+              OR (? = 0 AND tp.profile_id = ?)
+          )
+          {channel_filter}
+        ORDER BY ms.checked_at DESC LIMIT ?;
+    """
+    params = [clean_tid, is_default, is_default, clean_profile] + channel_params + [limit]
+    return conn.execute(sql, params).fetchall()
+
+
 def evaluate_quality(
     topic: str,
     niche: Optional[str] = None,
@@ -554,6 +739,8 @@ def evaluate_quality(
     task_id: Optional[str] = None,
     persist: bool = False,
     db_path: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Avalia determinística e integralmente a qualidade e potencial do conteúdo."""
     effective_hook = hook_text or (script_text.split(".")[0] if script_text else topic)
@@ -589,40 +776,31 @@ def evaluate_quality(
         except Exception:
             pass
 
-    # 1. Recuperar dados recentes para originalidade e repetição (excluindo a própria task)
+    # 1. Recuperar dados recentes para originalidade e repetição (isolado por perfil/canal e excluindo a própria task)
     recent_topics = []
     recent_hooks = []
     recent_items = []
+    clean_tid = str(task_id or "").strip()
     try:
         with get_connection(db_path) as conn:
-            check_table = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='monetization_safety';"
-            ).fetchone()
-            if check_table:
-                clean_tid = str(task_id or "").strip()
-                if clean_tid:
-                    rows = conn.execute(
-                        "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
-                        "WHERE task_id IS NULL OR task_id <> ? "
-                        "ORDER BY checked_at DESC LIMIT 15;",
-                        (clean_tid,),
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
-                        "ORDER BY checked_at DESC LIMIT 15;"
-                    ).fetchall()
-                for r in rows:
-                    row_tid = str(r["task_id"] or "").strip() if "task_id" in r.keys() else ""
-                    if clean_tid and row_tid and row_tid == clean_tid:
-                        continue
-                    if r["topic"]:
-                        recent_topics.append(r["topic"])
-                    if r["hook_text"]:
-                        recent_hooks.append(r["hook_text"])
-                    recent_items.append(dict(r))
-    except Exception:
-        pass
+            rows = _get_isolated_recent_safety_history(
+                conn=conn,
+                task_id=task_id,
+                profile_id=profile_id,
+                channel_id=channel_id,
+                limit=15,
+            )
+            for r in rows:
+                row_tid = str(r["task_id"] or "").strip() if "task_id" in r.keys() else ""
+                if clean_tid and row_tid and row_tid == clean_tid:
+                    continue
+                if r["topic"]:
+                    recent_topics.append(r["topic"])
+                if r["hook_text"]:
+                    recent_hooks.append(r["hook_text"])
+                recent_items.append(dict(r))
+    except Exception as exc:
+        logger.debug(f"[QUALITY_SCORE] Erro ao recuperar histórico isolado de safety: {exc}")
 
     # 2. Calcular scores individuais e capturar justificativas
     all_reasons = []

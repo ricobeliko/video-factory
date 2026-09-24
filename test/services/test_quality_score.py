@@ -511,6 +511,201 @@ class TestQualityScore(unittest.TestCase):
         self.assertLess(res_other["quality_score"], 70.0)
         self.assertIn(res_other["quality_label"], [quality_score.LABEL_REVIEW, quality_score.LABEL_WEAK])
 
+    def test_v15c2_quality_history_profile_and_channel_isolation(self):
+        """V15-C.2: Valida isolamento estrito de histórico por perfil e canal no Quality Score."""
+        from datetime import datetime, timezone
+        import sqlite3
+        from app.services import autonomous_production, profile_manager, scheduler
+
+        # H) MIN_QUALITY_SCORE_FOR_AUTONOMOUS continua 70
+        self.assertEqual(autonomous_production.MIN_QUALITY_SCORE_FOR_AUTONOMOUS, 70.0)
+
+        # I) COMPONENT_WEIGHTS não mudaram
+        expected_weights = {
+            "hook_strength": 0.15,
+            "originality": 0.15,
+            "trend_strength": 0.10,
+            "niche_relevance": 0.10,
+            "source_confidence": 0.05,
+            "repetition_risk": 0.10,
+            "narrative_fit": 0.10,
+            "duration_fit": 0.10,
+            "historical_performance": 0.10,
+            "visual_match": 0.05,
+        }
+        self.assertEqual(quality_score.COMPONENT_WEIGHTS, expected_weights)
+
+        # Inicializa tabelas de profiles e scheduler
+        profile_manager.init_profile_db(self.db_path)
+        scheduler.init_db(self.db_path)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Configura Perfis e Canais
+        prof_misterio = profile_manager.create_profile(
+            name="Historias de Misterio",
+            profile_id="historias-de-misterio-v15c2",
+            slug="historias-de-misterio-v15c2",
+            niche="historias_misterio",
+            db_path=self.db_path,
+        )
+        prof_misterio_id = prof_misterio["id"]
+
+        with sqlite3.connect(self.db_path) as conn:
+            # Canais de publicação
+            conn.execute(
+                "INSERT INTO publishing_channels (id, profile_id, platform, display_name, is_enabled, created_at, updated_at) "
+                "VALUES ('channel-misterio-youtube', ?, 'youtube', 'Misterio YT', 1, ?, ?);",
+                (prof_misterio_id, now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO publishing_channels (id, profile_id, platform, display_name, is_enabled, created_at, updated_at) "
+                "VALUES ('channel-default-youtube', 'default', 'youtube', 'Default YT', 1, ?, ?);",
+                (now_iso, now_iso),
+            )
+
+        # Identidades de tarefas
+        task_curr = "task-v15c2-curr"
+        task_same_hist = "task-v15c2-same-channel"
+        task_other_hist = "task-v15c2-other-channel"
+        task_same_dup = "task-v15c2-same-duplicate"
+        task_other_dup = "task-v15c2-other-duplicate"
+
+        common_topic = "A verdade sobre o misterioso manuscrito Voynich"
+        common_hook = "Você sabia que o manuscrito Voynich desafia os maiores criptógrafos?"
+
+        # Vincula perfis às tarefas
+        profile_manager.save_task_profile(task_curr, prof_misterio_id, db_path=self.db_path)
+        profile_manager.save_task_profile(task_same_hist, prof_misterio_id, db_path=self.db_path)
+        profile_manager.save_task_profile(task_same_dup, prof_misterio_id, db_path=self.db_path)
+        profile_manager.save_task_profile(task_other_hist, "default", db_path=self.db_path)
+        profile_manager.save_task_profile(task_other_dup, "default", db_path=self.db_path)
+
+        # Salva Safety para task_same_hist (mesmo canal com tema diferente)
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_same_hist,
+                "topic": "Como os computadores quanticos funcionam na pratica",
+                "preset": "youtube_shorts_original",
+                "safety_status": const.SAFETY_STATUS_PASS,
+                "safety_reasons": [],
+                "hook_text": "Voce sabia que a computacao quantica pode mudar tudo?",
+                "narrative_structure": "explainer",
+                "checked_at": "2026-09-24T00:01:00Z",
+            },
+            db_path=self.db_path,
+        )
+
+        # Salva Safety para task_other_hist (outro canal)
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_other_hist,
+                "topic": "Curiosidades sobre o espaço e planetas",
+                "preset": "youtube_shorts_original",
+                "safety_status": const.SAFETY_STATUS_PASS,
+                "safety_reasons": [],
+                "hook_text": "Você sabia que um dia em Vênus dura mais que um ano?",
+                "narrative_structure": "curiosity_hook",
+                "checked_at": "2026-09-24T00:02:00Z",
+            },
+            db_path=self.db_path,
+        )
+
+        # A) Confirmação de que no cenário antigo não-isolado ambos entrariam no histórico
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            unisolated_rows = conn.execute(
+                "SELECT task_id FROM monetization_safety WHERE task_id IS NULL OR task_id <> ? ORDER BY checked_at DESC;",
+                (task_curr,),
+            ).fetchall()
+            unisolated_tids = [r["task_id"] for r in unisolated_rows]
+            self.assertIn(task_same_hist, unisolated_tids)
+            self.assertIn(task_other_hist, unisolated_tids)
+
+        # B) e C) e G) Isolamento estrito de recent_topics, recent_hooks e recent_items
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            isolated_rows = quality_score._get_isolated_recent_safety_history(
+                conn, task_id=task_curr, profile_id=prof_misterio_id, channel_id="channel-misterio-youtube"
+            )
+            isolated_tids = [r["task_id"] for r in isolated_rows]
+            # B) Mesmo canal entra no histórico
+            self.assertIn(task_same_hist, isolated_tids)
+            # C) Outro canal NÃO entra no histórico
+            self.assertNotIn(task_other_hist, isolated_tids)
+            # D) Self task continua excluída
+            self.assertNotIn(task_curr, isolated_tids)
+
+        # Executa evaluate_quality para task_curr
+        res_curr = quality_score.evaluate_quality(
+            topic=common_topic,
+            hook_text=common_hook,
+            task_id=task_curr,
+            profile_id=prof_misterio_id,
+            channel_id="channel-misterio-youtube",
+            db_path=self.db_path,
+        )
+        # Originalidade não é penalizada por conteúdos de outro canal
+        self.assertGreaterEqual(res_curr["components"]["originality"], 80.0)
+        self.assertGreaterEqual(res_curr["components"]["repetition_risk"], 80.0)
+
+        # F) Duplicate em outro canal NÃO penaliza
+        # Insere avaliação de safety para task_other_dup no canal 'default' com tópico idêntico
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_other_dup,
+                "topic": common_topic,
+                "preset": "youtube_shorts_original",
+                "safety_status": const.SAFETY_STATUS_PASS,
+                "safety_reasons": [],
+                "hook_text": common_hook,
+                "narrative_structure": "explainer",
+                "checked_at": "2026-09-24T00:03:00Z",
+            },
+            db_path=self.db_path,
+        )
+
+        res_curr_after_other_dup = quality_score.evaluate_quality(
+            topic=common_topic,
+            hook_text=common_hook,
+            task_id=task_curr,
+            profile_id=prof_misterio_id,
+            channel_id="channel-misterio-youtube",
+            db_path=self.db_path,
+        )
+        # Tópico idêntico no canal default NÃO penaliza o canal misterio!
+        self.assertEqual(res_curr_after_other_dup["components"]["originality"], res_curr["components"]["originality"])
+        self.assertEqual(res_curr_after_other_dup["components"]["repetition_risk"], res_curr["components"]["repetition_risk"])
+        self.assertGreaterEqual(res_curr_after_other_dup["components"]["originality"], 80.0)
+        self.assertGreaterEqual(res_curr_after_other_dup["components"]["repetition_risk"], 80.0)
+
+        # E) Duplicate de outra task no MESMO canal CONTINUA penalizada
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_same_dup,
+                "topic": common_topic,
+                "preset": "youtube_shorts_original",
+                "safety_status": const.SAFETY_STATUS_PASS,
+                "safety_reasons": [],
+                "hook_text": common_hook,
+                "narrative_structure": "explainer",
+                "checked_at": "2026-09-24T00:04:00Z",
+            },
+            db_path=self.db_path,
+        )
+
+        res_curr_after_same_dup = quality_score.evaluate_quality(
+            topic=common_topic,
+            hook_text=common_hook,
+            task_id=task_curr,
+            profile_id=prof_misterio_id,
+            channel_id="channel-misterio-youtube",
+            db_path=self.db_path,
+        )
+        # Tópico idêntico no MESMO canal penaliza
+        self.assertEqual(res_curr_after_same_dup["components"]["originality"], 0.0)
+        self.assertEqual(res_curr_after_same_dup["components"]["repetition_risk"], 40.0)
+
 
 if __name__ == "__main__":
     unittest.main()

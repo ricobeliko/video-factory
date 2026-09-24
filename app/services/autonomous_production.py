@@ -1182,11 +1182,16 @@ def evaluate_completed_task_gates(
         except Exception:
             niche = None
 
+    # Resolução canônica de Channel para isolamento estrito (V15-C.2)
+    channel_id = task_data.get("channel_id") or resolve_autonomous_youtube_channel(profile_id, db_path=db_path)
+
     # 3. Avalia Quality Score (Fase V12-E.1: MIN_QUALITY_SCORE_FOR_AUTONOMOUS = 70.0)
     q_eval = quality_score.evaluate_quality(
         topic=topic,
         niche=niche,
         task_id=task_id,
+        profile_id=profile_id,
+        channel_id=channel_id,
         persist=True,
         db_path=db_path,
     )

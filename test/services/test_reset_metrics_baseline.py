@@ -29,7 +29,17 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.models import const
-from app.services import analytics, analytics_scheduler, profile_manager, quality_score, safety_gate, scheduler, trend_radar
+from app.services import (
+    analytics,
+    analytics_scheduler,
+    autonomous_production,
+    profile_manager,
+    quality_score,
+    safety_gate,
+    scheduler,
+    state as sm,
+    trend_radar,
+)
 from scripts import reset_metrics_baseline
 
 
@@ -546,6 +556,329 @@ class TestResetMetricsBaseline(unittest.TestCase):
         )
         self.assertEqual(ev["sample_count"], 1)
         self.assertEqual(ev["eligible_publication_ids"], [3])
+
+    def test_quiescence_a_active_current_task_blocks_execute(self):
+        """A) current_task não vazio => execute bloqueado."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) "
+                "VALUES ('autonomous_current_task_id:profile-misterio', 'task-in-progress-1');"
+            )
+
+        rep = reset_metrics_baseline.audit_metrics_baseline(db_path=self.db_path)
+        self.assertFalse(rep["operational_quiescence"]["ready_for_baseline_execution"])
+        self.assertIn("task-in-progress-1", rep["operational_quiescence"]["current_task_ids"])
+        self.assertGreater(len(rep["operational_quiescence"]["execution_blockers"]), 0)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            reset_metrics_baseline.execute_metrics_baseline_reset(
+                db_path=self.db_path,
+                confirm="CLEAN_METRICS_BASELINE",
+                backup_dir=self.backup_dir,
+            )
+        self.assertIn("quiescência", str(ctx.exception).lower())
+
+    def test_quiescence_b_non_terminal_scheduled_post_blocks_execute(self):
+        """B) scheduled_post planned/ready/processing => bloqueado."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at, profile_id, channel_id) "
+                "VALUES ('task-planned-1', 'youtube', ?, 'planned', ?, 'profile-misterio', 'channel-misterio-yt');",
+                (now_iso, now_iso),
+            )
+
+        rep = reset_metrics_baseline.audit_metrics_baseline(db_path=self.db_path)
+        self.assertFalse(rep["operational_quiescence"]["ready_for_baseline_execution"])
+        self.assertIn("task-planned-1", rep["operational_quiescence"]["non_terminal_scheduled_posts"])
+
+        with self.assertRaises(RuntimeError) as ctx:
+            reset_metrics_baseline.execute_metrics_baseline_reset(
+                db_path=self.db_path,
+                confirm="CLEAN_METRICS_BASELINE",
+                backup_dir=self.backup_dir,
+            )
+        self.assertIn("quiescência", str(ctx.exception).lower())
+
+    def test_quiescence_c_only_legacy_waiting_task_allows_execute(self):
+        """C) somente waiting_task legado => permitido."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) "
+                "VALUES ('autonomous_waiting_task_id:profile-misterio', 'cf2dc562-47a2-4584-965a-5fbbcefbba7d');"
+            )
+
+        rep = reset_metrics_baseline.audit_metrics_baseline(db_path=self.db_path)
+        self.assertTrue(rep["operational_quiescence"]["ready_for_baseline_execution"])
+        self.assertEqual(len(rep["operational_quiescence"]["execution_blockers"]), 0)
+        self.assertEqual(
+            rep["operational_quiescence"]["legacy_waiting_tasks_to_quarantine"],
+            ["cf2dc562-47a2-4584-965a-5fbbcefbba7d"],
+        )
+
+        res = reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["quarantined_waiting_tasks"], ["cf2dc562-47a2-4584-965a-5fbbcefbba7d"])
+
+    def test_quiescence_d_dry_run_lists_waiting_task_as_quarantine_candidate(self):
+        """D) dry-run lista waiting task como quarantine candidate."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) "
+                "VALUES ('autonomous_waiting_task_id:profile-misterio', 'cf2dc562-47a2-4584-965a-5fbbcefbba7d');"
+            )
+
+        rep = reset_metrics_baseline.audit_metrics_baseline(db_path=self.db_path)
+        cli_text = reset_metrics_baseline.format_report_cli(rep)
+        self.assertIn("OPERATIONAL_QUIESCENCE", cli_text)
+        self.assertIn("LEGACY_WAITING_TASKS_TO_QUARANTINE", cli_text)
+        self.assertIn("cf2dc562-47a2-4584-965a-5fbbcefbba7d", cli_text)
+        self.assertIn("DAILY_SAFETY_GUARDS_PRESERVED      : YES", cli_text)
+        self.assertIn("READY_FOR_BASELINE_EXECUTION       : YES", cli_text)
+
+    def test_quiescence_e_reset_clears_waiting_pointer(self):
+        """E) reset limpa waiting pointer."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) "
+                "VALUES ('autonomous_waiting_task_id:profile-misterio', 'cf2dc562-47a2-4584-965a-5fbbcefbba7d');"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) "
+                "VALUES ('autonomous_waiting_task_id', 'cf2dc562-47a2-4584-965a-5fbbcefbba7d');"
+            )
+
+        reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT key, value FROM autopilot_settings "
+                "WHERE key = 'autonomous_waiting_task_id' OR key LIKE 'autonomous_waiting_task_id:%';"
+            ).fetchall()
+            for r in rows:
+                self.assertEqual(r["value"], "")
+
+    def test_quiescence_f_task_quality_scores_removed_by_reset(self):
+        """F) content_quality_scores da task é removido."""
+        legacy_task_id = "cf2dc562-47a2-4584-965a-5fbbcefbba7d"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO content_quality_scores (task_id, topic, quality_score, quality_label, created_at) "
+                "VALUES (?, 'Misterio Antigo', 73.5, 'GOOD', ?);",
+                (legacy_task_id, now_iso),
+            )
+
+        reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM content_quality_scores WHERE task_id = ?;",
+                (legacy_task_id,),
+            ).fetchone()[0]
+            self.assertEqual(cnt, 0)
+
+    def test_quiescence_g_safety_and_task_profile_preserved(self):
+        """G) Safety/task_profile são preservados."""
+        legacy_task_id = "cf2dc562-47a2-4584-965a-5fbbcefbba7d"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO monetization_safety (task_id, topic, preset, narrative_structure, safety_status, checked_at) "
+                "VALUES (?, 'Misterio Antigo', 'youtube_shorts_original', 'explainer', 'PASS', ?);",
+                (legacy_task_id, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) "
+                "VALUES (?, 'profile-misterio', ?);",
+                (legacy_task_id, now_iso),
+            )
+
+        reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+
+        safety = safety_gate.get_safety_assessment(legacy_task_id, db_path=self.db_path)
+        self.assertIsNotNone(safety)
+        self.assertEqual(safety["safety_status"], "PASS")
+
+        prof_id = profile_manager.get_task_profile_id(legacy_task_id, db_path=self.db_path)
+        self.assertEqual(prof_id, "profile-misterio")
+
+    def test_quiescence_h_old_waiting_task_does_not_return_to_ready_stock(self):
+        """H) task antiga não retorna ao autonomous ready stock."""
+        from unittest.mock import patch
+        legacy_task_id = "cf2dc562-47a2-4584-965a-5fbbcefbba7d"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        tasks_dir = os.path.join(self.temp_dir, "tasks")
+        task_dir = os.path.join(tasks_dir, legacy_task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        video_file = os.path.join(task_dir, "final-1.mp4")
+        with open(video_file, "wb") as f:
+            f.write(b"dummy_video_bytes")
+
+        sm.state._tasks[legacy_task_id] = {
+            "task_id": legacy_task_id,
+            "state": const.TASK_STATE_COMPLETE,
+        }
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO monetization_safety (task_id, topic, preset, narrative_structure, safety_status, checked_at) "
+                "VALUES (?, 'Misterio Antigo', 'youtube_shorts_original', 'explainer', 'PASS', ?);",
+                (legacy_task_id, now_iso),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO task_profiles (task_id, profile_id, created_at) "
+                "VALUES (?, 'profile-misterio', ?);",
+                (legacy_task_id, now_iso),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO task_platforms (task_id, platform) "
+                "VALUES (?, 'youtube');",
+                (legacy_task_id,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO content_quality_scores (task_id, topic, quality_score, quality_label, created_at) "
+                "VALUES (?, 'Misterio Antigo', 73.5, 'GOOD', ?);",
+                (legacy_task_id, now_iso),
+            )
+
+        with patch("app.services.copyright_gate.evaluate_copyright_provenance_gate", return_value=(True, "ok", {})):
+            rec_before = autonomous_production._recover_waiting_task(
+                legacy_task_id, db_path=self.db_path, task_base_dir=tasks_dir
+            )
+            self.assertIsNotNone(rec_before)
+            stock_before = autonomous_production.get_autonomous_ready_stock(
+                task_base_dir=tasks_dir, db_path=self.db_path, profile_id="profile-misterio"
+            )
+            self.assertEqual(stock_before["ready_count"], 1)
+
+        reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            autonomous_production._recover_waiting_task(
+                legacy_task_id, db_path=self.db_path, task_base_dir=tasks_dir
+            )
+        self.assertIn("waiting_quality_not_approved", str(ctx.exception))
+
+        stock_after = autonomous_production.get_autonomous_ready_stock(
+            task_base_dir=tasks_dir, db_path=self.db_path, profile_id="profile-misterio"
+        )
+        self.assertEqual(stock_after["ready_count"], 0)
+        ready_ids = [t["task_id"] for t in stock_after.get("youtube_ready", [])]
+        self.assertNotIn(legacy_task_id, ready_ids)
+
+    def test_quiescence_i_publication_events_and_scheduled_posts_untouched(self):
+        """I) publication_events e scheduled_posts não são modificados."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            pubs_before = conn.execute("SELECT * FROM publication_events ORDER BY id;").fetchall()
+            schedules_before = conn.execute("SELECT * FROM scheduled_posts ORDER BY task_id;").fetchall()
+
+        reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            pubs_after = conn.execute("SELECT * FROM publication_events ORDER BY id;").fetchall()
+            schedules_after = conn.execute("SELECT * FROM scheduled_posts ORDER BY task_id;").fetchall()
+
+        self.assertEqual([dict(r) for r in pubs_before], [dict(r) for r in pubs_after])
+        self.assertEqual([dict(r) for r in schedules_before], [dict(r) for r in schedules_after])
+
+    def test_quiescence_j_daily_safety_guards_preserved_from_operational_history(self):
+        """J) daily safety guards permanecem baseados no histórico operacional real."""
+        now_utc = datetime.now(timezone.utc)
+        recent_time = (now_utc - timedelta(hours=2)).isoformat()
+
+        with sqlite3.connect(self.db_path) as conn:
+            for i in range(3):
+                conn.execute(
+                    "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message) "
+                    "VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'Attempt');",
+                    (recent_time, f"task-attempt-{i}"),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO task_profiles (task_id, profile_id, created_at) "
+                    "VALUES (?, 'profile-misterio', ?);",
+                    (f"task-attempt-{i}", recent_time),
+                )
+            for i in range(2):
+                conn.execute(
+                    "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message) "
+                    "VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', ?, 'Approved');",
+                    (recent_time, f"task-approved-{i}"),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO task_profiles (task_id, profile_id, created_at) "
+                    "VALUES (?, 'profile-misterio', ?);",
+                    (f"task-approved-{i}", recent_time),
+                )
+
+        att_before = autonomous_production.count_generation_attempts_in_last_24h(
+            now=now_utc, db_path=self.db_path, profile_id="profile-misterio"
+        )
+        gen_before = autonomous_production.count_generations_in_last_24h(
+            now=now_utc, db_path=self.db_path, profile_id="profile-misterio"
+        )
+        global_att_before = autonomous_production.count_all_profiles_attempts_24h(
+            now=now_utc, db_path=self.db_path
+        )
+        global_gen_before = autonomous_production.count_all_profiles_generations_24h(
+            now=now_utc, db_path=self.db_path
+        )
+
+        rep = reset_metrics_baseline.audit_metrics_baseline(db_path=self.db_path)
+        self.assertTrue(rep["daily_safety_guards_preserved"])
+
+        reset_metrics_baseline.execute_metrics_baseline_reset(
+            db_path=self.db_path,
+            confirm="CLEAN_METRICS_BASELINE",
+            backup_dir=self.backup_dir,
+        )
+
+        att_after = autonomous_production.count_generation_attempts_in_last_24h(
+            now=now_utc, db_path=self.db_path, profile_id="profile-misterio"
+        )
+        gen_after = autonomous_production.count_generations_in_last_24h(
+            now=now_utc, db_path=self.db_path, profile_id="profile-misterio"
+        )
+        global_att_after = autonomous_production.count_all_profiles_attempts_24h(
+            now=now_utc, db_path=self.db_path
+        )
+        global_gen_after = autonomous_production.count_all_profiles_generations_24h(
+            now=now_utc, db_path=self.db_path
+        )
+
+        self.assertEqual(att_before, att_after)
+        self.assertEqual(gen_before, gen_after)
+        self.assertEqual(global_att_before, global_att_after)
+        self.assertEqual(global_gen_before, global_gen_after)
+        self.assertEqual(att_after, 3)
+        self.assertEqual(gen_after, 2)
 
 
 if __name__ == "__main__":

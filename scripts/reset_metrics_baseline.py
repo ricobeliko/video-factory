@@ -231,6 +231,9 @@ AUTOPILOT_SETTINGS_RESET_KEYS: List[str] = [
 ]
 
 
+TERMINAL_SCHEDULED_POST_STATUSES = ("published", "failed", "cancelled")
+
+
 def check_baseline_consumers_support() -> Dict[str, Any]:
     """Verifica se os consumidores relevantes suportam o filtro pelo marcador de baseline."""
     import inspect
@@ -252,6 +255,102 @@ def check_baseline_consumers_support() -> Dict[str, Any]:
         "ANALYTICS_COLLECTION": "SUPPORTED" if as_supported else "MISSING",
         "CLOSED_FEEDBACK_LOOP": "SUPPORTED" if cf_supported else "MISSING",
         "all_supported": all_supported,
+    }
+
+
+def audit_operational_quiescence(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Audita o estado operacional para garantir quiescência antes do reset de baseline.
+
+    Regras V15-D.1B:
+    1. FAIL-CLOSED se existir qualquer autonomous_current_task_id ou
+       autonomous_current_task_id:<profile> com valor não vazio.
+    2. FAIL-CLOSED se existir scheduled_post não-terminal (status NOT IN ('published', 'failed', 'cancelled')).
+    3. autonomous_waiting_task_id (global ou por perfil) NÃO bloqueia o reset desde que (1) e (2)
+       sejam atendidos; essas tarefas são identificadas para quarentena atômica.
+    """
+    conn.row_factory = sqlite3.Row
+
+    current_task_ids: List[str] = []
+    current_tasks_detail: List[Dict[str, str]] = []
+
+    waiting_task_ids: List[str] = []
+    waiting_tasks_detail: List[Dict[str, str]] = []
+
+    non_terminal_scheduled_posts: List[str] = []
+    non_terminal_posts_detail: List[Dict[str, Any]] = []
+
+    execution_blockers: List[str] = []
+
+    # 1. Auditoria de autopilot_settings (current_task_id e waiting_task_id)
+    try:
+        cur_rows = conn.execute(
+            "SELECT key, value FROM autopilot_settings "
+            "WHERE key = 'autonomous_current_task_id' OR key LIKE 'autonomous_current_task_id:%' "
+            "   OR key = 'autonomous_waiting_task_id' OR key LIKE 'autonomous_waiting_task_id:%';"
+        ).fetchall()
+        for r in cur_rows:
+            k = str(r["key"])
+            v = str(r["value"] or "").strip()
+            if not v:
+                continue
+            if k == "autonomous_current_task_id" or k.startswith("autonomous_current_task_id:"):
+                current_task_ids.append(v)
+                current_tasks_detail.append({"key": k, "task_id": v})
+            elif k == "autonomous_waiting_task_id" or k.startswith("autonomous_waiting_task_id:"):
+                waiting_task_ids.append(v)
+                waiting_tasks_detail.append({"key": k, "task_id": v})
+    except sqlite3.OperationalError:
+        pass
+
+    # Deduplicação preservando ordem de aparição
+    current_task_ids = list(dict.fromkeys(current_task_ids))
+    waiting_task_ids = list(dict.fromkeys(waiting_task_ids))
+    legacy_waiting_tasks_to_quarantine = list(waiting_task_ids)
+
+    # 2. Auditoria de scheduled_posts não-terminais
+    try:
+        sp_rows = conn.execute(
+            "SELECT id, task_id, platform, status, scheduled_at, profile_id, channel_id "
+            "FROM scheduled_posts "
+            "WHERE status NOT IN ('published', 'failed', 'cancelled') "
+            "ORDER BY scheduled_at ASC, id ASC;"
+        ).fetchall()
+        for r in sp_rows:
+            tid = str(r["task_id"] or f"post_id_{r['id']}")
+            non_terminal_scheduled_posts.append(tid)
+            non_terminal_posts_detail.append(dict(r))
+    except sqlite3.OperationalError:
+        pass
+
+    non_terminal_scheduled_posts = list(dict.fromkeys(non_terminal_scheduled_posts))
+
+    # 3. Determinação de bloqueadores de execução
+    if current_task_ids:
+        for cd in current_tasks_detail:
+            execution_blockers.append(
+                f"Active autonomous_current_task_id detected ({cd['key']} = '{cd['task_id']}')"
+            )
+
+    if non_terminal_scheduled_posts:
+        for pd in non_terminal_posts_detail:
+            execution_blockers.append(
+                f"Non-terminal scheduled_post detected (task_id='{pd.get('task_id')}', "
+                f"status='{pd.get('status')}', scheduled_at='{pd.get('scheduled_at')}')"
+            )
+
+    ready_for_execution = (len(execution_blockers) == 0)
+
+    return {
+        "current_task_ids": current_task_ids,
+        "current_tasks_detail": current_tasks_detail,
+        "waiting_task_ids": waiting_task_ids,
+        "waiting_tasks_detail": waiting_tasks_detail,
+        "non_terminal_scheduled_posts": non_terminal_scheduled_posts,
+        "non_terminal_posts_detail": non_terminal_posts_detail,
+        "legacy_waiting_tasks_to_quarantine": legacy_waiting_tasks_to_quarantine,
+        "execution_blockers": execution_blockers,
+        "daily_safety_guards_preserved": True,
+        "ready_for_baseline_execution": ready_for_execution,
     }
 
 
@@ -416,6 +515,9 @@ def audit_metrics_baseline(db_path: Optional[str] = None) -> Dict[str, Any]:
         except Exception:
             pass
 
+        # Auditoria de quiescência operacional (Fase V15-D.1B)
+        quiescence = audit_operational_quiescence(conn)
+
     finally:
         conn.close()
 
@@ -459,6 +561,14 @@ def audit_metrics_baseline(db_path: Optional[str] = None) -> Dict[str, Any]:
             "reset_keys": AUTOPILOT_SETTINGS_RESET_KEYS,
             "baseline_marker_key": BASELINE_MARKER_KEY,
         },
+        "operational_quiescence": quiescence,
+        "current_task_ids": quiescence["current_task_ids"],
+        "waiting_task_ids": quiescence["waiting_task_ids"],
+        "non_terminal_scheduled_posts": quiescence["non_terminal_scheduled_posts"],
+        "legacy_waiting_tasks_to_quarantine": quiescence["legacy_waiting_tasks_to_quarantine"],
+        "execution_blockers": quiescence["execution_blockers"],
+        "daily_safety_guards_preserved": True,
+        "ready_for_baseline_execution": quiescence["ready_for_baseline_execution"],
         "ready_for_production_dry_run": consumers_support["all_supported"],
         "dry_run_mode": True,
     }
@@ -486,10 +596,25 @@ def execute_metrics_baseline_reset(
     if not ok_pre:
         raise RuntimeError(f"Integrity check falhou antes da mutação: {msg_pre}")
 
-    # 2. Backup físico obrigatório e verificado
+    # 2. EXECUTION QUIESCENCE GUARD (Fase V15-D.1B)
+    # Audita estado operacional ANTES de qualquer backup e de qualquer mutação.
+    # FAIL-CLOSED se houver current_task ativo ou scheduled_post não-terminal.
+    conn_q = sqlite3.connect(f"file:{resolved_path}?mode=ro", uri=True)
+    try:
+        quiescence = audit_operational_quiescence(conn_q)
+    finally:
+        conn_q.close()
+
+    if not quiescence["ready_for_baseline_execution"]:
+        blockers_msg = "; ".join(quiescence["execution_blockers"])
+        raise RuntimeError(
+            f"Operação abortada (FAIL-CLOSED): Estado operacional não está em quiescência: {blockers_msg}"
+        )
+
+    # 3. Backup físico obrigatório e verificado
     backup_meta = create_sqlite_backup(resolved_path, backup_dir=backup_dir)
 
-    # 3. Transação atômica de reset
+    # 4. Transação atômica de reset e quarentena de waiting task
     now_iso = datetime.now(timezone.utc).isoformat()
     deleted_counts: Dict[str, int] = {}
 
@@ -506,26 +631,35 @@ def execute_metrics_baseline_reset(
             except sqlite3.OperationalError:
                 deleted_counts[reset_table] = 0
 
-        # B) operational_events é PRESERVE (preserva 100% como trilha de auditoria histórica)
+        # B) operational_events é PRESERVE (preserva 100% como trilha de auditoria e safety guards 24h)
         deleted_counts["operational_events"] = 0
 
-        # C) Reset de contadores em autopilot_settings e gravação do marcador temporal
+        # C) Quarentena atômica de ponteiros de waiting_task e reset de contadores em autopilot_settings
         try:
+            # Limpa ponteiros waiting_task_id (global e por perfil)
+            cur_wait = conn.execute(
+                "UPDATE autopilot_settings SET value = '' "
+                "WHERE key = 'autonomous_waiting_task_id' OR key LIKE 'autonomous_waiting_task_id:%';"
+            )
+            # Reseta contadores de rejeições consecutivas
             conn.execute(
                 "UPDATE autopilot_settings SET value = '0' "
                 "WHERE key = 'autonomous_consecutive_rejections' OR key LIKE 'autonomous_consecutive_rejections:%' "
                 "   OR key = 'closed_loop_consecutive_rejections';"
             )
+            # Remove estruturas narrativas rejeitadas/anteriores
             conn.execute(
                 "DELETE FROM autopilot_settings "
                 "WHERE key IN ('autonomous_last_narrative_structure', 'autonomous_rejected_narrative_structure');"
             )
+            # Grava marcador temporal canônico
             conn.execute(
                 "INSERT INTO autopilot_settings (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 (BASELINE_MARKER_KEY, now_iso),
             )
             deleted_counts["autopilot_settings_counters_reset"] = 1
+            deleted_counts["waiting_task_pointers_cleared"] = cur_wait.rowcount if cur_wait else 0
         except sqlite3.OperationalError:
             pass
 
@@ -536,7 +670,7 @@ def execute_metrics_baseline_reset(
     finally:
         conn.close()
 
-    # 4. PRAGMA integrity_check pós-mutação
+    # 5. PRAGMA integrity_check pós-mutação
     ok_post, msg_post = check_sqlite_integrity(resolved_path)
     if not ok_post:
         raise RuntimeError(f"Integrity check falhou após a mutação: {msg_post}")
@@ -547,6 +681,8 @@ def execute_metrics_baseline_reset(
         "status": "success",
         "db_path": resolved_path,
         "backup": backup_meta,
+        "operational_quiescence": quiescence,
+        "quarantined_waiting_tasks": quiescence["legacy_waiting_tasks_to_quarantine"],
         "deleted_counts": deleted_counts,
         "baseline_marker": {
             "key": BASELINE_MARKER_KEY,
@@ -624,9 +760,21 @@ def format_report_cli(report: Dict[str, Any]) -> str:
     lines.append(f"  • RESET_DERIVED_STATE ({len(reset_keys)} chaves) : {', '.join(reset_keys)}")
     lines.append(f"  • BASELINE_MARKER ({keys_aud.get('baseline_marker_key')})")
 
-    lines.append(f"\n[8] PRONTIDÃO PARA DRY-RUN EM PRODUÇÃO:")
+    lines.append("\n[8] OPERATIONAL_QUIESCENCE:")
+    q_info = report.get("operational_quiescence", {})
+    lines.append(f"  • CURRENT_TASK_IDS                   : {q_info.get('current_task_ids', [])}")
+    lines.append(f"  • WAITING_TASK_IDS                   : {q_info.get('waiting_task_ids', [])}")
+    lines.append(f"  • NON_TERMINAL_SCHEDULED_POSTS       : {q_info.get('non_terminal_scheduled_posts', [])}")
+    lines.append(f"  • LEGACY_WAITING_TASKS_TO_QUARANTINE : {q_info.get('legacy_waiting_tasks_to_quarantine', [])}")
+    lines.append(f"  • EXECUTION_BLOCKERS                 : {q_info.get('execution_blockers', [])}")
+    lines.append(f"  • DAILY_SAFETY_GUARDS_PRESERVED      : YES")
+    ready_exec_str = "YES" if q_info.get("ready_for_baseline_execution") else "NO"
+    lines.append(f"  • READY_FOR_BASELINE_EXECUTION       : {ready_exec_str}")
+
+    lines.append(f"\n[9] PRONTIDÃO PARA DRY-RUN EM PRODUÇÃO:")
     ready_str = "YES" if report.get("ready_for_production_dry_run") else "NO"
     lines.append(f"  • READY_FOR_PRODUCTION_DRY_RUN = {ready_str}")
+    lines.append(f"  • READY_FOR_BASELINE_EXECUTION = {ready_exec_str}")
 
     lines.append("\n" + "=" * 72)
     lines.append(" [DRY-RUN CONCLUÍDO] Banco 100% inalterado. Zero bytes modificados.")
@@ -696,6 +844,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"SHA-256 Backup   : {res['backup']['sha256']}")
                 print(f"Integrity Check  : {res['integrity_check']}")
                 print(f"Marcador Gravado : {res['baseline_marker']['key']} = {res['baseline_marker']['value']}")
+                print(f"Quarentena Tasks : {res.get('quarantined_waiting_tasks', [])}")
                 print(f"Linhas Removidas : {res['deleted_counts']}")
                 print("=" * 72)
             return 0

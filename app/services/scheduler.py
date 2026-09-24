@@ -200,6 +200,20 @@ def set_setting(key: str, value: Any, db_path: Optional[str] = None) -> None:
         )
 
 
+def get_metrics_baseline_started_at(db_path: Optional[str] = None) -> Optional[str]:
+    """Retorna o timestamp ISO 8601 UTC do marcador de início da baseline limpa de métricas, se existir."""
+    val = get_setting("metrics_baseline_started_at", None, db_path=db_path)
+    if val:
+        clean_val = str(val).strip()
+        return clean_val if clean_val else None
+    return None
+
+
+def set_metrics_baseline_started_at(timestamp_iso: str, db_path: Optional[str] = None) -> None:
+    """Registra o marcador temporal da baseline limpa em autopilot_settings."""
+    set_setting("metrics_baseline_started_at", str(timestamp_iso).strip(), db_path=db_path)
+
+
 def get_growth_mode(platform: Optional[str] = None, db_path: Optional[str] = None) -> str:
     """Retorna o modo de crescimento configurado (global ou por plataforma).
 

@@ -590,7 +590,25 @@ def check_publication_eligibility(
     if platform not in SUPPORTED_ANALYTICS_PLATFORMS:
         return False, f"unsupported_platform ({platform})", None
 
-    # 4. Profile ativo
+    # 4. Clean Metrics Baseline Filter (V15-D.1A)
+    # Se metrics_baseline_started_at estiver definido em autopilot_settings,
+    # publicações com published_at < baseline NÃO entram na coleta de novas métricas.
+    published_at_str = pub_row.get("published_at")
+    if not published_at_str:
+        return False, "missing_published_at", None
+
+    baseline_marker = scheduler.get_metrics_baseline_started_at(db_path=db_path)
+    if baseline_marker:
+        try:
+            baseline_dt = _normalize_utc(baseline_marker)
+            pub_dt = _normalize_utc(published_at_str)
+            if pub_dt < baseline_dt:
+                return False, f"pre_baseline_publication ({published_at_str} < {baseline_marker})", None
+        except Exception:
+            if str(published_at_str) < str(baseline_marker):
+                return False, f"pre_baseline_publication ({published_at_str} < {baseline_marker})", None
+
+    # 5. Profile ativo
     task_id = str(pub_row.get("task_id") or "").strip()
     profile_id = pub_row.get("profile_id")
     if not profile_id:
@@ -603,24 +621,24 @@ def check_publication_eligibility(
     if prof and not prof.get("is_active"):
         return False, f"profile_inactive ({profile_id})", None
 
-    # 5. Canal habilitado (se especificado)
+    # 6. Canal habilitado (se especificado)
     channel_id = pub_row.get("channel_id")
     if channel_id:
         ch = profile_manager.get_channel(channel_id, db_path=db_path)
         if ch and not ch.get("is_enabled"):
             return False, f"channel_disabled ({channel_id})", None
 
-    # 6. Provedor configurado
+    # 7. Provedor configurado
     config_validation = validate_provider_configuration(platform, db_path=db_path)
     if not config_validation.get("configured"):
         return False, f"provider_not_configured ({platform})", None
 
-    # 7. Provedor fora de backoff
+    # 8. Provedor fora de backoff
     backoff = get_provider_backoff(platform, now=current_time, db_path=db_path)
     if backoff is not None:
         return False, f"provider_in_backoff ({backoff['reason']})", None
 
-    # 8. Privacidade do YouTube fail-closed: só é elegível com PUBLIC comprovado.
+    # 9. Privacidade do YouTube fail-closed: só é elegível com PUBLIC comprovado.
     # PRIVATE, UNLISTED e UNKNOWN (metadado ausente/inconclusivo) bloqueiam a coleta
     # automática. Prioriza privacy_status persistido em publication_events (pub_row),
     # com fallback legado para task.json dentro de get_known_publication_privacy_status.
@@ -631,11 +649,7 @@ def check_publication_eligibility(
         if privacy_status != PRIVACY_PUBLIC:
             return False, f"youtube_privacy_not_public_confirmed ({privacy_status})", None
 
-    # 9. Janela de idade (publicação deve ter <= 30 dias)
-    published_at_str = pub_row.get("published_at")
-    if not published_at_str:
-        return False, "missing_published_at", None
-
+    # 10. Janela de idade (publicação deve ter <= 30 dias)
     published_at_dt = _normalize_utc(published_at_str)
     age_seconds = (current_time - published_at_dt).total_seconds()
     if age_seconds < 0:

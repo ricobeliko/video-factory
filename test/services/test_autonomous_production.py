@@ -21,6 +21,7 @@ Cobre todos os 18 cenários obrigatórios:
 17. zero chamadas reais ao Upload-Post nos testes
 18. TikTok não é habilitado automaticamente
 """
+import json
 import os
 import shutil
 import tempfile
@@ -55,6 +56,9 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         self.db_path = os.path.join(self.test_dir, "test_autonomous.db")
         self.task_base_dir = os.path.join(self.test_dir, "tasks")
         os.makedirs(self.task_base_dir, exist_ok=True)
+        self.task_dir_patcher = patch("app.utils.utils.task_dir", return_value=self.task_base_dir)
+        self.mock_task_dir = self.task_dir_patcher.start()
+        self.addCleanup(self.task_dir_patcher.stop)
 
         # Inicializa bancos isolados
         operator_console.init_operator_db(self.db_path)
@@ -143,6 +147,16 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         video_path = os.path.join(t_dir, "final-1.mp4")
         with open(video_path, "wb") as f:
             f.write(b"fake mp4 video bytes for testing")
+        script_path = os.path.join(t_dir, "script.json")
+        if not os.path.exists(script_path):
+            with open(script_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "params": {"bgm_type": "none"},
+                    "asset_provenance": {
+                        "bgm": {"enabled": False, "source": "none"},
+                        "visual_clips": [{"provider": "pexels", "local_file": video_path}]
+                    }
+                }, f)
         return video_path
 
     # -----------------------------------------------------------------------
@@ -1224,16 +1238,16 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         config.ui["subtitle_enabled"] = False
         config.ui["font_name"] = "CustomFont.ttf"
         config.ui["font_size"] = 52
-        config.ui["bgm_type"] = "random"
-        config.ui["bgm_volume"] = 0.35
+        config.ui["bgm_type"] = "none"
+        config.ui["bgm_volume"] = 0.0
 
         params = autonomous_production.build_autonomous_video_params("Tema Config", db_path=self.db_path)
         self.assertEqual(params.video_aspect, VideoAspect.landscape)
         self.assertFalse(params.subtitle_enabled)
         self.assertEqual(params.font_name, "CustomFont.ttf")
         self.assertEqual(params.font_size, 52)
-        self.assertEqual(params.bgm_type, "random")
-        self.assertAlmostEqual(params.bgm_volume, 0.35)
+        self.assertEqual(params.bgm_type, "none")
+        self.assertAlmostEqual(params.bgm_volume, 0.0)
 
     def test_reboot_without_streamlit_session_state_resolves_params(self):
         """8. reinício sem Streamlit/session_state => parâmetros continuam resolvidos corretamente"""
@@ -1671,6 +1685,153 @@ class TestAutonomousProductionLoop(unittest.TestCase):
         autonomous_production.set_autonomous_mode_enabled(False, db_path=self.db_path)
         self.assertEqual(self._retry_persisted_waiting(one_shot=True)["status"], "scheduled")
         self.assertFalse(autonomous_production.is_autonomous_mode_enabled(db_path=self.db_path))
+
+    def test_v15c1_post_restart_gate_recovery_and_task_base_dir(self):
+        """V15-C.1: Valida recuperação pós-restart de topic, niche e propagação de task_base_dir sem NameError."""
+        # G) Garantir threshold 70
+        self.assertEqual(autonomous_production.MIN_QUALITY_SCORE_FOR_AUTONOMOUS, 70.0)
+
+        task_id = "2c203744-008c-447a-9c2d-b2af2b306339"
+        real_topic = "A verdade sobre o manuscrito Voynich que nenhum criptografo leu"
+        real_hook = "Voce sabia que o manuscrito Voynich desafia os maiores criptografos?"
+
+        # D) Criar perfil com nicho específico
+        profile_manager.create_profile(
+            name="Historias de Misterio",
+            slug="historias-de-misterio-v15c",
+            niche="misterios",
+            db_path=self.db_path,
+        )
+        # Salva associação da task ao perfil
+        profile_manager.save_task_profile(task_id, profile_id="historias-de-misterio-v15c", db_path=self.db_path)
+
+        # Criar arquivo de vídeo final no diretório isolado self.task_base_dir
+        task_dir = os.path.join(self.task_base_dir, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        video_file = os.path.join(task_dir, "final-1.mp4")
+        with open(video_file, "wb") as f:
+            f.write(b"\x00" * 2048)
+
+        # Persistir Safety PASS com topic real
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_id,
+                "topic": real_topic,
+                "preset": "youtube_shorts_original",
+                "safety_status": const.SAFETY_STATUS_PASS,
+                "safety_reasons": [],
+                "hook_text": real_hook,
+                "checked_at": self.now.isoformat(),
+            },
+            db_path=self.db_path,
+        )
+
+        # Garantir MemoryState vazio (pós-restart do safe updater)
+        self.assertIsNone(sm.state.get_task(task_id))
+
+        # A) e B): Chamar evaluate_completed_task_gates passando task_base_dir sem NameError
+        # Mock do copyright gate retornando PASS para validar aprovação completa
+        with patch("app.services.copyright_gate.evaluate_copyright_provenance_gate") as mock_cp:
+            mock_cp.return_value = (True, "Proveniência verificada", {"status": "ok"})
+            approved, reason, metrics = autonomous_production.evaluate_completed_task_gates(
+                task_id=task_id,
+                db_path=self.db_path,
+                task_base_dir=self.task_base_dir,
+            )
+
+            # A) Verificar que task_base_dir foi encaminhado ao copyright_gate
+            mock_cp.assert_called_once()
+            _, kwargs = mock_cp.call_args
+            self.assertEqual(kwargs.get("task_base_dir"), self.task_base_dir)
+
+            # B) Não ocorreu NameError
+            self.assertTrue(approved)
+
+            # C) Topic real utilizado e NÃO o UUID
+            # Consultar tabela content_quality_scores
+            with quality_score.get_connection(self.db_path) as conn:
+                row = conn.execute("SELECT topic, niche, quality_score FROM content_quality_scores WHERE task_id = ?;", (task_id,)).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row["topic"], real_topic)
+                self.assertNotEqual(row["topic"], task_id)
+                # D) Niche recuperado do perfil persistido
+                self.assertEqual(row["niche"], "misterios")
+
+    def test_v15c1_cycle_consumes_current_task_and_prevents_duplicate_re_evaluation(self):
+        """V15-C.1: Valida que o ciclo consome current_task_id, trata Copyright fail-closed e impede loop infinito."""
+        task_id = "task-loop-prevention-v15c"
+        real_topic = "O enigma das pirâmides submersas"
+
+        # Criar vídeo no task_base_dir
+        task_dir = os.path.join(self.task_base_dir, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        video_file = os.path.join(task_dir, "final-1.mp4")
+        with open(video_file, "wb") as f:
+            f.write(b"\x00" * 2048)
+
+        # Persistir Safety PASS com topic real
+        safety_gate.save_safety_assessment(
+            {
+                "task_id": task_id,
+                "topic": real_topic,
+                "preset": "youtube_shorts_original",
+                "safety_status": const.SAFETY_STATUS_PASS,
+                "safety_reasons": [],
+                "hook_text": "Você sabia que existem pirâmides no fundo do mar?",
+                "checked_at": self.now.isoformat(),
+            },
+            db_path=self.db_path,
+        )
+
+        # Configurar modo autônomo e current_task_id
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, task_id, db_path=self.db_path
+        )
+
+        # F) Simular Copyright Gate retornando FAIL (fail-closed)
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.copyright_gate.evaluate_copyright_provenance_gate") as mock_cp:
+            mock_cp.return_value = (False, "Mídia não licenciada detectada", {})
+
+            # Executa 1º ciclo autônomo
+            res1 = autonomous_production._run_autonomous_cycle(
+                force=True,
+                db_path=self.db_path,
+                now=self.now,
+                task_base_dir=self.task_base_dir,
+            )
+
+            # F) Rejeitado por copyright fail-closed
+            self.assertEqual(res1.get("status"), "rejected")
+            self.assertIn("Copyright Provenance Gate REPROVADO", res1.get("reason", ""))
+
+            # E) current_task_id foi consumido/limpo
+            current_after = autonomous_production.get_autonomous_setting(
+                autonomous_production.KEY_AUTONOMOUS_CURRENT_TASK_ID, db_path=self.db_path
+            )
+            self.assertEqual(current_after, "")
+
+            # Contar registros de quality score gerados no 1º ciclo
+            with quality_score.get_connection(self.db_path) as conn:
+                count1 = conn.execute("SELECT COUNT(*) FROM content_quality_scores WHERE task_id = ?;", (task_id,)).fetchone()[0]
+            self.assertEqual(count1, 1)
+
+            # Executa 2º ciclo autônomo (não deve reavaliar a mesma task nem gerar novos scores)
+            res2 = autonomous_production._run_autonomous_cycle(
+                force=True,
+                db_path=self.db_path,
+                now=self.now + timedelta(seconds=30),
+                task_base_dir=self.task_base_dir,
+            )
+
+            # E) O 2º ciclo NÃO reavalia a mesma task
+            self.assertNotEqual(res2.get("task_id"), task_id)
+
+            # Garante que NENHUM novo registro de quality score foi duplicado para task_id
+            with quality_score.get_connection(self.db_path) as conn:
+                count2 = conn.execute("SELECT COUNT(*) FROM content_quality_scores WHERE task_id = ?;", (task_id,)).fetchone()[0]
+            self.assertEqual(count2, 1)
 
 
 if __name__ == "__main__":

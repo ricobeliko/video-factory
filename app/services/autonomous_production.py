@@ -1114,7 +1114,11 @@ def discover_candidate_topic(
 # 4. Revisão de Qualidade e Segurança (Quality & Safety Gates)
 # ---------------------------------------------------------------------------
 
-def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -> Tuple[bool, str, Dict[str, Any]]:
+def evaluate_completed_task_gates(
+    task_id: str,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
     """Avalia uma tarefa recém-concluída através dos Gates de Quality Score e Safety Gate.
 
     Retorna: (is_approved, reason, metrics)
@@ -1127,12 +1131,9 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
     from app.services import state as sm
 
     task_data = sm.state.get_task(task_id) or {}
-    topic = task_data.get("video_subject") or task_data.get("topic") or task_id
-    niche = task_data.get("niche")
-    profile_id = task_data.get("profile_id")
 
     # 1. Verifica integridade do vídeo em disco
-    video_path = scheduler.get_task_final_video(task_id)
+    video_path = scheduler.get_task_final_video(task_id, task_base_dir=task_base_dir)
     if not video_path or not os.path.isfile(video_path) or os.path.getsize(video_path) == 0:
         return False, "Arquivo de vídeo final inexistente ou vazio em disco", {}
 
@@ -1160,6 +1161,26 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
 
     if clean_status != const.SAFETY_STATUS_PASS:
         return False, f"Safety Gate status desconhecido/não aprovado ({clean_status})", {"safety_status": clean_status}
+
+    # Recuperação determinística de Topic pós-restart (V15-C.1)
+    # Precedência: 1. video_subject, 2. topic (memória), 3. safety_rec.topic, 4. task_id (fail-safe)
+    safety_topic = safety_rec.get("topic") if safety_rec else None
+    topic = (
+        task_data.get("video_subject")
+        or task_data.get("topic")
+        or safety_topic
+        or task_id
+    )
+
+    # Recuperação determinística de Profile e Niche pós-restart (V15-C.1)
+    profile_id = task_data.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)
+    niche = task_data.get("niche")
+    if not niche and profile_id:
+        try:
+            p_ctx = profile_manager.get_generation_profile_context(profile_id=profile_id, db_path=db_path)
+            niche = p_ctx.get("niche")
+        except Exception:
+            niche = None
 
     # 3. Avalia Quality Score (Fase V12-E.1: MIN_QUALITY_SCORE_FOR_AUTONOMOUS = 70.0)
     q_eval = quality_score.evaluate_quality(
@@ -1202,11 +1223,22 @@ def evaluate_completed_task_gates(task_id: str, db_path: Optional[str] = None) -
 
     # 4. Avalia Copyright Provenance Gate (Fase V14-B: fail-closed)
     from app.services import copyright_gate
-    cp_approved, cp_reason, cp_metrics = copyright_gate.evaluate_copyright_provenance_gate(
-        task_id=task_id,
-        task_base_dir=task_base_dir,
-        db_path=db_path,
-    )
+    try:
+        cp_approved, cp_reason, cp_metrics = copyright_gate.evaluate_copyright_provenance_gate(
+            task_id=task_id,
+            task_data=task_data,
+            task_base_dir=task_base_dir,
+            db_path=db_path,
+        )
+    except Exception as cp_exc:
+        return False, f"Falha ao avaliar Copyright Gate (fail-closed): {cp_exc}", {
+            "quality_score": q_score,
+            "quality_label": q_label,
+            "safety_status": clean_status,
+            "copyright_provenance_gate": "FAIL",
+            "copyright_reason": str(cp_exc),
+        }
+
     if not cp_approved:
         return False, f"Copyright Provenance Gate REPROVADO: {cp_reason}", {
             "quality_score": q_score,
@@ -1764,7 +1796,11 @@ def _run_autonomous_cycle(
         _set_status(KEY_AUTONOMOUS_STATE, STATE_REVIEWING)
         _set_status(KEY_AUTONOMOUS_MESSAGE, f"Avaliando Gates para tarefa {current_task_id}...")
 
-        approved, reason, metrics = evaluate_completed_task_gates(current_task_id, db_path=db_path)
+        approved, reason, metrics = evaluate_completed_task_gates(
+            current_task_id,
+            db_path=db_path,
+            task_base_dir=task_base_dir,
+        )
         _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
 
         if approved:

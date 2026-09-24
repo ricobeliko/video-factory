@@ -131,6 +131,17 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
             except sqlite3.OperationalError:
                 pass
 
+            # V15-D.1A: Marcador de baseline limpa (V15-D.1A)
+            baseline_marker: Optional[datetime] = None
+            try:
+                row_bm = conn.execute(
+                    "SELECT value FROM autopilot_settings WHERE key = 'metrics_baseline_started_at'"
+                ).fetchone()
+                if row_bm and row_bm[0]:
+                    baseline_marker = _learning_time(row_bm[0])
+            except sqlite3.OperationalError:
+                pass
+
             selected = {}
             for row in rows:
                 item = dict(row)
@@ -175,6 +186,12 @@ def get_learning_evidence(platform: str, profile_id: str, channel_id: str,
                     if _learning_time(item["published_at"]) != published:
                         exclude("publication_time_mismatch")
                         continue
+
+                    # V15-D.1A: Publicação pré-baseline nunca pode virar evidência de aprendizado
+                    if baseline_marker and published < baseline_marker:
+                        exclude("pre_baseline_publication")
+                        continue
+
                     metadata = json.loads(item["metadata_json"] or "{}")
                     age = (collected - published).total_seconds() / 3600
                     if not (lower <= published <= cutoff and collected <= cutoff and TARGET_AGE_HOURS <= age <= MAX_AGE_HOURS):

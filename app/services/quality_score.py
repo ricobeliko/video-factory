@@ -657,9 +657,32 @@ def _get_isolated_recent_safety_history(
         except Exception:
             pass
 
+    # 0. Leitura do marcador de baseline limpa (V15-D.1A)
+    baseline_marker: Optional[str] = None
+    if _table_exists(conn, "autopilot_settings"):
+        try:
+            b_row = conn.execute(
+                "SELECT value FROM autopilot_settings WHERE key = 'metrics_baseline_started_at';"
+            ).fetchone()
+            if b_row:
+                b_val = b_row[0] if not hasattr(b_row, "keys") else (b_row["value"] if "value" in b_row.keys() else b_row[0])
+                if b_val:
+                    b_str = str(b_val).strip()
+                    if b_str:
+                        baseline_marker = b_str
+        except Exception:
+            pass
+
     # Caso 1: Chamadas manuais/legadas sem task_id, profile ou channel
     # Preservam backward-compatibility total consultando os últimos registros
     if not clean_tid and not clean_profile and not clean_channel:
+        if baseline_marker:
+            return conn.execute(
+                "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
+                "WHERE checked_at >= ? "
+                "ORDER BY checked_at DESC LIMIT ?;",
+                (baseline_marker, limit),
+            ).fetchall()
         return conn.execute(
             "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
             "ORDER BY checked_at DESC LIMIT ?;",
@@ -668,6 +691,13 @@ def _get_isolated_recent_safety_history(
 
     # Caso 2: Banco minimalista sem infraestrutura de múltiplos perfis
     if not has_tp and not has_cp and not has_pc:
+        if baseline_marker:
+            return conn.execute(
+                "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
+                "WHERE (task_id IS NULL OR task_id <> ?) AND checked_at >= ? "
+                "ORDER BY checked_at DESC LIMIT ?;",
+                (clean_tid, baseline_marker, limit),
+            ).fetchall()
         return conn.execute(
             "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
             "WHERE task_id IS NULL OR task_id <> ? "
@@ -702,6 +732,12 @@ def _get_isolated_recent_safety_history(
         channel_filter = ""
         channel_params = []
 
+    baseline_filter = ""
+    baseline_params = []
+    if baseline_marker:
+        baseline_filter = "AND ms.checked_at >= ?"
+        baseline_params = [baseline_marker]
+
     sql = f"""
         SELECT ms.task_id, ms.topic, ms.hook_text, ms.narrative_structure
         FROM monetization_safety ms
@@ -712,9 +748,10 @@ def _get_isolated_recent_safety_history(
               OR (? = 0 AND tp.profile_id = ?)
           )
           {channel_filter}
+          {baseline_filter}
         ORDER BY ms.checked_at DESC LIMIT ?;
     """
-    params = [clean_tid, is_default, is_default, clean_profile] + channel_params + [limit]
+    params = [clean_tid, is_default, is_default, clean_profile] + channel_params + baseline_params + [limit]
     return conn.execute(sql, params).fetchall()
 
 

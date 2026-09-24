@@ -589,7 +589,7 @@ def evaluate_quality(
         except Exception:
             pass
 
-    # 1. Recuperar dados recentes para originalidade e repetição
+    # 1. Recuperar dados recentes para originalidade e repetição (excluindo a própria task)
     recent_topics = []
     recent_hooks = []
     recent_items = []
@@ -599,10 +599,23 @@ def evaluate_quality(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='monetization_safety';"
             ).fetchone()
             if check_table:
-                rows = conn.execute(
-                    "SELECT topic, hook_text, narrative_structure FROM monetization_safety ORDER BY checked_at DESC LIMIT 15;"
-                ).fetchall()
+                clean_tid = str(task_id or "").strip()
+                if clean_tid:
+                    rows = conn.execute(
+                        "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
+                        "WHERE task_id IS NULL OR task_id <> ? "
+                        "ORDER BY checked_at DESC LIMIT 15;",
+                        (clean_tid,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT task_id, topic, hook_text, narrative_structure FROM monetization_safety "
+                        "ORDER BY checked_at DESC LIMIT 15;"
+                    ).fetchall()
                 for r in rows:
+                    row_tid = str(r["task_id"] or "").strip() if "task_id" in r.keys() else ""
+                    if clean_tid and row_tid and row_tid == clean_tid:
+                        continue
                     if r["topic"]:
                         recent_topics.append(r["topic"])
                     if r["hook_text"]:

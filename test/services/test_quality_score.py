@@ -403,5 +403,115 @@ class TestQualityScore(unittest.TestCase):
         self.assertIn(eval_res["quality_label"], [quality_score.LABEL_GOOD, quality_score.LABEL_STRONG])
 
 
+    def test_27_quality_score_excludes_current_task_self_comparison(self):
+        """27. Regressão V15-C: task presente em monetization_safety não se auto-compara.
+        
+        Garante:
+        A) Current task presente em monetization_safety não se compara consigo mesma.
+        B) Outra task com tópico/hook idêntico continua penalizada.
+        C) Tópicos diferentes não recebem artificialmente originality=0 e repetition=40.
+        D) Threshold continua 70 (LABEL_GOOD >= 70.0, LABEL_REVIEW < 70.0).
+        E) Pesos COMPONENT_WEIGHTS permanecem intactos.
+        F) Persistência continua funcionando sem mutação de schema.
+        """
+        import sqlite3
+
+        current_task_id = "task-v15c-current"
+        current_topic = "Por que Júpiter possui uma tempestade gigante?"
+        current_hook = "Você sabia que a tempestade de Júpiter dura centenas de anos?"
+
+        # E) Validar pesos nominais intocados
+        expected_weights = {
+            "hook_strength": 0.15,
+            "originality": 0.15,
+            "trend_strength": 0.10,
+            "niche_relevance": 0.10,
+            "source_confidence": 0.05,
+            "repetition_risk": 0.10,
+            "narrative_fit": 0.10,
+            "duration_fit": 0.10,
+            "historical_performance": 0.10,
+            "visual_match": 0.05,
+        }
+        self.assertEqual(quality_score.COMPONENT_WEIGHTS, expected_weights)
+        self.assertAlmostEqual(sum(quality_score.COMPONENT_WEIGHTS.values()), 1.0, places=4)
+
+        # D) Validar que o threshold operacional de aprovação continua 70.0
+        self.assertEqual(quality_score.determine_quality_label(70.0), quality_score.LABEL_GOOD)
+        self.assertEqual(quality_score.determine_quality_label(69.9), quality_score.LABEL_REVIEW)
+
+        # Inserir histórico com a própria task (simulando a etapa anterior do fluxo autônomo onde
+        # o safety gate é gravado antes do quality score)
+        with sqlite3.connect(self.db_path) as conn:
+            # Task histórica legítima diferente
+            conn.execute(
+                """
+                INSERT INTO monetization_safety (
+                    task_id, topic, preset, narrative_structure, word_count,
+                    estimated_duration, actual_duration, safety_status,
+                    safety_reasons, hook_text, cta_text, checked_at
+                ) VALUES ('task-hist-old', 'A história dos fósseis na Antártica', 'cross_platform', 'fact_context', 150, 65.0, 65.0, 'PASSED', '', 'Você sabia sobre os fósseis sob o gelo?', '', '2026-09-20T10:00:00Z');
+                """
+            )
+            # A PRÓPRIA task atual já salva pelo safety gate
+            conn.execute(
+                """
+                INSERT INTO monetization_safety (
+                    task_id, topic, preset, narrative_structure, word_count,
+                    estimated_duration, actual_duration, safety_status,
+                    safety_reasons, hook_text, cta_text, checked_at
+                ) VALUES (?, ?, 'cross_platform', 'explainer', 150, 65.0, 65.0, 'PASSED', '', ?, '', '2026-09-23T20:00:00Z');
+                """,
+                (current_task_id, current_topic, current_hook)
+            )
+
+        # A) Avaliar quality score com task_id da task atual
+        # F) Com persist=True para validar persistência
+        res_current = quality_score.evaluate_quality(
+            topic=current_topic,
+            hook_text=current_hook,
+            task_id=current_task_id,
+            preset="cross_platform",
+            narrative_structure="explainer",
+            estimated_duration=65.0,
+            db_path=self.db_path,
+            persist=True,
+        )
+
+        # C) Tópicos diferentes não recebem artificialmente originality=0 e repetition=40
+        self.assertGreater(res_current["components"]["originality"], 50.0)
+        self.assertGreater(res_current["components"]["repetition_risk"], 50.0)
+        self.assertGreaterEqual(res_current["components"]["hook_strength"], 70.0)
+        self.assertGreaterEqual(res_current["quality_score"], 70.0)
+        self.assertIn(res_current["quality_label"], [quality_score.LABEL_GOOD, quality_score.LABEL_STRONG])
+
+        # F) Confirmar persistência no SQLite
+        self.assertIsNotNone(res_current["id"])
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM content_quality_scores WHERE task_id = ?;", (current_task_id,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["quality_score"], res_current["quality_score"])
+
+        # B) Outra task com tópico/hook idêntico CONTINUA penalizada
+        other_task_id = "task-v15c-other-duplicate"
+        res_other = quality_score.evaluate_quality(
+            topic=current_topic,
+            hook_text=current_hook,
+            task_id=other_task_id,
+            preset="cross_platform",
+            narrative_structure="explainer",
+            estimated_duration=65.0,
+            db_path=self.db_path,
+            persist=False,
+        )
+        self.assertEqual(res_other["components"]["originality"], 0.0)
+        self.assertEqual(res_other["components"]["repetition_risk"], 40.0)
+        self.assertLessEqual(res_other["components"]["hook_strength"], 60.0)
+        self.assertLess(res_other["quality_score"], 70.0)
+        self.assertIn(res_other["quality_label"], [quality_score.LABEL_REVIEW, quality_score.LABEL_WEAK])
+
+
 if __name__ == "__main__":
     unittest.main()
+

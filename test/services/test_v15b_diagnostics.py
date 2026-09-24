@@ -389,6 +389,46 @@ class TestV15BDiagnostics(unittest.TestCase):
         self.assertIn("conclusions", parsed)
         self.assertIn("MYSTERY_APPROVED_TASK", parsed["conclusions"])
 
+    def test_07_regression_default_task_base_dir_and_utils_task_dir(self):
+        """Regressão V15-B.1: garante que utils.task_dir() resolve sem AttributeError quando task_base_dir=None."""
+        # 1. Garante que flow_diagnostics.utils.task_dir existe e é callable
+        self.assertTrue(callable(getattr(flow_diagnostics.utils, "task_dir", None)))
+
+        # 2. Executa diagnose_mystery_task com task_base_dir=None (caminho padrão que falhou em produção)
+        m_diag = flow_diagnostics.diagnose_mystery_task(
+            task_id="de22b786-973e-4391-8ba0-7c43599beef9",
+            db_path=self.db_path,
+            task_base_dir=None,
+        )
+        self.assertIsNotNone(m_diag)
+        self.assertIn("disk_inspection", m_diag)
+        self.assertTrue(os.path.isabs(m_diag["disk_inspection"]["task_dir"]))
+
+        # 3. Executa diagnose_missing_video_tasks com task_base_dir=None
+        mv_diag = flow_diagnostics.diagnose_missing_video_tasks(
+            task_ids=("2f568515-77d0-4e88-852a-27b189f30404",),
+            db_path=self.db_path,
+            task_base_dir=None,
+        )
+        self.assertIsNotNone(mv_diag)
+
+        # 4. Executa diagnose_v15b.main com --json e sem --task-base-dir (exercício exato da CLI de produção)
+        stdout_capture = io.StringIO()
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = stdout_capture
+            code = diagnose_v15b.main([
+                "--json",
+                "--db-path", self.db_path,
+            ])
+            self.assertEqual(code, 0)
+        finally:
+            sys.stdout = old_stdout
+
+        out = json.loads(stdout_capture.getvalue().strip())
+        self.assertEqual(out.get("status"), "ok")
+
 
 if __name__ == "__main__":
     unittest.main()
+

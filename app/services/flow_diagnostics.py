@@ -40,8 +40,8 @@ from app.services import (
     safety_gate,
     scheduler,
     state as sm,
-    utils,
 )
+from app.utils import utils
 
 DEFAULT_MYSTERY_TASK_ID = "de22b786-973e-4391-8ba0-7c43599beef9"
 DEFAULT_MISSING_VIDEO_TASK_IDS = (

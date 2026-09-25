@@ -99,6 +99,7 @@ def publish_youtube_video(
             channel_id=channel_id or "channel-default-youtube",
             task_id=task_id,
             privacy_status=effective_privacy,
+            made_for_kids=made_for_kids,
             profile_id=profile_id,
         )
 

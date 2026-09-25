@@ -147,14 +147,14 @@ def extract_youtube_video_id(data: Any) -> Optional[str]:
     """Extrai de forma determinística o video ID nativo do YouTube.
     
     Prioriza id nativo retornado em platform_data; caso indisponível, extrai da URL.
-    NUNCA aceita IDs com prefixo de Post for Me (ex.: spt_..., spc_...).
+    NUNCA aceita IDs com prefixo de Post for Me (ex.: spt_..., spc_..., spr_...).
     """
     if isinstance(data, dict):
         # 1. Checa platform_data interno
         pdata = data.get("platform_data") or data.get("platformData")
         if isinstance(pdata, dict):
             pid = pdata.get("id") or pdata.get("video_id") or pdata.get("videoId")
-            if pid and isinstance(pid, str) and not pid.startswith(("spt_", "spc_")):
+            if pid and isinstance(pid, str) and not pid.startswith(("spt_", "spc_", "spr_")):
                 return pid.strip()
             purl = pdata.get("url") or pdata.get("link") or pdata.get("video_url")
             if purl and isinstance(purl, str):
@@ -165,7 +165,7 @@ def extract_youtube_video_id(data: Any) -> Optional[str]:
         # 2. Checa chaves diretas
         for key in ("video_id", "videoId", "platform_post_id"):
             val = data.get(key)
-            if val and isinstance(val, str) and not val.startswith(("spt_", "spc_")):
+            if val and isinstance(val, str) and not val.startswith(("spt_", "spc_", "spr_")):
                 return val.strip()
 
         for key in ("url", "link", "video_url", "share_url", "external_url"):
@@ -183,9 +183,16 @@ def extract_youtube_video_id(data: Any) -> Optional[str]:
     return None
 
 
-def extract_post_result(post: Dict[str, Any], target_account_id: Optional[str] = None) -> Dict[str, Any]:
-    """Extrai e normaliza o resultado de publicação por conta a partir do social-post.
-    
+def extract_post_result(
+    data: Dict[str, Any],
+    target_account_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extrai e normaliza o resultado de publicação por conta.
+
+    Aceita:
+    1. SocialPostResultDto retornado por GET /v1/social-post-results
+    2. SocialPostDto container com results/post_results embutidos (ou top-level fallback)
+
     Retorna:
     {
         "success": bool,
@@ -196,14 +203,55 @@ def extract_post_result(post: Dict[str, Any], target_account_id: Optional[str] =
         "status": str,
     }
     """
-    post_id = str(post.get("id") or "")
-    post_status = str(post.get("status") or "").lower().strip()
-    
-    # Post for Me pode retornar results como lista ou dicionário
+    if not isinstance(data, dict):
+        return {
+            "success": False,
+            "post_id": "",
+            "youtube_video_id": None,
+            "url": None,
+            "error": "Dados de resultado inválidos",
+            "status": "error",
+        }
+
+    # Caso 1: Objeto é diretamente um SocialPostResultDto (possui 'success' booleano e não é container)
+    has_results_container = any(k in data for k in ("results", "post_results", "social_account_results"))
+    if "success" in data and not has_results_container:
+        success = bool(data.get("success", False))
+        post_id = str(data.get("post_id") or data.get("id") or "")
+        err_val = data.get("error") or data.get("message")
+        if isinstance(err_val, dict):
+            error = err_val.get("message") or err_val.get("error") or str(err_val)
+        else:
+            error = str(err_val) if err_val else None
+
+        pdata = data.get("platform_data") or data.get("platformData")
+        url = None
+        if isinstance(pdata, dict):
+            url = pdata.get("url") or pdata.get("link") or pdata.get("video_url")
+        if not url:
+            url = data.get("url") or data.get("link") or data.get("video_url")
+
+        vid_id = extract_youtube_video_id(data)
+        if not vid_id and url:
+            vid_id = extract_youtube_video_id(url)
+
+        return {
+            "success": success,
+            "post_id": post_id,
+            "youtube_video_id": vid_id,
+            "url": url,
+            "error": error,
+            "status": "processed" if success else "failed",
+        }
+
+    # Caso 2: Objeto é um SocialPostDto container (ou fallback)
+    post_id = str(data.get("id") or "")
+    post_status = str(data.get("status") or "").lower().strip()
+
     raw_results = (
-        post.get("results")
-        or post.get("post_results")
-        or post.get("social_account_results")
+        data.get("results")
+        or data.get("post_results")
+        or data.get("social_account_results")
         or []
     )
 
@@ -239,13 +287,21 @@ def extract_post_result(post: Dict[str, Any], target_account_id: Optional[str] =
 
     if matching_result:
         success = bool(matching_result.get("success", False))
-        error = matching_result.get("error") or matching_result.get("message")
-        url = (
-            matching_result.get("url")
-            or matching_result.get("link")
-            or matching_result.get("video_url")
-            or (matching_result.get("platform_data") or {}).get("url")
-        )
+        err_val = matching_result.get("error") or matching_result.get("message")
+        if isinstance(err_val, dict):
+            error = err_val.get("message") or err_val.get("error") or str(err_val)
+        else:
+            error = str(err_val) if err_val else None
+
+        pdata = matching_result.get("platform_data") or matching_result.get("platformData")
+        if isinstance(pdata, dict):
+            url = pdata.get("url") or pdata.get("link") or pdata.get("video_url")
+        if not url:
+            url = (
+                matching_result.get("url")
+                or matching_result.get("link")
+                or matching_result.get("video_url")
+            )
         vid_id = extract_youtube_video_id(matching_result)
     else:
         # Fallback para campos top-level do post se não houver array de results
@@ -253,10 +309,10 @@ def extract_post_result(post: Dict[str, Any], target_account_id: Optional[str] =
             success = True
         elif post_status in ("failed", "error"):
             success = False
-            error = str(post.get("error") or post.get("message") or "publication failed")
+            error = str(data.get("error") or data.get("message") or "publication failed")
 
-        url = post.get("url") or post.get("link")
-        vid_id = extract_youtube_video_id(post)
+        url = data.get("url") or data.get("link")
+        vid_id = extract_youtube_video_id(data)
 
     if not vid_id and url:
         vid_id = extract_youtube_video_id(url)
@@ -476,6 +532,54 @@ class PostForMeClient:
             return res
         raise PostForMeError(f"Resposta inesperada ao consultar social-post {post_id}")
 
+    def list_social_post_results(
+        self,
+        post_id: Optional[str] = None,
+        social_account_id: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Consulta resultados individuais de publicação via GET /v1/social-post-results."""
+        params: Dict[str, Any] = {}
+        if post_id:
+            params["post_id"] = post_id
+        if social_account_id:
+            params["social_account_id"] = social_account_id
+        if platform:
+            params["platform"] = platform
+
+        res = self._request("GET", "/social-post-results", params=params or None)
+        if isinstance(res, list):
+            return res
+        if isinstance(res, dict):
+            return res.get("data") or res.get("items") or res.get("results") or []
+        return []
+
+    def get_post_result_for_account(
+        self,
+        post_id: str,
+        social_account_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Recupera o Post Result associado ao social post e social account alvo."""
+        results = self.list_social_post_results(
+            post_id=post_id,
+            social_account_id=social_account_id,
+        )
+        if not results:
+            return None
+
+        if social_account_id:
+            for r in results:
+                if isinstance(r, dict) and (
+                    r.get("social_account_id") == social_account_id
+                    or r.get("account_id") == social_account_id
+                    or r.get("id") == social_account_id
+                ):
+                    return r
+        # Retorna o primeiro resultado se não encontrar por ID exato
+        if results and isinstance(results[0], dict):
+            return results[0]
+        return None
+
     def create_social_post(
         self,
         caption: str,
@@ -484,6 +588,7 @@ class PostForMeClient:
         title: str,
         privacy_status: str,
         external_id: str,
+        made_for_kids: bool = False,
     ) -> Dict[str, Any]:
         """Cria um novo post na Post for Me respeitando o contrato oficial."""
         clean_privacy = str(privacy_status or "").lower().strip()
@@ -501,6 +606,7 @@ class PostForMeClient:
                 "youtube": {
                     "title": title[:100],  # Limite oficial do YouTube
                     "privacy_status": clean_privacy,
+                    "made_for_kids": bool(made_for_kids),
                 }
             },
         }
@@ -524,7 +630,7 @@ class PostForMeClient:
             post = self.get_social_post(post_id)
             status = str(post.get("status") or "").lower().strip()
 
-            if status in ("completed", "posted", "success", "published", "done"):
+            if status in ("processed", "completed", "posted", "success", "published", "done"):
                 return post
             if status in ("failed", "error"):
                 return post
@@ -543,6 +649,7 @@ class PostForMeClient:
         channel_id: str,
         task_id: str,
         privacy_status: str = "public",
+        made_for_kids: bool = False,
         profile_id: Optional[str] = None,
         timeout_sec: int = 120,
         poll_interval_sec: float = 2.0,
@@ -645,19 +752,37 @@ class PostForMeClient:
                     title=title,
                     privacy_status=clean_privacy,
                     external_id=deterministic_external_id,
+                    made_for_kids=made_for_kids,
                 )
                 post_id = str(new_post.get("id"))
                 logger.info(f"[POST_FOR_ME] Social post criado com sucesso. id: {post_id}")
 
-            # 6. Polling do resultado
+            # 6. Polling do resultado aguardando estado terminal do post
             final_post = self.poll_social_post(
                 post_id,
                 timeout_sec=timeout_sec,
                 poll_interval_sec=poll_interval_sec,
             )
 
-            # 7. Extração do resultado
-            res_info = extract_post_result(final_post, target_account_id=social_account_id)
+            # 7. Consulta do Post Result correspondente via GET /v1/social-post-results
+            post_result = None
+            try:
+                post_result = self.get_post_result_for_account(
+                    post_id=post_id,
+                    social_account_id=social_account_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[POST_FOR_ME] Falha ao consultar post-results separados para post {post_id}: "
+                    f"{sanitize_secrets(exc, self._api_key)}"
+                )
+
+            # 8. Extração e avaliação do resultado
+            if post_result:
+                res_info = extract_post_result(post_result, target_account_id=social_account_id)
+            else:
+                res_info = extract_post_result(final_post, target_account_id=social_account_id)
+
             if res_info["success"]:
                 vid_id = res_info.get("youtube_video_id")
                 ext_url = res_info.get("url")

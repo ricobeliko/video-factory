@@ -1108,6 +1108,7 @@ class PostForMeClient:
         deterministic_external_id = f"video-factory:{task_id}:youtube:{ext_channel_id}"
 
         post_id: Optional[str] = None
+        reused_active_entry: Optional[Dict[str, Any]] = None
         try:
             # 5.1 Classificar tentativas existentes determinísticas
             classification = self.classify_existing_posts(
@@ -1190,6 +1191,7 @@ class PostForMeClient:
             if len(active_posts) == 1:
                 act = active_posts[0]
                 post_id = act["post_id"]
+                reused_active_entry = act
                 logger.info(
                     f"[POST_FOR_ME] Tentativa ativa encontrada (post_id: {post_id}). "
                     f"Retomando polling sem duplicar upload."
@@ -1277,7 +1279,9 @@ class PostForMeClient:
                     }
 
                 if len(reval["active_posts"]) == 1:
-                    post_id = reval["active_posts"][0]["post_id"]
+                    act = reval["active_posts"][0]
+                    post_id = act["post_id"]
+                    reused_active_entry = act
                     logger.info(
                         f"[POST_FOR_ME] Tentativa ativa detectada durante revalidação pré-upload "
                         f"(post_id: {post_id}). Retomando polling sem criar novo upload."
@@ -1347,13 +1351,49 @@ class PostForMeClient:
                         f"mas YouTube Video ID nativo não pôde ser extraído da resposta/URL."
                     )
 
+                # GAP V15-E.2.7: Distinguir post criado nesta chamada vs ACTIVE reutilizado
+                if reused_active_entry is not None:
+                    real_privacy = extract_real_privacy_status(
+                        post=final_post,
+                        post_result=post_result,
+                        result_info=res_info,
+                    )
+                    if not real_privacy and reused_active_entry.get("post"):
+                        real_privacy = extract_real_privacy_status(
+                            post=reused_active_entry.get("post"),
+                            post_result=post_result,
+                            result_info=res_info,
+                        )
+
+                    if not real_privacy:
+                        msg = (
+                            f"Não foi possível comprovar a privacidade real do post ativo reutilizado "
+                            f"(post_id: {post_id}). Bloqueando por segurança (Fail Closed)."
+                        )
+                        logger.error(f"[POST_FOR_ME] {msg}")
+                        return {
+                            "success": False,
+                            "provider": "post_for_me",
+                            "request_id": post_id,
+                            "external_id": vid_id,
+                            "external_url": ext_url,
+                            "privacy_status": None,
+                            "error": msg,
+                            "error_code": "ACTIVE_SUCCESS_PRIVACY_UNKNOWN",
+                        }
+
+                    effective_privacy = real_privacy
+                else:
+                    # Post criado nesta própria chamada: clean_privacy é confiável
+                    effective_privacy = clean_privacy
+
                 return {
                     "success": True,
                     "provider": "post_for_me",
                     "request_id": post_id,
                     "external_id": vid_id,
                     "external_url": ext_url,
-                    "privacy_status": clean_privacy,
+                    "privacy_status": effective_privacy,
                     "error": None,
                     "error_code": None,
                 }

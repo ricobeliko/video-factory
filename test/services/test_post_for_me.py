@@ -472,6 +472,7 @@ class TestPostForMeClient(unittest.TestCase):
                 "id": "spt_retry_flow_101",
                 "external_id": kwargs["external_id"],
                 "status": "processing",
+                "platform_configurations": {"youtube": {"privacy_status": kwargs.get("privacy_status", "public")}},
             }
             post_store[kwargs["external_id"]] = p
             return p
@@ -999,6 +1000,7 @@ class TestPostForMeClient(unittest.TestCase):
             "external_id": "video-factory:task-active-01:youtube:channel-default-youtube",
             "status": "processing",
             "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "public"}},
         }
 
         with (
@@ -1445,6 +1447,7 @@ class TestPostForMeClient(unittest.TestCase):
             "external_id": "video-factory:task-zero-race:youtube:channel-default-youtube",
             "status": "processing",
             "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "public"}},
         }
 
         call_count = 0
@@ -1575,6 +1578,187 @@ class TestPostForMeClient(unittest.TestCase):
             self.assertEqual(res["request_id"], "sp_fresh_zero")
             self.assertEqual(res["external_id"], "YT_FRESH_ZERO_VID")
             self.assertEqual(call_count, 2)  # Primeira classificação + Revalidação pré-upload
+            mock_up.assert_called_once()
+            mock_bin.assert_called_once()
+            mock_create.assert_called_once()
+            mock_poll.assert_called_once()
+
+    def test_publish_reused_active_preserves_real_privacy_private(self):
+        """GAP V15-E.2.7 (1): ACTIVE existente com privacy=private; chamada pede public -> retorna private."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        active_post = {
+            "id": "sp_active_priv",
+            "external_id": "video-factory:task-act-priv:youtube:channel-default-youtube",
+            "status": "processing",
+            "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "private"}},
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[active_post]),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_active_priv", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_act_priv",
+                "post_id": "sp_active_priv",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_ACT_PRIV_VID"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Active Priv Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-act-priv",
+                privacy_status="public",  # Chamada pede public
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_active_priv")
+            self.assertEqual(res["external_id"], "YT_ACT_PRIV_VID")
+            self.assertEqual(res["privacy_status"], "private")  # Retorna a privacidade real do post ativo
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_called_once_with("sp_active_priv", timeout_sec=120, poll_interval_sec=2.0)
+
+    def test_publish_revalidated_active_preserves_real_privacy_unlisted(self):
+        """GAP V15-E.2.7 (2): ACTIVE encontrado na revalidação com privacy=unlisted; chamada pede public -> retorna unlisted."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        active_post = {
+            "id": "sp_reval_act_unlisted",
+            "external_id": "video-factory:task-reval-unlisted:youtube:channel-default-youtube",
+            "status": "processing",
+            "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "unlisted"}},
+        }
+
+        call_count = 0
+        def mock_list_posts(ext_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []
+            return [active_post]
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", side_effect=mock_list_posts),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_reval_act_unlisted", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_reval_act_unl",
+                "post_id": "sp_reval_act_unlisted",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_REVAL_UNLISTED_VID"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Reval Unlisted Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-reval-unlisted",
+                privacy_status="public",  # Chamada pede public
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_reval_act_unlisted")
+            self.assertEqual(res["external_id"], "YT_REVAL_UNLISTED_VID")
+            self.assertEqual(res["privacy_status"], "unlisted")  # Retorna a privacidade real
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_called_once_with("sp_reval_act_unlisted", timeout_sec=120, poll_interval_sec=2.0)
+
+    def test_publish_reused_active_unknown_privacy_fails_closed(self):
+        """GAP V15-E.2.7 (3): ACTIVE reutilizado termina success mas privacy não comprovável -> FAIL CLOSED."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        active_post = {
+            "id": "sp_active_unk_priv",
+            "external_id": "video-factory:task-act-unk:youtube:channel-default-youtube",
+            "status": "processing",
+            "social_accounts": ["spc_yt_01"],
+            # Sem platform_configurations e sem privacy_status
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[active_post]),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_active_unk_priv", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_act_unk",
+                "post_id": "sp_active_unk_priv",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_ACT_UNK_VID"},
+                # Sem privacy_status
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Active Unk Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-act-unk",
+                privacy_status="public",
+            )
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_code"], "ACTIVE_SUCCESS_PRIVACY_UNKNOWN")
+            self.assertEqual(res["request_id"], "sp_active_unk_priv")
+            self.assertEqual(res["external_id"], "YT_ACT_UNK_VID")
+            self.assertIsNone(res["privacy_status"])
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+
+    def test_publish_created_this_call_uses_requested_privacy(self):
+        """GAP V15-E.2.7 (4): POST criado nesta própria chamada com privacy=public -> privacy_status permanece public."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[]),
+            patch.object(client, "create_media_upload_url", return_value=("https://up", "https://media")) as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post", return_value={"id": "sp_created_fresh"}) as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_created_fresh", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_created_fresh",
+                "post_id": "sp_created_fresh",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_CREATED_FRESH_VID"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Created Fresh Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-created-fresh",
+                privacy_status="public",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_created_fresh")
+            self.assertEqual(res["external_id"], "YT_CREATED_FRESH_VID")
+            self.assertEqual(res["privacy_status"], "public")
             mock_up.assert_called_once()
             mock_bin.assert_called_once()
             mock_create.assert_called_once()

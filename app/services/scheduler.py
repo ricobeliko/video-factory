@@ -1416,9 +1416,49 @@ def get_executor_status(db_path: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def is_youtube_daily_quota_error(error_msg: str) -> bool:
+    """Detecta erro específico de quota diária de upload do YouTube (Fase V15-E.2.3).
+
+    Detecta de maneira resiliente por sinais como:
+    - "Quota exceeded"
+    E algum dos:
+    - "Video Uploads"
+    - "video_insert"
+    - "defaultVideoInsertPerDayPerProject"
+    - "RESOURCE_EXHAUSTED"
+    """
+    msg = (error_msg or "").lower()
+    quota_indicators = (
+        "video uploads",
+        "video_insert",
+        "defaultvideoinsertperdayperproject",
+        "resource_exhausted",
+    )
+    if "quota exceeded" in msg and any(ind in msg for ind in quota_indicators):
+        return True
+    if "resource_exhausted" in msg and any(
+        ind in msg for ind in ("video uploads", "video_insert", "defaultvideoinsertperdayperproject")
+    ):
+        return True
+    return False
+
+
+def get_retry_after_hint(error_msg: str) -> Optional[int]:
+    """Retorna hint de retry_after em segundos baseado no tipo específico de erro.
+
+    Para erro de quota diária de upload do YouTube: 86400s (24h).
+    Para demais erros: None.
+    """
+    if is_youtube_daily_quota_error(error_msg):
+        return 86400  # 24 horas para quota diária de upload do YouTube
+    return None
+
+
 def classify_error(error_msg: str) -> str:
     """Classifica um erro de publicação em 'transient' ou 'permanent'."""
     err = (error_msg or "").lower()
+    if is_youtube_daily_quota_error(error_msg):
+        return "transient"
     transient_keywords = [
         "429",
         "rate limit",
@@ -1444,13 +1484,14 @@ def classify_error(error_msg: str) -> str:
 
 def calculate_backoff_seconds(attempt: int, retry_after: Optional[int] = None) -> int:
     """Calcula o tempo de espera em segundos para retry de falhas temporárias."""
-    if retry_after and retry_after > 0:
+    if retry_after is not None and retry_after > 0:
         return retry_after
     if attempt == 1:
         return 15 * 60  # 15 minutos
     if attempt == 2:
         return 60 * 60  # 60 minutos
     return 60 * 60
+
 
 
 def log_growth_limit_block(
@@ -1953,7 +1994,8 @@ def run_scheduler_cycle(
         err_type = classify_error(err_msg)
         new_attempts = attempts + 1
         if err_type == "transient" and new_attempts < 3:
-            backoff_sec = calculate_backoff_seconds(new_attempts)
+            retry_hint = get_retry_after_hint(err_msg)
+            backoff_sec = calculate_backoff_seconds(new_attempts, retry_after=retry_hint)
             next_retry = current_time + timedelta(seconds=backoff_sec)
             with get_connection(db_path) as conn:
                 conn.execute(

@@ -25,6 +25,7 @@ class TestSchedulerExecutionEngine(unittest.TestCase):
         self.db_path = os.path.join(self.temp_dir.name, "test_exec.db")
         scheduler.init_db(self.db_path)
         scheduler.reset_executor_status()
+        scheduler.set_growth_mode(const.GROWTH_MODE_SCALE, db_path=self.db_path)
 
         # Set in-memory task state
         self.state = MemoryState()
@@ -632,6 +633,74 @@ class TestSchedulerExecutionEngine(unittest.TestCase):
             self.assertNotIn(secret, logs_text)
         finally:
             logger.remove(handler_id)
+
+    # 26. Erro 429 genérico mantém comportamento antigo de 15 min na 1ª tentativa
+    def test_26_generic_429_maintains_standard_backoff(self):
+        err_msg = "429 Too Many Requests: Rate limit exceeded"
+        self.assertEqual(scheduler.classify_error(err_msg), "transient")
+        self.assertFalse(scheduler.is_youtube_daily_quota_error(err_msg))
+        self.assertIsNone(scheduler.get_retry_after_hint(err_msg))
+
+        # Backoffs padrão
+        self.assertEqual(scheduler.calculate_backoff_seconds(1), 15 * 60)
+        self.assertEqual(scheduler.calculate_backoff_seconds(2), 60 * 60)
+
+        # Ciclo do scheduler agenda retry em 15 minutos
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("auto_publish_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("dry_run", False, db_path=self.db_path)
+
+        now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+        self._create_task("task-gen-429", ["youtube"])
+        post_id = self._insert_scheduled_post("task-gen-429", "youtube", now - timedelta(minutes=5))
+
+        with patch("app.services.task.publish_task", return_value=(False, err_msg)):
+            res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.tasks_base_dir)
+            self.assertEqual(res["status"], "retry_scheduled")
+
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute("SELECT status, attempts, next_attempt_at FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
+            self.assertEqual(row["status"], "ready")
+            self.assertEqual(row["attempts"], 1)
+            expected_next = now + timedelta(seconds=15 * 60)
+            self.assertEqual(row["next_attempt_at"], scheduler._to_iso(expected_next))
+
+    # 27. Erro de quota diária do YouTube ativa backoff de 24 horas (86400 segundos)
+    def test_27_youtube_daily_quota_error_uses_24h_backoff(self):
+        err_msg = (
+            "429 Too Many Requests RESOURCE_EXHAUSTED Quota exceeded for quota metric "
+            "'Video Uploads' defaultVideoInsertPerDayPerProject"
+        )
+        self.assertEqual(scheduler.classify_error(err_msg), "transient")
+        self.assertTrue(scheduler.is_youtube_daily_quota_error(err_msg))
+        self.assertEqual(scheduler.get_retry_after_hint(err_msg), 86400)
+
+        # Backoff específico: 86400s (24h) em vez de 900s (15 min)
+        self.assertEqual(scheduler.calculate_backoff_seconds(1, retry_after=86400), 86400)
+        self.assertEqual(scheduler.calculate_backoff_seconds(2, retry_after=86400), 86400)
+
+        # Ciclo do scheduler agenda retry para daqui a 24 horas
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("auto_publish_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("dry_run", False, db_path=self.db_path)
+
+        now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+        self._create_task("task-yt-quota", ["youtube"])
+        post_id = self._insert_scheduled_post("task-yt-quota", "youtube", now - timedelta(minutes=5))
+
+        with patch("app.services.task.publish_task", return_value=(False, err_msg)):
+            res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.tasks_base_dir)
+            self.assertEqual(res["status"], "retry_scheduled")
+
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute("SELECT status, attempts, next_attempt_at FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
+            self.assertEqual(row["status"], "ready")
+            self.assertEqual(row["attempts"], 1)
+            expected_next = now + timedelta(seconds=86400)
+            self.assertEqual(row["next_attempt_at"], scheduler._to_iso(expected_next))
+            # Garantir categoricamente que NÃO foi agendado para 15 minutos
+            fifteen_min_next = now + timedelta(seconds=15 * 60)
+            self.assertNotEqual(row["next_attempt_at"], scheduler._to_iso(fifteen_min_next))
 
 
 if __name__ == "__main__":

@@ -689,7 +689,35 @@ Entregáveis homologados:
   5. Validação rigorosa de consistência de assets (`validate_character_pack_assets`) checando formato PNG, canal alfa real e uniformidade de dimensões entre poses.
   6. Gerador local de Contact Sheet (`generate_contact_sheet`) para inspeção de layout e coerência visual pelo operador.
   7. Autonomous Presenter mantido estritamente desligado (`avatar_mode="none"`).
-- **Próxima Fase Global:** V15-A — Production Observability Baseline (V15 — Production Observation & Optimization).
+- **Próxima Fase Global:** V15-E.2 — Post for Me YouTube Production Publisher.
+
+---
+
+## V15-E.1 — YouTube Direct Publisher Foundation + Private POC
+- **Status:** ✅ HOMOLOGATED (POC Validada nos 2 Canais)
+- **Implementação:**
+  - Módulo `app/services/youtube_direct.py` com suporte oficial a OAuth 2.0 por canal/perfil.
+  - Upload resumable oficial via YouTube Data API v3 (`videos.insert`).
+  - Guard estrita de privacidade `private` para POC (`DIRECT_POC_PRIVATE_ONLY`).
+  - CLI de sondagem `scripts/youtube_direct_probe.py`.
+  - Homologada com sucesso nos canais default e mistério.
+
+## V15-E.2 — Post for Me YouTube Production Publisher
+- **Status:** 🚀 DEV IMPLEMENTED / READY FOR POC HOMOLOGATION
+- **Implementação:**
+  - Novo cliente API oficial `app/services/post_for_me.py` para Post for Me API v1 (`https://api.postforme.dev/v1`).
+  - Roteador de publicação YouTube `app/services/youtube_publisher.py` chaveado por `autopilot_settings.youtube_publish_provider` (default `upload_post`).
+  - Resolução determinística fail-closed dos 2 canais conectados no Post for Me:
+    - Default: `channel-default-youtube` -> `UCss-ng7mkGuB2v-5KKtIN9A` (display "Dose Diária De Internet")
+    - Mistério: `channel-historias-misterio-youtube` -> `UCGJaC83EuaOwiZ0a3-KqUZA` (display "Dose Diária de Histórias e mistérios")
+  - Suporte completo a privacidade pública (`public`, `private`, `unlisted`).
+  - Idempotência preventiva com external_id determinístico (`video-factory:<task_id>:youtube:<channel_id>`) e consulta prévia (`GET /v1/social-posts?external_id=...`) antes de criar novo post.
+  - Polling bounded com erro transitório (`timeout`) para retry do scheduler sem duplicação de vídeo.
+  - Preservação do YouTube Video ID nativo para `publication_events.external_id` (compatibilidade total com Analytics).
+  - TikTok permanece estritamente OFF.
+  - Auto Publish em produção permanece OFF.
+  - Provider default permanece `upload_post` até homologação real controlada.
+  - API Key lida exclusivamente de `POST_FOR_ME_API_KEY`. Nenhuma credencial no Git.
 
 ---
 

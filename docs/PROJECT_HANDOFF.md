@@ -26,6 +26,8 @@
 - **Presenter autonomous**: OFF (`avatar_mode="none"`)
 - **TikTok**: OFF / NOT HOMOLOGATED
 - **V15-A Production Observability Baseline** = DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
+- **V15-E.1 YouTube Direct Foundation** = HOMOLOGATED (POC Validada nos 2 Canais)
+- **V15-E.2 Post for Me YouTube Publisher** = DEV IMPLEMENTED / READY FOR POC HOMOLOGATION
 
 ### Produção Atual (Estado Operacional Consolidado):
 - **PC forte** = autoridade de produção (`C:\Projetos\MoneyPrinterTurbo`)

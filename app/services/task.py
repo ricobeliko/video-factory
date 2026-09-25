@@ -1221,14 +1221,45 @@ def _run_cross_post(
                 or "Check out this video! #shorts #viral"
             )
 
+        from app.services import youtube_publisher
+        yt_provider = youtube_publisher.get_youtube_publish_provider(db_path=db_path)
+
         for video_path in video_paths:
-            result = upload_post.cross_post_video(
-                video_path=video_path,
-                title=post_title,
-                platforms=list(platforms),
-                youtube_extra=youtube_extra,
-                external_profile_name=external_profile_name,
-            )
+            if has_youtube and yt_provider == youtube_publisher.PROVIDER_POST_FOR_ME and list(platforms) == ["youtube"]:
+                yt_res = youtube_publisher.publish_youtube_video(
+                    video_path=video_path,
+                    title=metadata.get("title", video_subject),
+                    caption=post_title,
+                    task_id=task_id,
+                    channel_id=channel_id,
+                    profile_id=profile_id,
+                    privacy_status=youtube_privacy_status,
+                    made_for_kids=youtube_made_for_kids,
+                    tags=metadata.get("hashtags", []),
+                    external_profile_name=external_profile_name,
+                    db_path=db_path,
+                )
+                result = {
+                    "success": yt_res.get("success"),
+                    "request_id": yt_res.get("request_id"),
+                    "external_id": yt_res.get("external_id"),
+                    "external_url": yt_res.get("external_url"),
+                    "results": {
+                        "youtube": {
+                            "post_id": yt_res.get("external_id"),
+                            "url": yt_res.get("external_url"),
+                        }
+                    },
+                    "error": yt_res.get("error"),
+                }
+            else:
+                result = upload_post.cross_post_video(
+                    video_path=video_path,
+                    title=post_title,
+                    platforms=list(platforms),
+                    youtube_extra=youtube_extra,
+                    external_profile_name=external_profile_name,
+                )
             if not isinstance(result, dict):
                 result = {
                     "success": False,
@@ -1255,16 +1286,24 @@ def _run_cross_post(
         else:
             try:
                 from app.services import scheduler
-                req_id = results[0].get("request_id") if results and isinstance(results[0], dict) else None
+                first_res = results[0] if results and isinstance(results[0], dict) else {}
+                req_id = first_res.get("request_id")
+                sub_results = first_res.get("results", {}) if isinstance(first_res.get("results"), dict) else {}
                 for p in platforms:
+                    p_clean = (p or "").lower().strip()
+                    p_info = sub_results.get(p_clean, {}) if isinstance(sub_results.get(p_clean), dict) else {}
+                    p_post_id = p_info.get("post_id") or first_res.get("external_id") or req_id
+                    p_url = p_info.get("url") or first_res.get("external_url")
                     scheduler.record_publication_event(
                         task_id,
                         p,
                         status="success",
-                        external_id=req_id,
+                        external_id=str(p_post_id) if p_post_id else None,
+                        provider_request_id=str(req_id) if req_id else None,
                         channel_id=channel_id,
                         profile_id=profile_id,
-                        privacy_status=youtube_privacy_status if (p or "").lower().strip() == "youtube" else None,
+                        external_url=str(p_url) if p_url else None,
+                        privacy_status=youtube_privacy_status if p_clean == "youtube" else None,
                         db_path=db_path,
                     )
             except Exception as e:
@@ -1446,7 +1485,7 @@ def publish_task(
 
     Returns (True, "") on successful scheduling/execution, or (False, error_message) on failure.
     """
-    from app.services import operator_console, profile_manager
+    from app.services import operator_console, profile_manager, youtube_publisher
     try:
         operator_console.require_primary_instance(db_path=db_path)
     except PermissionError as exc:
@@ -1455,10 +1494,21 @@ def publish_task(
     if operator_console.is_factory_paused(db_path=db_path):
         return False, "Factory is paused: publishing blocked"
 
-    if not upload_post.upload_post_service.enabled:
-        return False, "Upload-Post integration is disabled in settings"
-    if not upload_post.upload_post_service.is_configured():
-        return False, "Upload-Post is not fully configured (missing API Key or username)"
+    yt_provider = youtube_publisher.get_youtube_publish_provider(db_path=db_path)
+    req_platforms_check = [p.lower().strip() for p in platforms if p and p.strip()] if platforms is not None else None
+    is_pure_post_for_me = (
+        req_platforms_check == ["youtube"] and yt_provider == youtube_publisher.PROVIDER_POST_FOR_ME
+    )
+
+    if not is_pure_post_for_me:
+        if not upload_post.upload_post_service.enabled:
+            return False, "Upload-Post integration is disabled in settings"
+        if not upload_post.upload_post_service.is_configured():
+            return False, "Upload-Post is not fully configured (missing API Key or username)"
+    else:
+        from app.services import post_for_me
+        if not post_for_me.post_for_me_client.is_configured():
+            return False, "Post for Me is not configured (missing POST_FOR_ME_API_KEY)"
 
     # 1. Resolução do perfil da task (imutável)
     task_profile_id = profile_manager.get_task_profile_id(task_id, db_path=db_path)
@@ -1505,7 +1555,9 @@ def publish_task(
         target_platforms = [ch_plat]
         external_profile_name = ch.get("external_profile_name")
     else:
-        req_plats = [p.lower().strip() for p in platforms if p and p.strip()] if platforms else list(upload_post.upload_post_service.platforms)
+        req_plats = [p.lower().strip() for p in platforms if p and p.strip()] if platforms is not None else list(upload_post.upload_post_service.platforms)
+        if not req_plats:
+            return False, "No target platforms selected for publishing"
         enabled_channels = profile_manager.resolve_task_channels(task_id, platforms=req_plats, db_path=db_path)
         all_channels = profile_manager.list_channels(profile_id=task_profile_id, db_path=db_path)
 
@@ -1555,7 +1607,8 @@ def publish_task(
                 external_profile_name = enabled_channels[0].get("external_profile_name")
                 target_platforms = [enabled_channels[0]["platform"].lower().strip()]
             else:
-                target_platforms = [c["platform"].lower().strip() for c in enabled_channels]
+                channel_plats = {c["platform"].lower().strip() for c in enabled_channels}
+                target_platforms = [p for p in req_plats if p in channel_plats] or [c["platform"].lower().strip() for c in enabled_channels]
                 resolved_channel_id = None
                 external_profile_name = None
 
@@ -1722,15 +1775,41 @@ def publish_task(
 
         results = []
         for video_path in video_paths:
-            res = upload_post.cross_post_video(
-                video_path=video_path,
-                title=post_title,
-                platforms=list(target_platforms),
-                youtube_extra=youtube_extra,
-                external_profile_name=external_profile_name,
-            )
+            if has_youtube and yt_provider == youtube_publisher.PROVIDER_POST_FOR_ME and list(target_platforms) == ["youtube"]:
+                yt_res = youtube_publisher.publish_youtube_video(
+                    video_path=video_path,
+                    title=metadata.get("title", subject),
+                    caption=metadata.get("caption", post_title),
+                    task_id=task_id,
+                    channel_id=resolved_channel_id,
+                    profile_id=task_profile_id,
+                    privacy_status=effective_youtube_privacy,
+                    made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
+                    tags=metadata.get("hashtags", []),
+                    external_profile_name=external_profile_name,
+                    db_path=db_path,
+                )
+                res = {
+                    "success": yt_res.get("success"),
+                    "request_id": yt_res.get("request_id"),
+                    "results": {
+                        "youtube": {
+                            "post_id": yt_res.get("external_id"),
+                            "url": yt_res.get("external_url"),
+                        }
+                    },
+                    "error": yt_res.get("error"),
+                }
+            else:
+                res = upload_post.cross_post_video(
+                    video_path=video_path,
+                    title=post_title,
+                    platforms=list(target_platforms),
+                    youtube_extra=youtube_extra,
+                    external_profile_name=external_profile_name,
+                )
             if not isinstance(res, dict):
-                res = {"success": False, "error": "Upload-Post returned an invalid response"}
+                res = {"success": False, "error": "Publish provider returned an invalid response"}
             results.append(res)
 
         failures = [r for r in results if not r.get("success")]

@@ -159,6 +159,39 @@ class TestYouTubePublisherRouter(unittest.TestCase):
             mock_pv.assert_called_once()
             self.assertIs(mock_pv.call_args.kwargs.get("made_for_kids"), True)
 
+    def test_router_propagates_tags_and_synthetic_media_to_post_for_me(self):
+        """2. Router propaga tags e contains_synthetic_media=True para Post for Me."""
+        youtube_publisher.set_youtube_publish_provider("post_for_me", db_path=self.db_path)
+
+        mock_pfm_res = {
+            "success": True,
+            "provider": "post_for_me",
+            "request_id": "spt_pfm_tags",
+            "external_id": "PFM_YT_TAGS",
+            "external_url": "https://www.youtube.com/watch?v=PFM_YT_TAGS",
+            "privacy_status": "public",
+            "error": None,
+            "error_code": None,
+        }
+        with patch.object(post_for_me.post_for_me_client, "publish_video", return_value=mock_pfm_res) as mock_pv:
+            res = youtube_publisher.publish_youtube_video(
+                video_path=self.video_file,
+                title="Title Tags",
+                caption="Caption Tags",
+                task_id="task-pfm-tags-01",
+                channel_id="channel-default-youtube",
+                profile_id="default",
+                privacy_status="public",
+                tags=["#tech", "#gadgets"],
+                contains_synthetic_media=True,
+                db_path=self.db_path,
+            )
+            self.assertTrue(res["success"])
+            mock_pv.assert_called_once()
+            call_kwargs = mock_pv.call_args.kwargs
+            self.assertEqual(call_kwargs.get("tags"), ["#tech", "#gadgets"])
+            self.assertIs(call_kwargs.get("contains_synthetic_media"), True)
+
     def test_publish_task_synchronous_records_native_youtube_video_id_with_post_for_me(self):
         """20. publication_events recebe external YouTube video ID, não Post for Me post ID."""
         youtube_publisher.set_youtube_publish_provider("post_for_me", db_path=self.db_path)

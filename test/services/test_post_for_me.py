@@ -17,6 +17,7 @@ from app.services.post_for_me import (
     PostForMeAccountDisconnectedError,
     PostForMeAccountNotFoundError,
     PostForMeAmbiguousAccountError,
+    PostForMeAmbiguousResultError,
     PostForMeAuthError,
     PostForMeClient,
     PostForMeTimeoutError,
@@ -198,7 +199,7 @@ class TestPostForMeClient(unittest.TestCase):
             self.assertEqual(res["external_id"], "YT_VID_999")
             self.assertEqual(res["external_url"], "https://www.youtube.com/watch?v=YT_VID_999")
 
-            mock_create_upload.assert_called_once_with(content_type="video/mp4")
+            mock_create_upload.assert_called_once_with()
             mock_put.assert_called_once_with("https://s3.fake/upload", self.video_file)
             mock_create_post.assert_called_once()
             mock_get_result.assert_called_once_with(post_id="spt_100", social_account_id="spc_yt_01")
@@ -758,6 +759,182 @@ class TestPostForMeClient(unittest.TestCase):
         self.assertNotIn(secret_key, sanitized)
         self.assertIn("[REDACTED_API_KEY]", sanitized)
         self.assertIn("[REDACTED_TOKEN]", sanitized)
+
+
+    def test_create_upload_url_sends_no_body(self):
+        """1. POST /v1/media/create-upload-url é enviado sem request body."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_resp = {
+            "data": {
+                "upload_url": "https://s3.amazonaws.com/presigned-upload",
+                "media_url": "https://api.postforme.dev/v1/media/med_123",
+            }
+        }
+        with patch.object(client, "_request", return_value=fake_resp) as mock_req:
+            up_url, med_url = client.create_media_upload_url()
+            self.assertEqual(up_url, "https://s3.amazonaws.com/presigned-upload")
+            self.assertEqual(med_url, "https://api.postforme.dev/v1/media/med_123")
+            mock_req.assert_called_once_with("POST", "/media/create-upload-url")
+            # Verifica que nenhum json_data foi passado
+            self.assertIsNone(mock_req.call_args.kwargs.get("json_data"))
+
+    def test_upload_media_binary_uses_video_mp4_content_type(self):
+        """1. PUT para a signed URL utiliza Content-Type: video/mp4."""
+        client = PostForMeClient(api_key="mock-key")
+        with patch("requests.put") as mock_put:
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status.return_value = None
+            mock_put.return_value = mock_resp
+
+            client.upload_media_binary("https://signed-url.example/upload", self.video_file)
+
+            mock_put.assert_called_once()
+            called_headers = mock_put.call_args.kwargs.get("headers")
+            self.assertIsNotNone(called_headers)
+            self.assertEqual(called_headers.get("Content-Type"), "video/mp4")
+
+    def test_tags_and_synthetic_media_propagated_to_platform_configurations(self):
+        """2. tags, contains_synthetic_media=True e description são propagados no platform_configurations.youtube."""
+        client = PostForMeClient(api_key="mock-key")
+
+        with patch.object(client, "_request", return_value={"data": {"id": "spt_meta_ok"}}) as mock_req:
+            client.create_social_post(
+                caption="Legenda do Vídeo #shorts",
+                social_account_id="spc_01",
+                media_url="https://media.url/v.mp4",
+                title="Título do Vídeo",
+                privacy_status="public",
+                external_id="ext-meta-01",
+                made_for_kids=False,
+                tags=["#shorts", "#tecnologia", "#ia"],
+                contains_synthetic_media=True,
+            )
+
+            mock_req.assert_called_once()
+            json_payload = mock_req.call_args.kwargs.get("json_data")
+            self.assertIsNotNone(json_payload)
+            yt_cfg = json_payload["platform_configurations"]["youtube"]
+            self.assertEqual(yt_cfg["title"], "Título do Vídeo")
+            self.assertEqual(yt_cfg["description"], "Legenda do Vídeo #shorts")
+            self.assertEqual(yt_cfg["tags"], ["#shorts", "#tecnologia", "#ia"])
+            self.assertIs(yt_cfg["contains_synthetic_media"], True)
+            self.assertIs(yt_cfg["made_for_kids"], False)
+            self.assertEqual(yt_cfg["privacy_status"], "public")
+
+    def test_publish_video_propagates_tags_and_synthetic_media(self):
+        """2. publish_video propaga tags e contains_synthetic_media para create_social_post."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "get_social_post_by_external_id", return_value=None),
+            patch.object(client, "create_media_upload_url", return_value=("https://up", "https://media")),
+            patch.object(client, "upload_media_binary"),
+            patch.object(client, "create_social_post", return_value={"id": "spt_meta_ok"}) as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "spt_meta_ok", "status": "processed"}),
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_meta",
+                "post_id": "spt_meta_ok",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_META_123"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Title",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-meta-01",
+                tags=["#viral", "#curiosidades"],
+                contains_synthetic_media=True,
+                made_for_kids=False,
+            )
+            self.assertTrue(res["success"])
+            mock_create.assert_called_once()
+            call_kwargs = mock_create.call_args.kwargs
+            self.assertEqual(call_kwargs["tags"], ["#viral", "#curiosidades"])
+            self.assertIs(call_kwargs["contains_synthetic_media"], True)
+            self.assertIs(call_kwargs["made_for_kids"], False)
+
+    def test_post_result_wrong_account_rejected(self):
+        """3A. Resultado de outra conta é rejeitado (retorna None)."""
+        client = PostForMeClient(api_key="mock-key")
+        results = [
+            {
+                "id": "spr_other",
+                "post_id": "spt_100",
+                "social_account_id": "spc_wrong_account",
+                "success": True,
+            }
+        ]
+        with patch.object(client, "list_social_post_results", return_value=results):
+            res = client.get_post_result_for_account(
+                post_id="spt_100",
+                social_account_id="spc_expected_account",
+            )
+            self.assertIsNone(res)
+
+    def test_post_result_wrong_post_id_rejected(self):
+        """3B. Resultado da conta correta mas outro post_id é rejeitado (retorna None)."""
+        client = PostForMeClient(api_key="mock-key")
+        results = [
+            {
+                "id": "spr_wrong_post",
+                "post_id": "spt_other_post_999",
+                "social_account_id": "spc_expected_account",
+                "success": True,
+            }
+        ]
+        with patch.object(client, "list_social_post_results", return_value=results):
+            res = client.get_post_result_for_account(
+                post_id="spt_expected_100",
+                social_account_id="spc_expected_account",
+            )
+            self.assertIsNone(res)
+
+    def test_post_result_correct_post_and_account_accepted(self):
+        """3C. post_id e social_account_id estritamente corretos é aceito."""
+        client = PostForMeClient(api_key="mock-key")
+        matching = {
+            "id": "spr_correct",
+            "post_id": "spt_100",
+            "social_account_id": "spc_yt_01",
+            "success": True,
+            "platform_data": {"id": "YT_OK"},
+        }
+        with patch.object(client, "list_social_post_results", return_value=[matching]):
+            res = client.get_post_result_for_account(
+                post_id="spt_100",
+                social_account_id="spc_yt_01",
+            )
+            self.assertIsNotNone(res)
+            self.assertEqual(res["id"], "spr_correct")
+
+    def test_post_result_ambiguous_matches_fail_closed(self):
+        """3D. Múltiplos matches levantam PostForMeAmbiguousResultError (Fail Closed)."""
+        client = PostForMeClient(api_key="mock-key")
+        ambiguous_results = [
+            {
+                "id": "spr_match_1",
+                "post_id": "spt_100",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+            },
+            {
+                "id": "spr_match_2",
+                "post_id": "spt_100",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+            },
+        ]
+        with patch.object(client, "list_social_post_results", return_value=ambiguous_results):
+            with self.assertRaises(PostForMeAmbiguousResultError):
+                client.get_post_result_for_account(
+                    post_id="spt_100",
+                    social_account_id="spc_yt_01",
+                )
 
 
 if __name__ == "__main__":

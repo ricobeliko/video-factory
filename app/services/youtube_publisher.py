@@ -66,6 +66,7 @@ def publish_youtube_video(
     privacy_status: Optional[str] = None,
     made_for_kids: bool = False,
     tags: Optional[List[str]] = None,
+    contains_synthetic_media: bool = True,
     external_profile_name: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -100,6 +101,8 @@ def publish_youtube_video(
             task_id=task_id,
             privacy_status=effective_privacy,
             made_for_kids=made_for_kids,
+            tags=tags,
+            contains_synthetic_media=contains_synthetic_media,
             profile_id=profile_id,
         )
 
@@ -113,7 +116,7 @@ def publish_youtube_video(
             "tags": tags or [],
             "privacyStatus": effective_privacy,
             "selfDeclaredMadeForKids": made_for_kids,
-            "containsSyntheticMedia": True,
+            "containsSyntheticMedia": bool(contains_synthetic_media),
         }
 
         res = upload_post.cross_post_video(

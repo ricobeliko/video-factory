@@ -85,6 +85,11 @@ class PostForMeAmbiguousAccountError(PostForMeError):
     pass
 
 
+class PostForMeAmbiguousResultError(PostForMeError):
+    """Múltiplos Post Results encontrados para o mesmo post e conta (ambiguidade)."""
+    pass
+
+
 class PostForMeTimeoutError(PostForMeError):
     """Timeout de polling aguardando conclusão do post (erro transitório)."""
     pass
@@ -266,7 +271,7 @@ def extract_post_result(
                 ):
                     matching_result = r
                     break
-        if not matching_result and raw_results:
+        elif raw_results:
             first = raw_results[0]
             if isinstance(first, dict):
                 matching_result = first
@@ -470,14 +475,13 @@ class PostForMeClient:
 
         return account
 
-    def create_media_upload_url(self, content_type: str = "video/mp4") -> Tuple[str, str]:
-        """Solicita URLs para upload temporário de mídia.
-        
+    def create_media_upload_url(self) -> Tuple[str, str]:
+        """Solicita URLs para upload temporário de mídia (POST /v1/media/create-upload-url sem body).
+
         Retorna (upload_url, media_url).
         """
-        payload = {"content_type": content_type}
-        res = self._request("POST", "/media/create-upload-url", json_data=payload)
-        
+        res = self._request("POST", "/media/create-upload-url")
+
         data_dict = res.get("data") if isinstance(res, dict) and isinstance(res.get("data"), dict) else res
         if not isinstance(data_dict, dict):
             raise PostForMeUploadError("Resposta inválida ao criar upload url")
@@ -557,28 +561,55 @@ class PostForMeClient:
     def get_post_result_for_account(
         self,
         post_id: str,
-        social_account_id: Optional[str] = None,
+        social_account_id: str,
     ) -> Optional[Dict[str, Any]]:
-        """Recupera o Post Result associado ao social post e social account alvo."""
+        """Recupera o Post Result associado ao social post e social account alvo.
+
+        Garantias estritas de integridade (Fail Closed):
+        - Exige post_id e social_account_id válidos
+        - Valida localmente post_id == expected_post_id E social_account_id == expected_account_id
+        - 0 matches: retorna None (rejeitado)
+        - 1 match: aceito
+        - >1 matches: levanta PostForMeAmbiguousResultError (fail closed)
+        - NUNCA retorna o primeiro resultado arbitrariamente
+        """
+        pid = str(post_id or "").strip()
+        acc_id = str(social_account_id or "").strip()
+        if not pid or not acc_id:
+            return None
+
         results = self.list_social_post_results(
-            post_id=post_id,
-            social_account_id=social_account_id,
+            post_id=pid,
+            social_account_id=acc_id,
         )
         if not results:
             return None
 
-        if social_account_id:
-            for r in results:
-                if isinstance(r, dict) and (
-                    r.get("social_account_id") == social_account_id
-                    or r.get("account_id") == social_account_id
-                    or r.get("id") == social_account_id
-                ):
-                    return r
-        # Retorna o primeiro resultado se não encontrar por ID exato
-        if results and isinstance(results[0], dict):
-            return results[0]
-        return None
+        matches: List[Dict[str, Any]] = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+
+            r_post_id = str(r.get("post_id") or "").strip()
+            r_acc_id = str(
+                r.get("social_account_id")
+                or r.get("account_id")
+                or ""
+            ).strip()
+
+            if r_post_id == pid and r_acc_id == acc_id:
+                matches.append(r)
+
+        if not matches:
+            return None
+
+        if len(matches) > 1:
+            raise PostForMeAmbiguousResultError(
+                f"Múltiplos Post Results ({len(matches)}) encontrados para post_id='{pid}' "
+                f"e social_account_id='{acc_id}'. Bloqueando por ambiguidade."
+            )
+
+        return matches[0]
 
     def create_social_post(
         self,
@@ -589,6 +620,9 @@ class PostForMeClient:
         privacy_status: str,
         external_id: str,
         made_for_kids: bool = False,
+        tags: Optional[List[str]] = None,
+        contains_synthetic_media: bool = True,
+        description: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Cria um novo post na Post for Me respeitando o contrato oficial."""
         clean_privacy = str(privacy_status or "").lower().strip()
@@ -597,17 +631,27 @@ class PostForMeClient:
                 f"privacy_status inválido '{privacy_status}'. Deve ser um de: {sorted(ALLOWED_PRIVACY_STATUSES)}"
             )
 
+        yt_cfg: Dict[str, Any] = {
+            "title": title[:100],  # Limite oficial do YouTube
+            "privacy_status": clean_privacy,
+            "made_for_kids": bool(made_for_kids),
+            "contains_synthetic_media": bool(contains_synthetic_media),
+        }
+
+        eff_desc = description if description is not None else caption
+        if eff_desc:
+            yt_cfg["description"] = eff_desc
+
+        if tags:
+            yt_cfg["tags"] = [str(t) for t in tags]
+
         payload = {
             "caption": caption,
             "social_accounts": [social_account_id],
             "media": [{"url": media_url}],
             "external_id": external_id,
             "platform_configurations": {
-                "youtube": {
-                    "title": title[:100],  # Limite oficial do YouTube
-                    "privacy_status": clean_privacy,
-                    "made_for_kids": bool(made_for_kids),
-                }
+                "youtube": yt_cfg,
             },
         }
 
@@ -650,6 +694,8 @@ class PostForMeClient:
         task_id: str,
         privacy_status: str = "public",
         made_for_kids: bool = False,
+        tags: Optional[List[str]] = None,
+        contains_synthetic_media: bool = True,
         profile_id: Optional[str] = None,
         timeout_sec: int = 120,
         poll_interval_sec: float = 2.0,
@@ -740,8 +786,8 @@ class PostForMeClient:
                     f"(id: {post_id}). Reutilizando post sem duplicar upload."
                 )
             else:
-                # Fluxo de upload de mídia
-                upload_url, media_url = self.create_media_upload_url(content_type="video/mp4")
+                # Fluxo de upload de mídia (POST /v1/media/create-upload-url sem body)
+                upload_url, media_url = self.create_media_upload_url()
                 self.upload_media_binary(upload_url, video_path)
 
                 # Criação do social-post
@@ -753,6 +799,8 @@ class PostForMeClient:
                     privacy_status=clean_privacy,
                     external_id=deterministic_external_id,
                     made_for_kids=made_for_kids,
+                    tags=tags,
+                    contains_synthetic_media=contains_synthetic_media,
                 )
                 post_id = str(new_post.get("id"))
                 logger.info(f"[POST_FOR_ME] Social post criado com sucesso. id: {post_id}")
@@ -764,24 +812,30 @@ class PostForMeClient:
                 poll_interval_sec=poll_interval_sec,
             )
 
-            # 7. Consulta do Post Result correspondente via GET /v1/social-post-results
-            post_result = None
-            try:
-                post_result = self.get_post_result_for_account(
-                    post_id=post_id,
-                    social_account_id=social_account_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"[POST_FOR_ME] Falha ao consultar post-results separados para post {post_id}: "
-                    f"{sanitize_secrets(exc, self._api_key)}"
-                )
+            # 7. Consulta do Post Result correspondente via GET /v1/social-post-results (Fail Closed)
+            post_result = self.get_post_result_for_account(
+                post_id=post_id,
+                social_account_id=social_account_id,
+            )
 
             # 8. Extração e avaliação do resultado
             if post_result:
                 res_info = extract_post_result(post_result, target_account_id=social_account_id)
             else:
-                res_info = extract_post_result(final_post, target_account_id=social_account_id)
+                logger.error(
+                    f"[POST_FOR_ME] Nenhum Post Result correspondente encontrado para "
+                    f"post_id='{post_id}' e social_account_id='{social_account_id}'."
+                )
+                return {
+                    "success": False,
+                    "provider": "post_for_me",
+                    "request_id": post_id,
+                    "external_id": None,
+                    "external_url": None,
+                    "privacy_status": clean_privacy,
+                    "error": f"Nenhum Post Result correspondente encontrado para post_id='{post_id}' e social_account_id='{social_account_id}'.",
+                    "error_code": "POST_RESULT_NOT_FOUND",
+                }
 
             if res_info["success"]:
                 vid_id = res_info.get("youtube_video_id")

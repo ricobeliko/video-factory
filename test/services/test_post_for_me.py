@@ -17,6 +17,7 @@ from app.services.post_for_me import (
     PostForMeAccountDisconnectedError,
     PostForMeAccountNotFoundError,
     PostForMeAmbiguousAccountError,
+    PostForMeAmbiguousPostError,
     PostForMeAmbiguousResultError,
     PostForMeAuthError,
     PostForMeClient,
@@ -935,6 +936,410 @@ class TestPostForMeClient(unittest.TestCase):
                     post_id="spt_100",
                     social_account_id="spc_yt_01",
                 )
+
+    def test_list_social_posts_by_external_id_strict_equality(self):
+        """Passo 2: list_social_posts_by_external_id filtra estritamente por external_id exato."""
+        client = PostForMeClient(api_key="mock-key")
+        target_ext_id = "video-factory:task-123:youtube:channel-default-youtube"
+        raw_items = [
+            {"id": "sp_1", "external_id": target_ext_id},
+            {"id": "sp_2", "external_id": "video-factory:task-123:youtube:channel-default-youtube:retry:1"},
+            {"id": "sp_3", "external_id": "other-external-id"},
+            {"id": "sp_4", "external_id": target_ext_id},
+        ]
+        with patch.object(client, "_request", return_value={"data": raw_items}) as mock_req:
+            res = client.list_social_posts_by_external_id(target_ext_id)
+            mock_req.assert_called_once_with("GET", "/social-posts", params={"external_id": target_ext_id})
+            self.assertEqual(len(res), 2)
+            self.assertEqual([p["id"] for p in res], ["sp_1", "sp_4"])
+
+    def test_publish_no_previous_post_uploads_and_creates_once(self):
+        """Passo 8.1: nenhum post anterior -> upload + create exatamente uma vez."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[]),
+            patch.object(client, "create_media_upload_url", return_value=("https://up", "https://media")) as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post", return_value={"id": "sp_fresh_01"}) as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_fresh_01", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_fresh_01",
+                "post_id": "sp_fresh_01",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_FRESH_VID_01"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Fresh Video",
+                caption="Fresh Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-fresh-01",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_fresh_01")
+            self.assertEqual(res["external_id"], "YT_FRESH_VID_01")
+            mock_up.assert_called_once()
+            mock_bin.assert_called_once()
+            mock_create.assert_called_once()
+            mock_poll.assert_called_once()
+
+    def test_publish_existing_processing_post_resumes_polling_without_upload(self):
+        """Passo 8.2: post existente processing -> NÃO upload, NÃO create, continua polling do existente."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        existing_active_post = {
+            "id": "sp_active_01",
+            "external_id": "video-factory:task-active-01:youtube:channel-default-youtube",
+            "status": "processing",
+            "social_accounts": ["spc_yt_01"],
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[existing_active_post]),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_active_01", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_act_01",
+                "post_id": "sp_active_01",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_ACTIVE_RESOLVED"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Active Video",
+                caption="Active Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-active-01",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_active_01")
+            self.assertEqual(res["external_id"], "YT_ACTIVE_RESOLVED")
+            # NÃO faz upload novo, NÃO cria social post
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            # Polling retomado no post existente
+            mock_poll.assert_called_once_with("sp_active_01", timeout_sec=120, poll_interval_sec=2.0)
+
+    def test_publish_existing_success_post_returns_immediately_without_upload(self):
+        """Passo 8.3: post existente success -> NÃO upload, NÃO create, retorna sucesso existente."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        existing_success_post = {
+            "id": "sp_success_01",
+            "external_id": "video-factory:task-succ-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+        }
+        success_result = {
+            "id": "spr_succ_01",
+            "post_id": "sp_success_01",
+            "social_account_id": "spc_yt_01",
+            "success": True,
+            "platform_data": {"id": "YT_EXISTING_SUCC_VID", "url": "https://www.youtube.com/watch?v=YT_EXISTING_SUCC_VID"},
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[existing_success_post]),
+            patch.object(client, "get_post_result_for_account", return_value=success_result),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post") as mock_poll,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Succ Video",
+                caption="Succ Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-succ-01",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_success_01")
+            self.assertEqual(res["external_id"], "YT_EXISTING_SUCC_VID")
+            self.assertEqual(res["external_url"], "https://www.youtube.com/watch?v=YT_EXISTING_SUCC_VID")
+            # ZERO upload, ZERO create, ZERO poll
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_not_called()
+
+    def test_publish_terminal_failed_post_allows_new_attempt(self):
+        """Passo 8.4: post terminal failed -> nova tentativa permitida."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        old_failed_post = {
+            "id": "sp_failed_old",
+            "external_id": "video-factory:task-retry-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+        }
+        failed_result = {
+            "id": "spr_failed_old",
+            "post_id": "sp_failed_old",
+            "social_account_id": "spc_yt_01",
+            "success": False,
+            "error": "429 Too Many Requests RESOURCE_EXHAUSTED Quota exceeded for quota metric 'Video Uploads' defaultVideoInsertPerDayPerProject",
+        }
+
+        # Simula que a busca de posts antes do upload retorna apenas o post falho
+        def mock_list_posts(ext_id):
+            return [old_failed_post]
+
+        def mock_get_result(post_id, social_account_id):
+            if post_id == "sp_failed_old":
+                return failed_result
+            if post_id == "sp_new_attempt_02":
+                return {
+                    "id": "spr_new_attempt_02",
+                    "post_id": "sp_new_attempt_02",
+                    "social_account_id": "spc_yt_01",
+                    "success": True,
+                    "platform_data": {"id": "YT_NEW_ATTEMPT_SUCCESS"},
+                }
+            return None
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", side_effect=mock_list_posts),
+            patch.object(client, "get_post_result_for_account", side_effect=mock_get_result),
+            patch.object(client, "create_media_upload_url", return_value=("https://up2", "https://media2")) as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post", return_value={"id": "sp_new_attempt_02"}) as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_new_attempt_02", "status": "processed"}) as mock_poll,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Retry Title",
+                caption="Retry Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-retry-01",
+            )
+            # Nova tentativa foi criada e teve sucesso
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_new_attempt_02")
+            self.assertEqual(res["external_id"], "YT_NEW_ATTEMPT_SUCCESS")
+            mock_up.assert_called_once()
+            mock_bin.assert_called_once()
+            mock_create.assert_called_once()
+            mock_poll.assert_called_once_with("sp_new_attempt_02", timeout_sec=120, poll_interval_sec=2.0)
+
+    def test_publish_lineage_old_failed_and_new_success_returns_success_without_third_attempt(self):
+        """Passo 8.5: histórico: failed antigo + success novo -> chamada seguinte retorna success sem criar 3ª tentativa."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        post_failed_old = {
+            "id": "sp_lineage_fail_01",
+            "external_id": "video-factory:task-lineage-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+        }
+        post_success_new = {
+            "id": "sp_lineage_succ_02",
+            "external_id": "video-factory:task-lineage-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+        }
+
+        def mock_get_result(post_id, social_account_id):
+            if post_id == "sp_lineage_fail_01":
+                return {
+                    "id": "spr_fail",
+                    "post_id": "sp_lineage_fail_01",
+                    "social_account_id": "spc_yt_01",
+                    "success": False,
+                }
+            if post_id == "sp_lineage_succ_02":
+                return {
+                    "id": "spr_succ",
+                    "post_id": "sp_lineage_succ_02",
+                    "social_account_id": "spc_yt_01",
+                    "success": True,
+                    "platform_data": {"id": "YT_LINEAGE_WON"},
+                }
+            return None
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[post_failed_old, post_success_new]),
+            patch.object(client, "get_post_result_for_account", side_effect=mock_get_result),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post") as mock_poll,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Lineage Title",
+                caption="Lineage Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-lineage-01",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_lineage_succ_02")
+            self.assertEqual(res["external_id"], "YT_LINEAGE_WON")
+            # NENHUMA 3ª tentativa criada
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_not_called()
+
+    def test_publish_multiple_success_fails_closed(self):
+        """Passo 8.6: múltiplos success -> fail closed."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        post_succ_1 = {
+            "id": "sp_dup_1",
+            "external_id": "video-factory:task-dup-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+        }
+        post_succ_2 = {
+            "id": "sp_dup_2",
+            "external_id": "video-factory:task-dup-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+        }
+
+        def mock_get_result(post_id, social_account_id):
+            return {
+                "id": f"spr_{post_id}",
+                "post_id": post_id,
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": f"YT_{post_id}"},
+            }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[post_succ_1, post_succ_2]),
+            patch.object(client, "get_post_result_for_account", side_effect=mock_get_result),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "create_social_post") as mock_create,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Dup Title",
+                caption="Dup Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-dup-01",
+            )
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_code"], "AMBIGUOUS_SUCCESS")
+            self.assertIn("Múltiplos sucessos", res["error"])
+            mock_up.assert_not_called()
+            mock_create.assert_not_called()
+
+    def test_publish_multiple_active_fails_closed(self):
+        """Passo 8.7: múltiplos active -> fail closed."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        post_active_1 = {
+            "id": "sp_act_1",
+            "external_id": "video-factory:task-act-02:youtube:channel-default-youtube",
+            "status": "processing",
+            "social_accounts": ["spc_yt_01"],
+        }
+        post_active_2 = {
+            "id": "sp_act_2",
+            "external_id": "video-factory:task-act-02:youtube:channel-default-youtube",
+            "status": "pending",
+            "social_accounts": ["spc_yt_01"],
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[post_active_1, post_active_2]),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "create_social_post") as mock_create,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Act Title",
+                caption="Act Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-act-02",
+            )
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_code"], "AMBIGUOUS_ACTIVE")
+            self.assertIn("Múltiplas tentativas ativas", res["error"])
+            mock_up.assert_not_called()
+            mock_create.assert_not_called()
+
+    def test_publish_inconsistent_post_fails_closed_without_upload(self):
+        """Passo 2E: post processed sem Post Result conclusivo -> INCONSISTENT -> FAIL CLOSED sem upload."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        inconclusive_post = {
+            "id": "sp_inconclusive_01",
+            "external_id": "video-factory:task-inconcl-01:youtube:channel-default-youtube",
+            "status": "processed",  # processed sem Post Result retornado
+            "social_accounts": ["spc_yt_01"],
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[inconclusive_post]),
+            patch.object(client, "get_post_result_for_account", return_value=None),  # Post Result ausente/inconclusivo
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "create_social_post") as mock_create,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Inconsistent Title",
+                caption="Inconsistent Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-inconcl-01",
+            )
+            # Fail closed estrito
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_code"], "AMBIGUOUS_POSTS")
+            self.assertIn("inconsistente", res["error"].lower())
+            # ZERO upload, ZERO create
+            mock_up.assert_not_called()
+            mock_create.assert_not_called()
+
+    def test_list_social_posts_by_external_id_bounded_pagination(self):
+        """Passo 3: list_social_posts_by_external_id executa paginação bounded se meta.next estiver presente."""
+        client = PostForMeClient(api_key="mock-key")
+        target_ext_id = "video-factory:task-page-01:youtube:channel-default-youtube"
+
+        page_1 = {
+            "data": [{"id": f"sp_p1_{i}", "external_id": target_ext_id} for i in range(50)],
+            "meta": {"total": 60, "offset": 0, "limit": 50, "next": "https://api.postforme.dev/v1/social-posts?offset=50&limit=50"},
+        }
+        page_2 = {
+            "data": [{"id": f"sp_p2_{i}", "external_id": target_ext_id} for i in range(10)],
+            "meta": {"total": 60, "offset": 50, "limit": 50, "next": None},
+        }
+
+        def mock_request(method, path, params=None, **kwargs):
+            if params and params.get("offset") == 50:
+                return page_2
+            return page_1
+
+        with patch.object(client, "_request", side_effect=mock_request) as mock_req:
+            posts = client.list_social_posts_by_external_id(target_ext_id)
+            self.assertEqual(len(posts), 60)
+            self.assertEqual(mock_req.call_count, 2)
 
 
 if __name__ == "__main__":

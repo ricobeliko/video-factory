@@ -237,7 +237,7 @@ class TestYouTubePublisherRouter(unittest.TestCase):
             # Verifica o registro persistido em publication_events
             with scheduler.get_connection(self.db_path) as conn:
                 row = conn.execute(
-                    "SELECT platform, status, external_id, provider_request_id, external_url, privacy_status FROM publication_events WHERE task_id = ?;",
+                    "SELECT platform, status, external_id, provider_request_id, external_url, privacy_status, channel_id, profile_id FROM publication_events WHERE task_id = ?;",
                     (task_id,),
                 ).fetchone()
 
@@ -251,8 +251,63 @@ class TestYouTubePublisherRouter(unittest.TestCase):
             self.assertEqual(row["provider_request_id"], "spt_social_post_id_12345")
             self.assertEqual(row["external_url"], "https://www.youtube.com/watch?v=NATIVE_YOUTUBE_VID_678")
             self.assertEqual(row["privacy_status"], "public")
+            self.assertEqual(row["channel_id"], "channel-default-youtube")
+            self.assertIsNotNone(row["profile_id"])
 
         shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_retry_failure_never_generates_publication_event(self):
+        """Passo 8.10: retry ou falha nunca gera publication_event antes de success confirmado."""
+        youtube_publisher.set_youtube_publish_provider("post_for_me", db_path=self.db_path)
+
+        task_id = "test-task-pfm-fail-no-event"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        task_video = os.path.join(task_dir, "final-1.mp4")
+        shutil.copyfile(self.video_file, task_video)
+        script_file = os.path.join(task_dir, "script.json")
+        with open(script_file, "w", encoding="utf-8") as f:
+            json.dump({"script": "Test script", "params": {"video_subject": "Test"}}, f)
+        self.state.update_task(task_id, state=const.TASK_STATE_COMPLETE, progress=100)
+
+        mock_pfm_fail = {
+            "success": False,
+            "provider": "post_for_me",
+            "request_id": "sp_failed_attempt",
+            "external_id": None,
+            "external_url": None,
+            "privacy_status": "public",
+            "error": "429 Too Many Requests RESOURCE_EXHAUSTED Quota exceeded for quota metric 'Video Uploads'",
+            "error_code": "POST_RESULT_FAILED",
+        }
+
+        with (
+            patch.object(post_for_me.post_for_me_client, "is_configured", return_value=True),
+            patch.object(youtube_publisher, "publish_youtube_video", return_value=mock_pfm_fail),
+            patch("app.services.operator_console.require_primary_instance", return_value=True),
+            patch("app.services.operator_console.is_factory_paused", return_value=False),
+        ):
+            success, msg = tm.publish_task(
+                task_id=task_id,
+                platforms=["youtube"],
+                channel_id="channel-default-youtube",
+                synchronous=True,
+                db_path=self.db_path,
+                youtube_privacy_status="public",
+            )
+            self.assertFalse(success)
+
+            # Verifica que NENHUM evento de publicação foi gravado para esta task
+            with scheduler.get_connection(self.db_path) as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM publication_events WHERE task_id = ?;",
+                    (task_id,),
+                ).fetchone()["cnt"]
+
+            self.assertEqual(count, 0)
+
+        shutil.rmtree(task_dir, ignore_errors=True)
+
 
     def test_tiktok_remains_unchanged(self):
         """23. TikTok não sofre alteração e continua usando upload_post."""

@@ -246,6 +246,18 @@ def extract_post_result(
         if not vid_id and url:
             vid_id = extract_youtube_video_id(url)
 
+        priv = None
+        if isinstance(pdata, dict):
+            priv = pdata.get("privacy_status") or pdata.get("privacy")
+        if not priv:
+            priv = data.get("privacy_status") or data.get("privacy")
+        p_cfg = data.get("platform_configurations") or data.get("platform_configuration") or {}
+        if not priv and isinstance(p_cfg, dict):
+            yt_cfg = p_cfg.get("youtube") or {}
+            if isinstance(yt_cfg, dict):
+                priv = yt_cfg.get("privacy_status") or yt_cfg.get("privacy")
+        privacy_val = priv.lower().strip() if (isinstance(priv, str) and priv.lower().strip() in ALLOWED_PRIVACY_STATUSES) else None
+
         return {
             "success": success,
             "post_id": post_id,
@@ -253,6 +265,7 @@ def extract_post_result(
             "url": url,
             "error": error,
             "status": "processed" if success else "failed",
+            "privacy_status": privacy_val,
         }
 
     # Caso 2: Objeto é um SocialPostDto container (ou fallback)
@@ -328,6 +341,24 @@ def extract_post_result(
     if not vid_id and url:
         vid_id = extract_youtube_video_id(url)
 
+    priv = None
+    if matching_result:
+        pdata = matching_result.get("platform_data") or matching_result.get("platformData")
+        if isinstance(pdata, dict):
+            priv = pdata.get("privacy_status") or pdata.get("privacy")
+        if not priv:
+            priv = matching_result.get("privacy_status") or matching_result.get("privacy")
+    if not priv and isinstance(data, dict):
+        p_cfg = data.get("platform_configurations") or data.get("platform_configuration") or {}
+        if isinstance(p_cfg, dict):
+            yt_cfg = p_cfg.get("youtube") or {}
+            if isinstance(yt_cfg, dict):
+                priv = yt_cfg.get("privacy_status") or yt_cfg.get("privacy")
+        if not priv:
+            priv = data.get("privacy_status") or data.get("privacy")
+
+    privacy_val = priv.lower().strip() if (isinstance(priv, str) and priv.lower().strip() in ALLOWED_PRIVACY_STATUSES) else None
+
     return {
         "success": success,
         "post_id": post_id,
@@ -335,6 +366,121 @@ def extract_post_result(
         "url": url,
         "error": error,
         "status": post_status,
+        "privacy_status": privacy_val,
+    }
+
+
+def extract_real_privacy_status(
+    post: Optional[Dict[str, Any]] = None,
+    post_result: Optional[Dict[str, Any]] = None,
+    result_info: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Extrai e valida a privacidade real comprovada de uma publicação existente (GAP 1).
+
+    Aceita estritamente: 'public', 'private', 'unlisted'.
+    Retorna None se a privacidade real não for comprovável com segurança.
+    """
+    candidates = []
+
+    if isinstance(post, dict):
+        p_cfg = post.get("platform_configurations") or post.get("platform_configuration") or {}
+        if isinstance(p_cfg, dict):
+            yt_cfg = p_cfg.get("youtube") or {}
+            if isinstance(yt_cfg, dict):
+                candidates.append(yt_cfg.get("privacy_status"))
+                candidates.append(yt_cfg.get("privacy"))
+
+        candidates.append(post.get("privacy_status"))
+        candidates.append(post.get("privacy"))
+
+        meta = post.get("metadata") or {}
+        if isinstance(meta, dict):
+            candidates.append(meta.get("privacy_status"))
+            candidates.append(meta.get("privacy"))
+
+    if isinstance(post_result, dict):
+        candidates.append(post_result.get("privacy_status"))
+        candidates.append(post_result.get("privacy"))
+
+        pdata = post_result.get("platform_data") or post_result.get("platformData") or {}
+        if isinstance(pdata, dict):
+            candidates.append(pdata.get("privacy_status"))
+            candidates.append(pdata.get("privacy"))
+
+        p_cfg = post_result.get("platform_configurations") or post_result.get("platform_configuration") or {}
+        if isinstance(p_cfg, dict):
+            yt_cfg = p_cfg.get("youtube") or {}
+            if isinstance(yt_cfg, dict):
+                candidates.append(yt_cfg.get("privacy_status"))
+                candidates.append(yt_cfg.get("privacy"))
+
+        meta = post_result.get("metadata") or {}
+        if isinstance(meta, dict):
+            candidates.append(meta.get("privacy_status"))
+            candidates.append(meta.get("privacy"))
+
+    if isinstance(result_info, dict):
+        candidates.append(result_info.get("privacy_status"))
+        candidates.append(result_info.get("privacy"))
+
+    for c in candidates:
+        if isinstance(c, str):
+            clean = c.lower().strip()
+            if clean in ALLOWED_PRIVACY_STATUSES:
+                return clean
+
+    return None
+
+
+def _build_success_reuse_response(
+    succ: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Constrói resposta determinística para reutilização de post success existente.
+
+    Regra estrita (Fase V15-E.2.6):
+    - Extrai a privacidade REAL comprovada do post/resultado existente
+    - Aceita somente 'public', 'private', 'unlisted'
+    - Se comprovável: retorna exatamente ela
+    - Se NÃO comprovável: FAIL CLOSED (error_code='EXISTING_SUCCESS_PRIVACY_UNKNOWN')
+    - Preserva request_id existente, YouTube Video ID nativo e external_url
+    - NUNCA inventa a privacidade usando clean_privacy solicitada na chamada atual
+    """
+    succ_post_id = succ.get("post_id") or ""
+    res_info = succ.get("result_info") or {}
+    vid_id = res_info.get("youtube_video_id")
+    ext_url = res_info.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else None)
+
+    real_privacy = extract_real_privacy_status(
+        post=succ.get("post"),
+        post_result=succ.get("post_result"),
+        result_info=res_info,
+    )
+
+    if not real_privacy:
+        msg = (
+            f"Não foi possível comprovar a privacidade real do post reutilizado "
+            f"(post_id: {succ_post_id}). Bloqueando por segurança (Fail Closed)."
+        )
+        return {
+            "success": False,
+            "provider": "post_for_me",
+            "request_id": succ_post_id,
+            "external_id": vid_id,
+            "external_url": ext_url,
+            "privacy_status": None,
+            "error": msg,
+            "error_code": "EXISTING_SUCCESS_PRIVACY_UNKNOWN",
+        }
+
+    return {
+        "success": True,
+        "provider": "post_for_me",
+        "request_id": succ_post_id,
+        "external_id": vid_id,
+        "external_url": ext_url,
+        "privacy_status": real_privacy,
+        "error": None,
+        "error_code": None,
     }
 
 
@@ -992,27 +1138,17 @@ class PostForMeClient:
                     "error_code": "AMBIGUOUS_SUCCESS",
                 }
 
-            # CASO 1: Exatamente 1 sucesso confirmado -> Idempotência forte
+            # CASO 1: Exatamente 1 sucesso confirmado -> Idempotência forte (GAP 1)
             if len(success_posts) == 1:
-                succ = success_posts[0]
-                succ_post_id = succ["post_id"]
-                res_info = succ["result_info"]
-                vid_id = res_info.get("youtube_video_id")
-                ext_url = res_info.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else None)
-                logger.info(
-                    f"[POST_FOR_ME] Sucesso confirmado pré-existente encontrado (post_id: {succ_post_id}, "
-                    f"video_id: {vid_id}). Reutilizando publicação sem novo upload."
-                )
-                return {
-                    "success": True,
-                    "provider": "post_for_me",
-                    "request_id": succ_post_id,
-                    "external_id": vid_id,
-                    "external_url": ext_url,
-                    "privacy_status": clean_privacy,
-                    "error": None,
-                    "error_code": None,
-                }
+                res = _build_success_reuse_response(success_posts[0])
+                if res["success"]:
+                    logger.info(
+                        f"[POST_FOR_ME] Sucesso confirmado pré-existente encontrado (post_id: {res['request_id']}, "
+                        f"video_id: {res['external_id']}, privacy: {res['privacy_status']}). Reutilizando publicação sem novo upload."
+                    )
+                else:
+                    logger.error(f"[POST_FOR_ME] {res['error']}")
+                return res
 
             # CASO 4: Múltiplos posts ativos -> FAIL CLOSED
             if len(active_posts) > 1:
@@ -1060,68 +1196,95 @@ class PostForMeClient:
                 )
             else:
                 # CASO 5: 0 SUCCESS, 0 ACTIVE (apenas TERMINAL FAILED ou nenhum post existente)
-                # PASSO 5: Garantia contra duplicidade (revalidar antes de create-upload-url)
+                # GAP 2: Revalidação OBRIGATÓRIA antes de TODO create_media_upload_url
                 if failed_posts:
                     logger.info(
                         f"[POST_FOR_ME] {len(failed_posts)} tentativa(s) anterior(es) com falha terminal. "
-                        f"Iniciando nova tentativa controlada para external_id '{deterministic_external_id}'."
+                        f"Revalidando antes de criar nova tentativa para external_id '{deterministic_external_id}'."
                     )
-                    reval = self.classify_existing_posts(
-                        external_id=deterministic_external_id,
-                        social_account_id=social_account_id,
+                else:
+                    logger.info(
+                        f"[POST_FOR_ME] Nenhuma tentativa anterior encontrada. "
+                        f"Revalidando antes de criar nova tentativa para external_id '{deterministic_external_id}'."
                     )
-                    if len(reval["inconsistent_posts"]) > 0:
-                        return {
-                            "success": False,
-                            "provider": "post_for_me",
-                            "request_id": None,
-                            "external_id": None,
-                            "external_url": None,
-                            "privacy_status": clean_privacy,
-                            "error": "Post inconsistente/ambíguo detectado durante revalidação.",
-                            "error_code": "AMBIGUOUS_POSTS",
-                        }
-                    if len(reval["success_posts"]) > 1:
-                        return {
-                            "success": False,
-                            "provider": "post_for_me",
-                            "request_id": None,
-                            "external_id": None,
-                            "external_url": None,
-                            "privacy_status": clean_privacy,
-                            "error": "Múltiplos sucessos detectados durante revalidação.",
-                            "error_code": "AMBIGUOUS_SUCCESS",
-                        }
-                    if len(reval["success_posts"]) == 1:
-                        succ = reval["success_posts"][0]
-                        vid_id = succ["result_info"].get("youtube_video_id")
-                        ext_url = succ["result_info"].get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else None)
-                        return {
-                            "success": True,
-                            "provider": "post_for_me",
-                            "request_id": succ["post_id"],
-                            "external_id": vid_id,
-                            "external_url": ext_url,
-                            "privacy_status": clean_privacy,
-                            "error": None,
-                            "error_code": None,
-                        }
-                    if len(reval["active_posts"]) > 1:
-                        return {
-                            "success": False,
-                            "provider": "post_for_me",
-                            "request_id": None,
-                            "external_id": None,
-                            "external_url": None,
-                            "privacy_status": clean_privacy,
-                            "error": "Múltiplas tentativas ativas detectadas durante revalidação.",
-                            "error_code": "AMBIGUOUS_ACTIVE",
-                        }
-                    if len(reval["active_posts"]) == 1:
-                        post_id = reval["active_posts"][0]["post_id"]
 
-                if not post_id:
-                    # Upload e criação de nova tentativa
+                reval = self.classify_existing_posts(
+                    external_id=deterministic_external_id,
+                    social_account_id=social_account_id,
+                )
+
+                if len(reval["inconsistent_posts"]) > 0:
+                    msg = (
+                        f"Post(s) inconsistente(s)/ambíguo(s) ({len(reval['inconsistent_posts'])}) "
+                        f"detectado(s) durante revalidação pré-upload. Bloqueando por segurança (Fail Closed)."
+                    )
+                    logger.error(f"[POST_FOR_ME] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": clean_privacy,
+                        "error": msg,
+                        "error_code": "AMBIGUOUS_POSTS",
+                    }
+
+                if len(reval["success_posts"]) > 1:
+                    msg = (
+                        f"Múltiplos sucessos confirmados ({len(reval['success_posts'])}) "
+                        f"detectados durante revalidação pré-upload. Bloqueando por ambiguidade (Fail Closed)."
+                    )
+                    logger.error(f"[POST_FOR_ME] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": clean_privacy,
+                        "error": msg,
+                        "error_code": "AMBIGUOUS_SUCCESS",
+                    }
+
+                if len(reval["success_posts"]) == 1:
+                    res = _build_success_reuse_response(reval["success_posts"][0])
+                    if res["success"]:
+                        logger.info(
+                            f"[POST_FOR_ME] Sucesso confirmado detectado durante revalidação pré-upload "
+                            f"(post_id: {res['request_id']}, video_id: {res['external_id']}, "
+                            f"privacy: {res['privacy_status']}). Reutilizando publicação sem novo upload."
+                        )
+                    else:
+                        logger.error(f"[POST_FOR_ME] {res['error']}")
+                    return res
+
+                if len(reval["active_posts"]) > 1:
+                    msg = (
+                        f"Múltiplas tentativas ativas ({len(reval['active_posts'])}) "
+                        f"detectadas durante revalidação pré-upload. Bloqueando por ambiguidade (Fail Closed)."
+                    )
+                    logger.error(f"[POST_FOR_ME] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": clean_privacy,
+                        "error": msg,
+                        "error_code": "AMBIGUOUS_ACTIVE",
+                    }
+
+                if len(reval["active_posts"]) == 1:
+                    post_id = reval["active_posts"][0]["post_id"]
+                    logger.info(
+                        f"[POST_FOR_ME] Tentativa ativa detectada durante revalidação pré-upload "
+                        f"(post_id: {post_id}). Retomando polling sem criar novo upload."
+                    )
+                else:
+                    # Somente failed_posts ou nenhum post no histórico revalidado:
+                    # Autorizado a criar upload e social post
                     upload_url, media_url = self.create_media_upload_url()
                     self.upload_media_binary(upload_url, video_path)
 

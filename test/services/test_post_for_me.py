@@ -282,7 +282,7 @@ class TestPostForMeClient(unittest.TestCase):
             )
 
             expected_id = "video-factory:task-xyz-987:youtube:channel-default-youtube"
-            self.assertEqual(captured_external_id, [expected_id])
+            self.assertEqual(captured_external_id, [expected_id, expected_id])
 
     def test_retry_finds_existing_post_and_does_not_duplicate(self):
         """15. Retry encontra post existente e NÃO cria duplicado."""
@@ -292,6 +292,7 @@ class TestPostForMeClient(unittest.TestCase):
             "id": "spt_existing_555",
             "external_id": "video-factory:task-dup-01:youtube:channel-default-youtube",
             "status": "processed",
+            "platform_configurations": {"youtube": {"privacy_status": "public"}},
         }
 
         with (
@@ -1042,6 +1043,7 @@ class TestPostForMeClient(unittest.TestCase):
             "external_id": "video-factory:task-succ-01:youtube:channel-default-youtube",
             "status": "processed",
             "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "public"}},
         }
         success_result = {
             "id": "spr_succ_01",
@@ -1154,6 +1156,7 @@ class TestPostForMeClient(unittest.TestCase):
             "external_id": "video-factory:task-lineage-01:youtube:channel-default-youtube",
             "status": "processed",
             "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "public"}},
         }
 
         def mock_get_result(post_id, social_account_id):
@@ -1340,6 +1343,242 @@ class TestPostForMeClient(unittest.TestCase):
             posts = client.list_social_posts_by_external_id(target_ext_id)
             self.assertEqual(len(posts), 60)
             self.assertEqual(mock_req.call_count, 2)
+
+    def test_publish_existing_success_preserves_real_privacy_even_if_call_requests_different(self):
+        """GAP 1.1: existing success com privacy real = private; nova chamada pede public -> retorna private."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        existing_success_post = {
+            "id": "sp_success_priv",
+            "external_id": "video-factory:task-priv-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "private"}},
+        }
+        success_result = {
+            "id": "spr_succ_priv",
+            "post_id": "sp_success_priv",
+            "social_account_id": "spc_yt_01",
+            "success": True,
+            "platform_data": {"id": "YT_EXISTING_PRIV_VID", "url": "https://www.youtube.com/watch?v=YT_EXISTING_PRIV_VID"},
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[existing_success_post]),
+            patch.object(client, "get_post_result_for_account", return_value=success_result),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post") as mock_poll,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Privacy Video",
+                caption="Privacy Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-priv-01",
+                privacy_status="public",  # Chamada atual pede public
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_success_priv")
+            self.assertEqual(res["external_id"], "YT_EXISTING_PRIV_VID")
+            self.assertEqual(res["external_url"], "https://www.youtube.com/watch?v=YT_EXISTING_PRIV_VID")
+            self.assertEqual(res["privacy_status"], "private")  # Retorna a privacidade REAL do post existente
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_not_called()
+
+    def test_publish_existing_success_unknown_privacy_fails_closed(self):
+        """GAP 1.2: existing success sem privacy comprovável -> FAIL CLOSED (EXISTING_SUCCESS_PRIVACY_UNKNOWN)."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        existing_success_post = {
+            "id": "sp_success_unk",
+            "external_id": "video-factory:task-unk-01:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+            # Sem platform_configurations e sem privacy_status
+        }
+        success_result = {
+            "id": "spr_succ_unk",
+            "post_id": "sp_success_unk",
+            "social_account_id": "spc_yt_01",
+            "success": True,
+            "platform_data": {"id": "YT_EXISTING_UNK_VID"},
+            # Sem privacy_status
+        }
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", return_value=[existing_success_post]),
+            patch.object(client, "get_post_result_for_account", return_value=success_result),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "create_social_post") as mock_create,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Unknown Priv Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-unk-01",
+                privacy_status="public",
+            )
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_code"], "EXISTING_SUCCESS_PRIVACY_UNKNOWN")
+            self.assertEqual(res["request_id"], "sp_success_unk")
+            self.assertEqual(res["external_id"], "YT_EXISTING_UNK_VID")
+            self.assertIsNone(res["privacy_status"])
+            mock_up.assert_not_called()
+            mock_create.assert_not_called()
+
+    def test_publish_zero_history_revalidation_finds_active_resumes_without_upload(self):
+        """GAP 2.1: revalidação zero-history: primeira vazio, segunda encontra 1 active -> NÃO upload, retoma active."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        active_post = {
+            "id": "sp_race_act_01",
+            "external_id": "video-factory:task-zero-race:youtube:channel-default-youtube",
+            "status": "processing",
+            "social_accounts": ["spc_yt_01"],
+        }
+
+        call_count = 0
+        def mock_list_posts(ext_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []
+            return [active_post]
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", side_effect=mock_list_posts),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_race_act_01", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_race_act_01",
+                "post_id": "sp_race_act_01",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_RACE_RESOLVED"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Race Active Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-zero-race",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_race_act_01")
+            self.assertEqual(res["external_id"], "YT_RACE_RESOLVED")
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_called_once_with("sp_race_act_01", timeout_sec=120, poll_interval_sec=2.0)
+
+    def test_publish_zero_history_revalidation_finds_success_reuses_without_upload(self):
+        """GAP 2.2: revalidação zero-history: primeira vazio, segunda encontra success -> reutiliza, NÃO upload."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        success_post = {
+            "id": "sp_race_succ_01",
+            "external_id": "video-factory:task-zero-succ:youtube:channel-default-youtube",
+            "status": "processed",
+            "social_accounts": ["spc_yt_01"],
+            "platform_configurations": {"youtube": {"privacy_status": "public"}},
+        }
+        success_result = {
+            "id": "spr_race_succ_01",
+            "post_id": "sp_race_succ_01",
+            "social_account_id": "spc_yt_01",
+            "success": True,
+            "platform_data": {"id": "YT_RACE_SUCC_VID"},
+        }
+
+        call_count = 0
+        def mock_list_posts(ext_id):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []
+            return [success_post]
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", side_effect=mock_list_posts),
+            patch.object(client, "get_post_result_for_account", return_value=success_result),
+            patch.object(client, "create_media_upload_url") as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post") as mock_create,
+            patch.object(client, "poll_social_post") as mock_poll,
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Race Succ Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-zero-succ",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_race_succ_01")
+            self.assertEqual(res["external_id"], "YT_RACE_SUCC_VID")
+            self.assertEqual(res["privacy_status"], "public")
+            mock_up.assert_not_called()
+            mock_bin.assert_not_called()
+            mock_create.assert_not_called()
+            mock_poll.assert_not_called()
+
+    def test_publish_zero_history_revalidation_empty_creates_once(self):
+        """GAP 2.3: revalidação zero-history: primeira vazio, segunda continua vazia -> 1 create_media, 1 upload, 1 create_post."""
+        client = PostForMeClient(api_key="mock-key")
+        fake_account = {"id": "spc_yt_01", "platform": "youtube", "user_id": CHANNEL_DEFAULT_YT_ID, "status": "connected"}
+
+        call_count = 0
+        def mock_list_posts(ext_id):
+            nonlocal call_count
+            call_count += 1
+            return []
+
+        with (
+            patch.object(client, "resolve_youtube_account", return_value=fake_account),
+            patch.object(client, "list_social_posts_by_external_id", side_effect=mock_list_posts),
+            patch.object(client, "create_media_upload_url", return_value=("https://up", "https://media")) as mock_up,
+            patch.object(client, "upload_media_binary") as mock_bin,
+            patch.object(client, "create_social_post", return_value={"id": "sp_fresh_zero"}) as mock_create,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_fresh_zero", "status": "processed"}) as mock_poll,
+            patch.object(client, "get_post_result_for_account", return_value={
+                "id": "spr_fresh_zero",
+                "post_id": "sp_fresh_zero",
+                "social_account_id": "spc_yt_01",
+                "success": True,
+                "platform_data": {"id": "YT_FRESH_ZERO_VID"},
+            }),
+        ):
+            res = client.publish_video(
+                video_path=self.video_file,
+                title="Fresh Video",
+                caption="Caption",
+                channel_id="channel-default-youtube",
+                task_id="task-zero-clean",
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["request_id"], "sp_fresh_zero")
+            self.assertEqual(res["external_id"], "YT_FRESH_ZERO_VID")
+            self.assertEqual(call_count, 2)  # Primeira classificação + Revalidação pré-upload
+            mock_up.assert_called_once()
+            mock_bin.assert_called_once()
+            mock_create.assert_called_once()
+            mock_poll.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from uuid import uuid4
 # add project root to python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.services import task as tm
+from app.services import post_for_me, task as tm
 from app.models.schema import MaterialInfo, VideoParams
 from app.services.state import MemoryState, RedisState
 from app.utils import utils
@@ -1522,7 +1522,10 @@ class TestTaskService(unittest.TestCase):
             patch.object(type(service), "auto_upload", new_callable=PropertyMock, return_value=True),
             patch.object(type(service), "platforms", new_callable=PropertyMock, return_value=["tiktok"]),
             patch.object(type(service), "youtube_privacy_status", new_callable=PropertyMock, return_value="private"),
-            patch.object(tm.upload_post, "cross_post_video") as cross_post,
+            patch.object(
+                post_for_me.post_for_me_quickstart_client,
+                "publish_tiktok_video",
+            ) as cross_post,
             patch.object(tm.sm, "state", state),
             patch.object(
                 tm._cross_post_executor,
@@ -1544,9 +1547,15 @@ class TestTaskService(unittest.TestCase):
         with (
             patch.object(tm.sm, "state", state),
             patch.object(
-                tm.upload_post,
-                "cross_post_video",
-                return_value={"success": True, "request_id": "upload-1"},
+                post_for_me.post_for_me_quickstart_client,
+                "publish_tiktok_video",
+                return_value={
+                    "success": True,
+                    "provider": "post_for_me",
+                    "request_id": "upload-1",
+                    "external_id": "tt-1",
+                    "external_url": "https://tiktok.com/@u/video/1",
+                },
             ),
         ):
             worker(*worker_args)
@@ -1762,9 +1771,15 @@ class TestTaskService(unittest.TestCase):
         with (
             patch.object(tm.sm, "state", state),
             patch.object(
-                tm.upload_post,
-                "cross_post_video",
-                return_value={"success": True, "request_id": "upload-1"},
+                post_for_me.post_for_me_quickstart_client,
+                "publish_tiktok_video",
+                return_value={
+                    "success": True,
+                    "provider": "post_for_me",
+                    "request_id": "upload-1",
+                    "external_id": "tt-1",
+                    "external_url": "https://tiktok.com/@u/video/1",
+                },
             ) as cross_post,
             patch.object(tm.time, "sleep") as sleep,
         ):
@@ -1937,9 +1952,15 @@ class TestTaskService(unittest.TestCase):
                         return_value=metadata,
                     ) as generate_metadata,
                     patch.object(
-                        tm.upload_post,
-                        "cross_post_video",
-                        return_value={"success": True},
+                        post_for_me.post_for_me_quickstart_client,
+                        "publish_tiktok_video",
+                        return_value={
+                            "success": True,
+                            "provider": "post_for_me",
+                            "request_id": "req-1",
+                            "external_id": "tt-1",
+                            "external_url": "https://tiktok.com/@u/video/1",
+                        },
                     ) as cross_post,
                 ):
                     tm._run_cross_post(
@@ -1954,7 +1975,7 @@ class TestTaskService(unittest.TestCase):
 
                 generate_metadata.assert_called_once()
                 cross_post.assert_called_once()
-                self.assertEqual(cross_post.call_args.kwargs["title"], expected_title)
+                self.assertEqual(cross_post.call_args.kwargs["caption"], expected_title)
 
     def test_recover_interrupted_cross_posts_preserves_active_future(self):
         """启动恢复只处理遗留状态，当前进程仍持有的发布任务不能被误伤。"""

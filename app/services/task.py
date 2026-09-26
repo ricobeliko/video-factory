@@ -1221,7 +1221,7 @@ def _run_cross_post(
                 or "Check out this video! #shorts #viral"
             )
 
-        from app.services import youtube_publisher, post_for_me
+        from app.services import youtube_publisher, post_for_me, profile_manager
         yt_provider = youtube_publisher.get_youtube_publish_provider(db_path=db_path)
 
         norm_platforms = [p.lower().strip() for p in platforms if p and p.strip()]
@@ -1371,6 +1371,9 @@ def _run_cross_post(
                     else:
                         effective_pid = profile_id or profile_manager.get_task_profile_id(task_id, db_path=db_path)
                         tt_ch_list = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
+                        if not tt_ch_list and (not effective_pid or effective_pid == profile_manager.DEFAULT_PROFILE_ID):
+                            profile_manager.ensure_default_profile(db_path=db_path)
+                            tt_ch_list = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
 
                         if not tt_ch_list:
                             err_msg = f"Perfil '{effective_pid}' não possui canal TikTok habilitado nesta fase."
@@ -1770,6 +1773,9 @@ def publish_task(
             return False, "No target platforms selected for publishing"
         if "tiktok" in req_plats:
             tt_channels = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
+            if not tt_channels and (not task_profile_id or task_profile_id == profile_manager.DEFAULT_PROFILE_ID):
+                profile_manager.ensure_default_profile(db_path=db_path)
+                tt_channels = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
             if not tt_channels:
                 return False, f"Profile '{task_profile_id}' has no enabled TikTok channel"
         enabled_channels = profile_manager.resolve_task_channels(task_id, platforms=req_plats, db_path=db_path)

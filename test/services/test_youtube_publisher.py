@@ -16,7 +16,6 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.config import config
 from app.models import const
 from app.services import (
     post_for_me,

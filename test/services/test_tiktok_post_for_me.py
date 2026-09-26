@@ -3,11 +3,10 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.models import const
 from app.services import (
-    operator_console,
     post_for_me,
     profile_manager,
     scheduler,

@@ -28,6 +28,8 @@ from loguru import logger
 DEFAULT_BASE_URL = "https://api.postforme.dev/v1"
 ENV_API_KEY = "POST_FOR_ME_API_KEY"
 ENV_BASE_URL = "POST_FOR_ME_BASE_URL"
+ENV_QUICKSTART_API_KEY = "POST_FOR_ME_QUICKSTART_API_KEY"
+ENV_QUICKSTART_BASE_URL = "POST_FOR_ME_QUICKSTART_BASE_URL"
 
 # Canais canônicos homologados
 CHANNEL_DEFAULT_YOUTUBE = "channel-default-youtube"
@@ -37,6 +39,18 @@ CHANNEL_DEFAULT_DISPLAY = "Dose Diária De Internet"
 CHANNEL_MYSTERY_YOUTUBE = "channel-historias-misterio-youtube"
 CHANNEL_MYSTERY_YT_ID = "UCGJaC83EuaOwiZ0a3-KqUZA"
 CHANNEL_MYSTERY_DISPLAY = "Dose Diária de Histórias e mistérios"
+
+CHANNEL_DEFAULT_TIKTOK = "channel-default-tiktok"
+CHANNEL_DEFAULT_TIKTOK_USER_ID = "-00084CZ8cOFQstM-kHqpIgjFOeYUf6w4a4F"
+CHANNEL_DEFAULT_TIKTOK_DISPLAY = "Dose Diária De Internet"
+
+TIKTOK_CHANNEL_MAP: Dict[str, Dict[str, str]] = {
+    CHANNEL_DEFAULT_TIKTOK: {
+        "tiktok_user_id": CHANNEL_DEFAULT_TIKTOK_USER_ID,
+        "display_name": CHANNEL_DEFAULT_TIKTOK_DISPLAY,
+        "profile_id": "default",
+    },
+}
 
 YOUTUBE_CHANNEL_MAP: Dict[str, Dict[str, str]] = {
     CHANNEL_DEFAULT_YOUTUBE: {
@@ -56,6 +70,12 @@ ALLOWED_PRIVACY_STATUSES = {"public", "private", "unlisted"}
 # Regex para extração de YouTube Video ID a partir de URLs conhecidas
 _YOUTUBE_URL_REGEX = re.compile(
     r"(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([a-zA-Z0-9_\-]{6,15})",
+    re.IGNORECASE,
+)
+
+# Regex para extração de TikTok Video / Post ID a partir de URLs conhecidas
+_TIKTOK_URL_REGEX = re.compile(
+    r"(?:tiktok\.com/(?:@[^/]+/video/|v/))(\d+)",
     re.IGNORECASE,
 )
 
@@ -142,14 +162,51 @@ def resolve_target_youtube_channel_id(
     return None
 
 
+def resolve_target_tiktok_user_id(
+    channel_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve o user_id real do canal TikTok de forma determinística.
+
+    Nesta fase:
+    - channel-default-tiktok -> -00084CZ8cOFQstM-kHqpIgjFOeYUf6w4a4F
+    - profile_id default se channel_id ausente/vazio
+    - user_id direto se for exatamente o homologado
+    Retorna None para qualquer outro canal ou perfil (Fail Closed).
+    """
+    c_clean = str(channel_id or "").strip()
+    p_clean = str(profile_id or "").strip()
+
+    if c_clean in TIKTOK_CHANNEL_MAP:
+        return TIKTOK_CHANNEL_MAP[c_clean]["tiktok_user_id"]
+
+    if c_clean == CHANNEL_DEFAULT_TIKTOK_USER_ID:
+        return c_clean
+
+    if not c_clean or c_clean == "default":
+        if p_clean in ("default", ""):
+            return CHANNEL_DEFAULT_TIKTOK_USER_ID
+
+    if p_clean == "default" and not c_clean:
+        return CHANNEL_DEFAULT_TIKTOK_USER_ID
+
+    return None
+
+
 def sanitize_secrets(text: Any, api_key: Optional[str] = None) -> str:
     """Sanitiza strings para garantir ausência de API Keys, headers e tokens em logs/retornos."""
     msg = str(text or "")
-    # Redigir qualquer Authorization header
     msg = re.sub(r"Bearer\s+\S+", "Bearer [REDACTED_TOKEN]", msg)
-    if api_key and api_key in msg:
-        msg = msg.replace(api_key, "[REDACTED_API_KEY]")
-    # Redigir URLs assinadas com tokens de query
+    keys_to_redact = set()
+    if api_key and len(str(api_key).strip()) > 3:
+        keys_to_redact.add(str(api_key).strip())
+    for env_name in (ENV_API_KEY, ENV_QUICKSTART_API_KEY):
+        val = os.environ.get(env_name, "").strip()
+        if val and len(val) > 3:
+            keys_to_redact.add(val)
+    for k in keys_to_redact:
+        if k in msg:
+            msg = msg.replace(k, "[REDACTED_API_KEY]")
     msg = re.sub(r"([?&](?:sig|signature|token|key|X-Amz-Signature)=)[^&\s]+", r"\1[REDACTED]", msg)
     return msg
 
@@ -194,9 +251,89 @@ def extract_youtube_video_id(data: Any) -> Optional[str]:
     return None
 
 
+def extract_tiktok_immutable_id(acc: Dict[str, Any]) -> Optional[str]:
+    """Extrai identificador imutável retornado pela API para conta TikTok (user_id).
+
+    NUNCA aceita 'id' interno da API Post for Me (ex.: spc_...) nem username.
+    """
+    if not isinstance(acc, dict):
+        return None
+    for key in ("user_id", "open_id", "account_id", "external_id"):
+        val = acc.get(key)
+        if val is not None:
+            sval = str(val).strip()
+            if sval and not sval.startswith(("spc_", "spt_", "spr_")):
+                return sval
+    return None
+
+
+def extract_tiktok_post_id(data: Any) -> Optional[str]:
+    """Extrai de forma determinística o ID nativo do post no TikTok.
+
+    NUNCA aceita IDs com prefixo de Post for Me (ex.: spt_..., spc_..., spr_...).
+    """
+    if isinstance(data, dict):
+        pdata = data.get("platform_data") or data.get("platformData")
+        if isinstance(pdata, dict):
+            for k in ("id", "video_id", "videoId", "item_id", "itemId"):
+                pid = pdata.get(k)
+                if pid is not None:
+                    spid = str(pid).strip()
+                    if spid and not spid.startswith(("spt_", "spc_", "spr_")):
+                        return spid
+            purl = pdata.get("url") or pdata.get("link") or pdata.get("video_url") or pdata.get("share_url") or pdata.get("platform_url")
+            if purl and isinstance(purl, str):
+                m = _TIKTOK_URL_REGEX.search(purl)
+                if m:
+                    return m.group(1)
+
+        for key in ("platform_post_id", "external_post_id", "video_id", "videoId", "item_id", "itemId"):
+            val = data.get(key)
+            if val is not None:
+                sval = str(val).strip()
+                if sval and not sval.startswith(("spt_", "spc_", "spr_")):
+                    return sval
+
+        for key in ("platform_url", "url", "link", "video_url", "share_url", "external_url"):
+            val = data.get(key)
+            if val and isinstance(val, str):
+                m = _TIKTOK_URL_REGEX.search(val)
+                if m:
+                    return m.group(1)
+
+    elif isinstance(data, str):
+        m = _TIKTOK_URL_REGEX.search(data)
+        if m:
+            return m.group(1)
+        sdata = data.strip()
+        if not sdata.startswith(("spt_", "spc_", "spr_")) and sdata.isdigit():
+            return sdata
+
+    return None
+
+
+def extract_tiktok_post_url(data: Any) -> Optional[str]:
+    """Extrai a URL pública nativa do post no TikTok."""
+    if isinstance(data, dict):
+        pdata = data.get("platform_data") or data.get("platformData")
+        if isinstance(pdata, dict):
+            for k in ("platform_url", "url", "share_url", "link", "video_url"):
+                val = pdata.get(k)
+                if val and isinstance(val, str) and val.startswith("http"):
+                    return val.strip()
+        for k in ("platform_url", "url", "share_url", "link", "video_url", "external_url"):
+            val = data.get(k)
+            if val and isinstance(val, str) and val.startswith("http"):
+                return val.strip()
+    elif isinstance(data, str) and data.startswith("http"):
+        return data.strip()
+    return None
+
+
 def extract_post_result(
     data: Dict[str, Any],
     target_account_id: Optional[str] = None,
+    platform: str = "youtube",
 ) -> Dict[str, Any]:
     """Extrai e normaliza o resultado de publicação por conta.
 
@@ -209,19 +346,28 @@ def extract_post_result(
         "success": bool,
         "post_id": str,
         "youtube_video_id": Optional[str],
+        "tiktok_video_id": Optional[str],
+        "platform_post_id": Optional[str],
         "url": Optional[str],
         "error": Optional[str],
         "status": str,
+        "privacy_status": Optional[str],
     }
     """
+    clean_platform = str(platform or "youtube").lower().strip()
+    is_tiktok = clean_platform == "tiktok"
+
     if not isinstance(data, dict):
         return {
             "success": False,
             "post_id": "",
             "youtube_video_id": None,
+            "tiktok_video_id": None,
+            "platform_post_id": None,
             "url": None,
             "error": "Dados de resultado inválidos",
             "status": "error",
+            "privacy_status": None,
         }
 
     # Caso 1: Objeto é diretamente um SocialPostResultDto (possui 'success' booleano e não é container)
@@ -238,13 +384,20 @@ def extract_post_result(
         pdata = data.get("platform_data") or data.get("platformData")
         url = None
         if isinstance(pdata, dict):
-            url = pdata.get("url") or pdata.get("link") or pdata.get("video_url")
+            url = pdata.get("url") or pdata.get("link") or pdata.get("video_url") or pdata.get("platform_url") or pdata.get("share_url")
         if not url:
-            url = data.get("url") or data.get("link") or data.get("video_url")
+            url = data.get("url") or data.get("link") or data.get("video_url") or data.get("platform_url") or data.get("share_url")
 
-        vid_id = extract_youtube_video_id(data)
-        if not vid_id and url:
-            vid_id = extract_youtube_video_id(url)
+        if is_tiktok:
+            vid_id = extract_tiktok_post_id(data)
+            if not vid_id and url:
+                vid_id = extract_tiktok_post_id(url)
+            if not url:
+                url = extract_tiktok_post_url(data)
+        else:
+            vid_id = extract_youtube_video_id(data)
+            if not vid_id and url:
+                vid_id = extract_youtube_video_id(url)
 
         priv = None
         if isinstance(pdata, dict):
@@ -253,15 +406,17 @@ def extract_post_result(
             priv = data.get("privacy_status") or data.get("privacy")
         p_cfg = data.get("platform_configurations") or data.get("platform_configuration") or {}
         if not priv and isinstance(p_cfg, dict):
-            yt_cfg = p_cfg.get("youtube") or {}
-            if isinstance(yt_cfg, dict):
-                priv = yt_cfg.get("privacy_status") or yt_cfg.get("privacy")
+            plat_cfg = p_cfg.get("tiktok") if is_tiktok else p_cfg.get("youtube")
+            if isinstance(plat_cfg, dict):
+                priv = plat_cfg.get("privacy_status") or plat_cfg.get("privacy")
         privacy_val = priv.lower().strip() if (isinstance(priv, str) and priv.lower().strip() in ALLOWED_PRIVACY_STATUSES) else None
 
         return {
             "success": success,
             "post_id": post_id,
-            "youtube_video_id": vid_id,
+            "youtube_video_id": vid_id if not is_tiktok else None,
+            "tiktok_video_id": vid_id if is_tiktok else None,
+            "platform_post_id": vid_id,
             "url": url,
             "error": error,
             "status": "processed" if success else "failed",
@@ -297,8 +452,8 @@ def extract_post_result(
     elif isinstance(raw_results, dict):
         if target_account_id and target_account_id in raw_results:
             matching_result = raw_results[target_account_id]
-        elif "youtube" in raw_results:
-            matching_result = raw_results["youtube"]
+        elif clean_platform in raw_results:
+            matching_result = raw_results[clean_platform]
         elif raw_results:
             first_val = next(iter(raw_results.values()))
             if isinstance(first_val, dict):
@@ -319,27 +474,39 @@ def extract_post_result(
 
         pdata = matching_result.get("platform_data") or matching_result.get("platformData")
         if isinstance(pdata, dict):
-            url = pdata.get("url") or pdata.get("link") or pdata.get("video_url")
+            url = pdata.get("url") or pdata.get("link") or pdata.get("video_url") or pdata.get("platform_url") or pdata.get("share_url")
         if not url:
             url = (
                 matching_result.get("url")
                 or matching_result.get("link")
                 or matching_result.get("video_url")
+                or matching_result.get("platform_url")
+                or matching_result.get("share_url")
             )
-        vid_id = extract_youtube_video_id(matching_result)
+        if is_tiktok:
+            vid_id = extract_tiktok_post_id(matching_result)
+            if not url:
+                url = extract_tiktok_post_url(matching_result)
+        else:
+            vid_id = extract_youtube_video_id(matching_result)
     else:
         # Fallback para campos top-level do post se não houver array de results
-        if post_status in ("completed", "posted", "success", "published"):
+        if post_status in ("completed", "posted", "success", "published", "done"):
             success = True
         elif post_status in ("failed", "error"):
             success = False
             error = str(data.get("error") or data.get("message") or "publication failed")
 
-        url = data.get("url") or data.get("link")
-        vid_id = extract_youtube_video_id(data)
+        url = data.get("url") or data.get("link") or data.get("platform_url") or data.get("share_url")
+        if is_tiktok:
+            vid_id = extract_tiktok_post_id(data)
+            if not url:
+                url = extract_tiktok_post_url(data)
+        else:
+            vid_id = extract_youtube_video_id(data)
 
     if not vid_id and url:
-        vid_id = extract_youtube_video_id(url)
+        vid_id = extract_tiktok_post_id(url) if is_tiktok else extract_youtube_video_id(url)
 
     priv = None
     if matching_result:
@@ -351,9 +518,9 @@ def extract_post_result(
     if not priv and isinstance(data, dict):
         p_cfg = data.get("platform_configurations") or data.get("platform_configuration") or {}
         if isinstance(p_cfg, dict):
-            yt_cfg = p_cfg.get("youtube") or {}
-            if isinstance(yt_cfg, dict):
-                priv = yt_cfg.get("privacy_status") or yt_cfg.get("privacy")
+            plat_cfg = p_cfg.get("tiktok") if is_tiktok else p_cfg.get("youtube")
+            if isinstance(plat_cfg, dict):
+                priv = plat_cfg.get("privacy_status") or plat_cfg.get("privacy")
         if not priv:
             priv = data.get("privacy_status") or data.get("privacy")
 
@@ -362,7 +529,9 @@ def extract_post_result(
     return {
         "success": success,
         "post_id": post_id,
-        "youtube_video_id": vid_id,
+        "youtube_video_id": vid_id if not is_tiktok else None,
+        "tiktok_video_id": vid_id if is_tiktok else None,
+        "platform_post_id": vid_id,
         "url": url,
         "error": error,
         "status": post_status,
@@ -389,6 +558,10 @@ def extract_real_privacy_status(
             if isinstance(yt_cfg, dict):
                 candidates.append(yt_cfg.get("privacy_status"))
                 candidates.append(yt_cfg.get("privacy"))
+            tt_cfg = p_cfg.get("tiktok") or {}
+            if isinstance(tt_cfg, dict):
+                candidates.append(tt_cfg.get("privacy_status"))
+                candidates.append(tt_cfg.get("privacy"))
 
         candidates.append(post.get("privacy_status"))
         candidates.append(post.get("privacy"))
@@ -413,6 +586,10 @@ def extract_real_privacy_status(
             if isinstance(yt_cfg, dict):
                 candidates.append(yt_cfg.get("privacy_status"))
                 candidates.append(yt_cfg.get("privacy"))
+            tt_cfg = p_cfg.get("tiktok") or {}
+            if isinstance(tt_cfg, dict):
+                candidates.append(tt_cfg.get("privacy_status"))
+                candidates.append(tt_cfg.get("privacy"))
 
         meta = post_result.get("metadata") or {}
         if isinstance(meta, dict):
@@ -434,21 +611,31 @@ def extract_real_privacy_status(
 
 def _build_success_reuse_response(
     succ: Dict[str, Any],
+    platform: str = "youtube",
 ) -> Dict[str, Any]:
     """Constrói resposta determinística para reutilização de post success existente.
 
-    Regra estrita (Fase V15-E.2.6):
+    Regra estrita:
     - Extrai a privacidade REAL comprovada do post/resultado existente
-    - Aceita somente 'public', 'private', 'unlisted'
-    - Se comprovável: retorna exatamente ela
-    - Se NÃO comprovável: FAIL CLOSED (error_code='EXISTING_SUCCESS_PRIVACY_UNKNOWN')
-    - Preserva request_id existente, YouTube Video ID nativo e external_url
+    - Preserva request_id existente, ID nativo e external_url
     - NUNCA inventa a privacidade usando clean_privacy solicitada na chamada atual
     """
     succ_post_id = succ.get("post_id") or ""
     res_info = succ.get("result_info") or {}
-    vid_id = res_info.get("youtube_video_id")
-    ext_url = res_info.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else None)
+    clean_platform = str(platform or "youtube").lower().strip()
+    is_tiktok = clean_platform == "tiktok"
+
+    vid_id = (
+        (res_info.get("tiktok_video_id") or res_info.get("platform_post_id"))
+        if is_tiktok
+        else res_info.get("youtube_video_id")
+    )
+    ext_url = res_info.get("url")
+    if not ext_url and vid_id:
+        if is_tiktok and str(vid_id).isdigit():
+            ext_url = f"https://www.tiktok.com/video/{vid_id}"
+        elif not is_tiktok:
+            ext_url = f"https://www.youtube.com/watch?v={vid_id}"
 
     real_privacy = extract_real_privacy_status(
         post=succ.get("post"),
@@ -492,27 +679,44 @@ class PostForMeClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: int = 30,
+        env_api_key_name: str = ENV_API_KEY,
+        env_base_url_name: str = ENV_BASE_URL,
     ):
-        self._api_key = (api_key or os.environ.get(ENV_API_KEY, "")).strip()
-        self._base_url = (base_url or os.environ.get(ENV_BASE_URL, DEFAULT_BASE_URL)).strip().rstrip("/")
+        self._explicit_api_key = api_key
+        self._explicit_base_url = base_url
+        self._env_api_key_name = env_api_key_name
+        self._env_base_url_name = env_base_url_name
         self._timeout = timeout
 
     @property
     def api_key(self) -> str:
-        return self._api_key
+        if self._explicit_api_key is not None:
+            return str(self._explicit_api_key).strip()
+        return os.environ.get(self._env_api_key_name, "").strip()
+
+    @property
+    def _api_key(self) -> str:
+        return self.api_key
 
     @property
     def base_url(self) -> str:
-        return self._base_url
+        if self._explicit_base_url is not None:
+            return str(self._explicit_base_url).strip().rstrip("/")
+        return os.environ.get(self._env_base_url_name, os.environ.get(ENV_BASE_URL, DEFAULT_BASE_URL)).strip().rstrip("/")
+
+    @property
+    def _base_url(self) -> str:
+        return self.base_url
 
     def is_configured(self) -> bool:
-        return bool(self._api_key)
+        return bool(self.api_key)
 
     def _headers(self) -> Dict[str, str]:
-        if not self._api_key:
-            raise PostForMeAuthError("POST_FOR_ME_API_KEY ausente ou não configurada.")
+        key = self.api_key
+        if not key:
+            raise PostForMeAuthError(f"{self._env_api_key_name} ausente ou não configurada.")
         return {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -525,7 +729,7 @@ class PostForMeClient:
         json_data: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> Any:
-        url = f"{self._base_url}{path}"
+        url = f"{self.base_url}{path}"
         req_timeout = timeout or self._timeout
         headers = self._headers()
 
@@ -539,14 +743,14 @@ class PostForMeClient:
                 timeout=req_timeout,
             )
         except requests.exceptions.Timeout as exc:
-            raise PostForMeTimeoutError(f"timeout: Post for Me request to {path} timed out: {sanitize_secrets(exc, self._api_key)}") from exc
+            raise PostForMeTimeoutError(f"timeout: Post for Me request to {path} timed out: {sanitize_secrets(exc, self.api_key)}") from exc
         except requests.exceptions.RequestException as exc:
-            msg = sanitize_secrets(str(exc), self._api_key)
+            msg = sanitize_secrets(str(exc), self.api_key)
             raise PostForMeError(f"connection/network error communicating with Post for Me: {msg}") from exc
 
         if not resp.ok:
             status_code = resp.status_code
-            err_body = sanitize_secrets(resp.text, self._api_key)
+            err_body = sanitize_secrets(resp.text, self.api_key)
             if status_code in (401, 403):
                 raise PostForMeAuthError(f"Post for Me auth failed ({status_code}): {err_body}")
             if status_code == 429:
@@ -558,7 +762,7 @@ class PostForMeClient:
         try:
             return resp.json()
         except Exception as exc:
-            raise PostForMeError(f"Invalid JSON returned from Post for Me: {sanitize_secrets(exc, self._api_key)}") from exc
+            raise PostForMeError(f"Invalid JSON returned from Post for Me: {sanitize_secrets(exc, self.api_key)}") from exc
 
     def list_social_accounts(self, platform: str = "youtube") -> List[Dict[str, Any]]:
         """Consulta as contas sociais conectadas, filtrando por plataforma quando aplicável."""
@@ -624,6 +828,81 @@ class PostForMeClient:
         acc_id = account.get("id")
         if not acc_id:
             raise PostForMeAccountNotFoundError(f"Conta resolvida para {expected_channel_id} não possui 'id' interno.")
+
+        return account
+
+    def resolve_tiktok_account(
+        self,
+        expected_account_id: Optional[str] = None,
+        profile_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve a conta TikTok conectada de forma DETERMINÍSTICA por user_id imutável.
+
+        Garantias:
+        - platform == 'tiktok'
+        - status == 'connected'
+        - user_id == expected_user_id (homologado: -00084CZ8cOFQstM-kHqpIgjFOeYUf6w4a4F)
+        - NUNCA resolver por username / display name
+        - NUNCA depender do spc_... como identidade persistente
+        - Retorna a conta resolvida incluindo o 'id' (spc_...) atual apenas para a chamada/validação
+        - Falha fechada em 0, >1 ou disconnected
+        """
+        expected_user_id = resolve_target_tiktok_user_id(
+            channel_id=expected_account_id,
+            profile_id=profile_id,
+        )
+        if not expected_user_id:
+            target_clean = str(expected_account_id or "").strip()
+            if target_clean == CHANNEL_DEFAULT_TIKTOK_USER_ID:
+                expected_user_id = CHANNEL_DEFAULT_TIKTOK_USER_ID
+            else:
+                raise PostForMeAccountNotFoundError(
+                    f"Canal TikTok '{expected_account_id}' não suportado ou sem mapeamento determinístico para user_id."
+                )
+
+        accounts = self.list_social_accounts(platform="tiktok")
+
+        tiktok_accounts = [
+            a for a in accounts
+            if isinstance(a, dict)
+            and str(a.get("platform") or a.get("provider") or "").lower().strip() == "tiktok"
+        ]
+
+        matching_accounts: List[Dict[str, Any]] = []
+        disconnected_matches: List[Dict[str, Any]] = []
+
+        for acc in tiktok_accounts:
+            immutable_id = extract_tiktok_immutable_id(acc)
+            if not immutable_id:
+                continue
+
+            # Comparação estrita de user_id - NUNCA comparar com username ou display_name
+            if immutable_id == expected_user_id:
+                status = str(acc.get("status") or "").lower().strip()
+                if status == "connected":
+                    matching_accounts.append(acc)
+                else:
+                    disconnected_matches.append(acc)
+
+        if not matching_accounts:
+            if disconnected_matches:
+                raise PostForMeAccountDisconnectedError(
+                    f"Conta Post for Me TikTok para user_id '{expected_user_id}' está desconectada (status: {disconnected_matches[0].get('status')})."
+                )
+            raise PostForMeAccountNotFoundError(
+                f"Nenhuma conta Post for Me TikTok conectada encontrada para user_id: '{expected_user_id}'."
+            )
+
+        if len(matching_accounts) > 1:
+            raise PostForMeAmbiguousAccountError(
+                f"Múltiplas contas Post for Me TikTok conectadas ({len(matching_accounts)}) encontradas para user_id '{expected_user_id}'. "
+                f"Bloqueando por ambiguidade (Fail Closed)."
+            )
+
+        account = matching_accounts[0]
+        acc_id = account.get("id")
+        if not acc_id:
+            raise PostForMeAccountNotFoundError("Conta TikTok resolvida não possui 'id' (spc_...) interno.")
 
         return account
 
@@ -736,6 +1015,7 @@ class PostForMeClient:
         self,
         external_id: str,
         social_account_id: str,
+        platform: str = "youtube",
     ) -> Dict[str, Any]:
         """Classifica todos os posts existentes para external_id e social_account_id (Fase V15-E.2.3).
 
@@ -796,11 +1076,11 @@ class PostForMeClient:
                 continue
             except Exception as exc:
                 logger.warning(
-                    f"[POST_FOR_ME] Erro ao consultar Post Result do post {post_id}: {sanitize_secrets(exc, self._api_key)}"
+                    f"[POST_FOR_ME] Erro ao consultar Post Result do post {post_id}: {sanitize_secrets(exc, self.api_key)}"
                 )
 
             if post_result is not None:
-                res_info = extract_post_result(post_result, target_account_id=social_account_id)
+                res_info = extract_post_result(post_result, target_account_id=social_account_id, platform=platform)
                 if res_info.get("success") is True:
                     success_posts.append({
                         "post": p,
@@ -821,7 +1101,7 @@ class PostForMeClient:
                 has_embedded_result = any(
                     k in p for k in ("results", "post_results", "social_account_results")
                 )
-                embedded_res = extract_post_result(p, target_account_id=social_account_id) if has_embedded_result else None
+                embedded_res = extract_post_result(p, target_account_id=social_account_id, platform=platform) if has_embedded_result else None
 
                 if embedded_res and embedded_res.get("success") is True:
                     success_posts.append({
@@ -993,6 +1273,51 @@ class PostForMeClient:
         if isinstance(res, dict):
             return res
         raise PostForMeError("Resposta inválida na criação de social-post")
+
+    def create_tiktok_social_post(
+        self,
+        caption: str,
+        social_account_id: str,
+        media_url: str,
+        external_id: str,
+        title: Optional[str] = None,
+        privacy_status: str = "public",
+        contains_synthetic_media: bool = True,
+        allow_comment: bool = True,
+        allow_duet: bool = True,
+        allow_stitch: bool = True,
+    ) -> Dict[str, Any]:
+        """Cria um novo post no TikTok via Post for Me respeitando o contrato oficial."""
+        clean_privacy = str(privacy_status or "public").lower().strip()
+        if clean_privacy not in ("public", "private"):
+            clean_privacy = "public"
+
+        tt_cfg: Dict[str, Any] = {
+            "privacy_status": clean_privacy,
+            "is_ai_generated": bool(contains_synthetic_media),
+            "allow_comment": bool(allow_comment),
+            "allow_duet": bool(allow_duet),
+            "allow_stitch": bool(allow_stitch),
+        }
+        if title:
+            tt_cfg["title"] = str(title)[:150]
+
+        payload = {
+            "caption": caption,
+            "social_accounts": [social_account_id],
+            "media": [{"url": media_url}],
+            "external_id": external_id,
+            "platform_configurations": {
+                "tiktok": tt_cfg,
+            },
+        }
+
+        res = self._request("POST", "/social-posts", json_data=payload)
+        if isinstance(res, dict) and isinstance(res.get("data"), dict):
+            return res["data"]
+        if isinstance(res, dict):
+            return res
+        raise PostForMeError("Resposta inválida na criação de social-post TikTok")
 
     def poll_social_post(
         self,
@@ -1412,7 +1737,7 @@ class PostForMeClient:
                 }
 
         except PostForMeTimeoutError as exc:
-            msg = sanitize_secrets(str(exc), self._api_key)
+            msg = sanitize_secrets(str(exc), self.api_key)
             logger.warning(f"[POST_FOR_ME] {msg}")
             return {
                 "success": False,
@@ -1425,7 +1750,7 @@ class PostForMeClient:
                 "error_code": "POLLING_TIMEOUT",
             }
         except Exception as exc:
-            msg = sanitize_secrets(str(exc), self._api_key)
+            msg = sanitize_secrets(str(exc), self.api_key)
             logger.error(f"[POST_FOR_ME] Erro durante publicação: {msg}")
             return {
                 "success": False,
@@ -1438,6 +1763,424 @@ class PostForMeClient:
                 "error_code": type(exc).__name__,
             }
 
+    def publish_tiktok_video(
+        self,
+        video_path: str,
+        caption: str,
+        task_id: str,
+        channel_id: Optional[str] = CHANNEL_DEFAULT_TIKTOK,
+        title: Optional[str] = None,
+        privacy_status: str = "public",
+        contains_synthetic_media: bool = True,
+        profile_id: Optional[str] = None,
+        timeout_sec: int = 120,
+        poll_interval_sec: float = 2.0,
+    ) -> Dict[str, Any]:
+        """Fluxo completo de publicação no TikTok via Post for Me Quickstart com proteção de idempotência."""
+        # 1. Validação de API Key
+        if not self.is_configured():
+            logger.error(f"[POST_FOR_ME_TIKTOK] Tentativa de publicação sem {self._env_api_key_name} configurada.")
+            return {
+                "success": False,
+                "provider": "post_for_me",
+                "request_id": None,
+                "external_id": None,
+                "external_url": None,
+                "privacy_status": privacy_status,
+                "error": f"{self._env_api_key_name} ausente ou não configurada.",
+                "error_code": "AUTH_CONFIG_MISSING",
+            }
 
-# Instância global padrão do cliente
-post_for_me_client = PostForMeClient()
+        clean_channel_id = str(channel_id or CHANNEL_DEFAULT_TIKTOK).strip()
+        clean_profile_id = str(profile_id or "").strip()
+
+        # 2. Validação estrita de perfil/canal para TikTok (Fase V15-F)
+        # Nesta fase, apenas canais explicitamente habilitados para TikTok são suportados (default: channel-default-tiktok).
+        # Perfis sem canal TikTok (ex: profile-historias-misterio) bloqueiam fechado.
+        if clean_profile_id and clean_profile_id != "default":
+            try:
+                from app.services import profile_manager
+                tt_channels = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"])
+                if not tt_channels:
+                    msg = f"Perfil '{clean_profile_id}' não possui canal TikTok habilitado nesta fase."
+                    logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": privacy_status,
+                        "error": msg,
+                        "error_code": "TIKTOK_CHANNEL_NOT_AVAILABLE",
+                    }
+            except Exception as ch_err:
+                logger.warning(f"[POST_FOR_ME_TIKTOK] Aviso ao checar canais do profile {clean_profile_id}: {ch_err}")
+
+        # 3. Resolução da conta Post for Me correspondente (Fail closed)
+        try:
+            account = self.resolve_tiktok_account(clean_channel_id, profile_id=clean_profile_id)
+            social_account_id = str(account.get("id"))
+        except (
+            PostForMeAccountNotFoundError,
+            PostForMeAccountDisconnectedError,
+            PostForMeAmbiguousAccountError,
+            PostForMeAuthError,
+            PostForMeError,
+        ) as exc:
+            msg = sanitize_secrets(str(exc), self.api_key)
+            logger.error(f"[POST_FOR_ME_TIKTOK] Falha na resolução da conta TikTok: {msg}")
+            return {
+                "success": False,
+                "provider": "post_for_me",
+                "request_id": None,
+                "external_id": None,
+                "external_url": None,
+                "privacy_status": privacy_status,
+                "error": msg,
+                "error_code": type(exc).__name__,
+            }
+
+        # 4. External ID determinístico para idempotência
+        deterministic_external_id = f"video-factory:{task_id}:tiktok:{clean_channel_id}"
+
+        post_id: Optional[str] = None
+        reused_active_entry: Optional[Dict[str, Any]] = None
+        try:
+            classification = self.classify_existing_posts(
+                external_id=deterministic_external_id,
+                social_account_id=social_account_id,
+                platform="tiktok",
+            )
+
+            success_posts = classification["success_posts"]
+            active_posts = classification["active_posts"]
+            failed_posts = classification["failed_posts"]
+            inconsistent_posts = classification["inconsistent_posts"]
+
+            # Múltiplos sucessos confirmados -> FAIL CLOSED
+            if len(success_posts) > 1:
+                msg = (
+                    f"Múltiplos sucessos confirmados ({len(success_posts)}) encontrados para "
+                    f"external_id='{deterministic_external_id}'. Bloqueando por ambiguidade (Fail Closed)."
+                )
+                logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                return {
+                    "success": False,
+                    "provider": "post_for_me",
+                    "request_id": None,
+                    "external_id": None,
+                    "external_url": None,
+                    "privacy_status": privacy_status,
+                    "error": msg,
+                    "error_code": "AMBIGUOUS_SUCCESS",
+                }
+
+            # Exatamente 1 sucesso confirmado -> Idempotência forte
+            if len(success_posts) == 1:
+                res = _build_success_reuse_response(success_posts[0], platform="tiktok")
+                if res["success"]:
+                    logger.info(
+                        f"[POST_FOR_ME_TIKTOK] Sucesso confirmado pré-existente encontrado (post_id: {res['request_id']}, "
+                        f"tiktok_id: {res['external_id']}). Reutilizando publicação sem novo upload."
+                    )
+                else:
+                    logger.error(f"[POST_FOR_ME_TIKTOK] {res['error']}")
+                return res
+
+            # Múltiplos posts ativos -> FAIL CLOSED
+            if len(active_posts) > 1:
+                msg = (
+                    f"Múltiplas tentativas ativas ({len(active_posts)}) encontradas para "
+                    f"external_id='{deterministic_external_id}'. Bloqueando por ambiguidade (Fail Closed)."
+                )
+                logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                return {
+                    "success": False,
+                    "provider": "post_for_me",
+                    "request_id": None,
+                    "external_id": None,
+                    "external_url": None,
+                    "privacy_status": privacy_status,
+                    "error": msg,
+                    "error_code": "AMBIGUOUS_ACTIVE",
+                }
+
+            # Inconsistência -> FAIL CLOSED
+            if len(inconsistent_posts) > 0:
+                msg = (
+                    f"Post(s) inconsistente(s)/ambíguo(s) ({len(inconsistent_posts)}) encontrado(s) para "
+                    f"external_id='{deterministic_external_id}'. Bloqueando por segurança (Fail Closed)."
+                )
+                logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                return {
+                    "success": False,
+                    "provider": "post_for_me",
+                    "request_id": None,
+                    "external_id": None,
+                    "external_url": None,
+                    "privacy_status": privacy_status,
+                    "error": msg,
+                    "error_code": "AMBIGUOUS_POSTS",
+                }
+
+            # Exatamente 1 ativo -> Retomar polling sem novo upload
+            if len(active_posts) == 1:
+                act = active_posts[0]
+                post_id = act["post_id"]
+                reused_active_entry = act
+                logger.info(
+                    f"[POST_FOR_ME_TIKTOK] Tentativa ativa encontrada (post_id: {post_id}). "
+                    f"Retomando polling sem duplicar upload."
+                )
+            else:
+                # 0 success, 0 active -> Revalidação obrigatória antes do upload
+                if failed_posts:
+                    logger.info(
+                        f"[POST_FOR_ME_TIKTOK] {len(failed_posts)} tentativa(s) anterior(es) com falha terminal. "
+                        f"Revalidando antes de criar nova tentativa para external_id '{deterministic_external_id}'."
+                    )
+                else:
+                    logger.info(
+                        f"[POST_FOR_ME_TIKTOK] Nenhuma tentativa anterior encontrada. "
+                        f"Revalidando antes de criar nova tentativa para external_id '{deterministic_external_id}'."
+                    )
+
+                reval = self.classify_existing_posts(
+                    external_id=deterministic_external_id,
+                    social_account_id=social_account_id,
+                    platform="tiktok",
+                )
+
+                if len(reval["inconsistent_posts"]) > 0:
+                    msg = (
+                        f"Post(s) inconsistente(s)/ambíguo(s) ({len(reval['inconsistent_posts'])}) "
+                        f"detectado(s) durante revalidação pré-upload TikTok. Bloqueando (Fail Closed)."
+                    )
+                    logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": privacy_status,
+                        "error": msg,
+                        "error_code": "AMBIGUOUS_POSTS",
+                    }
+
+                if len(reval["success_posts"]) > 1:
+                    msg = (
+                        f"Múltiplos sucessos confirmados ({len(reval['success_posts'])}) "
+                        f"detectados durante revalidação pré-upload TikTok. Bloqueando (Fail Closed)."
+                    )
+                    logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": privacy_status,
+                        "error": msg,
+                        "error_code": "AMBIGUOUS_SUCCESS",
+                    }
+
+                if len(reval["success_posts"]) == 1:
+                    res = _build_success_reuse_response(reval["success_posts"][0], platform="tiktok")
+                    return res
+
+                if len(reval["active_posts"]) > 1:
+                    msg = (
+                        f"Múltiplas tentativas ativas ({len(reval['active_posts'])}) "
+                        f"detectadas durante revalidação pré-upload TikTok. Bloqueando (Fail Closed)."
+                    )
+                    logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                    return {
+                        "success": False,
+                        "provider": "post_for_me",
+                        "request_id": None,
+                        "external_id": None,
+                        "external_url": None,
+                        "privacy_status": privacy_status,
+                        "error": msg,
+                        "error_code": "AMBIGUOUS_ACTIVE",
+                    }
+
+                if len(reval["active_posts"]) == 1:
+                    act = reval["active_posts"][0]
+                    post_id = act["post_id"]
+                    reused_active_entry = act
+                else:
+                    # Autorizado a criar upload e social post TikTok
+                    upload_url, media_url = self.create_media_upload_url()
+                    self.upload_media_binary(upload_url, video_path)
+
+                    new_post = self.create_tiktok_social_post(
+                        caption=caption,
+                        social_account_id=social_account_id,
+                        media_url=media_url,
+                        external_id=deterministic_external_id,
+                        title=title,
+                        privacy_status=privacy_status,
+                        contains_synthetic_media=contains_synthetic_media,
+                    )
+                    post_id = str(new_post.get("id"))
+                    logger.info(f"[POST_FOR_ME_TIKTOK] Nova tentativa criada com sucesso. post_id: {post_id}")
+
+            # Polling
+            final_post = self.poll_social_post(
+                post_id,
+                timeout_sec=timeout_sec,
+                poll_interval_sec=poll_interval_sec,
+            )
+
+            # Post Result
+            post_result = self.get_post_result_for_account(
+                post_id=post_id,
+                social_account_id=social_account_id,
+            )
+
+            if post_result:
+                res_info = extract_post_result(post_result, target_account_id=social_account_id, platform="tiktok")
+            else:
+                logger.error(
+                    f"[POST_FOR_ME_TIKTOK] Nenhum Post Result correspondente encontrado para "
+                    f"post_id='{post_id}' e social_account_id='{social_account_id}'."
+                )
+                return {
+                    "success": False,
+                    "provider": "post_for_me",
+                    "request_id": post_id,
+                    "external_id": None,
+                    "external_url": None,
+                    "privacy_status": privacy_status,
+                    "error": f"Nenhum Post Result correspondente encontrado para post_id='{post_id}' e social_account_id='{social_account_id}'.",
+                    "error_code": "POST_RESULT_NOT_FOUND",
+                }
+
+            if res_info["success"]:
+                vid_id = res_info.get("tiktok_video_id") or res_info.get("platform_post_id")
+                ext_url = res_info.get("url")
+                if not ext_url and vid_id and str(vid_id).isdigit():
+                    ext_url = f"https://www.tiktok.com/video/{vid_id}"
+
+                if reused_active_entry:
+                    real_privacy = extract_real_privacy_status(
+                        post=reused_active_entry.get("post") or final_post,
+                        post_result=post_result,
+                        result_info=res_info,
+                    )
+                    if not real_privacy:
+                        msg = (
+                            f"Post ativo reutilizado '{post_id}' concluiu com sucesso, mas não foi possível "
+                            f"comprovar sua privacidade real. Bloqueando por segurança (Fail Closed)."
+                        )
+                        logger.error(f"[POST_FOR_ME_TIKTOK] {msg}")
+                        return {
+                            "success": False,
+                            "provider": "post_for_me",
+                            "request_id": post_id,
+                            "external_id": vid_id,
+                            "external_url": ext_url,
+                            "privacy_status": None,
+                            "error": msg,
+                            "error_code": "ACTIVE_SUCCESS_PRIVACY_UNKNOWN",
+                        }
+                    effective_privacy = real_privacy
+                else:
+                    effective_privacy = (
+                        extract_real_privacy_status(
+                            post=final_post,
+                            post_result=post_result,
+                            result_info=res_info,
+                        )
+                        or (privacy_status or "public").lower().strip()
+                    )
+
+                return {
+                    "success": True,
+                    "provider": "post_for_me",
+                    "request_id": post_id,
+                    "external_id": vid_id,
+                    "external_url": ext_url,
+                    "privacy_status": effective_privacy,
+                    "error": None,
+                    "error_code": None,
+                }
+            else:
+                err_msg = res_info.get("error") or "Post for Me reportou falha na publicação TikTok."
+                logger.error(f"[POST_FOR_ME_TIKTOK] Falha no resultado do post {post_id}: {err_msg}")
+                return {
+                    "success": False,
+                    "provider": "post_for_me",
+                    "request_id": post_id,
+                    "external_id": None,
+                    "external_url": None,
+                    "privacy_status": privacy_status,
+                    "error": str(err_msg),
+                    "error_code": "POST_RESULT_FAILED",
+                }
+
+        except PostForMeTimeoutError as exc:
+            msg = sanitize_secrets(str(exc), self.api_key)
+            logger.warning(f"[POST_FOR_ME_TIKTOK] {msg}")
+            return {
+                "success": False,
+                "provider": "post_for_me",
+                "request_id": post_id,
+                "external_id": None,
+                "external_url": None,
+                "privacy_status": privacy_status,
+                "error": msg,
+                "error_code": "POLLING_TIMEOUT",
+            }
+        except Exception as exc:
+            msg = sanitize_secrets(str(exc), self.api_key)
+            logger.error(f"[POST_FOR_ME_TIKTOK] Erro durante publicação: {msg}")
+            return {
+                "success": False,
+                "provider": "post_for_me",
+                "request_id": post_id,
+                "external_id": None,
+                "external_url": None,
+                "privacy_status": privacy_status,
+                "error": msg,
+                "error_code": type(exc).__name__,
+            }
+
+
+# Instância global padrão do cliente White Label (YouTube)
+post_for_me_client = PostForMeClient(env_api_key_name=ENV_API_KEY, env_base_url_name=ENV_BASE_URL)
+
+# Instância global padrão do cliente Quickstart (TikTok)
+post_for_me_quickstart_client = PostForMeClient(env_api_key_name=ENV_QUICKSTART_API_KEY, env_base_url_name=ENV_QUICKSTART_BASE_URL)
+
+
+def publish_tiktok_video(
+    video_path: str,
+    caption: str,
+    task_id: str,
+    channel_id: Optional[str] = CHANNEL_DEFAULT_TIKTOK,
+    title: Optional[str] = None,
+    privacy_status: str = "public",
+    contains_synthetic_media: bool = True,
+    profile_id: Optional[str] = None,
+    timeout_sec: int = 120,
+    poll_interval_sec: float = 2.0,
+    client: Optional[PostForMeClient] = None,
+) -> Dict[str, Any]:
+    """Helper module-level para publicar vídeo no TikTok via Post for Me Quickstart."""
+    c = client or post_for_me_quickstart_client
+    return c.publish_tiktok_video(
+        video_path=video_path,
+        caption=caption,
+        task_id=task_id,
+        channel_id=channel_id,
+        title=title,
+        privacy_status=privacy_status,
+        contains_synthetic_media=contains_synthetic_media,
+        profile_id=profile_id,
+        timeout_sec=timeout_sec,
+        poll_interval_sec=poll_interval_sec,
+    )

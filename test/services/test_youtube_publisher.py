@@ -16,7 +16,6 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.config import config
 from app.models import const
 from app.services import (
     post_for_me,
@@ -309,8 +308,8 @@ class TestYouTubePublisherRouter(unittest.TestCase):
         shutil.rmtree(task_dir, ignore_errors=True)
 
 
-    def test_tiktok_remains_unchanged(self):
-        """23. TikTok não sofre alteração e continua usando upload_post."""
+    def test_tiktok_uses_post_for_me_quickstart(self):
+        """23. TikTok publica via Post for Me Quickstart."""
         task_id = "test-task-tiktok"
         task_dir = utils.task_dir(task_id)
         os.makedirs(task_dir, exist_ok=True)
@@ -321,27 +320,19 @@ class TestYouTubePublisherRouter(unittest.TestCase):
             json.dump({"script": "Test script", "params": {"video_subject": "Test"}}, f)
         self.state.update_task(task_id, state=const.TASK_STATE_COMPLETE, progress=100)
 
-        test_config = dict(
-            config.app,
-            upload_post_enabled=True,
-            upload_post_api_key="secret-key",
-            upload_post_username="testuser",
-        )
-
         mock_res = {
             "success": True,
-            "request_id": "up_tiktok_req",
-            "results": {
-                "tiktok": {
-                    "post_id": "TT_POST_123",
-                    "url": "https://www.tiktok.com/@user/video/123",
-                }
-            },
+            "provider": "post_for_me",
+            "request_id": "pfm_tiktok_req",
+            "external_id": "TT_POST_123",
+            "external_url": "https://www.tiktok.com/@user/video/123",
+            "privacy_status": "public",
         }
 
         with (
-            patch.object(config, "app", test_config),
-            patch.object(upload_post, "cross_post_video", return_value=mock_res) as mock_cp,
+            patch.dict(os.environ, {"POST_FOR_ME_QUICKSTART_API_KEY": "test-quickstart-key"}),
+            patch.object(post_for_me.post_for_me_quickstart_client, "is_configured", return_value=True),
+            patch.object(post_for_me.post_for_me_quickstart_client, "publish_tiktok_video", return_value=mock_res) as mock_tt,
             patch("app.services.operator_console.require_primary_instance", return_value=True),
             patch("app.services.operator_console.is_factory_paused", return_value=False),
         ):
@@ -352,9 +343,8 @@ class TestYouTubePublisherRouter(unittest.TestCase):
                 synchronous=True,
                 db_path=self.db_path,
             )
-            self.assertTrue(success)
-            mock_cp.assert_called_once()
-            call_kwargs = mock_cp.call_args.kwargs
+            self.assertTrue(success, f"publish_task failed: {msg}")
+            mock_tt.assert_called_once()
         shutil.rmtree(task_dir, ignore_errors=True)
 
     def test_publish_task_post_for_me_missing_key_fails(self):

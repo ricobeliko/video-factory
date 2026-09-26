@@ -625,6 +625,7 @@ def get_platform_rate_limits(
     growth_mode: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    include_scheduled: bool = True,
 ) -> Dict[str, Any]:
     """Calcula a janela móvel de 24 horas para uma plataforma específica.
     
@@ -634,6 +635,8 @@ def get_platform_rate_limits(
     - posts_agendados_proximas_24h: posts agendados ativos (status IN ('planned', 'ready')) agendados entre now e now + 24h
     - usados_janela: posts_publicados_ultimas_24h + posts_agendados_proximas_24h
     - disponiveis: max(0, limite_efetivo - usados_janela)
+    - include_scheduled: se True (default), considera agendamentos futuros para planejamento de vagas.
+                         se False, ignora reservas futuras (scheduled_count=0) para validação de execução imediata.
     """
     init_db(db_path)
     ref_time = now if now is not None else current_time
@@ -685,15 +688,18 @@ def get_platform_rate_limits(
         global_used_past = global_pub_row["cnt"] if global_pub_row else 0
 
         # Posts globais já agendados para a janela próxima de 24h
-        global_sched_row = conn.execute(
-            """
-            SELECT COUNT(*) AS cnt FROM scheduled_posts
-            WHERE platform = ? AND status IN ('planned', 'ready')
-            AND scheduled_at >= ? AND scheduled_at <= ?;
-            """,
-            (clean_platform, iso_now, iso_future),
-        ).fetchone()
-        global_sched_count = global_sched_row["cnt"] if global_sched_row else 0
+        if include_scheduled:
+            global_sched_row = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM scheduled_posts
+                WHERE platform = ? AND status IN ('planned', 'ready')
+                AND scheduled_at >= ? AND scheduled_at <= ?;
+                """,
+                (clean_platform, iso_now, iso_future),
+            ).fetchone()
+            global_sched_count = global_sched_row["cnt"] if global_sched_row else 0
+        else:
+            global_sched_count = 0
         global_total_used = global_used_past + global_sched_count
         global_slots = max(0, technical_limit - global_total_used) if enabled else 0
 
@@ -710,14 +716,17 @@ def get_platform_rate_limits(
                     """,
                     (clean_platform, prof_norm, chan_norm, iso_past, iso_now),
                 ).fetchone()
-                prof_sched_row = conn.execute(
-                    """
-                    SELECT COUNT(*) AS cnt FROM scheduled_posts
-                    WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ? AND channel_id = ?
-                    AND scheduled_at >= ? AND scheduled_at <= ?;
-                    """,
-                    (clean_platform, prof_norm, chan_norm, iso_now, iso_future),
-                ).fetchone()
+                if include_scheduled:
+                    prof_sched_row = conn.execute(
+                        """
+                        SELECT COUNT(*) AS cnt FROM scheduled_posts
+                        WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ? AND channel_id = ?
+                        AND scheduled_at >= ? AND scheduled_at <= ?;
+                        """,
+                        (clean_platform, prof_norm, chan_norm, iso_now, iso_future),
+                    ).fetchone()
+                else:
+                    prof_sched_row = None
             elif prof_norm == profile_manager.DEFAULT_PROFILE_ID:
                 prof_pub_row = conn.execute(
                     """
@@ -728,15 +737,18 @@ def get_platform_rate_limits(
                     """,
                     (clean_platform, prof_norm, iso_past, iso_now),
                 ).fetchone()
-                prof_sched_row = conn.execute(
-                    """
-                    SELECT COUNT(*) AS cnt FROM scheduled_posts
-                    WHERE platform = ? AND status IN ('planned', 'ready')
-                    AND (profile_id = ? OR profile_id IS NULL OR profile_id = '')
-                    AND scheduled_at >= ? AND scheduled_at <= ?;
-                    """,
-                    (clean_platform, prof_norm, iso_now, iso_future),
-                ).fetchone()
+                if include_scheduled:
+                    prof_sched_row = conn.execute(
+                        """
+                        SELECT COUNT(*) AS cnt FROM scheduled_posts
+                        WHERE platform = ? AND status IN ('planned', 'ready')
+                        AND (profile_id = ? OR profile_id IS NULL OR profile_id = '')
+                        AND scheduled_at >= ? AND scheduled_at <= ?;
+                        """,
+                        (clean_platform, prof_norm, iso_now, iso_future),
+                    ).fetchone()
+                else:
+                    prof_sched_row = None
             else:
                 prof_pub_row = conn.execute(
                     """
@@ -746,14 +758,17 @@ def get_platform_rate_limits(
                     """,
                     (clean_platform, prof_norm, iso_past, iso_now),
                 ).fetchone()
-                prof_sched_row = conn.execute(
-                    """
-                    SELECT COUNT(*) AS cnt FROM scheduled_posts
-                    WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ?
-                    AND scheduled_at >= ? AND scheduled_at <= ?;
-                    """,
-                    (clean_platform, prof_norm, iso_now, iso_future),
-                ).fetchone()
+                if include_scheduled:
+                    prof_sched_row = conn.execute(
+                        """
+                        SELECT COUNT(*) AS cnt FROM scheduled_posts
+                        WHERE platform = ? AND status IN ('planned', 'ready') AND profile_id = ?
+                        AND scheduled_at >= ? AND scheduled_at <= ?;
+                        """,
+                        (clean_platform, prof_norm, iso_now, iso_future),
+                    ).fetchone()
+                else:
+                    prof_sched_row = None
 
             used_past = prof_pub_row["cnt"] if prof_pub_row else 0
             scheduled_count = prof_sched_row["cnt"] if prof_sched_row else 0
@@ -1771,7 +1786,15 @@ def run_scheduler_cycle(
         return {"status": "skipped", "reason": "already_published", "task_id": task_id, "platform": platform}
 
     # 8. Revalidação da Janela Móvel de 24 horas (Técnica + Growth Mode do perfil/canal)
-    rate_info = get_platform_rate_limits(platform, db_path, now=current_time, profile_id=profile_id, channel_id=channel_id)
+    # include_scheduled=False: no momento da execução, reservas futuras não drenam a vaga do post que já venceu.
+    rate_info = get_platform_rate_limits(
+        platform,
+        db_path,
+        now=current_time,
+        profile_id=profile_id,
+        channel_id=channel_id,
+        include_scheduled=False,
+    )
     if rate_info["available_slots"] <= 0:
         window_past = current_time - timedelta(hours=24)
         with get_connection(db_path) as conn:

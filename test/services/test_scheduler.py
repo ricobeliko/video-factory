@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -516,6 +517,221 @@ class TestScheduler(unittest.TestCase):
             mock_pub.assert_not_called()
             mock_cross.assert_not_called()
             mock_upload.assert_not_called()
+
+    def test_32_scheduled_future_reservation_does_not_block_due_post_rate_limit_in_warmup(self):
+        """CENÁRIO A (BUG REAL): No modo warmup (limite YouTube = 1), reserva futura não pode bloquear post vencido."""
+        scheduler.init_db(self.db_path)
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("auto_publish_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("dry_run", False, db_path=self.db_path)
+        scheduler.set_setting("youtube_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_WARMUP, db_path=self.db_path)
+
+        from app.services import profile_manager
+        profile_manager.init_profile_db(self.db_path)
+        profile_manager.ensure_default_profile(self.db_path)
+
+        now = datetime.now(timezone.utc)
+        iso_now = scheduler._to_iso(now)
+        future_time = now + timedelta(hours=4)
+        iso_future = scheduler._to_iso(future_time)
+
+        # Prepara tarefa A (due agora)
+        task_a_dir = os.path.join(self.temp_dir.name, "task-a")
+        os.makedirs(task_a_dir, exist_ok=True)
+        with open(os.path.join(task_a_dir, "final-1.mp4"), "wb") as f:
+            f.write(b"video a")
+        with open(os.path.join(task_a_dir, "script.json"), "w", encoding="utf-8") as f:
+            json.dump({"script": "Script A", "params": {"video_subject": "Subject A"}}, f)
+        scheduler.save_task_platforms("task-a", ["youtube"], db_path=self.db_path)
+
+        # Prepara tarefa B (agendada no futuro dentro das próximas 24h)
+        task_b_dir = os.path.join(self.temp_dir.name, "task-b")
+        os.makedirs(task_b_dir, exist_ok=True)
+        with open(os.path.join(task_b_dir, "final-1.mp4"), "wb") as f:
+            f.write(b"video b")
+        with open(os.path.join(task_b_dir, "script.json"), "w", encoding="utf-8") as f:
+            json.dump({"script": "Script B", "params": {"video_subject": "Subject B"}}, f)
+        scheduler.save_task_platforms("task-b", ["youtube"], db_path=self.db_path)
+
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status, attempts, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                ("task-a", "youtube", "default", "channel-default-youtube", iso_now, "ready", 0, iso_now)
+            )
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status, attempts, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                ("task-b", "youtube", "default", "channel-default-youtube", iso_future, "ready", 0, iso_now)
+            )
+
+        # Verifica que o PLANEJAMENTO continua enxergando 0 slots livres por causa da reserva futura
+        plan_rate = scheduler.get_platform_rate_limits("youtube", db_path=self.db_path, now=now, profile_id="default", channel_id="channel-default-youtube", include_scheduled=True)
+        self.assertEqual(plan_rate["available_slots"], 0)
+        self.assertEqual(plan_rate["scheduled_24h"], 2)
+
+        # Verifica que a EXECUÇÃO enxerga 1 slot livre pois não há publicação real passada
+        exec_rate = scheduler.get_platform_rate_limits("youtube", db_path=self.db_path, now=now, profile_id="default", channel_id="channel-default-youtube", include_scheduled=False)
+        self.assertEqual(exec_rate["available_slots"], 1)
+        self.assertEqual(exec_rate["scheduled_24h"], 0)
+
+        # Executa ciclo do scheduler
+        with patch("app.services.operator_console.require_primary_instance", return_value=True), \
+             patch("app.services.operator_console.is_factory_paused", return_value=False), \
+             patch("app.services.task.publish_task", return_value=(True, "published")) as mock_pub:
+            res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.temp_dir.name)
+
+        # Post A deve ser publicado com sucesso e mock_pub chamado
+        self.assertEqual(res["status"], "published")
+        self.assertEqual(res["task_id"], "task-a")
+        mock_pub.assert_called_once()
+
+        # Verifica status no banco
+        with scheduler.get_connection(self.db_path) as conn:
+            post_a_row = conn.execute("SELECT status, scheduled_at FROM scheduled_posts WHERE task_id = 'task-a';").fetchone()
+            post_b_row = conn.execute("SELECT status, scheduled_at FROM scheduled_posts WHERE task_id = 'task-b';").fetchone()
+
+        self.assertEqual(post_a_row["status"], "published")
+        # Post B continua intacto e agendado
+        self.assertEqual(post_b_row["status"], "ready")
+        self.assertEqual(post_b_row["scheduled_at"], iso_future)
+
+    def test_33_real_publication_in_last_24h_still_blocks_due_post_rate_limit_in_warmup(self):
+        """CENÁRIO B (LIMITE REAL PROTEGIDO): Publicação REAL de YouTube nas últimas 24h bloqueia post vencido no warmup."""
+        scheduler.init_db(self.db_path)
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("auto_publish_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("dry_run", False, db_path=self.db_path)
+        scheduler.set_setting("youtube_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_WARMUP, db_path=self.db_path)
+
+        from app.services import profile_manager
+        profile_manager.init_profile_db(self.db_path)
+        profile_manager.ensure_default_profile(self.db_path)
+
+        now = datetime.now(timezone.utc)
+        iso_now = scheduler._to_iso(now)
+
+        # Registra publicação REAL 4 horas atrás
+        past_pub_time = now - timedelta(hours=4)
+        scheduler.record_publication_event(
+            task_id="past-pub-task",
+            platform="youtube",
+            status="success",
+            published_at=past_pub_time,
+            profile_id="default",
+            channel_id="channel-default-youtube",
+            db_path=self.db_path,
+        )
+
+        # Prepara tarefa A vencida agora
+        task_a_dir = os.path.join(self.temp_dir.name, "task-a")
+        os.makedirs(task_a_dir, exist_ok=True)
+        with open(os.path.join(task_a_dir, "final-1.mp4"), "wb") as f:
+            f.write(b"video a")
+        with open(os.path.join(task_a_dir, "script.json"), "w", encoding="utf-8") as f:
+            json.dump({"script": "Script A", "params": {"video_subject": "Subject A"}}, f)
+        scheduler.save_task_platforms("task-a", ["youtube"], db_path=self.db_path)
+
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status, attempts, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                ("task-a", "youtube", "default", "channel-default-youtube", iso_now, "ready", 0, iso_now)
+            )
+
+        with patch("app.services.operator_console.require_primary_instance", return_value=True), \
+             patch("app.services.operator_console.is_factory_paused", return_value=False), \
+             patch("app.services.task.publish_task") as mock_pub:
+            res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.temp_dir.name)
+
+        # Deve ser adiado por rate_limit_reached
+        self.assertEqual(res["status"], "postponed")
+        self.assertEqual(res["reason"], "rate_limit_reached")
+        mock_pub.assert_not_called()
+
+        with scheduler.get_connection(self.db_path) as conn:
+            post_a_row = conn.execute("SELECT status, scheduled_at FROM scheduled_posts WHERE task_id = 'task-a';").fetchone()
+
+        self.assertEqual(post_a_row["status"], "ready")
+        expected_eligible = past_pub_time + timedelta(hours=24, minutes=1)
+        self.assertEqual(post_a_row["scheduled_at"], scheduler._to_iso(expected_eligible))
+
+    def test_34_min_interval_hours_blocks_burst_publication(self):
+        """CENÁRIO C (ANTI-BURST): min_interval_hours (8h no warmup) impede publicação se a última publicação real ocorreu há menos de 8h."""
+        scheduler.init_db(self.db_path)
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("auto_publish_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("dry_run", False, db_path=self.db_path)
+        scheduler.set_setting("youtube_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("growth_mode", const.GROWTH_MODE_WARMUP, db_path=self.db_path)
+
+        from app.services import profile_manager
+        profile_manager.init_profile_db(self.db_path)
+        profile_manager.ensure_default_profile(self.db_path)
+
+        now = datetime.now(timezone.utc)
+        iso_now = scheduler._to_iso(now)
+
+        # Registra publicação REAL ocorrida há 3 horas (menor que o intervalo mínimo de 8h)
+        past_pub_time = now - timedelta(hours=3)
+        scheduler.record_publication_event(
+            task_id="recent-pub-task",
+            platform="youtube",
+            status="success",
+            published_at=past_pub_time,
+            profile_id="default",
+            channel_id="channel-default-youtube",
+            db_path=self.db_path,
+        )
+
+        # Prepara tarefa A vencida agora
+        task_a_dir = os.path.join(self.temp_dir.name, "task-a")
+        os.makedirs(task_a_dir, exist_ok=True)
+        with open(os.path.join(task_a_dir, "final-1.mp4"), "wb") as f:
+            f.write(b"video a")
+        with open(os.path.join(task_a_dir, "script.json"), "w", encoding="utf-8") as f:
+            json.dump({"script": "Script A", "params": {"video_subject": "Subject A"}}, f)
+        scheduler.save_task_platforms("task-a", ["youtube"], db_path=self.db_path)
+
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status, attempts, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                ("task-a", "youtube", "default", "channel-default-youtube", iso_now, "ready", 0, iso_now)
+            )
+
+        with patch("app.services.operator_console.require_primary_instance", return_value=True), \
+             patch("app.services.operator_console.is_factory_paused", return_value=False), \
+             patch("app.services.task.publish_task") as mock_pub:
+            # Simulando que a cota diária permitiu (e.g. 5 vagas no modo), mas o intervalo mínimo de 8h bloqueia
+            with patch.dict(const.GROWTH_MODE_LIMITS[const.GROWTH_MODE_WARMUP], {"youtube": 5, "min_interval_hours": 8}):
+                res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.temp_dir.name)
+
+        # Deve ser bloqueado por min_interval_hours (motivo min_interval_not_met)
+        self.assertEqual(res["status"], "postponed")
+        self.assertEqual(res["reason"], "min_interval_not_met")
+        mock_pub.assert_not_called()
+
+        with scheduler.get_connection(self.db_path) as conn:
+            post_a_row = conn.execute("SELECT status, scheduled_at FROM scheduled_posts WHERE task_id = 'task-a';").fetchone()
+
+        self.assertEqual(post_a_row["status"], "ready")
+        expected_allowed = past_pub_time + timedelta(hours=8)
+        self.assertEqual(post_a_row["scheduled_at"], scheduler._to_iso(expected_allowed))
 
 
 if __name__ == "__main__":

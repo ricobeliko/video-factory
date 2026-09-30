@@ -609,8 +609,14 @@ def get_autonomous_ready_stock(
         except (ValueError, TypeError, OSError):
             continue
     target = get_target_ready_stock(profile_id=clean_profile, db_path=db_path)
+    tt_count = 0
+    if scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true":
+        for t in eligible:
+            tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
+            if tt_check.get("eligible"):
+                tt_count += 1
     return {"ready_count": len(eligible), "youtube_count": len(eligible),
-            "tiktok_count": 0, "target_stock": target,
+            "tiktok_count": tt_count, "target_stock": target,
             "is_below_target": len(eligible) < target, "youtube_ready": eligible}
 
 
@@ -917,6 +923,41 @@ def get_global_cost_guard_status(now: Optional[datetime] = None, db_path: Option
     }
 
 
+def resolve_autonomous_planned_platforms(
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> List[str]:
+    """Resolve os destinos de publicação planejados para o loop autônomo baseado no estado real.
+
+    Regras:
+    - YouTube é incluído se globalmente habilitado e o perfil possuir canal YouTube ativo.
+    - TikTok é incluído se globalmente habilitado (tiktok_enabled == True) E o perfil possuir
+      EXATAMENTE UM canal TikTok habilitado.
+    - Fail-closed: se o perfil não tiver canal TikTok habilitado ou tiver múltiplos canais ambíguos,
+      TikTok não é incluído.
+    - default com ambos habilitados -> ["youtube", "tiktok"]
+    - profile-historias-misterio -> ["youtube"]
+    """
+    prof_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+    channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
+
+    planned: List[str] = []
+
+    # 1. YouTube
+    yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
+    enabled_yt = [c for c in channels if c.get("platform", "").lower().strip() == "youtube" and c.get("is_enabled")]
+    if yt_enabled and enabled_yt:
+        planned.append("youtube")
+
+    # 2. TikTok
+    tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
+    enabled_tt = [c for c in channels if c.get("platform", "").lower().strip() == "tiktok" and c.get("is_enabled")]
+    if tt_enabled and len(enabled_tt) == 1:
+        planned.append("tiktok")
+
+    return planned or ["youtube"]
+
+
 def check_asset_eligibility_for_destination(
     task_data: Dict[str, Any],
     platform: str,
@@ -924,20 +965,34 @@ def check_asset_eligibility_for_destination(
 ) -> Dict[str, Any]:
     """Avalia a elegibilidade de um asset aprovado para um destino específico.
 
-    Conceito arquitetural multi-destino (V12-F.5):
-    Prepara a distribuição de 1 asset aprovado para múltiplos destinos (ex: YouTube e futuramente TikTok)
+    Conceito arquitetural multi-destino:
+    Prepara a distribuição de 1 asset aprovado para múltiplos destinos (ex: YouTube e TikTok)
     sem necessidade de re-renderização, validando critérios como:
-    - aspect ratio (ex: 9:16 vertical para Shorts / TikTok)
-    - duração (ex: <= 60s para Shorts / TikTok)
-    - áudio / legendas
-    - políticas da plataforma
-
-    Nesta fase (V12-F.5):
-    - YouTube é o único destino efetivamente habilitado.
-    - TikTok permanece estritamente OFF (eligible=False, enabled=False).
+    - plataforma globalmente habilitada
+    - canal daquela plataforma existente e habilitado para o perfil
+    - perfil ativo
     """
     clean_plat = str(platform or "").lower().strip()
+    prof_id = task_data.get("profile_id") or profile_manager.get_active_profile_id(db_path=db_path)
+    channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
+
     if clean_plat == "youtube":
+        yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
+        enabled_yt = [c for c in channels if c.get("platform", "").lower().strip() == "youtube" and c.get("is_enabled")]
+        if not yt_enabled:
+            return {
+                "platform": "youtube",
+                "eligible": False,
+                "enabled": False,
+                "reasons": ["youtube_disabled_globally"],
+            }
+        if not enabled_yt:
+            return {
+                "platform": "youtube",
+                "eligible": False,
+                "enabled": False,
+                "reasons": ["no_enabled_youtube_channel_for_profile"],
+            }
         return {
             "platform": "youtube",
             "eligible": True,
@@ -945,11 +1000,27 @@ def check_asset_eligibility_for_destination(
             "reasons": [],
         }
     elif clean_plat == "tiktok":
+        tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
+        enabled_tt = [c for c in channels if c.get("platform", "").lower().strip() == "tiktok" and c.get("is_enabled")]
+        if not tt_enabled:
+            return {
+                "platform": "tiktok",
+                "eligible": False,
+                "enabled": False,
+                "reasons": ["tiktok_disabled_globally"],
+            }
+        if len(enabled_tt) != 1:
+            return {
+                "platform": "tiktok",
+                "eligible": False,
+                "enabled": False,
+                "reasons": ["tiktok_channel_not_available_or_ambiguous"],
+            }
         return {
             "platform": "tiktok",
-            "eligible": False,
-            "enabled": False,
-            "reasons": ["tiktok_disabled_in_v12_f5"],
+            "eligible": True,
+            "enabled": True,
+            "reasons": [],
         }
     return {
         "platform": clean_plat,
@@ -1608,7 +1679,8 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     if (not math.isfinite(score) or score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS
             or quality["quality_label"] not in ("GOOD", "STRONG")):
         raise ValueError("waiting_quality_not_approved")
-    if "youtube" not in scheduler.get_task_platforms(task_id, db_path=db_path):
+    persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+    if "youtube" not in persisted_plats and "youtube" not in (task.get("planned_platforms") or []):
         raise ValueError("waiting_youtube_destination_missing")
     prof = profile_manager.get_profile(profile["profile_id"], db_path=db_path) if profile else None
     if not prof or not prof.get("is_active"):
@@ -1630,8 +1702,13 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     if not cp_ok:
         raise ValueError(f"waiting_copyright_provenance_failed: {cp_reason}")
 
+    target_platforms = resolve_autonomous_planned_platforms(prof_id, db_path=db_path)
+    combined_plats = [p for p in target_platforms if p in persisted_plats or p == "youtube"]
+    if not combined_plats:
+        combined_plats = ["youtube"]
+
     task.update(task_id=task_id, state=const.TASK_STATE_COMPLETE, video_file=video,
-                safety_status=const.SAFETY_STATUS_PASS, planned_platforms=["youtube"],
+                safety_status=const.SAFETY_STATUS_PASS, planned_platforms=combined_plats,
                 profile_id=prof_id, quality_score=score,
                 quality_label=quality["quality_label"],
                 channel_id=chan_id,
@@ -1824,8 +1901,8 @@ def _run_autonomous_cycle(
             )
 
             _set_status(KEY_AUTONOMOUS_STATE, STATE_SCHEDULING)
-            # YouTube Primeiro: Apenas YouTube habilitado
-            scheduler.adopt_tasks_into_scheduler([current_task_id], ["youtube"], db_path=db_path)
+            planned_plats = resolve_autonomous_planned_platforms(target_profile_id, db_path=db_path)
+            scheduler.adopt_tasks_into_scheduler([current_task_id], planned_plats, db_path=db_path)
 
             from app.services import state as sm
             task_data = dict(sm.state.get_task(current_task_id) or {})
@@ -1833,11 +1910,12 @@ def _run_autonomous_cycle(
             if not task_data.get("video_file") and video_path:
                 task_data["video_file"] = video_path
             task_data["state"] = const.TASK_STATE_COMPLETE
-            if "youtube" not in (task_data.get("planned_platforms") or []):
-                task_data["planned_platforms"] = ["youtube"]
+            task_data["planned_platforms"] = planned_plats
             task_data["profile_id"] = target_profile_id
             if target_channel_id:
                 task_data["channel_id"] = target_channel_id
+
+            scheduler.save_task_platforms(current_task_id, planned_plats, db_path=db_path)
 
             scheduled_items = scheduler.plan_schedule(
                 tasks=[task_data], now=current_time, db_path=db_path, task_base_dir=task_base_dir
@@ -1849,7 +1927,7 @@ def _run_autonomous_cycle(
                     severity=operator_console.SEVERITY_INFO,
                     event_type="task_approved_and_scheduled",
                     task_id=current_task_id,
-                    message=f"Tarefa {current_task_id} aprovada nos Gates e agendada para YouTube.",
+                    message=f"Tarefa {current_task_id} aprovada nos Gates e agendada para {', '.join(planned_plats)}.",
                     metadata=metrics,
                     db_path=db_path,
                 )
@@ -1956,17 +2034,20 @@ def _run_autonomous_cycle(
     stock_info = get_autonomous_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=target_profile_id, channel_id=target_channel_id)
     pending = []
     for task_data in stock_info.get("youtube_ready", []):
+        t_prof = task_data.get("profile_id") or target_profile_id
+        target_plats = resolve_autonomous_planned_platforms(t_prof, db_path=db_path)
         channels = profile_manager.resolve_task_channels(
-            task_data["task_id"], platforms=["youtube"], db_path=db_path)
+            task_data["task_id"], platforms=target_plats, db_path=db_path)
         with scheduler.get_connection(db_path) as conn:
             unscheduled = any(not scheduler.has_existing_or_terminal_destination(
-                task_data["task_id"], "youtube", c["channel_id"], conn
+                task_data["task_id"], c.get("platform", "youtube"), c["channel_id"], conn
             ) for c in channels)
             queued = conn.execute(
-                "SELECT 1 FROM scheduled_posts WHERE task_id=? AND platform='youtube' "
+                "SELECT 1 FROM scheduled_posts WHERE task_id=? "
                 "AND status IN ('planned', 'ready', 'processing') LIMIT 1", (task_data["task_id"],)
             ).fetchone()
         if unscheduled and not queued:
+            task_data["planned_platforms"] = target_plats
             pending.append(task_data)
     # This pointer is scoped per profile for display and recovery
     _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, pending[0]["task_id"] if pending else "")
@@ -2001,7 +2082,7 @@ def _run_autonomous_cycle(
             operator_console.log_operational_event(
                 component="autonomous_production", severity=operator_console.SEVERITY_INFO,
                 event_type="task_approved_and_scheduled", task_id=task_data["task_id"],
-                message="Persisted approval scheduled for YouTube.",
+                message="Persisted approval scheduled.",
                 metadata={"scheduled_items": len(scheduled)}, db_path=db_path)
         return {"status": status, "task_id": task_data["task_id"],
                 "scheduled_items": len(scheduled), "message": message}

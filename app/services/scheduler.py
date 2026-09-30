@@ -858,8 +858,8 @@ def record_publication_event(
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'published'
-                    WHERE task_id = ? AND platform = ? AND channel_id = ? AND status IN ('planned', 'ready');
+                    SET status = 'published', last_error = NULL
+                    WHERE task_id = ? AND platform = ? AND channel_id = ? AND status IN ('planned', 'ready', 'processing', 'published');
                     """,
                     (task_id, clean_platform, channel_id),
                 )
@@ -867,8 +867,8 @@ def record_publication_event(
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'published'
-                    WHERE task_id = ? AND platform = ? AND status IN ('planned', 'ready');
+                    SET status = 'published', last_error = NULL
+                    WHERE task_id = ? AND platform = ? AND status IN ('planned', 'ready', 'processing', 'published');
                     """,
                     (task_id, clean_platform),
                 )
@@ -1144,7 +1144,7 @@ def plan_schedule(
             pass
 
         # Resolução do perfil da task
-        task_profile_id = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+        task_profile_id = t.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)
         prof = profile_manager.get_profile(task_profile_id, db_path=db_path)
         if prof and not prof.get("is_active"):
             operator_console.log_operational_event(
@@ -1228,6 +1228,72 @@ def plan_schedule(
                     channel_id=channel_id,
                     conn=conn,
                 ):
+                    continue
+
+            # 1.1 Reconciliação e bloqueio de colisão com retry pendente no mesmo canal (FASE D)
+            with get_connection(db_path) as conn:
+                if channel_id:
+                    pending_retry = conn.execute(
+                        """
+                        SELECT id, task_id, platform, profile_id, channel_id, attempts, last_error
+                        FROM scheduled_posts
+                        WHERE platform = ? AND status = 'ready' AND attempts > 0
+                          AND (profile_id = ? OR (profile_id IS NULL AND ? = 'default'))
+                          AND channel_id = ?
+                        ORDER BY id ASC LIMIT 1;
+                        """,
+                        (clean_plat, task_profile_id, task_profile_id, channel_id),
+                    ).fetchone()
+                else:
+                    pending_retry = conn.execute(
+                        """
+                        SELECT id, task_id, platform, profile_id, channel_id, attempts, last_error
+                        FROM scheduled_posts
+                        WHERE platform = ? AND status = 'ready' AND attempts > 0
+                          AND (profile_id = ? OR (profile_id IS NULL AND ? = 'default'))
+                        ORDER BY id ASC LIMIT 1;
+                        """,
+                        (clean_plat, task_profile_id, task_profile_id),
+                    ).fetchone()
+
+            if pending_retry:
+                from app.services import post_for_me
+                recon = post_for_me.reconcile_post_for_me_status(
+                    task_id=pending_retry["task_id"],
+                    platform=clean_plat,
+                    channel_id=pending_retry["channel_id"] or channel_id,
+                    profile_id=task_profile_id,
+                    db_path=db_path,
+                )
+                if recon.get("status") == "reconciled_success":
+                    logger.info(
+                        f"[SCHEDULER][PLAN] Retry pendente {pending_retry['id']} (task {pending_retry['task_id']}) "
+                        f"foi reconciliado como publicado via Post for Me."
+                    )
+                else:
+                    operator_console.log_operational_event(
+                        component="scheduler",
+                        severity="WARNING",
+                        event_type="PENDING_RETRY_COLLISION_BLOCK",
+                        task_id=task_id,
+                        message=(
+                            f"Agendamento bloqueado para {clean_plat} ({channel_id}): existe tentativa "
+                            f"anterior pendente de retry/reconciliação (post {pending_retry['id']}, task {pending_retry['task_id']})."
+                        ),
+                        metadata={
+                            "profile_id": task_profile_id,
+                            "channel_id": channel_id,
+                            "platform": clean_plat,
+                            "pending_post_id": pending_retry["id"],
+                            "pending_task_id": pending_retry["task_id"],
+                            "reconcile_status": recon.get("status"),
+                        },
+                        db_path=db_path,
+                    )
+                    logger.warning(
+                        f"[SCHEDULER][PLAN] Bloqueando novo agendamento para {clean_plat}:{channel_id}: "
+                        f"tentativa anterior pendente de retry (post {pending_retry['id']}, task {pending_retry['task_id']})."
+                    )
                     continue
 
             # 2. Consulta limites específicos do perfil/canal no modo de crescimento ativo
@@ -1621,6 +1687,13 @@ def run_scheduler_cycle(
         logger.info("[SCHEDULER][CYCLE] skipped reason=auto_publish_disabled")
         return {"status": "skipped", "reason": "auto_publish_disabled"}
 
+    # 0. Reconciliação bounded de timeouts/retries pendentes com Post for Me (FASE C)
+    try:
+        from app.services import post_for_me
+        post_for_me.reconcile_pending_post_for_me_posts(db_path=db_path)
+    except Exception as exc:
+        logger.warning(f"[SCHEDULER][CYCLE] Erro na reconciliação de posts pendentes: {exc}")
+
     # 1. Busca o post vencido mais antigo
     with get_connection(db_path) as conn:
         due_count = conn.execute(
@@ -1968,6 +2041,57 @@ def run_scheduler_cycle(
         }
 
     # 8. Execução Real (DRY RUN == False)
+    # 8.0 Reconciliação imediata antes de novo upload para retries/timeouts (FASE C)
+    if attempts > 0 and platform in ("youtube", "tiktok"):
+        from app.services import post_for_me
+        recon = post_for_me.reconcile_post_for_me_status(
+            task_id=task_id,
+            platform=platform,
+            channel_id=channel_id,
+            profile_id=profile_id,
+            db_path=db_path,
+        )
+        if recon.get("status") == "reconciled_success":
+            logger.info(f"[SCHEDULER][CYCLE] Post {post_id} ({task_id}, {platform}) já concluído remotamente. Reconciliado sem novo upload.")
+            _set_executor_status(
+                state="idle",
+                message="Aguardando posts agendados",
+                last_result=f"Reconciliado: {task_id} publicado no {platform}",
+                last_cycle_summary=f"Post {post_id} reconciliado com sucesso no {platform}",
+                db_path=db_path,
+            )
+            return {"status": "published", "task_id": task_id, "platform": platform, "reconciled": True}
+        elif recon.get("status") == "active":
+            logger.info(f"[SCHEDULER][CYCLE] Post {post_id} ainda ativo remotamente no Post for Me. Postergando sem novo upload.")
+            postpone_time = current_time + timedelta(minutes=5)
+            with get_connection(db_path) as conn:
+                conn.execute(
+                    "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                    (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
+                )
+            _set_executor_status(
+                state="idle",
+                message=f"Post {post_id} ainda ativo no provedor remoto; aguardando processamento",
+                last_cycle_summary=f"Post {post_id} ativo no provedor remoto",
+                db_path=db_path,
+            )
+            return {"status": "postponed", "reason": "remote_active", "task_id": task_id, "platform": platform}
+        elif recon.get("status") == "inconsistent":
+            logger.error(f"[SCHEDULER][CYCLE] Post {post_id} inconsistente/ambíguo remotamente. Marcando como failed (Fail Closed).")
+            with get_connection(db_path) as conn:
+                conn.execute(
+                    "UPDATE scheduled_posts SET status = 'failed', last_error = ? WHERE id = ?;",
+                    (recon.get("error") or "remote_inconsistent_ambiguous", post_id),
+                )
+            _set_executor_status(
+                state="error",
+                message=f"Post {post_id} falhou por ambiguidade/inconsistência remota",
+                last_result=f"Falha: ambiguidade remota para {task_id}",
+                last_cycle_summary=f"Post {post_id} falhou por ambiguidade remota",
+                db_path=db_path,
+            )
+            return {"status": "failed", "reason": "remote_inconsistent", "task_id": task_id, "platform": platform}
+
     # Bloqueio atômico de concorrência: altera status para 'processing'
     with get_connection(db_path) as conn:
         cur = conn.execute(

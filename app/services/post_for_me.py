@@ -2184,3 +2184,201 @@ def publish_tiktok_video(
         timeout_sec=timeout_sec,
         poll_interval_sec=poll_interval_sec,
     )
+
+
+def reconcile_post_for_me_status(
+    task_id: str,
+    platform: str,
+    channel_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reconcilia o estado remoto de uma publicação Post for Me após timeout ou falha transitória.
+
+    Contrato:
+    - Se exatamente 1 success_post:
+        - NÃO faz novo upload
+        - Reutiliza o resultado remoto
+        - Persiste publication_event local de sucesso
+        - Marca scheduled_posts como 'published' e limpa last_error
+        - Preserva attempts
+    - Se 1 active_post:
+        - Não cria novo upload, retorna status='active'
+    - Se múltiplos sucessos, múltiplos ativos ou inconsistente:
+        - FAIL CLOSED: não publica, retorna status='inconsistent'
+    - Se falha terminal remota (0 success, 0 active, failed > 0):
+        - Retorna status='failed'
+    """
+    clean_plat = str(platform or "").lower().strip()
+    from app.services import profile_manager
+
+    prof_id = profile_id or profile_manager.get_task_profile_id(task_id, db_path=db_path)
+
+    if clean_plat == "youtube":
+        from app.services import youtube_publisher
+        yt_prov = youtube_publisher.get_youtube_publish_provider(db_path=db_path)
+        if yt_prov != youtube_publisher.PROVIDER_POST_FOR_ME:
+            return {"status": "skipped", "reason": "not_post_for_me_provider"}
+        if not post_for_me_client.is_configured():
+            return {"status": "skipped", "reason": "client_not_configured"}
+
+        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=prof_id)
+        if not expected_yt_id:
+            return {"status": "skipped", "reason": "channel_resolution_failed"}
+
+        try:
+            account = post_for_me_client.resolve_youtube_account(expected_yt_id)
+            social_account_id = str(account.get("id"))
+        except Exception as exc:
+            return {"status": "skipped", "reason": f"account_resolution_failed: {exc}"}
+
+        ext_channel_id = channel_id or ("channel-default-youtube" if expected_yt_id == CHANNEL_DEFAULT_YT_ID else "channel-historias-misterio-youtube")
+        deterministic_external_id = f"video-factory:{task_id}:youtube:{ext_channel_id}"
+        client = post_for_me_client
+
+    elif clean_plat == "tiktok":
+        if not post_for_me_quickstart_client.is_configured():
+            return {"status": "skipped", "reason": "client_not_configured"}
+
+        expected_tt_id = resolve_target_tiktok_user_id(channel_id=channel_id, profile_id=prof_id)
+        if not expected_tt_id:
+            return {"status": "skipped", "reason": "channel_resolution_failed"}
+
+        try:
+            account = post_for_me_quickstart_client.resolve_tiktok_account_for_user(expected_tt_id)
+            social_account_id = str(account.get("id"))
+        except Exception as exc:
+            return {"status": "skipped", "reason": f"account_resolution_failed: {exc}"}
+
+        ext_channel_id = channel_id or "channel-default-tiktok"
+        deterministic_external_id = f"video-factory:{task_id}:tiktok:{ext_channel_id}"
+        client = post_for_me_quickstart_client
+    else:
+        return {"status": "skipped", "reason": "unsupported_platform"}
+
+    try:
+        classification = client.classify_existing_posts(
+            external_id=deterministic_external_id,
+            social_account_id=social_account_id,
+            platform=clean_plat,
+        )
+    except Exception as exc:
+        logger.warning(f"[POST_FOR_ME][RECONCILE] Erro ao classificar posts para {deterministic_external_id}: {exc}")
+        return {"status": "error", "error": str(exc)}
+
+    success_posts = classification.get("success_posts") or []
+    active_posts = classification.get("active_posts") or []
+    failed_posts = classification.get("failed_posts") or []
+    inconsistent_posts = classification.get("inconsistent_posts") or []
+
+    # Fail closed se houver ambiguidade ou inconsistência
+    if len(inconsistent_posts) > 0 or len(success_posts) > 1 or len(active_posts) > 1:
+        msg = (
+            f"Ambiguidade ou inconsistência detectada para external_id '{deterministic_external_id}' "
+            f"(success={len(success_posts)}, active={len(active_posts)}, inconsistent={len(inconsistent_posts)})."
+        )
+        logger.error(f"[POST_FOR_ME][RECONCILE] {msg}")
+        return {"status": "inconsistent", "error": msg, "error_code": "AMBIGUOUS_POSTS"}
+
+    # Exatamente 1 sucesso remoto confirmado
+    if len(success_posts) == 1:
+        reuse_res = _build_success_reuse_response(success_posts[0], platform=clean_plat)
+        if not reuse_res.get("success"):
+            return {"status": "inconsistent", "error": reuse_res.get("error")}
+
+        from app.services import scheduler
+        resolved_cid = ext_channel_id
+
+        # Persiste publication_event local
+        scheduler.record_publication_event(
+            task_id=task_id,
+            platform=clean_plat,
+            status="success",
+            external_id=str(reuse_res["external_id"]) if reuse_res.get("external_id") else None,
+            provider_request_id=str(reuse_res["request_id"]) if reuse_res.get("request_id") else None,
+            channel_id=resolved_cid,
+            profile_id=prof_id,
+            external_url=str(reuse_res["external_url"]) if reuse_res.get("external_url") else None,
+            privacy_status=reuse_res.get("privacy_status"),
+            db_path=db_path,
+        )
+
+        # Atualiza scheduled_posts para 'published' mantendo attempts
+        with scheduler.get_connection(db_path) as conn:
+            if resolved_cid:
+                conn.execute(
+                    """
+                    UPDATE scheduled_posts
+                    SET status = 'published', last_error = NULL
+                    WHERE task_id = ? AND platform = ? AND (channel_id = ? OR channel_id IS NULL)
+                      AND status IN ('ready', 'processing', 'planned', 'published');
+                    """,
+                    (task_id, clean_plat, resolved_cid),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE scheduled_posts
+                    SET status = 'published', last_error = NULL
+                    WHERE task_id = ? AND platform = ?
+                      AND status IN ('ready', 'processing', 'planned', 'published');
+                    """,
+                    (task_id, clean_plat),
+                )
+
+        logger.info(
+            f"[POST_FOR_ME][RECONCILE] Sucesso remoto reconciliado com sucesso para task {task_id} "
+            f"({clean_plat}:{resolved_cid}, video_id={reuse_res.get('external_id')})."
+        )
+        return {
+            "status": "reconciled_success",
+            "task_id": task_id,
+            "platform": clean_plat,
+            "external_id": reuse_res.get("external_id"),
+            "external_url": reuse_res.get("external_url"),
+            "request_id": reuse_res.get("request_id"),
+            "privacy_status": reuse_res.get("privacy_status"),
+        }
+
+    # Exatamente 1 tentativa ativa remota
+    if len(active_posts) == 1:
+        logger.info(f"[POST_FOR_ME][RECONCILE] Post ainda ativo remotamente para {deterministic_external_id}.")
+        return {"status": "active", "task_id": task_id, "platform": clean_plat}
+
+    # Falha remota terminal
+    if len(failed_posts) > 0 and len(success_posts) == 0 and len(active_posts) == 0:
+        logger.info(f"[POST_FOR_ME][RECONCILE] Falha remota confirmada para {deterministic_external_id}.")
+        return {"status": "failed", "task_id": task_id, "platform": clean_plat}
+
+    return {"status": "not_found", "task_id": task_id, "platform": clean_plat}
+
+
+def reconcile_pending_post_for_me_posts(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Busca posts em ready/processing com attempts > 0 e reconcilia com Post for Me."""
+    from app.services import scheduler
+    with scheduler.get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, task_id, platform, profile_id, channel_id, attempts, last_error
+            FROM scheduled_posts
+            WHERE status IN ('ready', 'processing') AND attempts > 0
+            ORDER BY id ASC
+            LIMIT 5;
+            """
+        ).fetchall()
+
+    reconciled = []
+    for r in rows:
+        plat = r["platform"].lower().strip()
+        if plat not in ("youtube", "tiktok"):
+            continue
+        res = reconcile_post_for_me_status(
+            task_id=r["task_id"],
+            platform=plat,
+            channel_id=r["channel_id"],
+            profile_id=r["profile_id"],
+            db_path=db_path,
+        )
+        if res.get("status") == "reconciled_success":
+            reconciled.append(res)
+    return reconciled

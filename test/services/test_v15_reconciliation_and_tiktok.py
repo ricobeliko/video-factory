@@ -500,6 +500,226 @@ class TestV15ReconciliationAndTikTok(unittest.TestCase):
         self.assertEqual(scheduled[0]["task_id"], task_c_id)
         self.assertEqual(scheduled[0]["status"], "planned")
 
+    def _create_ready_task(self, task_id: str, profile_id: str = "default") -> str:
+        import json
+        task_dir = os.path.join(self.tmp_dir, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        video_path = os.path.join(task_dir, "final-0.mp4")
+        shutil.copyfile(self.video_file, video_path)
+        script_path = os.path.join(task_dir, "script.json")
+        with open(script_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "params": {"bgm_type": "none"},
+                "asset_provenance": {
+                    "bgm": {"enabled": False, "source": "none"},
+                    "visual_clips": [{"provider": "pexels", "local_file": video_path}]
+                }
+            }, f)
+        profile_manager.save_task_profile(task_id, profile_id, db_path=self.db_path)
+        scheduler.save_task_platforms(task_id, ["youtube", "tiktok"], db_path=self.db_path)
+        from app.services import quality_score, safety_gate
+        quality_score.init_quality_db(self.db_path)
+        safety_gate.save_safety_assessment({
+            "task_id": task_id,
+            "safety_status": "PASS",
+            "safety_reasons": [],
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }, db_path=self.db_path)
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO content_quality_scores
+                (task_id, topic, quality_score, quality_label, created_at)
+                VALUES (?, ?, 85.0, 'GOOD', ?)
+                """,
+                (task_id, task_id, datetime.now(timezone.utc).isoformat()),
+            )
+        return video_path
+
+    # -------------------------------------------------------------------------
+    # 9. YouTube OFF + TikTok sem destino válido: fail-closed retorna []
+    # -------------------------------------------------------------------------
+    def test_9_youtube_off_tiktok_invalid_returns_empty(self):
+        """Verifica fail-closed: se YouTube estiver OFF e TikTok não possuir canal válido,
+        resolve_autonomous_planned_platforms NÃO retorna ['youtube'], mas sim []."""
+        scheduler.set_setting("youtube_enabled", "false", db_path=self.db_path)
+        scheduler.set_setting("tiktok_enabled", "false", db_path=self.db_path)
+
+        planned = autonomous_production.resolve_autonomous_planned_platforms("default", db_path=self.db_path)
+        self.assertEqual(planned, [])
+        self.assertNotIn("youtube", planned)
+
+        # Reabilita tiktok globalmente mas remove canais válidos de tiktok para o perfil
+        scheduler.set_setting("tiktok_enabled", "true", db_path=self.db_path)
+        channels = profile_manager.list_channels(profile_id="default", db_path=self.db_path)
+        for c in channels:
+            if c.get("platform") == "tiktok":
+                profile_manager.set_channel_enabled(c["channel_id"], False, db_path=self.db_path)
+
+        planned_no_chan = autonomous_production.resolve_autonomous_planned_platforms("default", db_path=self.db_path)
+        self.assertEqual(planned_no_chan, [])
+        self.assertNotIn("youtube", planned_no_chan)
+
+    # -------------------------------------------------------------------------
+    # 10. Perfil inativo: nenhum destino é elegível (fail-closed estrito)
+    # -------------------------------------------------------------------------
+    def test_10_inactive_profile_no_destinations_eligible(self):
+        """Verifica que perfil inativo resulta em zero destinos elegíveis tanto na resolução
+        quanto na checagem individual de destinos."""
+        profile_manager.create_profile(
+            profile_id="profile-inativo",
+            name="Perfil Inativo",
+            is_active=False,
+            db_path=self.db_path,
+        )
+        profile_manager.create_channel(
+            channel_id="channel-inativo-yt",
+            profile_id="profile-inativo",
+            platform="youtube",
+            display_name="Inativo YT",
+            is_enabled=True,
+            db_path=self.db_path,
+        )
+        profile_manager.create_channel(
+            channel_id="channel-inativo-tt",
+            profile_id="profile-inativo",
+            platform="tiktok",
+            display_name="Inativo TT",
+            is_enabled=True,
+            db_path=self.db_path,
+        )
+
+        planned = autonomous_production.resolve_autonomous_planned_platforms("profile-inativo", db_path=self.db_path)
+        self.assertEqual(planned, [])
+
+        elig_yt = autonomous_production.check_asset_eligibility_for_destination(
+            {"profile_id": "profile-inativo"}, "youtube", db_path=self.db_path
+        )
+        self.assertFalse(elig_yt["eligible"])
+        self.assertIn("profile_not_found_or_inactive", elig_yt["reasons"])
+
+        elig_tt = autonomous_production.check_asset_eligibility_for_destination(
+            {"profile_id": "profile-inativo"}, "tiktok", db_path=self.db_path
+        )
+        self.assertFalse(elig_tt["eligible"])
+        self.assertIn("profile_not_found_or_inactive", elig_tt["reasons"])
+
+    # -------------------------------------------------------------------------
+    # 11. Task com YouTube já planned e TikTok ausente: agenda SOMENTE TikTok
+    # -------------------------------------------------------------------------
+    def test_11_task_with_youtube_planned_and_tiktok_missing_schedules_only_tiktok(self):
+        """Verifica que a existência de agendamento prévio no YouTube não bloqueia o TikTok
+        faltante, e que o YouTube NÃO é duplicado."""
+        task_id = "task-yt-planned-tt-absent"
+        self._create_ready_task(task_id, profile_id="default")
+
+        now = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
+        iso_future = scheduler._to_iso(now + timedelta(hours=2))
+
+        # Insere YouTube pré-existente em 'planned'
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status,
+                    attempts, last_error, created_at
+                ) VALUES (?, 'youtube', 'default', 'channel-default-youtube', ?, 'planned', 0, NULL, ?);
+                """,
+                (task_id, iso_future, iso_future),
+            )
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.webui_task.submit_generation") as mock_submit:
+            res = autonomous_production.run_autonomous_cycle(
+                force=True,
+                now=now,
+                db_path=self.db_path,
+                task_base_dir=self.tmp_dir,
+            )
+
+        self.assertEqual(res["status"], "scheduled")
+        self.assertEqual(res["task_id"], task_id)
+        mock_submit.assert_not_called()
+
+        with scheduler.get_connection(self.db_path) as conn:
+            yt_posts = conn.execute(
+                "SELECT * FROM scheduled_posts WHERE task_id=? AND platform='youtube'", (task_id,)
+            ).fetchall()
+            tt_posts = conn.execute(
+                "SELECT * FROM scheduled_posts WHERE task_id=? AND platform='tiktok'", (task_id,)
+            ).fetchall()
+
+            # YouTube NÃO foi duplicado (continua exatamente 1)
+            self.assertEqual(len(yt_posts), 1)
+            self.assertEqual(yt_posts[0]["channel_id"], "channel-default-youtube")
+
+            # TikTok foi agendado com sucesso (exatamente 1)
+            self.assertEqual(len(tt_posts), 1)
+            self.assertEqual(tt_posts[0]["channel_id"], "channel-default-tiktok")
+            self.assertEqual(tt_posts[0]["status"], "planned")
+
+    # -------------------------------------------------------------------------
+    # 12. Task com YouTube e TikTok já existentes: não cria duplicata
+    # -------------------------------------------------------------------------
+    def test_12_task_with_youtube_and_tiktok_existing_does_not_duplicate(self):
+        """Verifica que quando ambos os destinos já possuem agendamento, o ciclo não cria
+        nenhuma duplicata para nenhuma das plataformas."""
+        task_id = "task-both-existing"
+        self._create_ready_task(task_id, profile_id="default")
+
+        now = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
+        iso_future = scheduler._to_iso(now + timedelta(hours=3))
+
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status,
+                    attempts, last_error, created_at
+                ) VALUES (?, 'youtube', 'default', 'channel-default-youtube', ?, 'planned', 0, NULL, ?);
+                """,
+                (task_id, iso_future, iso_future),
+            )
+            conn.execute(
+                """
+                INSERT INTO scheduled_posts (
+                    task_id, platform, profile_id, channel_id, scheduled_at, status,
+                    attempts, last_error, created_at
+                ) VALUES (?, 'tiktok', 'default', 'channel-default-tiktok', ?, 'planned', 0, NULL, ?);
+                """,
+                (task_id, iso_future, iso_future),
+            )
+
+        autonomous_production.set_autonomous_mode_enabled(True, db_path=self.db_path)
+        autonomous_production.set_autonomous_setting(
+            autonomous_production.KEY_AUTONOMOUS_TARGET_STOCK, "1", db_path=self.db_path
+        )
+
+        with patch("app.services.webui_task.has_active_generation_tasks", return_value=False), \
+             patch("app.services.webui_task.submit_generation") as mock_submit:
+            res = autonomous_production.run_autonomous_cycle(
+                force=True,
+                now=now,
+                db_path=self.db_path,
+                task_base_dir=self.tmp_dir,
+            )
+
+        # Não agendou nada adicional e não gerou duplicata
+        self.assertNotEqual(res.get("task_id"), task_id)
+        mock_submit.assert_not_called()
+
+        with scheduler.get_connection(self.db_path) as conn:
+            all_posts = conn.execute(
+                "SELECT * FROM scheduled_posts WHERE task_id=?", (task_id,)
+            ).fetchall()
+            self.assertEqual(len(all_posts), 2)
+            yt_count = sum(1 for p in all_posts if p["platform"] == "youtube")
+            tt_count = sum(1 for p in all_posts if p["platform"] == "tiktok")
+            self.assertEqual(yt_count, 1)
+            self.assertEqual(tt_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

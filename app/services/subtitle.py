@@ -1,7 +1,9 @@
 import json
 import os.path
 import re
+import threading
 from timeit import default_timer as timer
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from faster_whisper import WhisperModel
@@ -17,6 +19,7 @@ device = config.whisper.get("device", "cpu")
 compute_type = config.whisper.get("compute_type", "int8")
 initial_prompt = config.whisper.get("initial_prompt", "") or None
 model = None
+_model_lock = threading.Lock()
 
 
 def create(audio_file, subtitle_file: str = "", word_level: bool = False):
@@ -24,29 +27,30 @@ def create(audio_file, subtitle_file: str = "", word_level: bool = False):
     if WhisperModel is None:
         logger.warning("faster_whisper not available, skipping whisper subtitle generation")
         return ""
-    if not model:
-        model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
-        model_bin_file = f"{model_path}/model.bin"
-        if not os.path.isdir(model_path) or not os.path.isfile(model_bin_file):
-            model_path = model_size
+    with _model_lock:
+        if not model:
+            model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
+            model_bin_file = f"{model_path}/model.bin"
+            if not os.path.isdir(model_path) or not os.path.isfile(model_bin_file):
+                model_path = model_size
 
-        logger.info(
-            f"loading model: {model_path}, device: {device}, compute_type: {compute_type}"
-        )
-        try:
-            model = WhisperModel(
-                model_size_or_path=model_path, device=device, compute_type=compute_type
+            logger.info(
+                f"loading model: {model_path}, device: {device}, compute_type: {compute_type}"
             )
-        except Exception as e:
-            logger.error(
-                f"failed to load model: {e} \n\n"
-                f"********************************************\n"
-                f"this may be caused by network issue. \n"
-                f"please download the model manually and put it in the 'models' folder. \n"
-                f"see [README.md FAQ](https://github.com/harry0703/MoneyPrinterTurbo) for more details.\n"
-                f"********************************************\n\n"
-            )
-            return None
+            try:
+                model = WhisperModel(
+                    model_size_or_path=model_path, device=device, compute_type=compute_type
+                )
+            except Exception as e:
+                logger.error(
+                    f"failed to load model: {e} \n\n"
+                    f"********************************************\n"
+                    f"this may be caused by network issue. \n"
+                    f"please download the model manually and put it in the 'models' folder. \n"
+                    f"see [README.md FAQ](https://github.com/harry0703/MoneyPrinterTurbo) for more details.\n"
+                    f"********************************************\n\n"
+                )
+                return None
 
     logger.info(f"start, output file: {subtitle_file}")
     if not subtitle_file:
@@ -159,7 +163,7 @@ def file_to_subtitles(filename):
     current_times = None
     current_text = ""
     index = 0
-    with open(filename, "r", encoding="utf-8") as f:
+    with open(filename, "r", encoding="utf-8-sig") as f:
         for line in f:
             times = re.findall("([0-9]*:[0-9]*:[0-9]*,[0-9]*)", line)
             if times:
@@ -299,6 +303,218 @@ def correct(subtitle_file, video_script):
         logger.info("Subtitle corrected")
     else:
         logger.success("Subtitle is correct")
+
+
+def parse_srt_timestamp(ts_str: str) -> Optional[float]:
+    """Converte timestamp SRT ('HH:MM:SS,mmm' ou 'HH:MM:SS.mmm') em segundos (float)."""
+    try:
+        clean = ts_str.strip().replace(".", ",")
+        parts = clean.split(":")
+        if len(parts) != 3:
+            return None
+        h = int(parts[0])
+        m = int(parts[1])
+        s_parts = parts[2].split(",")
+        s = int(s_parts[0])
+        ms = int(s_parts[1]) if len(s_parts) > 1 else 0
+        return h * 3600.0 + m * 60.0 + s + (ms / 1000.0)
+    except Exception:
+        return None
+
+
+def validate_subtitle_file(
+    subtitle_path: str,
+    video_script: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Valida a integridade física, sintática e semântica de um arquivo SRT.
+
+    Requisitos canônicos (Fail-Closed):
+    - caminho não vazio e arquivo regular existente em disco
+    - tamanho > 0 bytes e não composto exclusivamente de whitespace
+    - legível em UTF-8 / UTF-8-SIG
+    - possui pelo menos 1 cue
+    - todo cue possui timestamps válidos (start < end, não todos zero)
+    - todo cue possui texto não vazio (não apenas índices/timestamps)
+    - coerência mínima com o roteiro (se video_script fornecido)
+
+    Retorno estruturado sem lançar exceções:
+    {
+        "valid": bool,
+        "reason": str,
+        "cue_count": int,
+        "text_chars": int,
+        "total_duration": float,
+    }
+    """
+    empty_result = {
+        "valid": False,
+        "reason": "empty_path",
+        "cue_count": 0,
+        "text_chars": 0,
+        "total_duration": 0.0,
+    }
+    if not subtitle_path or not isinstance(subtitle_path, str) or not subtitle_path.strip():
+        return empty_result
+
+    if not os.path.exists(subtitle_path):
+        return {**empty_result, "reason": "file_not_found"}
+
+    if not os.path.isfile(subtitle_path):
+        return {**empty_result, "reason": "not_a_regular_file"}
+
+    try:
+        file_size = os.path.getsize(subtitle_path)
+    except Exception as exc:
+        return {**empty_result, "reason": f"io_error_getsize: {exc}"}
+
+    if file_size == 0:
+        return {**empty_result, "reason": "empty_file"}
+
+    try:
+        with open(subtitle_path, "r", encoding="utf-8-sig") as f:
+            raw_content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(subtitle_path, "r", encoding="utf-8", errors="replace") as f:
+                raw_content = f.read()
+        except Exception as exc:
+            return {**empty_result, "reason": f"encoding_error: {exc}"}
+    except Exception as exc:
+        return {**empty_result, "reason": f"io_error_read: {exc}"}
+
+    if not raw_content or not raw_content.strip():
+        return {**empty_result, "reason": "whitespace_only"}
+
+    # Parse cues
+    lines = raw_content.splitlines()
+    cues = []
+    current_time_line = None
+    current_text_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if "-->" in stripped:
+            if current_time_line is not None:
+                cue_text = "\n".join(current_text_lines).strip()
+                cues.append((current_time_line, cue_text))
+                current_text_lines = []
+            current_time_line = stripped
+        elif stripped == "":
+            if current_time_line is not None:
+                cue_text = "\n".join(current_text_lines).strip()
+                cues.append((current_time_line, cue_text))
+                current_time_line = None
+                current_text_lines = []
+        else:
+            if current_time_line is not None:
+                current_text_lines.append(stripped)
+
+    if current_time_line is not None:
+        cue_text = "\n".join(current_text_lines).strip()
+        cues.append((current_time_line, cue_text))
+
+    if not cues:
+        return {**empty_result, "reason": "no_cues_found"}
+
+    all_zero_timestamps = True
+    total_text_chars = 0
+    min_start = float("inf")
+    max_end = float("-inf")
+
+    for idx, (time_line, text) in enumerate(cues, start=1):
+        if not text or not text.strip():
+            return {
+                "valid": False,
+                "reason": "empty_cue_text",
+                "cue_count": len(cues),
+                "text_chars": total_text_chars,
+                "total_duration": 0.0,
+            }
+
+        total_text_chars += len(text.strip())
+
+        parts = time_line.split("-->")
+        if len(parts) != 2:
+            return {
+                "valid": False,
+                "reason": "malformed_timestamp_line",
+                "cue_count": len(cues),
+                "text_chars": total_text_chars,
+                "total_duration": 0.0,
+            }
+
+        start_sec = parse_srt_timestamp(parts[0])
+        end_sec = parse_srt_timestamp(parts[1])
+
+        if start_sec is None or end_sec is None:
+            return {
+                "valid": False,
+                "reason": "invalid_timestamp_format",
+                "cue_count": len(cues),
+                "text_chars": total_text_chars,
+                "total_duration": 0.0,
+            }
+
+        if start_sec == 0.0 and end_sec == 0.0:
+            return {
+                "valid": False,
+                "reason": "all_timestamps_zero",
+                "cue_count": len(cues),
+                "text_chars": total_text_chars,
+                "total_duration": 0.0,
+            }
+
+        if start_sec >= end_sec:
+            return {
+                "valid": False,
+                "reason": "invalid_timestamp_order",
+                "cue_count": len(cues),
+                "text_chars": total_text_chars,
+                "total_duration": 0.0,
+            }
+
+        if start_sec > 0.0 or end_sec > 0.0:
+            all_zero_timestamps = False
+
+        min_start = min(min_start, start_sec)
+        max_end = max(max_end, end_sec)
+
+    if all_zero_timestamps:
+        return {
+            "valid": False,
+            "reason": "all_timestamps_zero",
+            "cue_count": len(cues),
+            "text_chars": total_text_chars,
+            "total_duration": 0.0,
+        }
+
+    total_duration = max(0.0, max_end - (min_start if min_start != float("inf") else 0.0))
+
+    # Coerência básica com o roteiro
+    if video_script and isinstance(video_script, str) and str(video_script).strip():
+        script_chars = re.sub(r"[\s\W_]+", "", str(video_script), flags=re.UNICODE)
+        all_cue_text = "".join(text for _, text in cues)
+        subs_chars = re.sub(r"[\s\W_]+", "", all_cue_text, flags=re.UNICODE)
+
+        if len(script_chars) >= 30 and (len(subs_chars) < min(10, len(script_chars) * 0.15) or len(subs_chars) < 5):
+            return {
+                "valid": False,
+                "reason": "text_incoherent_with_script",
+                "cue_count": len(cues),
+                "text_chars": total_text_chars,
+                "total_duration": total_duration,
+            }
+
+    return {
+        "valid": True,
+        "reason": "valid",
+        "cue_count": len(cues),
+        "text_chars": total_text_chars,
+        "total_duration": total_duration,
+    }
+
+
+validate_srt = validate_subtitle_file
 
 
 if __name__ == "__main__":

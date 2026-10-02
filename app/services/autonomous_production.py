@@ -1647,6 +1647,7 @@ def build_autonomous_video_params(
         video_clip_duration=video_clip_duration,
         video_count=video_count,
         subtitle_enabled=subtitle_enabled,
+        subtitle_required=True,
         font_name=font_name,
         subtitle_position=subtitle_position,
         subtitle_display_mode=subtitle_display_mode,

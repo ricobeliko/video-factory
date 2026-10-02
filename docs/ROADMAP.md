@@ -13,9 +13,9 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.1 — Brazilian Content Contract`
-- **ACTIVE_BRANCH** = `feat/v16-1-brazilian-content-contract`
-- **NEXT_GATE** = `V16.2 — Subtitle Reliability Gate`
+- **ACTIVE_PHASE** = `V16.2 — Subtitle Reliability Gate`
+- **ACTIVE_BRANCH** = `feat/v16-2-subtitle-reliability-gate`
+- **NEXT_GATE** = `V16.3 — Final Media Quality Gate`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -24,8 +24,9 @@
 ## Status Consolidado por Componente
 
 - **V16.0 Quality Audit** = DONE
-- **V16.1 Brazilian Content Contract** = ACTIVE (P0)
-- **V16.2 Subtitle Reliability Gate** = PLANNED (P0)
+- **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
+- **V16.2 Subtitle Reliability Gate** = ACTIVE (P0)
+- **V16.3 Final Media Quality Gate** = PLANNED (P0)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -748,9 +749,12 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Quality Gate atual avalia tema/conteúdo, mas não garante qualidade audiovisual final
 
 ## V16.1 — Brazilian Content Contract
-- **Status:** 🚀 ACTIVE
-- **Priority:** P0
-- **Objetivo:** Transformar português brasileiro e legendas visíveis em CONTRATO obrigatório da produção autônoma.
+- **Status:** ✅ PRODUCTION HOMOLOGATED
+- **Deploy SHA:** `3983d37a29d1f169e513f19bd7186348a74ad5e9`
+- **Evidências de Homologação Real:**
+  - A UI persistida em produção ainda continha `af-ZA-AdriNeural-Female`, `subtitle_enabled=False`, `text_fore_color=#000000`.
+  - A produção autônoma bloqueou corretamente a voz estrangeira de forma fail-closed sem gerar falha silenciosa.
+  - Nenhum vídeo/API/publicação espúria ocorreu no teste.
 - **Regras Canônicas:**
   - `video_language = "pt-BR"`
   - `region = "BR"`
@@ -763,8 +767,17 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Voz estrangeira (`af-ZA-*`, `en-*`, `zh-*`, `pt-PT-*`, etc.) ou vazia = FAIL CLOSED / BLOCK.
 
 ## V16.2 — Subtitle Reliability Gate
-- **Status:** 📋 PLANNED
+- **Status:** 🚀 ACTIVE
 - **Priority:** P0
+- **Regra Fundamental:** `AUTONOMOUS_VIDEO_WITHOUT_VALID_CAPTIONS = FORBIDDEN`
+- **Arquitetura Implementada:**
+  - **PRIMARY:** Edge subtitles (`voice.create_subtitle`).
+  - **SRT VALIDATOR:** Validador físico, sintático e semântico dedicado (`subtitle.validate_subtitle_file`).
+  - **FALLBACK:** Whisper (`subtitle.create` + `subtitle.correct`).
+  - **FAIL CLOSED:** Se ambos os provedores falharem ou produzirem SRT inválido, a tarefa falha estruturadamente (`stage="subtitle"`, `error="subtitle_required_but_unavailable..."`) antes de baixar materiais ou renderizar.
+  - **STALE PROTECTION:** Limpeza de arquivos parciais/inválidos e substituição atômica via arquivo temporário.
+  - **PRESERVAÇÃO DO FLUXO MANUAL:** Quando `subtitle_required=False`, o comportamento manual não executa download inadvertido de modelos nem altera a flexibilidade do operador.
+  - **MODEL ENVIRONMENT:** O modelo Whisper real não foi baixado na fase de testes/desenvolvimento (mocks estritos). Recomendação de produção: `large-v3-turbo`.
 
 ## V16.3 — Final Media Quality Gate
 - **Status:** 📋 PLANNED

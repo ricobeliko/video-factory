@@ -3,9 +3,9 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.1 — Brazilian Content Contract`
-- **ACTIVE_BRANCH** = `feat/v16-1-brazilian-content-contract`
-- **NEXT_GATE** = `V16.2 — Subtitle Reliability Gate`
+- **ACTIVE_PHASE** = `V16.2 — Subtitle Reliability Gate`
+- **ACTIVE_BRANCH** = `feat/v16-2-subtitle-reliability-gate`
+- **NEXT_GATE** = `V16.3 — Final Media Quality Gate`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -13,8 +13,9 @@
 
 ### Status Consolidado dos Componentes:
 - **V16.0 Quality Audit** = DONE
-- **V16.1 Brazilian Content Contract** = ACTIVE (P0)
-- **V16.2 Subtitle Reliability Gate** = PLANNED (P0)
+- **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
+- **V16.2 Subtitle Reliability Gate** = ACTIVE (P0)
+- **V16.3 Final Media Quality Gate** = PLANNED (P0)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -998,14 +999,14 @@ O `PROJECT_HANDOFF.md` deve ser atualizado ao final de cada fase importante.
 
 ---
 
-## 25. V16.1 — Brazilian Content Contract (Fase Ativa Atual)
+## 25. V16.1 — Brazilian Content Contract
 
-**Status: 🚀 ACTIVE / DEV IMPLEMENTED (02/10/2026)**
-
-Causa Raiz Auditada em Produção (V16.0):
-- Perfil `language = pt-BR` gerou roteiro em português, mas a produção autônoma herdou a primeira voz da lista da WebUI (`af-ZA-AdriNeural-Female`).
-- Vídeo publicado com `subtitle_enabled = False` e `text_fore_color = #000000` (legendas invisíveis).
-- `match_materials_to_script = False` gerava termos desconexos da narrativa.
+**Status: ✅ PRODUCTION HOMOLOGATED (02/10/2026)**
+- **Deploy SHA:** `3983d37a29d1f169e513f19bd7186348a74ad5e9`
+- **Evidências de Homologação Real:**
+  - A UI persistida em produção ainda continha `af-ZA-AdriNeural-Female`, `subtitle_enabled=False`, `text_fore_color=#000000`.
+  - A produção autônoma bloqueou corretamente a voz estrangeira de forma fail-closed sem gerar falha silenciosa.
+  - Nenhum vídeo/API/publicação espúria ocorreu no teste.
 
 Entregas da Fase V16.1:
 1. **Contrato Brasileiro Canônico Fail-Closed:**
@@ -1020,3 +1021,32 @@ Entregas da Fase V16.1:
    - `validate_autonomous_brazilian_content_contract(params)` avalia e retorna relatório estruturado (`PASS` ou `BLOCK`).
 4. **Preservação de Geração Manual:**
    - Chamadas diretas de `VideoParams` pela WebUI continuam livres para experimentação manual pelo operador, sem impacto inadvertido.
+
+---
+
+## 26. V16.2 — Subtitle Reliability Gate (Fase Ativa Atual)
+
+**Status: 🚀 ACTIVE / DEV IMPLEMENTED (02/10/2026)**
+
+Regra Fundamental: `AUTONOMOUS_VIDEO_WITHOUT_VALID_CAPTIONS = FORBIDDEN`
+
+Entregas da Fase V16.2:
+1. **Validador Reutilizável de SRT (`validate_subtitle_file` / `validate_srt`):**
+   - Valida existência, integridade física (> 0 bytes, não apenas whitespace), leitura em UTF-8 / UTF-8-SIG (com BOM).
+   - Valida parsing rigoroso de cues, formato de timestamps, ordenação temporal (`start < end`), detecção de timestamps zerados (`all_timestamps_zero`) e texto não vazio por cue.
+   - Validação heurística e tolerante de coerência com o roteiro (`text_incoherent_with_script`) que impede legendas vazias/truncadas vs roteiros substanciais.
+   - Retorno estruturado fail-closed sem lançar exceções.
+2. **Arquitetura de Geração com Fallback Automático:**
+   - **Primary:** Edge Subtitles (`voice.create_subtitle`). Se gerar SRT válido -> aceito imediatamente.
+   - **Fallback:** Whisper Subtitles (`subtitle.create` + `subtitle.correct`). Acionado automaticamente se Edge falhar, não gerar arquivo, gerar arquivo vazio ou inválido.
+   - **Stale SRT Protection:** Remoção preventiva de arquivos parciais/inválidos e geração temporária atômica (`os.replace`) para evitar falsos positivos por arquivos residuais.
+3. **Fail-Closed Gate:**
+   - Se ambos Edge e Whisper falharem ou produzirem SRT inválido: o pipeline é interrompido imediatamente em `stage="subtitle"`, marcando a tarefa como `TASK_STATE_FAILED` com `error="subtitle_required_but_unavailable..."`.
+   - Impede o avanço para download de materiais (`get_video_materials`) e renderização final (`generate_final_videos`).
+   - Nenhuma publicação ou agendamento é disparado sem legenda válida.
+4. **Preservação de Compatibilidade Manual:**
+   - Quando `subtitle_required=False` (modo manual/WebUI), o fluxo preserva estritamente o comportamento anterior (não executa fallback inesperado nem download inadvertido de modelos Whisper).
+   - `subtitle_enabled=False` manual continua 100% suportado.
+   - Provedor explícito `subtitle_provider="whisper"` e `custom_audio_file` continuam plenamente funcionais.
+5. **Ambiente Whisper:**
+   - Nenhuma chamada real de rede ou download de modelo Whisper foi executada nesta fase (testes unitários isolados com mocks). Recomendação oficial de produção: `large-v3-turbo`.

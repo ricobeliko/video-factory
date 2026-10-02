@@ -574,70 +574,208 @@ def generate_audio(
         return custom_audio_file, audio_duration, None
 
 
-def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
+def generate_subtitle(
+    task_id,
+    params,
+    video_script,
+    sub_maker,
+    audio_file,
+    required: bool | None = None,
+):
+    """Generate subtitle for the video script.
+
+    If subtitle generation is disabled, it will return an empty string.
+    If required=True (or params.subtitle_required=True):
+        Enforces Subtitle Reliability Gate (V16.2):
+        Primary: Edge subtitles -> Validate SRT
+        Fallback: Whisper subtitles -> Validate SRT
+        Fail-Closed: if both fail or SRT is invalid, blocks pipeline before materials/render.
+    If required=False (default/manual):
+        Preserves existing manual behavior (does not unexpectedly fallback to Whisper if Edge fails).
     """
-    Generate subtitle for the video script.
-    If subtitle generation is disabled or no subtitle maker is provided, it will return an empty string.
-    Otherwise, it will generate the subtitle using the specified provider.
-    Returns:
-        - subtitle_path: path to the generated subtitle file
-    """
-    logger.info("\n\n## generating subtitle")
+    is_required = bool(required if required is not None else getattr(params, "subtitle_required", False))
+    logger.info(f"\n\n## generating subtitle (required={is_required})")
+
     if not params.subtitle_enabled:
+        if is_required:
+            logger.error(f"[SUBTITLE][BLOCK] task_id={task_id} reason=subtitle_disabled_but_required")
+            return ""
         return ""
 
-    subtitle_path = path.join(utils.task_dir(task_id), "subtitle.srt")
+    task_dir_path = utils.task_dir(task_id)
+    subtitle_path = path.join(task_dir_path, "subtitle.srt")
+    temp_edge_path = path.join(task_dir_path, f"subtitle.edge.tmp.{uuid4().hex[:8]}")
+    temp_whisper_path = path.join(task_dir_path, f"subtitle.whisper.tmp.{uuid4().hex[:8]}")
     subtitle_provider = config.app.get("subtitle_provider", "edge").strip().lower()
-    logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}")
-
-    if not subtitle_provider:
-        logger.info("subtitle provider is empty, skip subtitle generation")
-        return ""
-
-    if sub_maker is None and subtitle_provider != "whisper":
-        # 自定义音频不会经过 TTS，因此没有 Edge/Azure 等 TTS 返回的
-        # sub_maker 时间轴。只有 Whisper 可以直接从音频文件转写字幕；
-        # 其他字幕提供方继续保持原有行为，避免生成错误的空时间轴。
-        logger.warning(
-            "subtitle maker is missing, skip subtitle generation for provider: "
-            f"{subtitle_provider}"
-        )
-        return ""
-
     is_word_level = getattr(params, "subtitle_display_mode", "sentence") == "word_by_word"
 
-    if subtitle_provider == "edge":
-        voice.create_subtitle(
-            text=video_script,
-            sub_maker=sub_maker,
-            subtitle_file=subtitle_path,
-            word_level=is_word_level,
-        )
-        if not os.path.exists(subtitle_path):
-            # Edge 字幕偶尔会因为时间轴与文案无法匹配而没有产出文件。这里不能
-            # 自动切换到 Whisper，否则首次失败会在用户不知情的情况下下载数 GB
-            # 的模型。只有显式配置 Whisper 时才允许加载模型，Edge 失败则保留
-            # 无字幕视频并记录原因，避免意外的网络和磁盘开销。
+    if not is_required:
+        # ---------------------------------------------------------
+        # MANUAL / LEGACY FLOW (100% PRESERVED)
+        # ---------------------------------------------------------
+        logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}")
+        if not subtitle_provider:
+            logger.info("subtitle provider is empty, skip subtitle generation")
+            return ""
+
+        if sub_maker is None and subtitle_provider != "whisper":
             logger.warning(
-                "edge subtitle generation did not produce a subtitle file; "
-                "skip subtitles without falling back to whisper"
+                "subtitle maker is missing, skip subtitle generation for provider: "
+                f"{subtitle_provider}"
             )
             return ""
 
-    if subtitle_provider == "whisper":
-        subtitle.create(
-            audio_file=audio_file,
-            subtitle_file=subtitle_path,
-            word_level=is_word_level,
-        )
-        if not is_word_level:
-            logger.info("\n\n## correcting subtitle")
-            subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
+        if subtitle_provider == "edge":
+            voice.create_subtitle(
+                text=video_script,
+                sub_maker=sub_maker,
+                subtitle_file=subtitle_path,
+                word_level=is_word_level,
+            )
+            if not os.path.exists(subtitle_path):
+                logger.warning(
+                    "edge subtitle generation did not produce a subtitle file; "
+                    "skip subtitles without falling back to whisper"
+                )
+                return ""
 
-    subtitle_lines = subtitle.file_to_subtitles(subtitle_path)
-    if not subtitle_lines:
-        logger.warning(f"subtitle file is invalid: {subtitle_path}")
-        return ""
+        if subtitle_provider == "whisper":
+            subtitle.create(
+                audio_file=audio_file,
+                subtitle_file=subtitle_path,
+                word_level=is_word_level,
+            )
+            if not is_word_level:
+                logger.info("\n\n## correcting subtitle")
+                subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
+
+        subtitle_lines = subtitle.file_to_subtitles(subtitle_path)
+        if not subtitle_lines:
+            logger.warning(f"subtitle file is invalid: {subtitle_path}")
+            return ""
+
+        return subtitle_path
+
+    # -------------------------------------------------------------
+    # AUTONOMOUS / REQUIRED SUBTITLE GATE (V16.2)
+    # -------------------------------------------------------------
+    logger.info(f"[SUBTITLE][START] task_id={task_id} required=True")
+
+    # Stale SRT cleanup: must remove existing subtitle.srt. If removal fails and file still exists: FAIL CLOSED!
+    if os.path.exists(subtitle_path):
+        try:
+            os.remove(subtitle_path)
+        except Exception as rm_exc:
+            logger.error(f"[SUBTITLE][STALE_ERROR] Failed to remove stale subtitle: {rm_exc}")
+        if os.path.exists(subtitle_path):
+            logger.error(f"[SUBTITLE][BLOCK] Stale subtitle file could not be removed: {subtitle_path}")
+            return ""
+
+    edge_succeeded = False
+    # Primary: Edge (isolated atomic temp file)
+    if sub_maker is not None and subtitle_provider != "whisper":
+        try:
+            logger.info(f"[SUBTITLE][EDGE_START] task_id={task_id}")
+            if os.path.exists(temp_edge_path):
+                try:
+                    os.remove(temp_edge_path)
+                except Exception:
+                    pass
+
+            voice.create_subtitle(
+                text=video_script,
+                sub_maker=sub_maker,
+                subtitle_file=temp_edge_path,
+                word_level=is_word_level,
+            )
+            if os.path.exists(temp_edge_path):
+                val_edge = subtitle.validate_subtitle_file(temp_edge_path, video_script=video_script)
+                if val_edge["valid"]:
+                    os.replace(temp_edge_path, subtitle_path)
+                    logger.info(
+                        f"[SUBTITLE][EDGE_OK] task_id={task_id} cues={val_edge['cue_count']} "
+                        f"chars={val_edge['text_chars']} duration={val_edge['total_duration']:.2f}s"
+                    )
+                    edge_succeeded = True
+                    return subtitle_path
+                else:
+                    logger.warning(f"[SUBTITLE][EDGE_INVALID] task_id={task_id} reason={val_edge['reason']}")
+            else:
+                logger.warning(f"[SUBTITLE][EDGE_NO_OUTPUT] task_id={task_id}")
+        except Exception as edge_exc:
+            logger.warning(f"[SUBTITLE][EDGE_FAILED] task_id={task_id} error={edge_exc}")
+        finally:
+            if os.path.exists(temp_edge_path):
+                try:
+                    os.remove(temp_edge_path)
+                except Exception:
+                    pass
+    else:
+        if sub_maker is None:
+            logger.warning(f"[SUBTITLE][EDGE_SKIPPED] task_id={task_id} reason=sub_maker_missing")
+        elif subtitle_provider == "whisper":
+            logger.info(f"[SUBTITLE][EDGE_SKIPPED] task_id={task_id} reason=whisper_explicit")
+
+    # If Edge did not succeed, ensure no stale/partial subtitle_path exists before Whisper
+    if not edge_succeeded:
+        if os.path.exists(subtitle_path):
+            try:
+                os.remove(subtitle_path)
+            except Exception:
+                pass
+        if os.path.exists(subtitle_path):
+            logger.error(f"[SUBTITLE][BLOCK] Contaminated subtitle.srt could not be cleared before fallback")
+            return ""
+
+        logger.info(f"[SUBTITLE][WHISPER_FALLBACK] task_id={task_id}")
+        whisper_succeeded = False
+        try:
+            if os.path.exists(temp_whisper_path):
+                try:
+                    os.remove(temp_whisper_path)
+                except Exception:
+                    pass
+
+            whisper_res = subtitle.create(
+                audio_file=audio_file,
+                subtitle_file=temp_whisper_path,
+                word_level=is_word_level,
+            )
+            if os.path.exists(temp_whisper_path):
+                if not is_word_level and video_script:
+                    logger.info(f"[SUBTITLE][WHISPER_CORRECT] task_id={task_id}")
+                    subtitle.correct(subtitle_file=temp_whisper_path, video_script=video_script)
+
+                val_whisper = subtitle.validate_subtitle_file(temp_whisper_path, video_script=video_script)
+                if val_whisper["valid"]:
+                    os.replace(temp_whisper_path, subtitle_path)
+                    logger.info(
+                        f"[SUBTITLE][WHISPER_OK] task_id={task_id} cues={val_whisper['cue_count']} "
+                        f"chars={val_whisper['text_chars']} duration={val_whisper['total_duration']:.2f}s"
+                    )
+                    whisper_succeeded = True
+                    return subtitle_path
+                else:
+                    logger.error(f"[SUBTITLE][WHISPER_INVALID] task_id={task_id} reason={val_whisper['reason']}")
+            else:
+                logger.error(f"[SUBTITLE][WHISPER_NO_OUTPUT] task_id={task_id} ret={whisper_res}")
+        except Exception as whisper_exc:
+            logger.error(f"[SUBTITLE][WHISPER_FAILED] task_id={task_id} error={whisper_exc}")
+        finally:
+            if os.path.exists(temp_whisper_path):
+                try:
+                    os.remove(temp_whisper_path)
+                except Exception:
+                    pass
+
+        if not whisper_succeeded:
+            logger.error(f"[SUBTITLE][BLOCK] task_id={task_id} reason=all_providers_failed")
+            if os.path.exists(subtitle_path):
+                try:
+                    os.remove(subtitle_path)
+                except Exception:
+                    pass
+            return ""
 
     return subtitle_path
 
@@ -867,6 +1005,15 @@ def _get_material_source_groups(task_id: str, video_paths: list[str]) -> dict[st
 def generate_final_videos(
     task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
 ):
+    if getattr(params, "subtitle_required", False):
+        val_res = subtitle.validate_subtitle_file(subtitle_path)
+        if not val_res["valid"]:
+            logger.error(
+                f"[RENDER][BLOCKED] Subtitle required but invalid: reason={val_res['reason']}, "
+                f"task_id={task_id}"
+            )
+            return [], [], [{"code": "subtitle_required_invalid"}]
+
     final_video_paths = []
     combined_video_paths = []
     warnings = []
@@ -979,6 +1126,15 @@ def generate_final_videos(
                 )
                 bgm_file_override = ""
                 warnings.append({"code": warning_code, "video_index": index})
+
+        if getattr(params, "subtitle_required", False):
+            val_res = subtitle.validate_subtitle_file(subtitle_path)
+            if not val_res["valid"]:
+                logger.error(
+                    f"[RENDER][BLOCKED] Subtitle required but invalid: reason={val_res['reason']}, "
+                    f"task_id={task_id}, video_index={index}"
+                )
+                return [], [], [{"code": "subtitle_required_invalid"}]
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         bgm_mix_succeeded = video.generate_video(
@@ -2588,6 +2744,14 @@ def _run_pipeline(
     subtitle_path = generate_subtitle(
         task_id, params, video_script, sub_maker, audio_file
     )
+
+    if getattr(params, "subtitle_required", False):
+        if not subtitle_path or not os.path.isfile(subtitle_path):
+            return _mark_task_failed(
+                task_id,
+                stage="subtitle",
+                error="subtitle_required_but_unavailable: legendas obrigatorias falharam tanto no Edge quanto no Whisper fallback",
+            )
 
     if stop_at == "subtitle":
         sm.state.update_task(

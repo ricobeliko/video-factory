@@ -3,9 +3,9 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.2 — Subtitle Reliability Gate`
-- **ACTIVE_BRANCH** = `feat/v16-2-subtitle-reliability-gate`
-- **NEXT_GATE** = `V16.3 — Final Media Quality Gate`
+- **ACTIVE_PHASE** = `V16.3 — Final Media Quality Gate`
+- **ACTIVE_BRANCH** = `feat/v16-3-final-media-quality-gate`
+- **NEXT_GATE** = `V16.4 — Scene-Based Video Generation`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -14,8 +14,9 @@
 ### Status Consolidado dos Componentes:
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
-- **V16.2 Subtitle Reliability Gate** = ACTIVE (P0)
-- **V16.3 Final Media Quality Gate** = PLANNED (P0)
+- **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
+- **V16.3 Final Media Quality Gate** = ACTIVE (P0)
+- **V16.4 Scene-Based Video Generation** = PLANNED (P1)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1024,17 +1025,17 @@ Entregas da Fase V16.1:
 
 ---
 
-## 26. V16.2 — Subtitle Reliability Gate (Fase Ativa Atual)
+## 26. V16.2 — Subtitle Reliability Gate
 
-**Status: 🚀 ACTIVE / DEV IMPLEMENTED (02/10/2026)**
-
-Regra Fundamental: `AUTONOMOUS_VIDEO_WITHOUT_VALID_CAPTIONS = FORBIDDEN`
+**Status: ✅ PRODUCTION HOMOLOGATED (02/10/2026)**
+- **Deploy SHA:** `0744fd2b8593fa276a2d3117d88b270475b5b05c`
+- **Regra Fundamental:** `AUTONOMOUS_VIDEO_WITHOUT_VALID_CAPTIONS = FORBIDDEN`
 
 Entregas da Fase V16.2:
 1. **Validador Reutilizável de SRT (`validate_subtitle_file` / `validate_srt`):**
    - Valida existência, integridade física (> 0 bytes, não apenas whitespace), leitura em UTF-8 / UTF-8-SIG (com BOM).
-   - Valida parsing rigoroso de cues, formato de timestamps, ordenação temporal (`start < end`), detecção de timestamps zerados (`all_timestamps_zero`) e texto não vazio por cue.
-   - Validação heurística e tolerante de coerência com o roteiro (`text_incoherent_with_script`) que impede legendas vazias/truncadas vs roteiros substanciais.
+   - Valida parsing rigoroso de cues, formato e faixas de timestamps (hour >= 0, 0 <= m < 60, 0 <= s < 60, 0 <= ms <= 999), ordenação temporal (`start < end`), detecção de timestamps zerados (`all_timestamps_zero`) e texto não vazio por cue.
+   - Validação heurística de coerência com o roteiro (cobertura proporcional mínima e sobreposição lexical sem acentos) que impede legendas vazias ou desconexas.
    - Retorno estruturado fail-closed sem lançar exceções.
 2. **Arquitetura de Geração com Fallback Automático:**
    - **Primary:** Edge Subtitles (`voice.create_subtitle`). Se gerar SRT válido -> aceito imediatamente.
@@ -1050,3 +1051,31 @@ Entregas da Fase V16.2:
    - Provedor explícito `subtitle_provider="whisper"` e `custom_audio_file` continuam plenamente funcionais.
 5. **Ambiente Whisper:**
    - Nenhuma chamada real de rede ou download de modelo Whisper foi executada nesta fase (testes unitários isolados com mocks). Recomendação oficial de produção: `large-v3-turbo`.
+
+---
+
+## 27. V16.3 — Final Media Quality Gate (Fase Ativa Atual)
+
+**Status: 🚀 ACTIVE / DEV IMPLEMENTED (02/10/2026)**
+
+Regra Fundamental: `AUTONOMOUS_FINAL_MEDIA_WITH_CRITICAL_DEFECT = FORBIDDEN`
+
+Entregas da Fase V16.3:
+1. **Módulo Centralizado de Qualidade de Mídia (`app/services/media_quality.py`):**
+   - Helper seguro `probe_media(file_path)` utilizando `ffprobe` com subprocess sem shell, timeout rígido e captura estruturada em JSON.
+   - Evaluator de qualidade `evaluate_final_media_quality(video_path, params, ...)` que retorna status padronizado (`PASS` ou `BLOCK`), lista de `reasons` padronizadas e `metrics` consolidadas (duração, resolução, aspect ratio, codec, fps, tamanho em bytes).
+2. **Critical Gates Fail-Closed:**
+   - **Arquivo:** Rejeita arquivos inexistentes, diretórios, 0 bytes ou truncados (< 10KB, `MIN_VALID_MEDIA_FILE_BYTES`).
+   - **Probe:** Falha de ffprobe (indisponível, timeout, retorno não-zero ou JSON inválido) bloqueia a produção autônoma.
+   - **Vídeo:** Rejeita vídeos sem stream de vídeo, com dimensões inválidas (width/height <= 0), com resolução abaixo do mínimo ou aspect ratio incompatível com a orientação esperada (ex: `portrait` 9:16).
+   - **Duração:** Rejeita vídeos com duração <= 0 ou que apresentem divergência extrema em relação ao áudio gerado (`AUDIO_VIDEO_DURATION_MISMATCH`).
+   - **Áudio:** Para produção autônoma com locução, exige presença de stream de áudio com duração válida.
+   - **Contrato de Legenda:** Valida que o artefato SRT obrigatório existe e foi mantido no pipeline.
+3. **Pipeline Gate Pré-Publicação:**
+   - Integrado diretamente em `app/services/task.py` logo após a geração de `final_video_paths`.
+   - Se qualquer vídeo final do lote falhar no gate, a tarefa é imediatamente interrompida como `TASK_STATE_FAILED` com `stage="final_media_quality"`.
+   - O agendamento de cross-post (`_schedule_cross_post`) e a chamada de publicadores externos são bloqueados preventivamente.
+4. **Preservação do Modo Manual:**
+   - A imposição fail-closed é governada pelo flag `final_media_quality_required=True` (imposta automaticamente na produção autônoma), preservando geração manual e testes pontuais.
+5. **Limites do Escopo:**
+   - Não realiza OCR visual de legendas, análise de black/freeze frames, nem avaliação semântica subjetiva.

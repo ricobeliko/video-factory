@@ -21,6 +21,7 @@ from app.services import (
     llm,
     loomloom,
     material,
+    media_quality,
     metaso_minimax,
     ofox,
     sonilo,
@@ -2837,6 +2838,72 @@ def _run_pipeline(
 
     logger.info(f"[GEN][COMPLETE] task_id={task_id} final_videos={final_video_paths}")
 
+    # 6.5. Final Media Quality Gate (Fase V16.3)
+    is_media_quality_required = getattr(params, "final_media_quality_required", False)
+    final_media_reports = []
+    has_media_defect = False
+
+    for idx, f_path in enumerate(final_video_paths, start=1):
+        report = media_quality.evaluate_final_media_quality(
+            video_path=f_path,
+            params=params,
+            expected_audio_duration=audio_duration,
+            subtitle_path=subtitle_path,
+            task_id=task_id,
+            video_index=idx,
+            required=is_media_quality_required,
+        )
+        final_media_reports.append(report)
+        if report["status"] == "BLOCK":
+            has_media_defect = True
+
+    if is_media_quality_required and has_media_defect:
+        all_block_reasons = []
+        for r in final_media_reports:
+            all_block_reasons.extend(r.get("reasons", []))
+        all_block_reasons = list(dict.fromkeys(all_block_reasons))
+        primary_metrics = (
+            final_media_reports[0].get("metrics", {}) if final_media_reports else {}
+        )
+        reports_summary = [
+            {
+                "video_index": idx + 1,
+                "status": r.get("status"),
+                "reasons": r.get("reasons", []),
+                "metrics": r.get("metrics", {}),
+            }
+            for idx, r in enumerate(final_media_reports)
+        ]
+        try:
+            task_artifacts.patch_script_data(
+                task_id,
+                final_media_quality={
+                    "status": "BLOCK",
+                    "reasons": all_block_reasons,
+                    "metrics": primary_metrics,
+                    "reports": reports_summary,
+                },
+            )
+        except Exception as mq_exc:
+            logger.warning(
+                f"[MEDIA_GATE] Falha ao persistir script_data no caminho de BLOCK (ignorado): {mq_exc}"
+            )
+
+        logger.error(
+            f"[MEDIA_GATE][TASK_FAILED] task_id={task_id} reasons={all_block_reasons}"
+        )
+        return _mark_task_failed(
+            task_id,
+            "final_media_quality",
+            f"final media quality check failed: {', '.join(all_block_reasons)}",
+            details={
+                "final_media_quality_status": "BLOCK",
+                "final_media_quality_reasons": all_block_reasons,
+                "final_media_quality_metrics": primary_metrics,
+                "final_media_reports": final_media_reports,
+            },
+        )
+
     logger.success(
         f"task {task_id} finished, generated {len(final_video_paths)} videos."
     )
@@ -2866,6 +2933,36 @@ def _run_pipeline(
     except Exception as prov_exc:
         logger.warning(f"[COPYRIGHT] Falha ao persistir asset_provenance final: {prov_exc}")
 
+    primary_media_metrics = (
+        final_media_reports[0].get("metrics", {}) if final_media_reports else {}
+    )
+    all_media_reasons = []
+    for r in final_media_reports:
+        all_media_reasons.extend(r.get("reasons", []))
+    all_media_reasons = list(dict.fromkeys(all_media_reasons))
+    reports_summary = [
+        {
+            "video_index": idx + 1,
+            "status": r.get("status"),
+            "reasons": r.get("reasons", []),
+            "metrics": r.get("metrics", {}),
+        }
+        for idx, r in enumerate(final_media_reports)
+    ]
+
+    try:
+        task_artifacts.patch_script_data(
+            task_id,
+            final_media_quality={
+                "status": "BLOCK" if has_media_defect else "PASS",
+                "reasons": all_media_reasons,
+                "metrics": primary_media_metrics,
+                "reports": reports_summary,
+            },
+        )
+    except Exception as mq_exc:
+        logger.warning(f"[MEDIA_GATE] Falha ao persistir script_data: {mq_exc}")
+
     kwargs = {
         "videos": final_video_paths,
         "combined_videos": combined_video_paths,
@@ -2876,6 +2973,10 @@ def _run_pipeline(
         "subtitle_path": subtitle_path,
         "materials": downloaded_videos,
         "asset_provenance": final_prov,
+        "final_media_quality_status": "BLOCK" if has_media_defect else "PASS",
+        "final_media_quality_reasons": all_media_reasons,
+        "final_media_quality_metrics": primary_media_metrics,
+        "final_media_reports": final_media_reports,
         "cross_post_state": cross_post_state,
         "cross_post_results": None,
         "cross_post_error": None,

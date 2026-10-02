@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 
 from app.models import const
 from app.models.schema import VideoAspect, VideoParams
-from app.services import autonomous_production, media_quality, task as tm
+from app.services import autonomous_production, media_quality, task as tm, task_artifacts
 from app.services import state as sm
 from app.utils import utils
 
@@ -867,6 +867,247 @@ class TestV16_3FinalMediaQualityGate(unittest.TestCase):
             call_args = mock_sub.call_args[0][0]
             self.assertEqual(call_args[-1], space_file)
             self.assertFalse(mock_sub.call_args[1].get("shell", False))
+
+    # =========================================================================
+    # K. HARDENING V16.3 (TESTES 45 A 57)
+    # =========================================================================
+
+    def test_45_payload_json_top_level_list_fails_parse_error(self):
+        """45. ffprobe payload top-level como lista -> FFPROBE_PARSE_ERROR."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "list_payload.mp4", size_bytes=15000)
+        mock_proc = MagicMock(returncode=0, stdout="[]", stderr="")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("FFPROBE_PARSE_ERROR", res["reasons"])
+
+    def test_46_streams_none_fails_parse_error(self):
+        """46. streams=None no JSON -> FFPROBE_PARSE_ERROR."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "streams_none.mp4", size_bytes=15000)
+        payload = {"format": {"duration": "30.0"}, "streams": None}
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("FFPROBE_PARSE_ERROR", res["reasons"])
+
+    def test_47_streams_string_fails_parse_error(self):
+        """47. streams sendo string -> FFPROBE_PARSE_ERROR."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "streams_str.mp4", size_bytes=15000)
+        payload = {"format": {"duration": "30.0"}, "streams": "not_a_list"}
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("FFPROBE_PARSE_ERROR", res["reasons"])
+
+    def test_48_stream_item_none_fails_parse_error(self):
+        """48. item da lista streams sendo None ou não-dicionário -> FFPROBE_PARSE_ERROR."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "streams_item_none.mp4", size_bytes=15000)
+        payload = {"format": {"duration": "30.0"}, "streams": [None]}
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("FFPROBE_PARSE_ERROR", res["reasons"])
+
+    def test_49_format_invalid_type_fails_parse_error(self):
+        """49. format sendo tipo inválido (ex: lista) -> FFPROBE_PARSE_ERROR."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "format_list.mp4", size_bytes=15000)
+        payload = {"format": [], "streams": []}
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("FFPROBE_PARSE_ERROR", res["reasons"])
+
+    def test_50_audio_duration_string_blocks(self):
+        """50. audio duration presente mas string não-numérica -> BLOCK / INVALID_AUDIO_DURATION."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "audio_str.mp4", size_bytes=15000)
+        payload = make_valid_probe_payload(duration=30.0, width=1080, height=1920, has_audio=True)
+        payload["streams"][1]["duration"] = "abc"
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        params = VideoParams(video_subject="Test", voice_name="pt-BR-AntonioNeural")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, params=params, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("INVALID_AUDIO_DURATION", res["reasons"])
+
+    def test_51_audio_duration_nan_blocks(self):
+        """51. audio duration NaN -> BLOCK / INVALID_AUDIO_DURATION."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "audio_nan.mp4", size_bytes=15000)
+        payload = make_valid_probe_payload(duration=30.0, width=1080, height=1920, has_audio=True)
+        payload["streams"][1]["duration"] = "NaN"
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        params = VideoParams(video_subject="Test", voice_name="pt-BR-AntonioNeural")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, params=params, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("INVALID_AUDIO_DURATION", res["reasons"])
+
+    def test_52_audio_duration_inf_blocks(self):
+        """52. audio duration Inf -> BLOCK / INVALID_AUDIO_DURATION."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "audio_inf.mp4", size_bytes=15000)
+        payload = make_valid_probe_payload(duration=30.0, width=1080, height=1920, has_audio=True)
+        payload["streams"][1]["duration"] = "inf"
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        params = VideoParams(video_subject="Test", voice_name="pt-BR-AntonioNeural")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, params=params, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("INVALID_AUDIO_DURATION", res["reasons"])
+
+    def test_53_audio_duration_zero_blocks(self):
+        """53. audio duration 0 -> BLOCK / INVALID_AUDIO_DURATION."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "audio_zero.mp4", size_bytes=15000)
+        payload = make_valid_probe_payload(duration=30.0, width=1080, height=1920, has_audio=True)
+        payload["streams"][1]["duration"] = "0"
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        params = VideoParams(video_subject="Test", voice_name="pt-BR-AntonioNeural")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, params=params, required=True)
+            self.assertEqual(res["status"], "BLOCK")
+            self.assertIn("INVALID_AUDIO_DURATION", res["reasons"])
+
+    def test_54_audio_duration_missing_tolerated(self):
+        """54. audio duration ausente (None) no stream -> tolerado sem bloquear apenas por ausência."""
+        valid_file = make_dummy_media_file(self.tmp_dir, "audio_missing_dur.mp4", size_bytes=15000)
+        payload = make_valid_probe_payload(duration=30.0, width=1080, height=1920, has_audio=True)
+        del payload["streams"][1]["duration"]
+        mock_proc = MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+        params = VideoParams(video_subject="Test", voice_name="pt-BR-AntonioNeural")
+        with patch("app.services.media_quality.get_ffprobe_binary", return_value="ffprobe"), \
+             patch("subprocess.run", return_value=mock_proc):
+            res = media_quality.evaluate_final_media_quality(video_path=valid_file, params=params, required=True)
+            self.assertEqual(res["status"], "PASS")
+            self.assertNotIn("INVALID_AUDIO_DURATION", res["reasons"])
+
+    def test_55_pipeline_media_gate_block_persists_script_data(self):
+        """55. pipeline media gate BLOCK persiste final_media_quality no script_data."""
+        task_id = "test-pipe-block-persist"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        try:
+            bad_mp4 = make_dummy_media_file(task_dir, "final-1.mp4", size_bytes=15000)
+            params = VideoParams(
+                video_subject="Pipeline Block Persist",
+                final_media_quality_required=True,
+            )
+
+            mock_eval = {
+                "status": "BLOCK",
+                "reasons": ["NO_AUDIO_STREAM"],
+                "metrics": {"duration": 30.0, "width": 1080, "height": 1920},
+            }
+
+            with patch("app.services.task.generate_script", return_value="Script"), \
+                 patch("app.services.task.generate_terms", return_value=["terms"]), \
+                 patch("app.services.task.generate_audio", return_value=("a.mp3", 30.0, MagicMock())), \
+                 patch("app.services.task.generate_subtitle", return_value="a.srt"), \
+                 patch("app.services.task.get_video_materials", return_value=["m.mp4"]), \
+                 patch("app.services.task.generate_final_videos", return_value=([bad_mp4], [bad_mp4], [])), \
+                 patch("app.services.media_quality.evaluate_final_media_quality", return_value=mock_eval), \
+                 patch("app.services.task_artifacts.patch_script_data") as mock_patch:
+
+                res = tm.start(task_id, params, stop_at="video")
+                self.assertEqual(res.get("state"), const.TASK_STATE_FAILED)
+                mock_patch.assert_called()
+                call_kwargs = mock_patch.call_args[1]
+                self.assertIn("final_media_quality", call_kwargs)
+                fmq = call_kwargs["final_media_quality"]
+                self.assertEqual(fmq["status"], "BLOCK")
+                self.assertIn("NO_AUDIO_STREAM", fmq["reasons"])
+                self.assertIn("reports", fmq)
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_56_script_data_failure_does_not_prevent_block(self):
+        """56. Falha ao persistir script_data não impede TASK_STATE_FAILED."""
+        task_id = "test-pipe-block-script-fail"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        try:
+            bad_mp4 = make_dummy_media_file(task_dir, "final-1.mp4", size_bytes=15000)
+            params = VideoParams(
+                video_subject="Pipeline Block Script Fail",
+                final_media_quality_required=True,
+            )
+
+            mock_eval = {
+                "status": "BLOCK",
+                "reasons": ["RESOLUTION_TOO_LOW"],
+                "metrics": {},
+            }
+
+            with patch("app.services.task.generate_script", return_value="Script"), \
+                 patch("app.services.task.generate_terms", return_value=["terms"]), \
+                 patch("app.services.task.generate_audio", return_value=("a.mp3", 30.0, MagicMock())), \
+                 patch("app.services.task.generate_subtitle", return_value="a.srt"), \
+                 patch("app.services.task.get_video_materials", return_value=["m.mp4"]), \
+                 patch("app.services.task.generate_final_videos", return_value=([bad_mp4], [bad_mp4], [])), \
+                 patch("app.services.media_quality.evaluate_final_media_quality", return_value=mock_eval), \
+                 patch("app.services.task_artifacts.patch_script_data", side_effect=IOError("disk full")):
+
+                res = tm.start(task_id, params, stop_at="video")
+                self.assertEqual(res.get("state"), const.TASK_STATE_FAILED)
+                self.assertEqual(res.get("failed_stage"), "final_media_quality")
+                self.assertIn("RESOLUTION_TOO_LOW", res.get("error", ""))
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_57_multi_video_block_preserves_diagnostics_reports(self):
+        """57. multi-video BLOCK preserva reports por vídeo para diagnóstico."""
+        task_id = "test-multi-diag"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        try:
+            v1 = make_dummy_media_file(task_dir, "final-1.mp4", size_bytes=15000)
+            v2 = make_dummy_media_file(task_dir, "final-2.mp4", size_bytes=15000)
+            params = VideoParams(
+                video_subject="Multi Video Diag",
+                video_count=2,
+                final_media_quality_required=True,
+            )
+
+            eval_v1 = {"status": "PASS", "reasons": [], "metrics": {"duration": 30.0}}
+            eval_v2 = {"status": "BLOCK", "reasons": ["NO_AUDIO_STREAM"], "metrics": {"duration": 30.0}}
+
+            with patch("app.services.task.generate_script", return_value="Script"), \
+                 patch("app.services.task.generate_terms", return_value=["terms"]), \
+                 patch("app.services.task.generate_audio", return_value=("a.mp3", 30.0, MagicMock())), \
+                 patch("app.services.task.generate_subtitle", return_value="a.srt"), \
+                 patch("app.services.task.get_video_materials", return_value=["m.mp4"]), \
+                 patch("app.services.task.generate_final_videos", return_value=([v1, v2], [v1, v2], [])), \
+                 patch("app.services.media_quality.evaluate_final_media_quality", side_effect=[eval_v1, eval_v2]), \
+                 patch("app.services.task_artifacts.patch_script_data") as mock_patch:
+
+                res = tm.start(task_id, params, stop_at="video")
+                self.assertEqual(res.get("state"), const.TASK_STATE_FAILED)
+                # Verifica que final_media_reports está nos details do resultado
+                reports = res.get("final_media_reports", [])
+                self.assertEqual(len(reports), 2)
+                self.assertEqual(reports[0]["status"], "PASS")
+                self.assertEqual(reports[1]["status"], "BLOCK")
+
+                # Verifica que patch_script_data gravou os reports por vídeo
+                mock_patch.assert_called()
+                call_kwargs = mock_patch.call_args[1]
+                fmq = call_kwargs["final_media_quality"]
+                self.assertEqual(len(fmq.get("reports", [])), 2)
+                self.assertEqual(fmq["reports"][0]["video_index"], 1)
+                self.assertEqual(fmq["reports"][1]["video_index"], 2)
+                self.assertEqual(fmq["reports"][1]["status"], "BLOCK")
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

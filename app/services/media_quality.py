@@ -152,10 +152,33 @@ def probe_media(
         base_result["error_message"] = f"failed to parse ffprobe json: {exc}"
         return base_result
 
-    format_dict = payload.get("format", {})
-    streams = payload.get("streams", [])
-    video_streams = [s for s in streams if s.get("codec_type") == "video"]
-    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    # Validação estrutural defensiva do payload (Hardening V16.3-1)
+    if not isinstance(payload, dict):
+        base_result["error_code"] = "FFPROBE_PARSE_ERROR"
+        base_result["error_message"] = f"ffprobe payload is not a dictionary: {type(payload).__name__}"
+        return base_result
+
+    format_val = payload.get("format")
+    if format_val is not None and not isinstance(format_val, dict):
+        base_result["error_code"] = "FFPROBE_PARSE_ERROR"
+        base_result["error_message"] = f"ffprobe 'format' field is not a dictionary: {type(format_val).__name__}"
+        return base_result
+    format_dict = format_val or {}
+
+    streams_val = payload.get("streams")
+    if not isinstance(streams_val, list):
+        base_result["error_code"] = "FFPROBE_PARSE_ERROR"
+        base_result["error_message"] = f"ffprobe 'streams' field is not a list: {type(streams_val).__name__}"
+        return base_result
+
+    for s in streams_val:
+        if not isinstance(s, dict):
+            base_result["error_code"] = "FFPROBE_PARSE_ERROR"
+            base_result["error_message"] = f"ffprobe stream item is not a dictionary: {type(s).__name__}"
+            return base_result
+
+    video_streams = [s for s in streams_val if s.get("codec_type") == "video"]
+    audio_streams = [s for s in streams_val if s.get("codec_type") == "audio"]
 
     # Extrai duração do contêiner ou do stream de vídeo primário
     format_dur = 0.0
@@ -383,13 +406,13 @@ def evaluate_final_media_quality(
         a_stream = audio_streams[0]
         audio_codec = str(a_stream.get("codec_name") or "unknown")
         raw_a_dur = a_stream.get("duration")
-        if raw_a_dur is not None:
+        if raw_a_dur is not None and str(raw_a_dur).strip() != "":
             try:
                 a_dur = float(raw_a_dur)
                 if a_dur <= 0.0 or not math.isfinite(a_dur):
                     reasons.append("INVALID_AUDIO_DURATION")
             except (ValueError, TypeError):
-                pass
+                reasons.append("INVALID_AUDIO_DURATION")
     elif is_narration_expected and required:
         reasons.append("NO_AUDIO_STREAM")
 

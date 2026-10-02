@@ -2865,6 +2865,30 @@ def _run_pipeline(
         primary_metrics = (
             final_media_reports[0].get("metrics", {}) if final_media_reports else {}
         )
+        reports_summary = [
+            {
+                "video_index": idx + 1,
+                "status": r.get("status"),
+                "reasons": r.get("reasons", []),
+                "metrics": r.get("metrics", {}),
+            }
+            for idx, r in enumerate(final_media_reports)
+        ]
+        try:
+            task_artifacts.patch_script_data(
+                task_id,
+                final_media_quality={
+                    "status": "BLOCK",
+                    "reasons": all_block_reasons,
+                    "metrics": primary_metrics,
+                    "reports": reports_summary,
+                },
+            )
+        except Exception as mq_exc:
+            logger.warning(
+                f"[MEDIA_GATE] Falha ao persistir script_data no caminho de BLOCK (ignorado): {mq_exc}"
+            )
+
         logger.error(
             f"[MEDIA_GATE][TASK_FAILED] task_id={task_id} reasons={all_block_reasons}"
         )
@@ -2916,6 +2940,15 @@ def _run_pipeline(
     for r in final_media_reports:
         all_media_reasons.extend(r.get("reasons", []))
     all_media_reasons = list(dict.fromkeys(all_media_reasons))
+    reports_summary = [
+        {
+            "video_index": idx + 1,
+            "status": r.get("status"),
+            "reasons": r.get("reasons", []),
+            "metrics": r.get("metrics", {}),
+        }
+        for idx, r in enumerate(final_media_reports)
+    ]
 
     try:
         task_artifacts.patch_script_data(
@@ -2924,6 +2957,7 @@ def _run_pipeline(
                 "status": "BLOCK" if has_media_defect else "PASS",
                 "reasons": all_media_reasons,
                 "metrics": primary_media_metrics,
+                "reports": reports_summary,
             },
         )
     except Exception as mq_exc:
@@ -2942,6 +2976,7 @@ def _run_pipeline(
         "final_media_quality_status": "BLOCK" if has_media_defect else "PASS",
         "final_media_quality_reasons": all_media_reasons,
         "final_media_quality_metrics": primary_media_metrics,
+        "final_media_reports": final_media_reports,
         "cross_post_state": cross_post_state,
         "cross_post_results": None,
         "cross_post_error": None,

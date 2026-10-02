@@ -2900,22 +2900,36 @@ def _run_pipeline(
 
     # 6. Generate final videos
     logger.info(f"[RENDER][START] task_id={task_id}")
-    final_video_paths, combined_video_paths, generation_warnings = (
-        generate_final_videos(
-            task_id,
-            params,
-            downloaded_videos,
-            audio_file,
-            subtitle_path,
-            audio_duration,
-            scene_clip_instructions=scene_instructions,
+    try:
+        final_video_paths, combined_video_paths, generation_warnings = (
+            generate_final_videos(
+                task_id,
+                params,
+                downloaded_videos,
+                audio_file,
+                subtitle_path,
+                audio_duration,
+                scene_clip_instructions=scene_instructions,
+            )
         )
-    )
-
-    if not final_video_paths:
+    except Exception as exc:
+        is_scene_mode = bool(getattr(params, "scene_based_generation_enabled", False))
+        failed_stage = "scene_render" if is_scene_mode else "video"
+        reason = getattr(exc, "reason_code", "SCENE_RENDER_FAILURE" if is_scene_mode else "RENDER_FAILURE")
+        logger.error(f"[RENDER][BLOCK] task_id={task_id} stage={failed_stage} reason={reason} error={exc}")
         return _mark_task_failed(
             task_id,
-            "video",
+            failed_stage,
+            f"failed to render video: {exc}",
+            details={"reason": reason, "stage": failed_stage},
+        )
+
+    if not final_video_paths:
+        is_scene_mode = bool(getattr(params, "scene_based_generation_enabled", False))
+        failed_stage = "scene_render" if is_scene_mode else "video"
+        return _mark_task_failed(
+            task_id,
+            failed_stage,
             "failed to generate final video",
         )
 

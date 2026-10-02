@@ -1086,7 +1086,7 @@ Entregas da Fase V16.3:
 ## 28. V16.4 — Scene-Based Video Generation (Fase Ativa Atual)
 
 **Status: 🚀 DEV COMPLETED / READY FOR PR (02/10/2026)**
-- **Validação:** 15 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
+- **Validação:** 19 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
 - **Regra Fundamental:** `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
 
 Objetivo da Fase V16.4:

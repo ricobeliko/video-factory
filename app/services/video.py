@@ -43,6 +43,13 @@ from app.services import bgm as bgm_service
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
+class SceneRenderError(RuntimeError):
+    """Exceção levantada quando a renderização de uma cena falha criticamente."""
+    def __init__(self, message: str, reason_code: str = "SCENE_RENDER_FAILURE"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
 class SubClippedVideoClip:
     def __init__(
         self,
@@ -53,6 +60,7 @@ class SubClippedVideoClip:
         height=None,
         duration=None,
         source_file_path=None,
+        scene_index=None,
     ):
         self.file_path = file_path
         self.start_time = start_time
@@ -60,6 +68,7 @@ class SubClippedVideoClip:
         self.width = width
         self.height = height
         self.source_file_path = source_file_path or file_path
+        self.scene_index = scene_index
         if duration is None:
             self.duration = end_time - start_time
         else:
@@ -812,6 +821,13 @@ def combine_videos(
             mat_path = getattr(inst, "material_path", inst.get("material_path", "") if isinstance(inst, dict) else "")
             base_dur = float(getattr(inst, "duration_seconds", inst.get("duration_seconds", max_clip_duration) if isinstance(inst, dict) else max_clip_duration))
 
+            if not mat_path or not os.path.exists(mat_path):
+                logger.error(f"[SCENE_RENDER][BLOCK] material path '{mat_path}' for scene {scene_idx} does not exist")
+                raise SceneRenderError(
+                    f"SCENE_RENDER_FAILURE: material path '{mat_path}' for scene {scene_idx} does not exist",
+                    reason_code="SCENE_RENDER_FAILURE",
+                )
+
             # Apenas a última cena pode absorver o residual controlado
             if idx == len(sorted_instructions) - 1 and residual_margin > 0.0:
                 scene_target_duration = round(base_dur + residual_margin, 3)
@@ -822,6 +838,12 @@ def combine_videos(
                 raw_clip = _open_video_clip_quietly(mat_path)
                 try:
                     source_dur = raw_clip.duration
+                    if source_dur <= 0:
+                        raise SceneRenderError(
+                            f"SCENE_RENDER_FAILURE: source clip duration <= 0 for scene {scene_idx}",
+                            reason_code="SCENE_RENDER_FAILURE",
+                        )
+
                     needed_source_dur = scene_target_duration * normalized_clip_speed
 
                     if source_dur >= needed_source_dur:
@@ -885,13 +907,42 @@ def combine_videos(
                             width=video_width,
                             height=video_height,
                             source_file_path=mat_path,
+                            scene_index=scene_idx,
                         )
                     )
                     video_duration += clip_duration_saved
                 finally:
                     close_clip(raw_clip)
             except Exception as e:
-                logger.error(f"failed to process scene clip {scene_idx}: {str(e)}")
+                logger.error(f"[SCENE_RENDER][BLOCK] failed to process scene clip {scene_idx}: {str(e)}")
+                if isinstance(e, SceneRenderError):
+                    raise
+                raise SceneRenderError(
+                    f"SCENE_RENDER_FAILURE: failed to render scene {scene_idx}: {str(e)}",
+                    reason_code="SCENE_RENDER_FAILURE",
+                ) from e
+
+        # Validações mandatórias antes da concatenação da timeline de cenas
+        if len(processed_clips) != len(scene_clip_instructions):
+            logger.error(
+                f"[SCENE_RENDER][BLOCK] processed_clips count ({len(processed_clips)}) != "
+                f"instructions count ({len(scene_clip_instructions)})"
+            )
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: processed {len(processed_clips)} clips but expected {len(scene_clip_instructions)}",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+
+        processed_indexes = [c.scene_index for c in processed_clips]
+        expected_indexes = list(range(1, len(scene_clip_instructions) + 1))
+        if processed_indexes != expected_indexes:
+            logger.error(
+                f"[SCENE_RENDER][BLOCK] scene indexes mismatch: got {processed_indexes}, expected {expected_indexes}"
+            )
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: processed scene indexes {processed_indexes} do not match expected {expected_indexes}",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
     else:
         # Fluxo legado (inalterado)
         subclipped_items = []
@@ -1049,13 +1100,27 @@ def combine_videos(
                 f"required duration: {required_video_duration:.2f}s, "
                 f"looped {len(processed_clips)-len(base_clips)} clips"
             )
-     
+
     # merge video clips progressively, avoid loading all videos at once to avoid memory overflow
     logger.info("starting clip merging process")
+    if scene_clip_instructions:
+        if len(processed_clips) != len(scene_clip_instructions):
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: partial timeline blocked before concat ({len(processed_clips)}/{len(scene_clip_instructions)})",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+        processed_indexes = [c.scene_index for c in processed_clips]
+        expected_indexes = list(range(1, len(scene_clip_instructions) + 1))
+        if processed_indexes != expected_indexes:
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: processed scene indexes {processed_indexes} do not match expected {expected_indexes}",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+
     if not processed_clips:
         logger.warning("no clips available for merging")
         return combined_video_path
-    
+
     clip_files = [clip.file_path for clip in processed_clips]
     logger.info(f"concatenating {len(clip_files)} clips with ffmpeg")
     concat_video_clips_with_ffmpeg(

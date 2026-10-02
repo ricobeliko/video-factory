@@ -35,6 +35,18 @@ class SceneMaterialError(RuntimeError):
         self.reason_code = reason_code
 
 
+BANNED_GENERIC_TERMS = {
+    "cinematic visual",
+    "generic footage",
+    "stock video",
+    "background video",
+    "fundo de video",
+    "fundo de tela",
+    "video escuro",
+    "fundo escuro",
+}
+
+
 def _get_provider_search_func(source: str):
     """Retorna o par (provider_name, search_func) adequado para o provider configurado."""
     provider = "pexels"
@@ -114,18 +126,75 @@ def resolve_scene_materials(
         scene_idx = scene.scene_index
         logger.info(f"[SCENE_MATERIAL][START] task_id={tid_str} scene_index={scene_idx}")
 
-        terms_to_try = list(scene.search_terms or [])
-        # Fallback genérico adicional se nenhum dos termos da cena resolver
-        if params.video_subject and params.video_subject not in terms_to_try:
-            terms_to_try.append(params.video_subject.strip())
-        if "cinematic visual" not in terms_to_try:
-            terms_to_try.append("cinematic visual")
+        terms_to_try: List[str] = []
+
+        # 1. search_terms da própria cena
+        has_explicit_terms = bool(scene.search_terms)
+        valid_explicit_terms = [
+            t.strip() for t in (scene.search_terms or [])
+            if t.strip() and t.strip().lower() not in BANNED_GENERIC_TERMS
+        ]
+        if strict and has_explicit_terms and not valid_explicit_terms:
+            raise SceneMaterialError(
+                f"SCENE_TERMS_EMPTY_OR_BANNED: scene {scene_idx} has only banned search terms",
+                reason_code="SCENE_TERMS_EMPTY_OR_BANNED",
+            )
+
+        for term in (scene.search_terms or []):
+            t_clean = term.strip()
+            if t_clean and t_clean not in terms_to_try:
+                if t_clean.lower() in BANNED_GENERIC_TERMS:
+                    continue
+                terms_to_try.append(t_clean)
+
+        # 2. Termos derivados da narration da própria cena
+        if scene.narration:
+            from app.services.scene_planner import _extract_scene_search_terms
+            derived = _extract_scene_search_terms(
+                narration=scene.narration,
+                video_subject=params.video_subject,
+                max_terms=3,
+            )
+            for dt in derived:
+                dt_clean = dt.strip()
+                if dt_clean and dt_clean not in terms_to_try:
+                    if dt_clean.lower() in BANNED_GENERIC_TERMS:
+                        continue
+                    terms_to_try.append(dt_clean)
+
+        # 3. visual_intent contextualizado com a cena
+        if getattr(scene, "visual_intent", None):
+            vi = str(scene.visual_intent).strip()
+            if vi and vi not in terms_to_try:
+                if vi.lower() not in BANNED_GENERIC_TERMS:
+                    terms_to_try.append(vi)
+
+        # 4. video_subject contextualizado com a cena, se aplicável
+        if params.video_subject:
+            vs = str(params.video_subject).strip()
+            if vs and vs not in terms_to_try:
+                if vs.lower() not in BANNED_GENERIC_TERMS:
+                    terms_to_try.append(vs)
+
+        if strict and not terms_to_try:
+            raise SceneMaterialError(
+                f"SCENE_TERMS_EMPTY_OR_BANNED: scene {scene_idx} has no valid non-banned search terms",
+                reason_code="SCENE_TERMS_EMPTY_OR_BANNED",
+            )
+
+        # Fallback genérico amplo permitido SOMENTE se strict=False
+        if not strict:
+            if "cinematic visual" not in terms_to_try:
+                terms_to_try.append("cinematic visual")
 
         resolved_item: Optional[MaterialInfo] = None
         term_used: str = ""
         fallback_used: bool = False
 
         for term_i, term in enumerate(terms_to_try):
+            if strict and term.lower() in BANNED_GENERIC_TERMS:
+                continue
+
             candidates = _search_candidates(
                 search_term=term,
                 source=source,

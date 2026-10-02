@@ -37,8 +37,12 @@ class SceneMaterialError(RuntimeError):
 
 BANNED_GENERIC_TERMS = {
     "cinematic visual",
+    "cinematic stock",
     "generic footage",
+    "generic stock",
+    "generic video",
     "stock video",
+    "stock footage",
     "background video",
     "fundo de video",
     "fundo de tela",
@@ -166,14 +170,14 @@ def resolve_scene_materials(
         if getattr(scene, "visual_intent", None):
             vi = str(scene.visual_intent).strip()
             if vi and vi not in terms_to_try:
-                if vi.lower() not in BANNED_GENERIC_TERMS:
+                if not (strict and vi.lower() in BANNED_GENERIC_TERMS):
                     terms_to_try.append(vi)
 
         # 4. video_subject contextualizado com a cena, se aplicável
         if params.video_subject:
             vs = str(params.video_subject).strip()
             if vs and vs not in terms_to_try:
-                if vs.lower() not in BANNED_GENERIC_TERMS:
+                if not (strict and vs.lower() in BANNED_GENERIC_TERMS):
                     terms_to_try.append(vs)
 
         if strict and not terms_to_try:

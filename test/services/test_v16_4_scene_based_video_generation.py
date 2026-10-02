@@ -392,6 +392,50 @@ class TestSceneMaterial(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.reason_code, "SCENE_TERMS_EMPTY_OR_BANNED")
 
+    @patch("app.services.material._search_videos_with_cache")
+    def test_scene_material_rejects_generic_visual_intent_in_strict(self, mock_search):
+        searched_terms = []
+
+        def search_side_effect(search_term, **kwargs):
+            searched_terms.append(search_term)
+            if search_term == "cinematic stock":
+                return [
+                    MaterialInfo(
+                        provider="pexels",
+                        url="https://example.com/cinematic.mp4",
+                        duration=10.0,
+                        source_info={"asset_id": "asset_cinematic_generic"},
+                    )
+                ]
+            return []
+
+        mock_search.side_effect = search_side_effect
+
+        plan = ScenePlan(
+            scenes=[
+                ScenePlanItem(
+                    scene_index=1,
+                    narration="Roteiro narrativo da cena",
+                    search_terms=["termo_especifico_sem_resultado"],
+                    visual_intent="cinematic stock",
+                )
+            ],
+            total_scenes=1,
+        )
+        params = VideoParams(video_subject="")
+
+        with self.assertRaises(scene_material.SceneMaterialError) as ctx:
+            scene_material.resolve_scene_materials(
+                task_id="task_reject_generic_vi",
+                scene_plan=plan,
+                params=params,
+                strict=True,
+            )
+
+        self.assertEqual(ctx.exception.reason_code, "SCENE_MATERIAL_MISSING")
+        self.assertNotIn("cinematic stock", searched_terms)
+        self.assertNotIn("cinematic stock", [t.lower() for t in searched_terms])
+
 
 class TestSceneAssembly(unittest.TestCase):
     """Testes unitários para o Scene Assembly."""

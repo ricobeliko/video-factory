@@ -2,6 +2,7 @@ import json
 import os.path
 import re
 import threading
+import unicodedata
 from timeit import default_timer as timer
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -374,11 +375,7 @@ def validate_subtitle_file(
         with open(subtitle_path, "r", encoding="utf-8-sig") as f:
             raw_content = f.read()
     except UnicodeDecodeError:
-        try:
-            with open(subtitle_path, "r", encoding="utf-8", errors="replace") as f:
-                raw_content = f.read()
-        except Exception as exc:
-            return {**empty_result, "reason": f"encoding_error: {exc}"}
+        return {**empty_result, "reason": "invalid_utf8_encoding"}
     except Exception as exc:
         return {**empty_result, "reason": f"io_error_read: {exc}"}
 
@@ -490,20 +487,46 @@ def validate_subtitle_file(
 
     total_duration = max(0.0, max_end - (min_start if min_start != float("inf") else 0.0))
 
-    # Coerência básica com o roteiro
+    # Coerência com o roteiro (Coverage + Lexical Overlap)
     if video_script and isinstance(video_script, str) and str(video_script).strip():
+        # A) Cobertura proporcional de caracteres úteis (sem whitespace e pontuação)
         script_chars = re.sub(r"[\s\W_]+", "", str(video_script), flags=re.UNICODE)
-        all_cue_text = "".join(text for _, text in cues)
+        all_cue_text = " ".join(text for _, text in cues)
         subs_chars = re.sub(r"[\s\W_]+", "", all_cue_text, flags=re.UNICODE)
 
-        if len(script_chars) >= 30 and (len(subs_chars) < min(10, len(script_chars) * 0.15) or len(subs_chars) < 5):
-            return {
-                "valid": False,
-                "reason": "text_incoherent_with_script",
-                "cue_count": len(cues),
-                "text_chars": total_text_chars,
-                "total_duration": total_duration,
-            }
+        if len(script_chars) >= 30:
+            coverage_ratio = len(subs_chars) / len(script_chars)
+            # Bloqueia se a cobertura for inferior a 20% ou texto minúsculo (< 15 chars)
+            if coverage_ratio < 0.20 or len(subs_chars) < 15:
+                return {
+                    "valid": False,
+                    "reason": "text_incoherent_with_script",
+                    "cue_count": len(cues),
+                    "text_chars": total_text_chars,
+                    "total_duration": total_duration,
+                }
+
+        # B) Sobreposição lexical (tokens úteis com normalização sem acentos)
+        def _extract_tokens(txt: str) -> set:
+            nfkd = unicodedata.normalize("NFKD", txt)
+            ascii_txt = nfkd.encode("ASCII", "ignore").decode("ASCII").lower()
+            return set(re.findall(r"\b[a-z0-9]{3,}\b", ascii_txt))
+
+        script_tokens = _extract_tokens(str(video_script))
+        sub_tokens = _extract_tokens(all_cue_text)
+
+        if len(script_tokens) >= 4:
+            overlap = script_tokens.intersection(sub_tokens)
+            overlap_ratio = len(overlap) / len(script_tokens)
+            # Se não houver palavras em comum ou sobreposição for insignificante (< 15%)
+            if overlap_ratio < 0.15 or len(overlap) == 0:
+                return {
+                    "valid": False,
+                    "reason": "text_incoherent_with_script",
+                    "cue_count": len(cues),
+                    "text_chars": total_text_chars,
+                    "total_duration": total_duration,
+                }
 
     return {
         "valid": True,

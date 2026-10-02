@@ -798,6 +798,231 @@ class TestV16_2SubtitleReliabilityGate(unittest.TestCase):
         self.assertTrue(val["valid"])
         self.assertEqual(val["cue_count"], 1)
 
+    # =========================================================================
+    # G. HARDENING (36 a 45)
+    # =========================================================================
+
+    def test_36_stale_srt_removal_failure_fails_closed(self):
+        """36. stale subtitle.srt existente + remoção falha -> FAIL CLOSED (não considera Edge success)."""
+        task_id = "test-stale-fail-closed"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        stale_srt = os.path.join(task_dir, "subtitle.srt")
+        with open(stale_srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,100 --> 00:00:02,000\nStale antigo.\n\n")
+
+        try:
+            params = VideoParams(video_subject="Stale Fail", subtitle_enabled=True, subtitle_required=True)
+            # Simula falha ao remover o arquivo stale (continua existindo)
+            with patch("os.remove", side_effect=PermissionError("File locked")), \
+                 patch.object(tm.voice, "create_subtitle") as mock_edge, \
+                 patch.object(tm.subtitle, "create") as mock_whisper:
+                sub_path = tm.generate_subtitle(
+                    task_id=task_id,
+                    params=params,
+                    video_script="Novo roteiro.",
+                    sub_maker=MagicMock(),
+                    audio_file=os.path.join(task_dir, "audio.mp3"),
+                )
+                self.assertEqual(sub_path, "")
+                mock_edge.assert_not_called()
+                mock_whisper.assert_not_called()
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_37_edge_atomic_temp_replacement_passes(self):
+        """37. Edge gera em arquivo temporário válido -> atomic replace -> PASS."""
+        task_id = "test-edge-atomic-ok"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        try:
+            params = VideoParams(video_subject="Edge Atomic", subtitle_enabled=True, subtitle_required=True)
+            sub_maker = MagicMock()
+
+            def _fake_edge(text, sub_maker, subtitle_file, word_level=False):
+                # subtitle_file recebido deve ser o temporário .tmp.
+                self.assertIn("subtitle.edge.tmp.", subtitle_file)
+                with open(subtitle_file, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,100 --> 00:00:02,000\nEdge em arquivo temporario.\n\n")
+
+            with patch.object(tm.voice, "create_subtitle", side_effect=_fake_edge):
+                sub_path = tm.generate_subtitle(
+                    task_id=task_id,
+                    params=params,
+                    video_script="Edge em arquivo temporario.",
+                    sub_maker=sub_maker,
+                    audio_file=os.path.join(task_dir, "audio.mp3"),
+                )
+                self.assertTrue(os.path.isfile(sub_path))
+                self.assertTrue(sub_path.endswith("subtitle.srt"))
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_38_edge_temp_invalid_does_not_contaminate_and_triggers_whisper(self):
+        """38. Edge temp inválido -> não contamina subtitle.srt final e dispara Whisper fallback."""
+        task_id = "test-edge-temp-invalid"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        canonical_srt = os.path.join(task_dir, "subtitle.srt")
+
+        try:
+            params = VideoParams(video_subject="Edge Temp Inv", subtitle_enabled=True, subtitle_required=True)
+            sub_maker = MagicMock()
+
+            def _fake_edge(text, sub_maker, subtitle_file, word_level=False):
+                with open(subtitle_file, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:05,000 --> 00:00:01,000\nInvertido temporario.\n\n")
+
+            def _fake_whisper(audio_file, subtitle_file, word_level=False):
+                self.assertIn("subtitle.whisper.tmp.", subtitle_file)
+                with open(subtitle_file, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,100 --> 00:00:02,000\nWhisper valido recuperado.\n\n")
+                return subtitle_file
+
+            with patch.object(tm.voice, "create_subtitle", side_effect=_fake_edge), \
+                 patch.object(tm.subtitle, "create", side_effect=_fake_whisper) as mock_whisper:
+                sub_path = tm.generate_subtitle(
+                    task_id=task_id,
+                    params=params,
+                    video_script="Whisper valido recuperado.",
+                    sub_maker=sub_maker,
+                    audio_file=os.path.join(task_dir, "audio.mp3"),
+                )
+                self.assertTrue(os.path.isfile(sub_path))
+                mock_whisper.assert_called_once()
+                with open(sub_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.assertIn("Whisper valido recuperado", content)
+                self.assertNotIn("Invertido temporario.", content)
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_39_whisper_atomic_temp_replacement_passes(self):
+        """39. Whisper temp válido -> atomic replace -> PASS."""
+        task_id = "test-whisper-atomic-ok"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        try:
+            params = VideoParams(video_subject="Whisper Atomic", subtitle_enabled=True, subtitle_required=True)
+
+            def _fake_whisper(audio_file, subtitle_file, word_level=False):
+                self.assertIn("subtitle.whisper.tmp.", subtitle_file)
+                with open(subtitle_file, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,100 --> 00:00:02,000\nWhisper atomico com sucesso.\n\n")
+                return subtitle_file
+
+            with patch.object(tm.voice, "create_subtitle", side_effect=RuntimeError("Edge crash")), \
+                 patch.object(tm.subtitle, "create", side_effect=_fake_whisper):
+                sub_path = tm.generate_subtitle(
+                    task_id=task_id,
+                    params=params,
+                    video_script="Whisper atomico com sucesso.",
+                    sub_maker=MagicMock(),
+                    audio_file=os.path.join(task_dir, "audio.mp3"),
+                )
+                self.assertTrue(os.path.isfile(sub_path))
+                self.assertTrue(sub_path.endswith("subtitle.srt"))
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+    def test_40_invalid_utf8_bytes_fails_closed(self):
+        """40. Bytes UTF-8 inválidos -> invalid_utf8_encoding (BLOCK sem fallback corruptor)."""
+        srt = os.path.join(self.tmp_dir, "invalid_utf8.srt")
+        with open(srt, "wb") as f:
+            f.write(b"\xff\xfe\x00\x00\x80\x81\x82")  # Sequência inválida UTF-8
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "invalid_utf8_encoding")
+
+    def test_41_long_script_with_only_10_chars_subtitle_blocks(self):
+        """41. Script longo com subtitle de apenas 10 caracteres -> BLOCK (cobertura proporcional)."""
+        script = (
+            "A Floresta Amazônica possui uma das maiores biodiversidades do planeta Terra, "
+            "abrigando milhões de espécies de animais, plantas e insetos vitais para o equilíbrio climático."
+        )
+        srt = os.path.join(self.tmp_dir, "short_10_chars.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,100 --> 00:00:01,000\nFloresta T\n\n")
+        res = subtitle.validate_subtitle_file(srt, video_script=script)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "text_incoherent_with_script")
+
+    def test_42_reasonable_length_but_unrelated_content_blocks(self):
+        """42. Subtitle com tamanho razoável mas conteúdo completamente não relacionado -> BLOCK (lexical overlap)."""
+        script = (
+            "Os golfinhos utilizam assobios característicos e ecolocalização refinada para navegar e caçar nos mares."
+        )
+        srt = os.path.join(self.tmp_dir, "unrelated_content.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write(
+                "1\n00:00:00,100 --> 00:00:03,000\n"
+                "Hoje vamos aprender uma receita caseira de bolo de chocolate fofinho e delicioso.\n\n"
+            )
+        res = subtitle.validate_subtitle_file(srt, video_script=script)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "text_incoherent_with_script")
+
+    def test_43_whisper_small_accents_and_punctuation_differences_passes(self):
+        """43. Whisper com pequenas diferenças de pontuação e acentos -> PASS."""
+        script = "A inteligência artificial transformará a automação industrial moderna."
+        srt = os.path.join(self.tmp_dir, "whisper_accents.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write(
+                "1\n00:00:00,100 --> 00:00:03,500\n"
+                "A inteligencia artificial transformara a automacao industrial moderna\n\n"
+            )
+        res = subtitle.validate_subtitle_file(srt, video_script=script)
+        self.assertTrue(res["valid"])
+        self.assertEqual(res["reason"], "valid")
+
+    def test_44_subtitle_practically_complete_and_coherent_passes(self):
+        """44. Subtitle praticamente completo e coerente com o roteiro -> PASS."""
+        script = "O telescópio James Webb revelou detalhes inéditos sobre a formação das primeiras galáxias do universo."
+        srt = os.path.join(self.tmp_dir, "coherent_complete.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write(
+                "1\n00:00:00,100 --> 00:00:02,500\n"
+                "O telescopio James Webb revelou detalhes ineditos\n\n"
+                "2\n00:00:02,600 --> 00:00:05,000\n"
+                "sobre a formacao das primeiras galaxias do universo.\n\n"
+            )
+        res = subtitle.validate_subtitle_file(srt, video_script=script)
+        self.assertTrue(res["valid"])
+        self.assertEqual(res["reason"], "valid")
+
+    def test_45_render_required_with_existing_invalid_srt_blocks(self):
+        """45. Render com subtitle_required=True e SRT existente porém inválido no disco -> render NÃO é chamado."""
+        task_id = "test-render-invalid-srt"
+        task_dir = utils.task_dir(task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        invalid_srt = os.path.join(task_dir, "subtitle.srt")
+        with open(invalid_srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,000 --> 00:00:00,000\nZero timestamps.\n\n")
+
+        try:
+            params = VideoParams(
+                video_subject="Render Invalid",
+                subtitle_enabled=True,
+                subtitle_required=True,
+            )
+
+            with patch.object(tm.video, "generate_video") as mock_generate_video:
+                final_videos, combined_videos, warnings = tm.generate_final_videos(
+                    task_id=task_id,
+                    params=params,
+                    downloaded_videos=["mat1.mp4"],
+                    audio_file=os.path.join(task_dir, "audio.mp3"),
+                    subtitle_path=invalid_srt,
+                    audio_duration=5.0,
+                )
+
+                self.assertEqual(final_videos, [])
+                self.assertEqual(combined_videos, [])
+                self.assertEqual(warnings, [{"code": "subtitle_required_invalid"}])
+                mock_generate_video.assert_not_called()
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -604,7 +604,8 @@ def generate_subtitle(
 
     task_dir_path = utils.task_dir(task_id)
     subtitle_path = path.join(task_dir_path, "subtitle.srt")
-    temp_subtitle_path = path.join(task_dir_path, f"subtitle.srt.tmp.{uuid4().hex[:8]}")
+    temp_edge_path = path.join(task_dir_path, f"subtitle.edge.tmp.{uuid4().hex[:8]}")
+    temp_whisper_path = path.join(task_dir_path, f"subtitle.whisper.tmp.{uuid4().hex[:8]}")
     subtitle_provider = config.app.get("subtitle_provider", "edge").strip().lower()
     is_word_level = getattr(params, "subtitle_display_mode", "sentence") == "word_by_word"
 
@@ -660,66 +661,94 @@ def generate_subtitle(
     # -------------------------------------------------------------
     logger.info(f"[SUBTITLE][START] task_id={task_id} required=True")
 
-    # Stale SRT cleanup: remove existing subtitle.srt to ensure fresh validation
+    # Stale SRT cleanup: must remove existing subtitle.srt. If removal fails and file still exists: FAIL CLOSED!
     if os.path.exists(subtitle_path):
         try:
             os.remove(subtitle_path)
         except Exception as rm_exc:
-            logger.warning(f"[SUBTITLE] Failed to remove stale subtitle: {rm_exc}")
+            logger.error(f"[SUBTITLE][STALE_ERROR] Failed to remove stale subtitle: {rm_exc}")
+        if os.path.exists(subtitle_path):
+            logger.error(f"[SUBTITLE][BLOCK] Stale subtitle file could not be removed: {subtitle_path}")
+            return ""
 
     edge_succeeded = False
-    # Primary: Edge (if sub_maker available and provider is not explicit whisper)
+    # Primary: Edge (isolated atomic temp file)
     if sub_maker is not None and subtitle_provider != "whisper":
         try:
             logger.info(f"[SUBTITLE][EDGE_START] task_id={task_id}")
+            if os.path.exists(temp_edge_path):
+                try:
+                    os.remove(temp_edge_path)
+                except Exception:
+                    pass
+
             voice.create_subtitle(
                 text=video_script,
                 sub_maker=sub_maker,
-                subtitle_file=subtitle_path,
+                subtitle_file=temp_edge_path,
                 word_level=is_word_level,
             )
-            val_edge = subtitle.validate_subtitle_file(subtitle_path, video_script=video_script)
-            if val_edge["valid"]:
-                logger.info(
-                    f"[SUBTITLE][EDGE_OK] task_id={task_id} cues={val_edge['cue_count']} "
-                    f"chars={val_edge['text_chars']} duration={val_edge['total_duration']:.2f}s"
-                )
-                edge_succeeded = True
-                return subtitle_path
+            if os.path.exists(temp_edge_path):
+                val_edge = subtitle.validate_subtitle_file(temp_edge_path, video_script=video_script)
+                if val_edge["valid"]:
+                    os.replace(temp_edge_path, subtitle_path)
+                    logger.info(
+                        f"[SUBTITLE][EDGE_OK] task_id={task_id} cues={val_edge['cue_count']} "
+                        f"chars={val_edge['text_chars']} duration={val_edge['total_duration']:.2f}s"
+                    )
+                    edge_succeeded = True
+                    return subtitle_path
+                else:
+                    logger.warning(f"[SUBTITLE][EDGE_INVALID] task_id={task_id} reason={val_edge['reason']}")
             else:
-                logger.warning(f"[SUBTITLE][EDGE_INVALID] task_id={task_id} reason={val_edge['reason']}")
+                logger.warning(f"[SUBTITLE][EDGE_NO_OUTPUT] task_id={task_id}")
         except Exception as edge_exc:
             logger.warning(f"[SUBTITLE][EDGE_FAILED] task_id={task_id} error={edge_exc}")
+        finally:
+            if os.path.exists(temp_edge_path):
+                try:
+                    os.remove(temp_edge_path)
+                except Exception:
+                    pass
     else:
         if sub_maker is None:
             logger.warning(f"[SUBTITLE][EDGE_SKIPPED] task_id={task_id} reason=sub_maker_missing")
         elif subtitle_provider == "whisper":
             logger.info(f"[SUBTITLE][EDGE_SKIPPED] task_id={task_id} reason=whisper_explicit")
 
-    # If Edge did not produce a valid SRT, clean stale file and fallback to Whisper
+    # If Edge did not succeed, ensure no stale/partial subtitle_path exists before Whisper
     if not edge_succeeded:
         if os.path.exists(subtitle_path):
             try:
                 os.remove(subtitle_path)
             except Exception:
                 pass
+        if os.path.exists(subtitle_path):
+            logger.error(f"[SUBTITLE][BLOCK] Contaminated subtitle.srt could not be cleared before fallback")
+            return ""
 
         logger.info(f"[SUBTITLE][WHISPER_FALLBACK] task_id={task_id}")
         whisper_succeeded = False
         try:
+            if os.path.exists(temp_whisper_path):
+                try:
+                    os.remove(temp_whisper_path)
+                except Exception:
+                    pass
+
             whisper_res = subtitle.create(
                 audio_file=audio_file,
-                subtitle_file=temp_subtitle_path,
+                subtitle_file=temp_whisper_path,
                 word_level=is_word_level,
             )
-            if os.path.exists(temp_subtitle_path):
+            if os.path.exists(temp_whisper_path):
                 if not is_word_level and video_script:
                     logger.info(f"[SUBTITLE][WHISPER_CORRECT] task_id={task_id}")
-                    subtitle.correct(subtitle_file=temp_subtitle_path, video_script=video_script)
+                    subtitle.correct(subtitle_file=temp_whisper_path, video_script=video_script)
 
-                val_whisper = subtitle.validate_subtitle_file(temp_subtitle_path, video_script=video_script)
+                val_whisper = subtitle.validate_subtitle_file(temp_whisper_path, video_script=video_script)
                 if val_whisper["valid"]:
-                    os.replace(temp_subtitle_path, subtitle_path)
+                    os.replace(temp_whisper_path, subtitle_path)
                     logger.info(
                         f"[SUBTITLE][WHISPER_OK] task_id={task_id} cues={val_whisper['cue_count']} "
                         f"chars={val_whisper['text_chars']} duration={val_whisper['total_duration']:.2f}s"
@@ -733,9 +762,9 @@ def generate_subtitle(
         except Exception as whisper_exc:
             logger.error(f"[SUBTITLE][WHISPER_FAILED] task_id={task_id} error={whisper_exc}")
         finally:
-            if os.path.exists(temp_subtitle_path):
+            if os.path.exists(temp_whisper_path):
                 try:
-                    os.remove(temp_subtitle_path)
+                    os.remove(temp_whisper_path)
                 except Exception:
                     pass
 
@@ -976,6 +1005,15 @@ def _get_material_source_groups(task_id: str, video_paths: list[str]) -> dict[st
 def generate_final_videos(
     task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
 ):
+    if getattr(params, "subtitle_required", False):
+        val_res = subtitle.validate_subtitle_file(subtitle_path)
+        if not val_res["valid"]:
+            logger.error(
+                f"[RENDER][BLOCKED] Subtitle required but invalid: reason={val_res['reason']}, "
+                f"task_id={task_id}"
+            )
+            return [], [], [{"code": "subtitle_required_invalid"}]
+
     final_video_paths = []
     combined_video_paths = []
     warnings = []
@@ -1090,11 +1128,13 @@ def generate_final_videos(
                 warnings.append({"code": warning_code, "video_index": index})
 
         if getattr(params, "subtitle_required", False):
-            if not subtitle_path or not os.path.isfile(subtitle_path):
+            val_res = subtitle.validate_subtitle_file(subtitle_path)
+            if not val_res["valid"]:
                 logger.error(
-                    f"[RENDER][BLOCKED] Subtitle required but missing or invalid, task_id={task_id}, video_index={index}"
+                    f"[RENDER][BLOCKED] Subtitle required but invalid: reason={val_res['reason']}, "
+                    f"task_id={task_id}, video_index={index}"
                 )
-                return [], [], [{"code": "subtitle_required_missing"}]
+                return [], [], [{"code": "subtitle_required_invalid"}]
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         bgm_mix_succeeded = video.generate_video(

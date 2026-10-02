@@ -10,13 +10,22 @@
 
 ---
 
-# Estado Atual Canônico — 23/09/2026
+# Estado Atual Canônico — 02/10/2026
+
+- **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
+- **ACTIVE_PHASE** = `V16.1 — Brazilian Content Contract`
+- **ACTIVE_BRANCH** = `feat/v16-1-brazilian-content-contract`
+- **NEXT_GATE** = `V16.2 — Subtitle Reliability Gate`
+- **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
 > **Precedência Canônica:** Esta seção reflete o estado real, auditado e vigente da fábrica de vídeos. Ela prevalece formalmente sobre quaisquer menções, metas pendentes ou notas de snapshots históricos mantidos nas seções inferiores para rastreabilidade de engenharia.
 
 ## Status Consolidado por Componente
 
+- **V16.0 Quality Audit** = DONE
+- **V16.1 Brazilian Content Contract** = ACTIVE (P0)
+- **V16.2 Subtitle Reliability Gate** = PLANNED (P0)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -718,6 +727,73 @@ Entregáveis homologados:
   - Auto Publish em produção permanece OFF.
   - Provider default permanece `upload_post` até homologação real controlada.
   - API Key lida exclusivamente de `POST_FOR_ME_API_KEY`. Nenhuma credencial no Git.
+
+---
+
+# V16 — Audiovisual Quality & Brazilian Content Contract
+
+## Regra Permanente
+Cada projeto deve ter somente UMA fase ativa de implementação.
+
+## V16.0 — Quality Audit
+- **Status:** ✅ DONE
+- **Causa raiz confirmada em produção:**
+  - profile language = pt-BR
+  - roteiro = pt-BR
+  - geração autônoma herdou voice_name estrangeira: `af-ZA-AdriNeural-Female`
+  - subtitle_enabled = False em vídeo publicado
+  - text_fore_color = #000000
+  - outro vídeo possuía subtitle.srt, mas também usava cor preta
+  - match_materials_to_script = False
+  - Quality Gate atual avalia tema/conteúdo, mas não garante qualidade audiovisual final
+
+## V16.1 — Brazilian Content Contract
+- **Status:** 🚀 ACTIVE
+- **Priority:** P0
+- **Objetivo:** Transformar português brasileiro e legendas visíveis em CONTRATO obrigatório da produção autônoma.
+- **Regras Canônicas:**
+  - `video_language = "pt-BR"`
+  - `region = "BR"`
+  - `subtitle_enabled = True`
+  - `text_fore_color = "#FFFFFF"`
+  - `stroke_color = "#000000"`
+  - `stroke_width >= 1.5` (default autônomo 2.0)
+  - `match_materials_to_script = True` (ordem sequencial do roteiro)
+  - Voz TTS: validação estrita de locale `pt-BR` (ex: `pt-BR-AntonioNeural`, `pt-BR-FranciscaNeural`, `pt-BR-ThalitaMultilingualNeural`).
+  - Voz estrangeira (`af-ZA-*`, `en-*`, `zh-*`, `pt-PT-*`, etc.) ou vazia = FAIL CLOSED / BLOCK.
+
+## V16.2 — Subtitle Reliability Gate
+- **Status:** 📋 PLANNED
+- **Priority:** P0
+
+## V16.3 — Final Media Quality Gate
+- **Status:** 📋 PLANNED
+- **Priority:** P0
+
+## V16.4 — Scene-Based Video Generation
+- **Status:** 📋 PLANNED
+- **Priority:** P1
+- **REUSE-FIRST RULE:** Before implementing scene-based video generation, audit current upstream MoneyPrinterTurbo implementation/PR and reuse/port existing code when technically compatible.
+
+## V16.5 — Visual Matching v2
+- **Status:** 📋 PLANNED
+- **Priority:** P1
+
+## V16.6 — Subtitle Style System
+- **Status:** 📋 PLANNED
+- **Priority:** P1
+
+## V16.7 — Gemini / Nano Banana Adapter
+- **Status:** 📋 PLANNED
+- **Priority:** P2
+
+## V16.8 — AI Video Generation
+- **Status:** 🔮 FUTURE
+- **Priority:** P3
+
+## V16.9 — Audiovisual Feedback Learning
+- **Status:** 🔮 FUTURE
+- **Priority:** P3
 
 ---
 

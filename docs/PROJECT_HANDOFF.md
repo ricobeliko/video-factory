@@ -1,11 +1,20 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 23/09/2026
+## Estado Atual Canônico — 02/10/2026
+
+- **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
+- **ACTIVE_PHASE** = `V16.1 — Brazilian Content Contract`
+- **ACTIVE_BRANCH** = `feat/v16-1-brazilian-content-contract`
+- **NEXT_GATE** = `V16.2 — Subtitle Reliability Gate`
+- **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
 > **Precedência Canônica:** Esta seção reflete o estado consolidado e auditado da fábrica de vídeos em produção no PC forte (`C:\Projetos\MoneyPrinterTurbo`). Ela prevalece formalmente sobre quaisquer menções ou snapshots históricos contidos nas seções inferiores deste documento.
 
 ### Status Consolidado dos Componentes:
+- **V16.0 Quality Audit** = DONE
+- **V16.1 Brazilian Content Contract** = ACTIVE (P0)
+- **V16.2 Subtitle Reliability Gate** = PLANNED (P0)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -986,3 +995,28 @@ docs/
 ```
 
 O `PROJECT_HANDOFF.md` deve ser atualizado ao final de cada fase importante.
+
+---
+
+## 25. V16.1 — Brazilian Content Contract (Fase Ativa Atual)
+
+**Status: 🚀 ACTIVE / DEV IMPLEMENTED (02/10/2026)**
+
+Causa Raiz Auditada em Produção (V16.0):
+- Perfil `language = pt-BR` gerou roteiro em português, mas a produção autônoma herdou a primeira voz da lista da WebUI (`af-ZA-AdriNeural-Female`).
+- Vídeo publicado com `subtitle_enabled = False` e `text_fore_color = #000000` (legendas invisíveis).
+- `match_materials_to_script = False` gerava termos desconexos da narrativa.
+
+Entregas da Fase V16.1:
+1. **Contrato Brasileiro Canônico Fail-Closed:**
+   - `video_language = "pt-BR"` e `region = "BR"` impostos na produção autônoma independentemente de configurações de UI.
+   - `subtitle_enabled = True` forçado para todas as gerações autônomas.
+   - `text_fore_color = "#FFFFFF"`, `stroke_color = "#000000"` e `stroke_width >= 1.5` (default autônomo 2.0).
+   - `match_materials_to_script = True` e `video_concat_mode = sequential` como default autônomo.
+2. **Validação Estrita de Locales de Voz:**
+   - `is_valid_pt_br_voice(voice_name)` aceita somente vozes comprovadamente `pt-BR` (ex: `pt-BR-AntonioNeural`, `pt-BR-FranciscaNeural`, `pt-BR-ThalitaMultilingualNeural`).
+   - Vozes estrangeiras (`af-ZA-*`, `en-*`, `zh-*`, `pt-PT-*`) ou vazias provocam `AutonomousConfigError` (FAIL CLOSED), sem fallback silencioso para línguas estrangeiras.
+3. **Validador Reutilizável de Contrato:**
+   - `validate_autonomous_brazilian_content_contract(params)` avalia e retorna relatório estruturado (`PASS` ou `BLOCK`).
+4. **Preservação de Geração Manual:**
+   - Chamadas diretas de `VideoParams` pela WebUI continuam livres para experimentação manual pelo operador, sem impacto inadvertido.

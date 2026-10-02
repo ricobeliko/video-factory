@@ -19,7 +19,7 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -1053,6 +1053,117 @@ def check_asset_eligibility_for_destination(
 
 
 # ---------------------------------------------------------------------------
+# 2.1. Contrato de Conteúdo Brasileiro (Fase V16.1 — Brazilian Content Contract)
+# ---------------------------------------------------------------------------
+
+def is_valid_pt_br_voice(voice_name: Optional[str]) -> bool:
+    """Verifica se um identificador de voz TTS pertence comprovadamente ao locale pt-BR.
+
+    Regras:
+    - Retorna False para strings vazias, None ou sentinelas de sem voz ('no-voice', 'none').
+    - Aceita identificadores com prefixo pt-BR (ex: 'pt-BR-AntonioNeural', 'pt-BR-FranciscaNeural-Female',
+      'pt-BR-ThalitaMultilingualNeural', 'pt-BR-AntonioNeural-Male').
+    - Rejeita qualquer outro locale (ex: 'af-ZA-*', 'en-*', 'zh-*', 'pt-PT-*').
+    """
+    if not voice_name or not str(voice_name).strip():
+        return False
+    clean = str(voice_name).strip()
+    if clean.lower() in ("no-voice", "none"):
+        return False
+    parts = clean.replace("_", "-").split("-")
+    if len(parts) >= 2:
+        lang_part = parts[0].strip().lower()
+        region_part = parts[1].strip().upper()
+        if lang_part == "pt" and region_part == "BR":
+            return True
+    return False
+
+
+def validate_autonomous_brazilian_content_contract(
+    params: Union[VideoParams, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Valida o Contrato de Conteúdo Brasileiro (V16.1) para parâmetros de vídeo autônomos.
+
+    Regras canônicas (Fail-Closed):
+    - video_language == 'pt-BR'
+    - region == 'BR'
+    - subtitle_enabled is True
+    - text_fore_color normalizado == '#FFFFFF'
+    - stroke_color normalizado == '#000000'
+    - stroke_width >= 1.5
+    - Se voice_mode/TTS ativo:
+        voice_name não pode ser vazio
+        voice_name deve pertencer comprovadamente ao locale pt-BR (ex: pt-BR-AntonioNeural)
+        Vozes estrangeiras (en-*, af-ZA-*, zh-*, pt-PT-*, etc.) são expressamente BLOQUEADAS.
+    """
+    def _get(field, default=None):
+        if isinstance(params, dict):
+            return params.get(field, default)
+        return getattr(params, field, default)
+
+    reasons: List[str] = []
+
+    # 1. Idioma do script / roteiro (deve ser pt-BR)
+    video_lang = _get("video_language")
+    if not video_lang or str(video_lang).strip().lower() != "pt-br":
+        reasons.append("invalid_video_language")
+
+    # 2. Região geográfica (deve ser BR)
+    reg = _get("region")
+    if not reg or str(reg).strip().upper() != "BR":
+        reasons.append("invalid_region")
+
+    # 3. Legendas habilitadas
+    sub_enabled = _get("subtitle_enabled")
+    if sub_enabled is not True:
+        reasons.append("subtitle_disabled")
+
+    # 4. Cor do texto da legenda (deve ser branco #FFFFFF)
+    text_color = _get("text_fore_color")
+    if not text_color or str(text_color).strip().upper() != "#FFFFFF":
+        reasons.append("invalid_subtitle_color")
+
+    # 5. Stroke da legenda (preto #000000 e espessura >= 1.5)
+    stroke_color = _get("stroke_color")
+    if stroke_color and str(stroke_color).strip().upper() != "#000000":
+        reasons.append("invalid_stroke_color")
+
+    try:
+        stroke_width = float(_get("stroke_width", 0.0))
+        if stroke_width < 1.5:
+            reasons.append("stroke_width_too_thin")
+    except (ValueError, TypeError):
+        reasons.append("invalid_stroke_width")
+
+    # 6. Validação independente de TTS / Voz
+    voice_name = _get("voice_name")
+    is_no_voice = not voice_name or str(voice_name).strip().lower() in ("no-voice", "none")
+    if is_no_voice:
+        if voice_name is None or str(voice_name).strip() == "":
+            reasons.append("empty_voice_name")
+    else:
+        if not is_valid_pt_br_voice(voice_name):
+            reasons.append("foreign_or_invalid_voice_locale")
+
+    is_valid = len(reasons) == 0
+    return {
+        "valid": is_valid,
+        "status": "PASS" if is_valid else "BLOCK",
+        "reasons": reasons,
+        "details": {
+            "video_language": str(video_lang) if video_lang else "",
+            "region": str(reg) if reg else "",
+            "subtitle_enabled": bool(sub_enabled),
+            "text_fore_color": str(text_color) if text_color else "",
+            "stroke_color": str(stroke_color) if stroke_color else "",
+            "stroke_width": float(_get("stroke_width", 0.0)) if _get("stroke_width") is not None else 0.0,
+            "voice_name": str(voice_name) if voice_name else "",
+            "voice_is_pt_br": is_valid_pt_br_voice(voice_name),
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # 3. Deduplicação e Seleção de Temas
 # ---------------------------------------------------------------------------
 
@@ -1376,10 +1487,11 @@ def build_autonomous_video_params(
     assigned_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
     ctx = profile_manager.get_generation_profile_context(profile_id=assigned_profile_id, db_path=db_path)
 
-    # Identidade / Metadados operacionais
+    # Identidade / Metadados operacionais - Contrato Brasileiro Canônico (V16.1)
+    # A produção autônoma tem compromisso estrito com pt-BR e região BR
     niche = ctx.get("niche") or config.app.get("default_niche") or "curiosidades"
-    language = ctx.get("language") or config.app.get("video_language") or "pt-BR"
-    region = ctx.get("region") or config.app.get("default_region") or "BR"
+    language = "pt-BR"
+    region = "BR"
     preset = ctx.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET
 
     # 2. Fonte de Vídeo (video_source)
@@ -1415,6 +1527,10 @@ def build_autonomous_video_params(
             raise AutonomousConfigError(
                 "voice_name vazio quando TTS ativo na configuração persistida"
             )
+        if not is_valid_pt_br_voice(resolved_voice_name):
+            raise AutonomousConfigError(
+                f"voice_name '{resolved_voice_name}' não pertence ao locale pt-BR exigido pelo contrato autônomo (V16.1)"
+            )
 
     try:
         voice_volume = float(config.ui.get("voice_volume", 1.0))
@@ -1440,16 +1556,9 @@ def build_autonomous_video_params(
     except (ValueError, TypeError):
         video_fit_mode = VideoFitMode.cover
 
-    # 5. Concat Mode & Script Order Match
-    match_materials_to_script = bool(config.app.get("match_materials_to_script", False))
-    if match_materials_to_script:
-        video_concat_mode = VideoConcatMode.sequential
-    else:
-        concat_str = config.ui.get("video_concat_mode", VideoConcatMode.random.value)
-        try:
-            video_concat_mode = VideoConcatMode(concat_str)
-        except (ValueError, TypeError):
-            video_concat_mode = VideoConcatMode.random
+    # 5. Concat Mode & Script Order Match (V16.1: default autônomo seguro match_materials_to_script=True)
+    match_materials_to_script = True
+    video_concat_mode = VideoConcatMode.sequential
 
     # 6. Transição
     trans_str = config.ui.get("video_transition_mode", None)
@@ -1472,8 +1581,8 @@ def build_autonomous_video_params(
     except (ValueError, TypeError):
         video_count = 1
 
-    # 8. Legendas
-    subtitle_enabled = bool(config.ui.get("subtitle_enabled", True))
+    # 8. Legendas - Contrato Brasileiro Canônico (V16.1: Legenda Branca Obrigatória)
+    subtitle_enabled = True
     font_name = str(config.ui.get("font_name", "MicrosoftYaHeiBold.ttc") or "MicrosoftYaHeiBold.ttc")
     subtitle_position = str(config.ui.get("subtitle_position", "bottom"))
     subtitle_display_mode = _get_valid_ui_choice("subtitle_display_mode", _SUBTITLE_DISPLAY_MODES, "sentence")
@@ -1483,17 +1592,22 @@ def build_autonomous_video_params(
     except (ValueError, TypeError):
         custom_position = 70.0
 
-    text_fore_color = str(config.ui.get("text_fore_color", "#FFFFFF"))
+    text_fore_color = "#FFFFFF"
     try:
         font_size = int(config.ui.get("font_size", 60))
     except (ValueError, TypeError):
         font_size = 60
 
-    stroke_color = str(config.ui.get("stroke_color", "#000000"))
+    stroke_color = "#000000"
     try:
-        stroke_width = float(config.ui.get("stroke_width", 1.5))
+        raw_stroke_width = float(config.ui.get("stroke_width", 2.0))
+        # Contrato V16.1: preferencialmente 2.0 para novas gerações autônomas (mínimo 1.5)
+        if raw_stroke_width <= 1.5:
+            stroke_width = 2.0
+        else:
+            stroke_width = raw_stroke_width
     except (ValueError, TypeError):
-        stroke_width = 1.5
+        stroke_width = 2.0
 
     subtitle_bg_enabled = bool(config.ui.get("subtitle_background_enabled", False))
     subtitle_bg_color = str(config.ui.get("subtitle_background_color", "#000000"))
@@ -1507,7 +1621,7 @@ def build_autonomous_video_params(
     bgm_file = auto_bgm["file"]
     bgm_volume = auto_bgm["volume"]
 
-    return VideoParams(
+    params = VideoParams(
         video_subject=topic,
         video_language=language,
         niche=niche,
@@ -1547,6 +1661,14 @@ def build_autonomous_video_params(
         avatar_character_id="",
         avatar_asset_path="",
     )
+
+    contract_eval = validate_autonomous_brazilian_content_contract(params)
+    if not contract_eval["valid"]:
+        raise AutonomousConfigError(
+            f"Violação do Contrato de Conteúdo Brasileiro (V16.1): {', '.join(contract_eval['reasons'])}"
+        )
+
+    return params
 
 
 def check_required_providers_preflight(
@@ -1609,6 +1731,8 @@ def check_required_providers_preflight(
         details["TTS"] = "None (No Voiceover)"
     elif not voice_name or not voice_name.strip():
         return False, "voice_name vazio quando TTS ativo na configuração persistida", {"TTS": "MISSING"}
+    elif not is_valid_pt_br_voice(voice_name):
+        return False, f"voice_name '{voice_name}' não pertence ao locale pt-BR exigido pelo contrato autônomo (V16.1)", {"TTS": "INVALID_LOCALE"}
     else:
         clean_voice = voice_name.lower().strip()
         if "azure" in clean_voice:

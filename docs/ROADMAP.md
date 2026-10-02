@@ -13,9 +13,9 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.2 — Subtitle Reliability Gate`
-- **ACTIVE_BRANCH** = `feat/v16-2-subtitle-reliability-gate`
-- **NEXT_GATE** = `V16.3 — Final Media Quality Gate`
+- **ACTIVE_PHASE** = `V16.3 — Final Media Quality Gate`
+- **ACTIVE_BRANCH** = `feat/v16-3-final-media-quality-gate`
+- **NEXT_GATE** = `V16.4 — Scene-Based Video Generation`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -25,8 +25,9 @@
 
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
-- **V16.2 Subtitle Reliability Gate** = ACTIVE (P0)
-- **V16.3 Final Media Quality Gate** = PLANNED (P0)
+- **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
+- **V16.3 Final Media Quality Gate** = ACTIVE (P0)
+- **V16.4 Scene-Based Video Generation** = PLANNED (P1)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -767,8 +768,8 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Voz estrangeira (`af-ZA-*`, `en-*`, `zh-*`, `pt-PT-*`, etc.) ou vazia = FAIL CLOSED / BLOCK.
 
 ## V16.2 — Subtitle Reliability Gate
-- **Status:** 🚀 ACTIVE
-- **Priority:** P0
+- **Status:** ✅ PRODUCTION HOMOLOGATED
+- **Deploy SHA:** `0744fd2b8593fa276a2d3117d88b270475b5b05c`
 - **Regra Fundamental:** `AUTONOMOUS_VIDEO_WITHOUT_VALID_CAPTIONS = FORBIDDEN`
 - **Arquitetura Implementada:**
   - **PRIMARY:** Edge subtitles (`voice.create_subtitle`).
@@ -780,8 +781,28 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - **MODEL ENVIRONMENT:** O modelo Whisper real não foi baixado na fase de testes/desenvolvimento (mocks estritos). Recomendação de produção: `large-v3-turbo`.
 
 ## V16.3 — Final Media Quality Gate
-- **Status:** 📋 PLANNED
+- **Status:** 🚀 ACTIVE
 - **Priority:** P0
+- **Regra Fundamental:** `AUTONOMOUS_FINAL_MEDIA_WITH_CRITICAL_DEFECT = FORBIDDEN`
+- **Objetivo:** Garantir integridade física, visual e de áudio do arquivo MP4 renderizado antes de torná-lo elegível para agendamento e publicação.
+- **Arquitetura Implementada:**
+  - **Módulo Centralizado:** `app/services/media_quality.py`.
+  - **Probing Helper Seguro:** `probe_media(file_path)` baseado em `ffprobe` com subprocess seguro (sem shell=True, timeout, capture_output).
+  - **Critical Gates:**
+    - Arquivo: existência, arquivo regular, tamanho > 10KB (`MIN_VALID_MEDIA_FILE_BYTES`).
+    - Probe: ffprobe disponível, execução sem erro, JSON parseável.
+    - Vídeo: stream de vídeo presente, dimensões > 0, resolução compatível com orientação, aspect ratio dentro da tolerância (ex: vertical 9:16 portrait).
+    - Duração: duração > 0 e coerência com a narração da pipeline (`AUDIO_VIDEO_DURATION_MISMATCH`).
+    - Áudio: áudio presente na produção autônoma com duração válida.
+    - Legenda: confirmação de contrato de que o artefato SRT válido foi persistido.
+    - Pipeline Gate: bloqueia cross-posting e publicação antes de despachar chamadas externas.
+    - Multi-Vídeo: avaliação estrita de cada `final-N.mp4`.
+    - Preservação Manual: flag `final_media_quality_required=True` ativa o gate estrito para autônomo, preservando chamadas manuais.
+- **Limites e Escopo (O que NÃO é feito em V16.3):**
+  - Sem OCR de legenda gravada.
+  - Sem detecção de black frames ou freeze frames.
+  - Sem análise subjetiva de estética ou relevância semântica.
+  - Sem dependências de bibliotecas de Computer Vision.
 
 ## V16.4 — Scene-Based Video Generation
 - **Status:** 📋 PLANNED

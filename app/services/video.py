@@ -12,7 +12,7 @@ import time
 import unicodedata
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
-from typing import List
+from typing import Any, List, Optional
 from loguru import logger
 import numpy as np
 from moviepy import (
@@ -24,6 +24,7 @@ from moviepy import (
     TextClip,
     VideoFileClip,
     afx,
+    concatenate_videoclips,
 )
 from moviepy.video.tools.subtitles import SubtitlesClip
 from PIL import Image, ImageDraw, ImageFont
@@ -42,6 +43,13 @@ from app.services import bgm as bgm_service
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
+class SceneRenderError(RuntimeError):
+    """Exceção levantada quando a renderização de uma cena falha criticamente."""
+    def __init__(self, message: str, reason_code: str = "SCENE_RENDER_FAILURE"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
 class SubClippedVideoClip:
     def __init__(
         self,
@@ -52,6 +60,7 @@ class SubClippedVideoClip:
         height=None,
         duration=None,
         source_file_path=None,
+        scene_index=None,
     ):
         self.file_path = file_path
         self.start_time = start_time
@@ -59,6 +68,7 @@ class SubClippedVideoClip:
         self.width = width
         self.height = height
         self.source_file_path = source_file_path or file_path
+        self.scene_index = scene_index
         if duration is None:
             self.duration = end_time - start_time
         else:
@@ -753,6 +763,7 @@ def combine_videos(
     source_usage: dict[str, int] | None = None,
     source_groups: dict[str, str] | None = None,
     used_video_paths: List[str] | None = None,
+    scene_clip_instructions: List[Any] | None = None,
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -789,170 +800,327 @@ def combine_videos(
     video_width, video_height = aspect.to_resolution()
 
     processed_clips = []
-    subclipped_items = []
     video_duration = 0
-    for video_path in video_paths:
-        clip = _open_video_clip_quietly(video_path)
-        clip_duration = clip.duration
-        clip_w, clip_h = clip.size
-        close_clip(clip)
-        
-        start_time = 0
 
-        while start_time < clip_duration:
-            end_time = min(start_time + source_clip_duration, clip_duration)
-
-            # 保留所有有效分段。
-            # 这样既不会丢掉“整段视频本身就短于 max_clip_duration”的素材，
-            # 也不会吞掉长视频最后剩下的一小段尾部内容。
-            if end_time > start_time:
-                subclipped_items.append(
-                    SubClippedVideoClip(
-                        file_path=video_path,
-                        start_time=start_time,
-                        end_time=end_time,
-                        width=clip_w,
-                        height=clip_h,
-                        source_file_path=video_path,
-                    )
-                )
-
-            start_time = end_time
-            if video_concat_mode.value == VideoConcatMode.sequential.value:
-                break
-
-    subclipped_items = _prioritize_unique_source_clips(
-        subclipped_items=subclipped_items,
-        concat_mode=video_concat_mode,
-        **({"source_usage": source_usage, "source_groups": source_groups}
-           if source_usage is not None else {}),
-    )
-        
-    logger.debug(f"total subclipped items: {len(subclipped_items)}")
-    
-    # Add downloaded clips over and over until the duration of the audio (max_duration) has been reached
-    for i, subclipped_item in enumerate(subclipped_items):
-        if video_duration >= required_video_duration:
-            break
-        
-        logger.debug(
-            f"processing clip {i+1}: {subclipped_item.width}x{subclipped_item.height}, "
-            f"source: {os.path.basename(subclipped_item.source_file_path)}, "
-            f"current duration: {video_duration:.2f}s, "
-            f"remaining: {required_video_duration - video_duration:.2f}s"
+    if scene_clip_instructions:
+        # Modo baseado em cenas (V16.4): cada cena tem duração exata e ordem estrita
+        sorted_instructions = sorted(
+            scene_clip_instructions,
+            key=lambda x: getattr(x, "scene_index", x.get("scene_index", 0) if isinstance(x, dict) else 0),
         )
-        
-        try:
-            clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
-                subclipped_item.start_time, subclipped_item.end_time
+        total_instructions_duration = sum(
+            float(getattr(x, "duration_seconds", x.get("duration_seconds", 0.0) if isinstance(x, dict) else 0.0))
+            for x in sorted_instructions
+        )
+        # Residual de segurança: se a soma das instruções for menor que required_video_duration,
+        # apenas a ÚLTIMA cena absorve o residual para garantir cobertura completa do áudio.
+        residual_margin = max(0.0, required_video_duration - total_instructions_duration)
+
+        for idx, inst in enumerate(sorted_instructions):
+            scene_idx = getattr(inst, "scene_index", inst.get("scene_index", idx + 1) if isinstance(inst, dict) else idx + 1)
+            mat_path = getattr(inst, "material_path", inst.get("material_path", "") if isinstance(inst, dict) else "")
+            base_dur = float(getattr(inst, "duration_seconds", inst.get("duration_seconds", max_clip_duration) if isinstance(inst, dict) else max_clip_duration))
+
+            if not mat_path or not os.path.exists(mat_path):
+                logger.error(f"[SCENE_RENDER][BLOCK] material path '{mat_path}' for scene {scene_idx} does not exist")
+                raise SceneRenderError(
+                    f"SCENE_RENDER_FAILURE: material path '{mat_path}' for scene {scene_idx} does not exist",
+                    reason_code="SCENE_RENDER_FAILURE",
+                )
+
+            # Apenas a última cena pode absorver o residual controlado
+            if idx == len(sorted_instructions) - 1 and residual_margin > 0.0:
+                scene_target_duration = round(base_dur + residual_margin, 3)
+            else:
+                scene_target_duration = base_dur
+
+            try:
+                raw_clip = _open_video_clip_quietly(mat_path)
+                try:
+                    source_dur = raw_clip.duration
+                    if source_dur <= 0:
+                        raise SceneRenderError(
+                            f"SCENE_RENDER_FAILURE: source clip duration <= 0 for scene {scene_idx}",
+                            reason_code="SCENE_RENDER_FAILURE",
+                        )
+
+                    needed_source_dur = scene_target_duration * normalized_clip_speed
+
+                    if source_dur >= needed_source_dur:
+                        clip = raw_clip.subclipped(0, needed_source_dur)
+                    else:
+                        # Source curto: repete internamente A MESMA cena se necessário
+                        loops = math.ceil(needed_source_dur / max(0.1, source_dur))
+                        clip = concatenate_videoclips([raw_clip] * loops).subclipped(0, needed_source_dur)
+
+                    if normalized_clip_speed != 1.0:
+                        clip = clip.with_speed_scaled(normalized_clip_speed)
+
+                    inst_fit = getattr(inst, "fit_mode", None)
+                    if isinstance(inst, dict):
+                        inst_fit = inst.get("fit_mode")
+                    effective_fit = VideoFitMode(inst_fit) if inst_fit else fit_mode
+
+                    clip_w, clip_h = clip.size
+                    if clip_w != video_width or clip_h != video_height:
+                        clip = _fit_clip_to_canvas(
+                            clip,
+                            target_width=video_width,
+                            target_height=video_height,
+                            fit_mode=effective_fit,
+                        )
+
+                    # Transições
+                    if transition_value in (None, VideoTransitionMode.none.value):
+                        pass
+                    elif transition_value == VideoTransitionMode.fade_in.value:
+                        clip = video_effects.fadein_transition(clip, 1)
+                    elif transition_value == VideoTransitionMode.fade_out.value:
+                        clip = video_effects.fadeout_transition(clip, 1)
+                    elif transition_value == VideoTransitionMode.slide_in.value:
+                        clip = video_effects.slidein_transition(clip, 1, "left")
+                    elif transition_value == VideoTransitionMode.slide_out.value:
+                        clip = video_effects.slideout_transition(clip, 1, "left")
+                    elif transition_value == VideoTransitionMode.zoom_in.value:
+                        clip = video_effects.zoomin_transition(clip, 1)
+                    elif transition_value == VideoTransitionMode.zoom_out.value:
+                        clip = video_effects.zoomout_transition(clip, 1)
+
+                    if clip.duration > scene_target_duration:
+                        clip = clip.subclipped(0, scene_target_duration)
+
+                    clip_file = f"{output_dir}/temp-clip-scene-{scene_idx}.mp4"
+                    _write_videofile_with_codec_fallback(
+                        clip,
+                        clip_file,
+                        codec=_get_configured_video_codec(),
+                        logger=None,
+                        fps=fps,
+                    )
+                    clip_duration_saved = clip.duration
+                    close_clip(clip)
+
+                    processed_clips.append(
+                        SubClippedVideoClip(
+                            file_path=clip_file,
+                            duration=clip_duration_saved,
+                            width=video_width,
+                            height=video_height,
+                            source_file_path=mat_path,
+                            scene_index=scene_idx,
+                        )
+                    )
+                    video_duration += clip_duration_saved
+                finally:
+                    close_clip(raw_clip)
+            except Exception as e:
+                logger.error(f"[SCENE_RENDER][BLOCK] failed to process scene clip {scene_idx}: {str(e)}")
+                if isinstance(e, SceneRenderError):
+                    raise
+                raise SceneRenderError(
+                    f"SCENE_RENDER_FAILURE: failed to render scene {scene_idx}: {str(e)}",
+                    reason_code="SCENE_RENDER_FAILURE",
+                ) from e
+
+        # Validações mandatórias antes da concatenação da timeline de cenas
+        if len(processed_clips) != len(scene_clip_instructions):
+            logger.error(
+                f"[SCENE_RENDER][BLOCK] processed_clips count ({len(processed_clips)}) != "
+                f"instructions count ({len(scene_clip_instructions)})"
             )
-            # 播放速度属于素材本身属性，应在转场前应用。这样 Fade/Slide 等一秒转场
-            # 不会跟随素材速度变成 0.5 秒或 2 秒；后续最大时长裁剪继续作为
-            # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
-            if normalized_clip_speed != 1.0:
-                clip = clip.with_speed_scaled(normalized_clip_speed)
-            # Normalize every source clip before transitions are applied. In cover mode
-            # the clip fills the canvas and the excess edges are cropped; contain keeps
-            # the complete source frame and uses black bars for the unused area.
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: processed {len(processed_clips)} clips but expected {len(scene_clip_instructions)}",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+
+        processed_indexes = [c.scene_index for c in processed_clips]
+        expected_indexes = list(range(1, len(scene_clip_instructions) + 1))
+        if processed_indexes != expected_indexes:
+            logger.error(
+                f"[SCENE_RENDER][BLOCK] scene indexes mismatch: got {processed_indexes}, expected {expected_indexes}"
+            )
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: processed scene indexes {processed_indexes} do not match expected {expected_indexes}",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+    else:
+        # Fluxo legado (inalterado)
+        subclipped_items = []
+        for video_path in video_paths:
+            clip = _open_video_clip_quietly(video_path)
+            clip_duration = clip.duration
             clip_w, clip_h = clip.size
-            if clip_w != video_width or clip_h != video_height:
-                clip_ratio = clip.w / clip.h
-                video_ratio = video_width / video_height
-                logger.debug(
-                    "resizing clip, "
-                    f"source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, "
-                    f"target: {video_width}x{video_height}, ratio: {video_ratio:.2f}, "
-                    f"fit_mode: {fit_mode.value}"
-                )
-                clip = _fit_clip_to_canvas(
-                    clip,
-                    target_width=video_width,
-                    target_height=video_height,
-                    fit_mode=fit_mode,
-                )
-
-            shuffle_side = random.choice(["left", "right", "top", "bottom"])
-            if transition_value in (None, VideoTransitionMode.none.value):
-                clip = clip
-            elif transition_value == VideoTransitionMode.fade_in.value:
-                clip = video_effects.fadein_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.fade_out.value:
-                clip = video_effects.fadeout_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.slide_in.value:
-                clip = video_effects.slidein_transition(clip, 1, shuffle_side)
-            elif transition_value == VideoTransitionMode.slide_out.value:
-                clip = video_effects.slideout_transition(clip, 1, shuffle_side)
-            elif transition_value == VideoTransitionMode.zoom_in.value:
-                clip = video_effects.zoomin_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.zoom_out.value:
-                clip = video_effects.zoomout_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.shuffle.value:
-                transition_funcs = [
-                    lambda c: video_effects.fadein_transition(c, 1),
-                    lambda c: video_effects.fadeout_transition(c, 1),
-                    lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
-                    lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
-                    lambda c: video_effects.zoomin_transition(c, 1),
-                    lambda c: video_effects.zoomout_transition(c, 1),
-                ]
-                shuffle_transition = random.choice(transition_funcs)
-                clip = shuffle_transition(clip)
-
-            if clip.duration > max_clip_duration:
-                clip = clip.subclipped(0, max_clip_duration)
-                
-            # wirte clip to temp file
-            clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
-            _write_videofile_with_codec_fallback(
-                clip,
-                clip_file,
-                codec=_get_configured_video_codec(),
-                logger=None,
-                fps=fps,
-            )
-
-            # Store clip duration before closing
-            clip_duration_saved = clip.duration
             close_clip(clip)
 
-            processed_clips.append(
-                SubClippedVideoClip(
-                    file_path=clip_file,
-                    duration=clip_duration_saved,
-                    width=clip_w,
-                    height=clip_h,
-                    source_file_path=subclipped_item.source_file_path,
-                )
-            )
-            video_duration += clip_duration_saved
-            
-        except Exception as e:
-            logger.error(f"failed to process clip: {str(e)}")
-    
-    # loop processed clips until the video duration covers the audio duration and the small safety margin.
-    if video_duration < required_video_duration:
-        logger.warning(
-            f"video duration ({video_duration:.2f}s) is shorter than required duration "
-            f"({required_video_duration:.2f}s), looping clips to match audio length."
+            start_time = 0
+
+            while start_time < clip_duration:
+                end_time = min(start_time + source_clip_duration, clip_duration)
+
+                # 保留所有有效分段。
+                # 这样既不会丢掉“整段视频本身就短于 max_clip_duration”的素材，
+                # 也不会吞掉长视频最后剩下的一小段尾部内容。
+                if end_time > start_time:
+                    subclipped_items.append(
+                        SubClippedVideoClip(
+                            file_path=video_path,
+                            start_time=start_time,
+                            end_time=end_time,
+                            width=clip_w,
+                            height=clip_h,
+                            source_file_path=video_path,
+                        )
+                    )
+
+                start_time = end_time
+                if video_concat_mode.value == VideoConcatMode.sequential.value:
+                    break
+
+        subclipped_items = _prioritize_unique_source_clips(
+            subclipped_items=subclipped_items,
+            concat_mode=video_concat_mode,
+            **({"source_usage": source_usage, "source_groups": source_groups}
+               if source_usage is not None else {}),
         )
-        base_clips = processed_clips.copy()
-        for clip in itertools.cycle(base_clips):
+
+        logger.debug(f"total subclipped items: {len(subclipped_items)}")
+
+        # Add downloaded clips over and over until the duration of the audio (max_duration) has been reached
+        for i, subclipped_item in enumerate(subclipped_items):
             if video_duration >= required_video_duration:
                 break
-            processed_clips.append(clip)
-            video_duration += clip.duration
-        logger.info(
-            f"video duration: {video_duration:.2f}s, audio duration: {audio_duration:.2f}s, "
-            f"required duration: {required_video_duration:.2f}s, "
-            f"looped {len(processed_clips)-len(base_clips)} clips"
-        )
-     
+
+            logger.debug(
+                f"processing clip {i+1}: {subclipped_item.width}x{subclipped_item.height}, "
+                f"source: {os.path.basename(subclipped_item.source_file_path)}, "
+                f"current duration: {video_duration:.2f}s, "
+                f"remaining: {required_video_duration - video_duration:.2f}s"
+            )
+            try:
+                clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
+                    subclipped_item.start_time, subclipped_item.end_time
+                )
+                # 播放速度属于素材本身属性，应在转场前应用。这样 Fade/Slide 等一秒转场
+                # 不会跟随素材速度变成 0.5 秒或 2 秒；后续最大时长裁剪继续作为
+                # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
+                if normalized_clip_speed != 1.0:
+                    clip = clip.with_speed_scaled(normalized_clip_speed)
+                # Normalize every source clip before transitions are applied. In cover mode
+                # the clip fills the canvas and the excess edges are cropped; contain keeps
+                # the complete source frame and uses black bars for the unused area.
+                clip_w, clip_h = clip.size
+                if clip_w != video_width or clip_h != video_height:
+                    clip_ratio = clip.w / clip.h
+                    video_ratio = video_width / video_height
+                    logger.debug(
+                        "resizing clip, "
+                        f"source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, "
+                        f"target: {video_width}x{video_height}, ratio: {video_ratio:.2f}, "
+                        f"fit_mode: {fit_mode.value}"
+                    )
+                    clip = _fit_clip_to_canvas(
+                        clip,
+                        target_width=video_width,
+                        target_height=video_height,
+                        fit_mode=fit_mode,
+                    )
+
+                shuffle_side = random.choice(["left", "right", "top", "bottom"])
+                if transition_value in (None, VideoTransitionMode.none.value):
+                    clip = clip
+                elif transition_value == VideoTransitionMode.fade_in.value:
+                    clip = video_effects.fadein_transition(clip, 1)
+                elif transition_value == VideoTransitionMode.fade_out.value:
+                    clip = video_effects.fadeout_transition(clip, 1)
+                elif transition_value == VideoTransitionMode.slide_in.value:
+                    clip = video_effects.slidein_transition(clip, 1, shuffle_side)
+                elif transition_value == VideoTransitionMode.slide_out.value:
+                    clip = video_effects.slideout_transition(clip, 1, shuffle_side)
+                elif transition_value == VideoTransitionMode.zoom_in.value:
+                    clip = video_effects.zoomin_transition(clip, 1)
+                elif transition_value == VideoTransitionMode.zoom_out.value:
+                    clip = video_effects.zoomout_transition(clip, 1)
+                elif transition_value == VideoTransitionMode.shuffle.value:
+                    transition_funcs = [
+                        lambda c: video_effects.fadein_transition(c, 1),
+                        lambda c: video_effects.fadeout_transition(c, 1),
+                        lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
+                        lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
+                        lambda c: video_effects.zoomin_transition(c, 1),
+                        lambda c: video_effects.zoomout_transition(c, 1),
+                    ]
+                    shuffle_transition = random.choice(transition_funcs)
+                    clip = shuffle_transition(clip)
+
+                if clip.duration > max_clip_duration:
+                    clip = clip.subclipped(0, max_clip_duration)
+
+                # wirte clip to temp file
+                clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
+                _write_videofile_with_codec_fallback(
+                    clip,
+                    clip_file,
+                    codec=_get_configured_video_codec(),
+                    logger=None,
+                    fps=fps,
+                )
+
+                # Store clip duration before closing
+                clip_duration_saved = clip.duration
+                close_clip(clip)
+
+                processed_clips.append(
+                    SubClippedVideoClip(
+                        file_path=clip_file,
+                        duration=clip_duration_saved,
+                        width=clip_w,
+                        height=clip_h,
+                        source_file_path=subclipped_item.source_file_path,
+                    )
+                )
+                video_duration += clip_duration_saved
+
+            except Exception as e:
+                logger.error(f"failed to process clip: {str(e)}")
+
+        # loop processed clips until the video duration covers the audio duration and the small safety margin.
+        if video_duration < required_video_duration:
+            logger.warning(
+                f"video duration ({video_duration:.2f}s) is shorter than required duration "
+                f"({required_video_duration:.2f}s), looping clips to match audio length."
+            )
+            base_clips = processed_clips.copy()
+            for clip in itertools.cycle(base_clips):
+                if video_duration >= required_video_duration:
+                    break
+                processed_clips.append(clip)
+                video_duration += clip.duration
+            logger.info(
+                f"video duration: {video_duration:.2f}s, audio duration: {audio_duration:.2f}s, "
+                f"required duration: {required_video_duration:.2f}s, "
+                f"looped {len(processed_clips)-len(base_clips)} clips"
+            )
+
     # merge video clips progressively, avoid loading all videos at once to avoid memory overflow
     logger.info("starting clip merging process")
+    if scene_clip_instructions:
+        if len(processed_clips) != len(scene_clip_instructions):
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: partial timeline blocked before concat ({len(processed_clips)}/{len(scene_clip_instructions)})",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+        processed_indexes = [c.scene_index for c in processed_clips]
+        expected_indexes = list(range(1, len(scene_clip_instructions) + 1))
+        if processed_indexes != expected_indexes:
+            raise SceneRenderError(
+                f"SCENE_RENDER_FAILURE: processed scene indexes {processed_indexes} do not match expected {expected_indexes}",
+                reason_code="SCENE_RENDER_FAILURE",
+            )
+
     if not processed_clips:
         logger.warning("no clips available for merging")
         return combined_video_path
-    
+
     clip_files = [clip.file_path for clip in processed_clips]
     logger.info(f"concatenating {len(clip_files)} clips with ffmpeg")
     concat_video_clips_with_ffmpeg(

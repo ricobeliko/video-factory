@@ -359,12 +359,27 @@ def generate_terms(task_id, params, video_script):
     return video_terms
 
 
-def save_script_data(task_id, video_script, video_terms, params):
+def save_script_data(task_id, video_script, video_terms, params, scene_plan=None):
     script_data = {
         "script": video_script,
         "search_terms": video_terms,
         "params": params,
     }
+    try:
+        target = task_artifacts._script_file(task_id)
+        if target.is_file():
+            with target.open("r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if isinstance(existing, dict):
+                for k, v in existing.items():
+                    if k not in script_data:
+                        script_data[k] = v
+    except Exception as exc:
+        logger.debug(f"could not read existing script_data for preservation: {exc}")
+
+    if scene_plan is not None:
+        script_data["scene_plan"] = scene_plan
+
     task_artifacts.write_script_data(task_id, script_data)
 
 
@@ -1004,7 +1019,8 @@ def _get_material_source_groups(task_id: str, video_paths: list[str]) -> dict[st
 
 
 def generate_final_videos(
-    task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
+    task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration,
+    scene_clip_instructions=None,
 ):
     if getattr(params, "subtitle_required", False):
         val_res = subtitle.validate_subtitle_file(subtitle_path)
@@ -1070,6 +1086,7 @@ def generate_final_videos(
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
+            scene_clip_instructions=scene_clip_instructions,
             **batch_options,
         )
         if allocate_batch_materials:
@@ -2659,10 +2676,43 @@ def _run_pipeline(
     if cancel_res:
         return cancel_res
 
-    # 2. Generate terms
+    # 2. Scene Planning & Search Terms
+    scene_plan = None
+    serialized_plan = None
+    if getattr(params, "scene_based_generation_enabled", False):
+        try:
+            from app.services import scene_planner
+            scene_plan = scene_planner.plan_scenes(
+                video_script=video_script,
+                params=params,
+                task_id=task_id,
+            )
+            serialized_plan = [
+                s.model_dump() if hasattr(s, "model_dump") else s.__dict__
+                for s in scene_plan.scenes
+            ]
+        except Exception as exc:
+            reason = getattr(exc, "reason_code", "SCENE_PLAN_EMPTY")
+            logger.error(f"[SCENE_PLAN][BLOCK] task_id={task_id} reason={reason} detail={exc}")
+            return _mark_task_failed(
+                task_id,
+                "scene_planning",
+                f"failed to generate scene plan: {exc}",
+                details={"reason": reason},
+            )
+
     video_terms = ""
     if params.video_source != "local":
-        video_terms = generate_terms(task_id, params, video_script)
+        if scene_plan and scene_plan.scenes:
+            extracted = []
+            for s in scene_plan.scenes:
+                for t in s.search_terms:
+                    if t and t not in extracted:
+                        extracted.append(t)
+            video_terms = extracted[:8]
+        else:
+            video_terms = generate_terms(task_id, params, video_script)
+
         if not video_terms:
             return _mark_task_failed(
                 task_id,
@@ -2670,7 +2720,9 @@ def _run_pipeline(
                 "failed to generate video search terms",
             )
 
-    save_script_data(task_id, video_script, video_terms, params)
+    save_script_data(task_id, video_script, video_terms, params, scene_plan=serialized_plan)
+    if serialized_plan:
+        task_artifacts.patch_script_data(task_id, scene_plan=serialized_plan)
     logger.info(f"[GEN][SCRIPT_SAVE_OK] task_id={task_id}")
 
     if stop_at == "terms":
@@ -2772,13 +2824,43 @@ def _run_pipeline(
 
     # 5. Get video materials
     logger.info(f"[MATERIAL][START] task_id={task_id}")
-    downloaded_videos = get_video_materials(
-        task_id,
-        params,
-        video_terms,
-        audio_duration,
-        loomloom_video_request=loomloom_video_request,
-    )
+    scene_instructions = None
+    if getattr(params, "scene_based_generation_enabled", False) and scene_plan:
+        try:
+            from app.services import scene_assembly, scene_material
+            scene_materials = scene_material.resolve_scene_materials(
+                task_id=task_id,
+                scene_plan=scene_plan,
+                params=params,
+                audio_duration=audio_duration,
+                strict=True,
+            )
+            scene_instructions = scene_assembly.assemble_scene_clips(
+                scene_plan=scene_plan,
+                material_selections=scene_materials,
+                audio_duration=audio_duration,
+                params=params,
+                task_id=task_id,
+            )
+            downloaded_videos = scene_assembly.get_ordered_video_paths(scene_instructions)
+        except Exception as exc:
+            reason = getattr(exc, "reason_code", "SCENE_MATERIAL_MISSING")
+            logger.error(f"[SCENE_MATERIAL][BLOCK] task_id={task_id} reason={reason} detail={exc}")
+            return _mark_task_failed(
+                task_id,
+                "materials",
+                f"scene material resolution failed: {exc}",
+                details={"reason": reason},
+            )
+    else:
+        downloaded_videos = get_video_materials(
+            task_id,
+            params,
+            video_terms,
+            audio_duration,
+            loomloom_video_request=loomloom_video_request,
+        )
+
     if not downloaded_videos:
         return _mark_task_failed(
             task_id,
@@ -2818,21 +2900,36 @@ def _run_pipeline(
 
     # 6. Generate final videos
     logger.info(f"[RENDER][START] task_id={task_id}")
-    final_video_paths, combined_video_paths, generation_warnings = (
-        generate_final_videos(
-            task_id,
-            params,
-            downloaded_videos,
-            audio_file,
-            subtitle_path,
-            audio_duration,
+    try:
+        final_video_paths, combined_video_paths, generation_warnings = (
+            generate_final_videos(
+                task_id,
+                params,
+                downloaded_videos,
+                audio_file,
+                subtitle_path,
+                audio_duration,
+                scene_clip_instructions=scene_instructions,
+            )
         )
-    )
-
-    if not final_video_paths:
+    except Exception as exc:
+        is_scene_mode = bool(getattr(params, "scene_based_generation_enabled", False))
+        failed_stage = "scene_render" if is_scene_mode else "video"
+        reason = getattr(exc, "reason_code", "SCENE_RENDER_FAILURE" if is_scene_mode else "RENDER_FAILURE")
+        logger.error(f"[RENDER][BLOCK] task_id={task_id} stage={failed_stage} reason={reason} error={exc}")
         return _mark_task_failed(
             task_id,
-            "video",
+            failed_stage,
+            f"failed to render video: {exc}",
+            details={"reason": reason, "stage": failed_stage},
+        )
+
+    if not final_video_paths:
+        is_scene_mode = bool(getattr(params, "scene_based_generation_enabled", False))
+        failed_stage = "scene_render" if is_scene_mode else "video"
+        return _mark_task_failed(
+            task_id,
+            failed_stage,
             "failed to generate final video",
         )
 

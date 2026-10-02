@@ -13,9 +13,9 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.3 — Final Media Quality Gate`
-- **ACTIVE_BRANCH** = `feat/v16-3-final-media-quality-gate`
-- **NEXT_GATE** = `V16.4 — Scene-Based Video Generation`
+- **ACTIVE_PHASE** = `V16.4 — Scene-Based Video Generation`
+- **ACTIVE_BRANCH** = `feat/v16-4-scene-based-video-generation`
+- **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -26,8 +26,8 @@
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
-- **V16.3 Final Media Quality Gate** = ACTIVE (P0)
-- **V16.4 Scene-Based Video Generation** = PLANNED (P1)
+- **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
+- **V16.4 Scene-Based Video Generation** = ACTIVE (P1)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -781,21 +781,21 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - **MODEL ENVIRONMENT:** O modelo Whisper real não foi baixado na fase de testes/desenvolvimento (mocks estritos). Recomendação de produção: `large-v3-turbo`.
 
 ## V16.3 — Final Media Quality Gate
-- **Status:** 🚀 ACTIVE
-- **Priority:** P0
+- **Status:** ✅ PRODUCTION HOMOLOGATED
+- **Deploy SHA:** `9e3fde0b35e28781aab67117d5ff33c182b337ef`
 - **Regra Fundamental:** `AUTONOMOUS_FINAL_MEDIA_WITH_CRITICAL_DEFECT = FORBIDDEN`
 - **Objetivo:** Garantir integridade física, visual e de áudio do arquivo MP4 renderizado antes de torná-lo elegível para agendamento e publicação.
 - **Arquitetura Implementada:**
   - **Módulo Centralizado:** `app/services/media_quality.py`.
-  - **Probing Helper Seguro:** `probe_media(file_path)` baseado em `ffprobe` com subprocess seguro (sem shell=True, timeout, capture_output).
+  - **Probing Helper Seguro:** `probe_media(file_path)` baseado em `ffprobe` com subprocess seguro (sem shell=True, timeout, capture_output, validação estrutural do payload).
   - **Critical Gates:**
     - Arquivo: existência, arquivo regular, tamanho > 10KB (`MIN_VALID_MEDIA_FILE_BYTES`).
-    - Probe: ffprobe disponível, execução sem erro, JSON parseável.
+    - Probe: ffprobe disponível, execução sem erro, JSON parseável e estruturalmente válido (dict, streams list, format dict).
     - Vídeo: stream de vídeo presente, dimensões > 0, resolução compatível com orientação, aspect ratio dentro da tolerância (ex: vertical 9:16 portrait).
     - Duração: duração > 0 e coerência com a narração da pipeline (`AUDIO_VIDEO_DURATION_MISMATCH`).
-    - Áudio: áudio presente na produção autônoma com duração válida.
+    - Áudio: áudio presente na produção autônoma com duração válida (duration inválida/não-numérica/NaN/inf/<=0 falha fechada; ausência tolerada).
     - Legenda: confirmação de contrato de que o artefato SRT válido foi persistido.
-    - Pipeline Gate: bloqueia cross-posting e publicação antes de despachar chamadas externas.
+    - Pipeline Gate: bloqueia cross-posting e publicação antes de despachar chamadas externas; persiste diagnóstico em `script_data` mesmo em caso de BLOCK.
     - Multi-Vídeo: avaliação estrita de cada `final-N.mp4`.
     - Preservação Manual: flag `final_media_quality_required=True` ativa o gate estrito para autônomo, preservando chamadas manuais.
 - **Limites e Escopo (O que NÃO é feito em V16.3):**
@@ -805,9 +805,24 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem dependências de bibliotecas de Computer Vision.
 
 ## V16.4 — Scene-Based Video Generation
-- **Status:** 📋 PLANNED
+- **Status:** 🚀 DEV COMPLETED / READY FOR PR
+- **Validação:** 19 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
 - **Priority:** P1
-- **REUSE-FIRST RULE:** Before implementing scene-based video generation, audit current upstream MoneyPrinterTurbo implementation/PR and reuse/port existing code when technically compatible.
+- **Regra Fundamental:** `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
+- **REUSE-FIRST RULE:** Before implementing scene-based video generation, audit current upstream MoneyPrinterTurbo implementation/PR and reuse/port existing code when technically compatible. (Auditoria realizada: upstream PR #1315 não disponível localmente no fork; reaproveitamento focado em `material.py`, `video.py`, cache e contratos existentes).
+- **Objetivo:** Introduzir geração orientada a cenas, garantindo que o visual acompanhe a progressão narrativa do roteiro, com termos de busca específicos por cena, resolução sequencial de materiais com fallback rastreável e montagem estritamente ordenada.
+- **Arquitetura Implementada:**
+  - `ScenePlan` e `ScenePlanItem`: representação estruturada de cenas com indexação determinística, narração, termos de busca e duração estimada.
+  - Planner determinístico local (`app/services/scene_planner.py`): segmentação semântica do roteiro por pontuação/parágrafos e extração de termos visuais sem dependência obrigatória de LLM/rede.
+  - Scene Material Resolver (`app/services/scene_material.py`): resolução de material por cena, fallback entre termos da própria cena e para termo genérico derivado se necessário.
+  - Scene Assembly (`app/services/scene_assembly.py`): montagem e sequenciamento estrito das cenas em instruções ordenadas (`SceneClipInstruction`).
+  - Flag de ativação: `scene_based_generation_enabled=True` no autônomo, `False` como padrão no manual.
+  - Persistência e auditoria: `scene_plan` e `scene_materials` gravados em `script_data` com proveniência de ativos preservada.
+  - Fail-closed: bloqueio em caso de cenas sem narração, termos vazios, ordem inconsistente ou falha crítica de resolução de material.
+- **Limites e Escopo (O que NÃO é feito em V16.4):**
+  - Sem CLIP embeddings ou reranking por visão computacional (V16.5).
+  - Sem geração de imagem/vídeo por IA (V16.7/V16.8).
+  - Sem OCR ou classificação visual de frames.
 
 ## V16.5 — Visual Matching v2
 - **Status:** 📋 PLANNED

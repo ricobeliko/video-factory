@@ -140,6 +140,7 @@ class VideoParams(BaseModel):
     subtitle_enabled: Optional[bool] = True
     subtitle_required: bool = False
     final_media_quality_required: bool = False
+    scene_based_generation_enabled: bool = False
     subtitle_position: Optional[str] = config.ui.get(
         "subtitle_position", "bottom"
     )  # top, bottom, center, custom, two_thirds_bottom
@@ -623,3 +624,43 @@ class VideoMaterialUploadResponse(BaseResponse):
             },
         }
     )
+
+
+# =============================================================================
+# V16.4 — Scene-Based Video Generation Models
+# =============================================================================
+
+class ScenePlanItem(BaseModel):
+    scene_index: int = Field(..., ge=1, description="1-based scene index in deterministic order")
+    narration: str = Field(..., min_length=1, description="Narration text corresponding to this scene")
+    search_terms: List[str] = Field(default_factory=list, description="Ordered list of visual search terms for this scene")
+    duration_hint: Optional[float] = Field(default=None, description="Estimated duration in seconds for this scene")
+    visual_intent: Optional[str] = Field(default=None, description="Visual intent or mood description for this scene")
+    source_strategy: Optional[str] = Field(default=None, description="Preferred source or strategy for this scene")
+
+
+class ScenePlan(BaseModel):
+    scenes: List[ScenePlanItem] = Field(default_factory=list, description="Ordered list of scenes in narrative sequence")
+    total_scenes: int = Field(default=0, ge=0, description="Total count of scenes in the plan")
+    script_hash: Optional[str] = Field(default=None, description="SHA256 or hash of the source script")
+    planner_version: str = Field(default="v1.0", description="Planner algorithm version")
+
+
+class SceneMaterialSelection(BaseModel):
+    scene_index: int = Field(..., ge=1, description="Scene index bound to this material")
+    material_path: str = Field(..., description="Local path to downloaded or cached video material")
+    provider: str = Field(default="pexels", description="Provider source (pexels, pixabay, etc.)")
+    asset_id: Optional[str] = Field(default=None, description="Provider asset identifier")
+    source_url: Optional[str] = Field(default=None, description="Original source URL or page")
+    search_term_used: str = Field(default="", description="Search term that successfully resolved this material")
+    fallback_used: bool = Field(default=False, description="Whether fallback logic was used to find this material")
+    duration: float = Field(default=0.0, ge=0.0, description="Duration in seconds of the material")
+    provenance: Optional[dict] = Field(default=None, description="Asset provenance details for copyright compliance")
+
+
+class SceneClipInstruction(BaseModel):
+    scene_index: int = Field(..., ge=1, description="Scene index")
+    material_path: str = Field(..., description="Local path to video clip")
+    duration_seconds: float = Field(..., gt=0.0, description="Exact clip duration for this scene")
+    fit_mode: str = Field(default="cover", description="Video fit mode (cover, contain, etc.)")
+    start_offset: float = Field(default=0.0, ge=0.0, description="Start offset within the source video")

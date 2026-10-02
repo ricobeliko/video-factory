@@ -1649,6 +1649,7 @@ def build_autonomous_video_params(
         subtitle_enabled=subtitle_enabled,
         subtitle_required=True,
         final_media_quality_required=True,
+        scene_based_generation_enabled=True,
         font_name=font_name,
         subtitle_position=subtitle_position,
         subtitle_display_mode=subtitle_display_mode,

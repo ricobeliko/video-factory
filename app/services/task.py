@@ -2659,10 +2659,43 @@ def _run_pipeline(
     if cancel_res:
         return cancel_res
 
-    # 2. Generate terms
+    # 2. Scene Planning & Search Terms
+    scene_plan = None
+    if getattr(params, "scene_based_generation_enabled", False):
+        try:
+            from app.services import scene_planner
+            scene_plan = scene_planner.plan_scenes(
+                video_script=video_script,
+                params=params,
+                task_id=task_id,
+            )
+            serialized_plan = [
+                s.model_dump() if hasattr(s, "model_dump") else s.__dict__
+                for s in scene_plan.scenes
+            ]
+            task_artifacts.patch_script_data(task_id, scene_plan=serialized_plan)
+        except Exception as exc:
+            reason = getattr(exc, "reason_code", "SCENE_PLAN_EMPTY")
+            logger.error(f"[SCENE_PLAN][BLOCK] task_id={task_id} reason={reason} detail={exc}")
+            return _mark_task_failed(
+                task_id,
+                "scene_planning",
+                f"failed to generate scene plan: {exc}",
+                details={"reason": reason},
+            )
+
     video_terms = ""
     if params.video_source != "local":
-        video_terms = generate_terms(task_id, params, video_script)
+        if scene_plan and scene_plan.scenes:
+            extracted = []
+            for s in scene_plan.scenes:
+                for t in s.search_terms:
+                    if t and t not in extracted:
+                        extracted.append(t)
+            video_terms = extracted[:8]
+        else:
+            video_terms = generate_terms(task_id, params, video_script)
+
         if not video_terms:
             return _mark_task_failed(
                 task_id,
@@ -2772,13 +2805,42 @@ def _run_pipeline(
 
     # 5. Get video materials
     logger.info(f"[MATERIAL][START] task_id={task_id}")
-    downloaded_videos = get_video_materials(
-        task_id,
-        params,
-        video_terms,
-        audio_duration,
-        loomloom_video_request=loomloom_video_request,
-    )
+    if getattr(params, "scene_based_generation_enabled", False) and scene_plan:
+        try:
+            from app.services import scene_assembly, scene_material
+            scene_materials = scene_material.resolve_scene_materials(
+                task_id=task_id,
+                scene_plan=scene_plan,
+                params=params,
+                audio_duration=audio_duration,
+                strict=True,
+            )
+            scene_instructions = scene_assembly.assemble_scene_clips(
+                scene_plan=scene_plan,
+                material_selections=scene_materials,
+                audio_duration=audio_duration,
+                params=params,
+                task_id=task_id,
+            )
+            downloaded_videos = scene_assembly.get_ordered_video_paths(scene_instructions)
+        except Exception as exc:
+            reason = getattr(exc, "reason_code", "SCENE_MATERIAL_MISSING")
+            logger.error(f"[SCENE_MATERIAL][BLOCK] task_id={task_id} reason={reason} detail={exc}")
+            return _mark_task_failed(
+                task_id,
+                "materials",
+                f"scene material resolution failed: {exc}",
+                details={"reason": reason},
+            )
+    else:
+        downloaded_videos = get_video_materials(
+            task_id,
+            params,
+            video_terms,
+            audio_duration,
+            loomloom_video_request=loomloom_video_request,
+        )
+
     if not downloaded_videos:
         return _mark_task_failed(
             task_id,

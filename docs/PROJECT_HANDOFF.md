@@ -3,9 +3,9 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.3 — Final Media Quality Gate`
-- **ACTIVE_BRANCH** = `feat/v16-3-final-media-quality-gate`
-- **NEXT_GATE** = `V16.4 — Scene-Based Video Generation`
+- **ACTIVE_PHASE** = `V16.4 — Scene-Based Video Generation`
+- **ACTIVE_BRANCH** = `feat/v16-4-scene-based-video-generation`
+- **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -15,8 +15,8 @@
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
-- **V16.3 Final Media Quality Gate** = ACTIVE (P0)
-- **V16.4 Scene-Based Video Generation** = PLANNED (P1)
+- **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
+- **V16.4 Scene-Based Video Generation** = ACTIVE (P1)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1054,28 +1054,63 @@ Entregas da Fase V16.2:
 
 ---
 
-## 27. V16.3 — Final Media Quality Gate (Fase Ativa Atual)
+## 27. V16.3 — Final Media Quality Gate
 
-**Status: 🚀 ACTIVE / DEV IMPLEMENTED (02/10/2026)**
+**Status: ✅ PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)**
 
 Regra Fundamental: `AUTONOMOUS_FINAL_MEDIA_WITH_CRITICAL_DEFECT = FORBIDDEN`
 
 Entregas da Fase V16.3:
 1. **Módulo Centralizado de Qualidade de Mídia (`app/services/media_quality.py`):**
-   - Helper seguro `probe_media(file_path)` utilizando `ffprobe` com subprocess sem shell, timeout rígido e captura estruturada em JSON.
+   - Helper seguro `probe_media(file_path)` utilizando `ffprobe` com subprocess sem shell, timeout rígido, captura estruturada em JSON e validação defensiva da estrutura do payload (dict, streams list, format dict).
    - Evaluator de qualidade `evaluate_final_media_quality(video_path, params, ...)` que retorna status padronizado (`PASS` ou `BLOCK`), lista de `reasons` padronizadas e `metrics` consolidadas (duração, resolução, aspect ratio, codec, fps, tamanho em bytes).
 2. **Critical Gates Fail-Closed:**
    - **Arquivo:** Rejeita arquivos inexistentes, diretórios, 0 bytes ou truncados (< 10KB, `MIN_VALID_MEDIA_FILE_BYTES`).
    - **Probe:** Falha de ffprobe (indisponível, timeout, retorno não-zero ou JSON inválido) bloqueia a produção autônoma.
    - **Vídeo:** Rejeita vídeos sem stream de vídeo, com dimensões inválidas (width/height <= 0), com resolução abaixo do mínimo ou aspect ratio incompatível com a orientação esperada (ex: `portrait` 9:16).
    - **Duração:** Rejeita vídeos com duração <= 0 ou que apresentem divergência extrema em relação ao áudio gerado (`AUDIO_VIDEO_DURATION_MISMATCH`).
-   - **Áudio:** Para produção autônoma com locução, exige presença de stream de áudio com duração válida.
+   - **Áudio:** Para produção autônoma com locução, exige presença de stream de áudio com duração válida (duration inválida/não-numérica/NaN/inf/<=0 bloqueia; ausência tolerada).
    - **Contrato de Legenda:** Valida que o artefato SRT obrigatório existe e foi mantido no pipeline.
 3. **Pipeline Gate Pré-Publicação:**
    - Integrado diretamente em `app/services/task.py` logo após a geração de `final_video_paths`.
    - Se qualquer vídeo final do lote falhar no gate, a tarefa é imediatamente interrompida como `TASK_STATE_FAILED` com `stage="final_media_quality"`.
    - O agendamento de cross-post (`_schedule_cross_post`) e a chamada de publicadores externos são bloqueados preventivamente.
+   - Diagnóstico estruturado é persistido em `script_data` (`task_artifacts.patch_script_data`) tanto no fluxo de sucesso quanto no fluxo de BLOCK.
 4. **Preservação do Modo Manual:**
    - A imposição fail-closed é governada pelo flag `final_media_quality_required=True` (imposta automaticamente na produção autônoma), preservando geração manual e testes pontuais.
 5. **Limites do Escopo:**
    - Não realiza OCR visual de legendas, análise de black/freeze frames, nem avaliação semântica subjetiva.
+
+---
+
+## 28. V16.4 — Scene-Based Video Generation (Fase Ativa Atual)
+
+**Status: 🚀 ACTIVE / IN DEVELOPMENT (02/10/2026)**
+
+Regra Fundamental: `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
+
+Objetivo da Fase V16.4:
+Garantir que vídeos autônomos possuam coerência visual narrativa, dividindo o roteiro em cenas estruturadas, associando termos visuais específicos para cada cena, resolvendo materiais sequenciais com fallback observável e montando a timeline de vídeo na ordem exata da narração.
+
+Arquitetura e Contratos:
+1. **Modelagem de Cenas (`ScenePlanItem`, `ScenePlan`, `SceneMaterialSelection`, `SceneClipInstruction`):**
+   - Indexação determinística 1-based (`scene_index: 1, 2, ...`).
+   - Narração não-vazia por cena.
+   - Lista ordenada de termos visuais (`search_terms`) por cena.
+   - Durations estimadas coerentes com a fala/narração.
+2. **Planner Determinístico Baseline (`app/services/scene_planner.py`):**
+   - Segmentação do roteiro por pontuação, limites narrativos e estimativa temporal (target 4-8s por cena).
+   - Extração local de termos visuais específicos por cena sem necessidade de chamada externa ou LLM no baseline.
+   - Suporte completo ao português brasileiro (pt-BR) com preservação de acentuação e stopwords filtradas.
+3. **Scene Material Resolver (`app/services/scene_material.py`):**
+   - Busca materiais para cada cena usando os termos específicos da cena.
+   - Política de fallback observável: termo 1 -> termo 2 -> termo 3 -> termo visual derivado -> falha estruturada se não houver material.
+   - Evita repetição visual consecutiva quando existirem alternativas.
+   - Rastreabilidade completa de provedor, asset ID e termo utilizado, preservando o gate de proveniência (`asset_provenance`).
+4. **Scene Assembly (`app/services/scene_assembly.py`):**
+   - Orquestra e valida a sequência exata de clips antes da renderização.
+   - Fail-closed em caso de índices duplicados, cenas ausentes ou durações inválidas.
+5. **Compatibilidade e Preservação:**
+   - Modo autônomo define `scene_based_generation_enabled=True`.
+   - Modo manual preserva `scene_based_generation_enabled=False` por padrão.
+   - Não altera pipelines de legendas (V16.2) nem o Final Media Quality Gate (V16.3).

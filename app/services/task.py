@@ -359,12 +359,27 @@ def generate_terms(task_id, params, video_script):
     return video_terms
 
 
-def save_script_data(task_id, video_script, video_terms, params):
+def save_script_data(task_id, video_script, video_terms, params, scene_plan=None):
     script_data = {
         "script": video_script,
         "search_terms": video_terms,
         "params": params,
     }
+    try:
+        target = task_artifacts._script_file(task_id)
+        if target.is_file():
+            with target.open("r", encoding="utf-8") as f:
+                existing = json.load(f)
+            if isinstance(existing, dict):
+                for k, v in existing.items():
+                    if k not in script_data:
+                        script_data[k] = v
+    except Exception as exc:
+        logger.debug(f"could not read existing script_data for preservation: {exc}")
+
+    if scene_plan is not None:
+        script_data["scene_plan"] = scene_plan
+
     task_artifacts.write_script_data(task_id, script_data)
 
 
@@ -1004,7 +1019,8 @@ def _get_material_source_groups(task_id: str, video_paths: list[str]) -> dict[st
 
 
 def generate_final_videos(
-    task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
+    task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration,
+    scene_clip_instructions=None,
 ):
     if getattr(params, "subtitle_required", False):
         val_res = subtitle.validate_subtitle_file(subtitle_path)
@@ -1070,6 +1086,7 @@ def generate_final_videos(
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
+            scene_clip_instructions=scene_clip_instructions,
             **batch_options,
         )
         if allocate_batch_materials:
@@ -2661,6 +2678,7 @@ def _run_pipeline(
 
     # 2. Scene Planning & Search Terms
     scene_plan = None
+    serialized_plan = None
     if getattr(params, "scene_based_generation_enabled", False):
         try:
             from app.services import scene_planner
@@ -2673,7 +2691,6 @@ def _run_pipeline(
                 s.model_dump() if hasattr(s, "model_dump") else s.__dict__
                 for s in scene_plan.scenes
             ]
-            task_artifacts.patch_script_data(task_id, scene_plan=serialized_plan)
         except Exception as exc:
             reason = getattr(exc, "reason_code", "SCENE_PLAN_EMPTY")
             logger.error(f"[SCENE_PLAN][BLOCK] task_id={task_id} reason={reason} detail={exc}")
@@ -2703,7 +2720,9 @@ def _run_pipeline(
                 "failed to generate video search terms",
             )
 
-    save_script_data(task_id, video_script, video_terms, params)
+    save_script_data(task_id, video_script, video_terms, params, scene_plan=serialized_plan)
+    if serialized_plan:
+        task_artifacts.patch_script_data(task_id, scene_plan=serialized_plan)
     logger.info(f"[GEN][SCRIPT_SAVE_OK] task_id={task_id}")
 
     if stop_at == "terms":
@@ -2805,6 +2824,7 @@ def _run_pipeline(
 
     # 5. Get video materials
     logger.info(f"[MATERIAL][START] task_id={task_id}")
+    scene_instructions = None
     if getattr(params, "scene_based_generation_enabled", False) and scene_plan:
         try:
             from app.services import scene_assembly, scene_material
@@ -2888,6 +2908,7 @@ def _run_pipeline(
             audio_file,
             subtitle_path,
             audio_duration,
+            scene_clip_instructions=scene_instructions,
         )
     )
 

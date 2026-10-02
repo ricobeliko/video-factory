@@ -1085,9 +1085,9 @@ Entregas da Fase V16.3:
 
 ## 28. V16.4 — Scene-Based Video Generation (Fase Ativa Atual)
 
-**Status: 🚀 ACTIVE / IN DEVELOPMENT (02/10/2026)**
-
-Regra Fundamental: `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
+**Status: 🚀 DEV COMPLETED / READY FOR PR (02/10/2026)**
+- **Validação:** 15 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
+- **Regra Fundamental:** `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
 
 Objetivo da Fase V16.4:
 Garantir que vídeos autônomos possuam coerência visual narrativa, dividindo o roteiro em cenas estruturadas, associando termos visuais específicos para cada cena, resolvendo materiais sequenciais com fallback observável e montando a timeline de vídeo na ordem exata da narração.

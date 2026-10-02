@@ -805,7 +805,8 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem dependências de bibliotecas de Computer Vision.
 
 ## V16.4 — Scene-Based Video Generation
-- **Status:** 🚀 ACTIVE
+- **Status:** 🚀 DEV COMPLETED / READY FOR PR
+- **Validação:** 15 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
 - **Priority:** P1
 - **Regra Fundamental:** `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
 - **REUSE-FIRST RULE:** Before implementing scene-based video generation, audit current upstream MoneyPrinterTurbo implementation/PR and reuse/port existing code when technically compatible. (Auditoria realizada: upstream PR #1315 não disponível localmente no fork; reaproveitamento focado em `material.py`, `video.py`, cache e contratos existentes).

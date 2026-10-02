@@ -307,17 +307,50 @@ def correct(subtitle_file, video_script):
 
 
 def parse_srt_timestamp(ts_str: str) -> Optional[float]:
-    """Converte timestamp SRT ('HH:MM:SS,mmm' ou 'HH:MM:SS.mmm') em segundos (float)."""
+    """Converte timestamp SRT ('HH:MM:SS,mmm' ou 'HH:MM:SS.mmm') em segundos (float).
+
+    Rejeita de forma estrita (retorna None):
+    - hora negativa (< 0)
+    - minuto < 0 ou >= 60
+    - segundo < 0 ou >= 60
+    - milissegundo < 0 ou > 999
+    - campos vazios ou não numéricos
+    - timestamp estruturalmente inválido
+    """
     try:
+        if not ts_str or not isinstance(ts_str, str):
+            return None
         clean = ts_str.strip().replace(".", ",")
         parts = clean.split(":")
         if len(parts) != 3:
             return None
-        h = int(parts[0])
-        m = int(parts[1])
-        s_parts = parts[2].split(",")
-        s = int(s_parts[0])
-        ms = int(s_parts[1]) if len(s_parts) > 1 else 0
+        if not parts[0].strip() or not parts[1].strip() or not parts[2].strip():
+            return None
+
+        h_str = parts[0].strip()
+        m_str = parts[1].strip()
+        s_parts = parts[2].strip().split(",")
+        if len(s_parts) > 2 or not s_parts[0].strip():
+            return None
+        s_str = s_parts[0].strip()
+        ms_str = s_parts[1].strip() if len(s_parts) > 1 else "0"
+        if not ms_str:
+            return None
+
+        h = int(h_str)
+        m = int(m_str)
+        s = int(s_str)
+        ms = int(ms_str)
+
+        if h < 0:
+            return None
+        if m < 0 or m >= 60:
+            return None
+        if s < 0 or s >= 60:
+            return None
+        if ms < 0 or ms > 999:
+            return None
+
         return h * 3600.0 + m * 60.0 + s + (ms / 1000.0)
     except Exception:
         return None

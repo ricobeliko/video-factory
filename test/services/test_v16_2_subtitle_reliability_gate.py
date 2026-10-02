@@ -1023,6 +1023,99 @@ class TestV16_2SubtitleReliabilityGate(unittest.TestCase):
         finally:
             shutil.rmtree(task_dir, ignore_errors=True)
 
+    # =========================================================================
+    # H. TIMESTAMP BOUNDARY & RANGE VALIDATION (46 a 52)
+    # =========================================================================
+
+    def test_46_timestamp_range_minute_99_blocks(self):
+        """46. minute=99 -> None no parser e BLOCK com invalid_timestamp_format no validador."""
+        self.assertIsNone(subtitle.parse_srt_timestamp("00:99:10,000"))
+        srt = os.path.join(self.tmp_dir, "min_99.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:99:10,000 --> 00:99:15,000\nMinuto invalido.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "invalid_timestamp_format")
+
+    def test_47_timestamp_range_second_99_blocks(self):
+        """47. second=99 -> None no parser e BLOCK no validador."""
+        self.assertIsNone(subtitle.parse_srt_timestamp("00:10:99,000"))
+        srt = os.path.join(self.tmp_dir, "sec_99.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:99,000 --> 00:01:05,000\nSegundo invalido.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "invalid_timestamp_format")
+
+    def test_48_timestamp_range_milliseconds_1000_blocks(self):
+        """48. milliseconds=1000 -> None no parser e BLOCK no validador."""
+        self.assertIsNone(subtitle.parse_srt_timestamp("00:10:10,1000"))
+        srt = os.path.join(self.tmp_dir, "ms_1000.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:01,1000 --> 00:00:03,000\nMilissegundo invalido.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "invalid_timestamp_format")
+
+    def test_49_timestamp_range_negative_values_blocks(self):
+        """49. timestamps negativos em hora, minuto, segundo ou milissegundo -> BLOCK."""
+        negatives = [
+            "-1:00:00,000",
+            "00:-1:00,000",
+            "00:00:-1,000",
+            "00:00:01,-1",
+        ]
+        for ts in negatives:
+            with self.subTest(ts=ts):
+                self.assertIsNone(subtitle.parse_srt_timestamp(ts))
+
+        srt = os.path.join(self.tmp_dir, "negative_ts.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n-1:00:00,000 --> 00:00:02,000\nNegativo.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "invalid_timestamp_format")
+
+    def test_50_timestamp_range_boundary_59_59_999_passes(self):
+        """50. limites válidos 00:59:59,999 e separador com ponto -> PASS."""
+        ts = subtitle.parse_srt_timestamp("00:59:59,999")
+        self.assertIsNotNone(ts)
+        self.assertAlmostEqual(ts, 3599.999, places=3)
+
+        ts_dot = subtitle.parse_srt_timestamp("00:59:59.999")
+        self.assertIsNotNone(ts_dot)
+        self.assertAlmostEqual(ts_dot, 3599.999, places=3)
+
+        srt = os.path.join(self.tmp_dir, "boundary_valid.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,100 --> 00:59:59,999\nLimite valido aprovado.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertTrue(res["valid"])
+        self.assertEqual(res["reason"], "valid")
+
+    def test_51_timestamp_range_hour_greater_than_23_passes(self):
+        """51. hora > 23 continua válida (SRTs podem ultrapassar 24h)."""
+        ts = subtitle.parse_srt_timestamp("25:00:00,000")
+        self.assertIsNotNone(ts)
+        self.assertEqual(ts, 90000.0)
+
+        srt = os.path.join(self.tmp_dir, "hour_gt_23.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n25:00:00,000 --> 25:00:02,000\nDuracao longa.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertTrue(res["valid"])
+        self.assertEqual(res["reason"], "valid")
+
+    def test_52_timestamp_malformed_empty_field_blocks(self):
+        """52. timestamp com campos vazios (ex: 00::01,000) -> BLOCK."""
+        self.assertIsNone(subtitle.parse_srt_timestamp("00::01,000"))
+        srt = os.path.join(self.tmp_dir, "empty_field.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write("1\n00::01,000 --> 00:00:03,000\nCampo vazio.\n\n")
+        res = subtitle.validate_subtitle_file(srt)
+        self.assertFalse(res["valid"])
+        self.assertEqual(res["reason"], "invalid_timestamp_format")
+
 
 if __name__ == "__main__":
     unittest.main()

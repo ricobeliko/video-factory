@@ -267,6 +267,70 @@ class TestV16_1BrazilianContentContract(unittest.TestCase):
         self.assertTrue(params.match_materials_to_script)
         self.assertEqual(params.video_concat_mode, VideoConcatMode.sequential)
 
+    def test_14_stroke_hardening_edge_cases(self):
+        """14. Hardening de stroke_color e stroke_width: fail-closed estruturado sem exceções."""
+        base_valid = {
+            "video_language": "pt-BR",
+            "region": "BR",
+            "subtitle_enabled": True,
+            "text_fore_color": "#FFFFFF",
+            "stroke_color": "#000000",
+            "stroke_width": 2.0,
+            "voice_name": "pt-BR-AntonioNeural",
+        }
+
+        # 1. stroke_color=None -> BLOCK
+        res_none = autonomous_production.validate_autonomous_brazilian_content_contract({
+            **base_valid,
+            "stroke_color": None,
+        })
+        self.assertFalse(res_none["valid"])
+        self.assertEqual(res_none["status"], "BLOCK")
+        self.assertIn("invalid_stroke_color", res_none["reasons"])
+
+        # 2. stroke_color="" -> BLOCK
+        res_empty = autonomous_production.validate_autonomous_brazilian_content_contract({
+            **base_valid,
+            "stroke_color": "",
+        })
+        self.assertFalse(res_empty["valid"])
+        self.assertEqual(res_empty["status"], "BLOCK")
+        self.assertIn("invalid_stroke_color", res_empty["reasons"])
+
+        # 3. stroke_color="#FFFFFF" -> BLOCK
+        res_white = autonomous_production.validate_autonomous_brazilian_content_contract({
+            **base_valid,
+            "stroke_color": "#FFFFFF",
+        })
+        self.assertFalse(res_white["valid"])
+        self.assertEqual(res_white["status"], "BLOCK")
+        self.assertIn("invalid_stroke_color", res_white["reasons"])
+
+        # 4. stroke_color="#000000" -> PASS
+        res_black = autonomous_production.validate_autonomous_brazilian_content_contract({
+            **base_valid,
+            "stroke_color": "#000000",
+        })
+        self.assertTrue(res_black["valid"])
+        self.assertEqual(res_black["status"], "PASS")
+        self.assertNotIn("invalid_stroke_color", res_black["reasons"])
+
+        # 5, 6, 7. stroke_width="abc" -> não lança exceção, BLOCK com invalid_stroke_width, details preservados
+        try:
+            res_abc = autonomous_production.validate_autonomous_brazilian_content_contract({
+                **base_valid,
+                "stroke_width": "abc",
+            })
+        except Exception as exc:
+            self.fail(f"validate_autonomous_brazilian_content_contract não deve lançar exceção com stroke_width inválido: {exc}")
+
+        self.assertFalse(res_abc["valid"])
+        self.assertEqual(res_abc["status"], "BLOCK")
+        self.assertIn("invalid_stroke_width", res_abc["reasons"])
+        self.assertIsInstance(res_abc.get("details"), dict)
+        self.assertEqual(res_abc["details"]["stroke_width"], 0.0)
+        self.assertEqual(res_abc["details"]["stroke_color"], "#000000")
+
 
 if __name__ == "__main__":
     unittest.main()

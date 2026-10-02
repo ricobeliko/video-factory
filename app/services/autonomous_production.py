@@ -1123,15 +1123,21 @@ def validate_autonomous_brazilian_content_contract(
     if not text_color or str(text_color).strip().upper() != "#FFFFFF":
         reasons.append("invalid_subtitle_color")
 
-    # 5. Stroke da legenda (preto #000000 e espessura >= 1.5)
+    # 5. Stroke da legenda (preto #000000 obrigatório e espessura >= 1.5)
     stroke_color = _get("stroke_color")
-    if stroke_color and str(stroke_color).strip().upper() != "#000000":
+    if not stroke_color or str(stroke_color).strip().upper() != "#000000":
         reasons.append("invalid_stroke_color")
 
+    normalized_stroke_width: float = 0.0
+    raw_stroke_width = _get("stroke_width")
     try:
-        stroke_width = float(_get("stroke_width", 0.0))
-        if stroke_width < 1.5:
-            reasons.append("stroke_width_too_thin")
+        if raw_stroke_width is not None and str(raw_stroke_width).strip() != "":
+            parsed_width = float(raw_stroke_width)
+            normalized_stroke_width = parsed_width
+            if parsed_width < 1.5:
+                reasons.append("stroke_width_too_thin")
+        else:
+            reasons.append("invalid_stroke_width")
     except (ValueError, TypeError):
         reasons.append("invalid_stroke_width")
 
@@ -1156,7 +1162,7 @@ def validate_autonomous_brazilian_content_contract(
             "subtitle_enabled": bool(sub_enabled),
             "text_fore_color": str(text_color) if text_color else "",
             "stroke_color": str(stroke_color) if stroke_color else "",
-            "stroke_width": float(_get("stroke_width", 0.0)) if _get("stroke_width") is not None else 0.0,
+            "stroke_width": normalized_stroke_width,
             "voice_name": str(voice_name) if voice_name else "",
             "voice_is_pt_br": is_valid_pt_br_voice(voice_name),
         }

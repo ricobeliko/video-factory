@@ -205,7 +205,7 @@ class TestSceneRenderPerformanceTiming(unittest.TestCase):
 
 
 class TestStreamCopyConcat(unittest.TestCase):
-    """Testes para concat stream-copy e fallback para transcode."""
+    """Testes para concat stream-copy, validação de mídia via probe e fallback para transcode."""
 
     def setUp(self):
         self.test_dir = tempfile.mkdtemp(prefix="stream_copy_test_")
@@ -218,12 +218,22 @@ class TestStreamCopyConcat(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
+    @patch("app.services.video.probe_media")
     @patch("app.services.video.logger.info")
     @patch("app.services.video.subprocess.run")
-    def test_stream_copy_succeeds_and_logs_stream_copy_mode(self, mock_run, mock_logger_info):
+    def test_stream_copy_rc0_valid_probe_succeeds_as_stream_copy(
+        self, mock_run, mock_logger_info, mock_probe
+    ):
+        """Cenário 1: rc=0 + arquivo não vazio + probe válido com video stream -> STREAM_COPY."""
+        mock_probe.return_value = {
+            "valid": True,
+            "video_streams": [{"codec_type": "video", "width": 1080, "height": 1920}],
+            "audio_streams": [],
+        }
+
         def fake_run(command, capture_output, text, check):
             if "-c" in command and command[command.index("-c") + 1] == "copy":
-                Path(self.output_file).write_bytes(b"concatenated stream copy")
+                Path(self.output_file).write_bytes(b"concatenated stream copy data")
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             return types.SimpleNamespace(returncode=1, stdout="", stderr="unexpected transcode")
 
@@ -239,6 +249,7 @@ class TestStreamCopyConcat(unittest.TestCase):
         )
 
         self.assertEqual(codec_result, "copy")
+        mock_probe.assert_called_once_with(self.output_file)
         first_call_cmd = mock_run.call_args_list[0].args[0]
         self.assertIn("-c", first_call_cmd)
         self.assertEqual(first_call_cmd[first_call_cmd.index("-c") + 1], "copy")
@@ -246,9 +257,91 @@ class TestStreamCopyConcat(unittest.TestCase):
         info_logs = [call.args[0] for call in mock_logger_info.call_args_list if call.args]
         self.assertTrue(any("CONCAT_MODE=STREAM_COPY" in str(log) for log in info_logs))
 
+    @patch("app.services.video.probe_media")
+    @patch("app.services.video.logger.warning")
+    @patch("app.services.video.subprocess.run")
+    def test_stream_copy_rc0_invalid_probe_triggers_transcode_fallback(
+        self, mock_run, mock_logger_warn, mock_probe
+    ):
+        """Cenário 2: rc=0 + arquivo não vazio + probe inválido -> TRANSCODE_FALLBACK."""
+        # Probe indica mídia inválida ou corrompida
+        mock_probe.return_value = {
+            "valid": False,
+            "error_code": "FFPROBE_PARSE_ERROR",
+            "error_message": "corrupted stream headers",
+            "video_streams": [],
+        }
+
+        def fake_run(command, capture_output, text, check):
+            if "-c" in command and command[command.index("-c") + 1] == "copy":
+                Path(self.output_file).write_bytes(b"corrupted copy data")
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            # Fallback de transcode escreve arquivo final válido
+            Path(self.output_file).write_bytes(b"transcoded video")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+
+        codec_result = video.concat_video_clips_with_ffmpeg(
+            clip_files=[self.clip1, self.clip2],
+            output_file=self.output_file,
+            threads=2,
+            output_dir=self.test_dir,
+            max_duration=10.0,
+            allow_stream_copy=True,
+        )
+
+        self.assertIn(codec_result, ["libx264", video._DEFAULT_VIDEO_CODEC])
+        # Primeiro comando foi stream-copy, segundo comando foi transcode fallback
+        self.assertEqual(len(mock_run.call_args_list), 2)
+        first_cmd = mock_run.call_args_list[0].args[0]
+        self.assertEqual(first_cmd[first_cmd.index("-c") + 1], "copy")
+        second_cmd = mock_run.call_args_list[1].args[0]
+        self.assertIn("-c:v", second_cmd)
+
+        # Log emitido deve ser TRANSCODE_FALLBACK
+        warn_logs = [call.args[0] for call in mock_logger_warn.call_args_list if call.args]
+        self.assertTrue(any("CONCAT_MODE=TRANSCODE_FALLBACK" in str(log) for log in warn_logs))
+
+    @patch("app.services.video.probe_media")
+    @patch("app.services.video.logger.warning")
+    @patch("app.services.video.subprocess.run")
+    def test_stream_copy_rc0_no_video_stream_triggers_transcode_fallback(
+        self, mock_run, mock_logger_warn, mock_probe
+    ):
+        """Cenário 3: rc=0 + arquivo não vazio + probe válido mas sem video streams -> TRANSCODE_FALLBACK."""
+        mock_probe.return_value = {
+            "valid": True,
+            "video_streams": [],
+            "audio_streams": [{"codec_type": "audio"}],
+        }
+
+        def fake_run(command, capture_output, text, check):
+            if "-c" in command and command[command.index("-c") + 1] == "copy":
+                Path(self.output_file).write_bytes(b"audio only data")
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            Path(self.output_file).write_bytes(b"transcoded video")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = fake_run
+
+        codec_result = video.concat_video_clips_with_ffmpeg(
+            clip_files=[self.clip1, self.clip2],
+            output_file=self.output_file,
+            threads=2,
+            output_dir=self.test_dir,
+            max_duration=10.0,
+            allow_stream_copy=True,
+        )
+
+        self.assertIn(codec_result, ["libx264", video._DEFAULT_VIDEO_CODEC])
+        warn_logs = [call.args[0] for call in mock_logger_warn.call_args_list if call.args]
+        self.assertTrue(any("CONCAT_MODE=TRANSCODE_FALLBACK" in str(log) for log in warn_logs))
+
     @patch("app.services.video.logger.warning")
     @patch("app.services.video.subprocess.run")
     def test_stream_copy_fails_and_falls_back_to_transcode(self, mock_run, mock_logger_warn):
+        """Cenário 4: rc!=0 no stream copy -> TRANSCODE_FALLBACK."""
         def fake_run(command, capture_output, text, check):
             if "-c" in command and command[command.index("-c") + 1] == "copy":
                 return types.SimpleNamespace(returncode=1, stdout="", stderr="stream copy error: incompatible codec")
@@ -275,17 +368,17 @@ class TestStreamCopyConcat(unittest.TestCase):
 
         warn_logs = [call.args[0] for call in mock_logger_warn.call_args_list if call.args]
         self.assertTrue(any("CONCAT_MODE=TRANSCODE_FALLBACK" in str(log) for log in warn_logs))
+
     @patch("app.services.video.logger.warning")
     @patch("app.services.video.subprocess.run")
     def test_stream_copy_zero_byte_output_triggers_transcode_fallback(
         self, mock_run, mock_logger_warn
     ):
+        """Cenário 5: rc=0 mas arquivo de 0 bytes -> TRANSCODE_FALLBACK."""
         def fake_run(command, capture_output, text, check):
             if "-c" in command and command[command.index("-c") + 1] == "copy":
-                # Cria arquivo de 0 bytes (corrompido / vazio)
                 Path(self.output_file).write_bytes(b"")
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-            # Transcode fallback escreve v?lido
             Path(self.output_file).write_bytes(b"transcoded output")
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -301,14 +394,13 @@ class TestStreamCopyConcat(unittest.TestCase):
         )
 
         self.assertIn(codec_result, ["libx264", video._DEFAULT_VIDEO_CODEC])
-        # Arquivo final deve conter o resultado do transcode
         self.assertEqual(Path(self.output_file).read_bytes(), b"transcoded output")
         warn_logs = [call.args[0] for call in mock_logger_warn.call_args_list if call.args]
         self.assertTrue(any("CONCAT_MODE=TRANSCODE_FALLBACK" in str(log) for log in warn_logs))
 
-
     @patch("app.services.video.subprocess.run")
     def test_legacy_mode_does_not_attempt_stream_copy(self, mock_run):
+        """Cenário 6: Modo legado não tenta stream copy."""
         def fake_run(command, capture_output, text, check):
             Path(self.output_file).write_bytes(b"transcoded video")
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")

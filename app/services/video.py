@@ -41,6 +41,7 @@ from app.models.schema import (
     VideoTransitionMode,
 )
 from app.services import bgm as bgm_service
+from app.services.media_quality import probe_media
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
@@ -523,8 +524,21 @@ def concat_video_clips_with_ffmpeg(
         if not os.path.exists(target_file):
             return False
         try:
-            return os.path.getsize(target_file) > 0
+            if os.path.getsize(target_file) <= 0:
+                return False
         except OSError:
+            return False
+
+        try:
+            probe_info = probe_media(target_file)
+            if not probe_info or not probe_info.get("valid"):
+                return False
+            video_streams = probe_info.get("video_streams") or []
+            if not video_streams:
+                return False
+            return True
+        except Exception as probe_exc:
+            logger.warning(f"failed to probe stream copy output {target_file}: {probe_exc}")
             return False
 
     def build_command(codec: str) -> list[str]:

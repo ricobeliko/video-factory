@@ -1183,6 +1183,10 @@ def generate_final_videos(
                 f"SCENE_RENDER_PREP_SECONDS={scene_render_timings.get('SCENE_RENDER_PREP_SECONDS', 0.0):.3f}s "
                 f"SCENE_RENDER_CLIPS_SECONDS={scene_render_timings.get('SCENE_RENDER_CLIPS_SECONDS', 0.0):.3f}s "
                 f"CONCAT_SECONDS={scene_render_timings.get('CONCAT_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_PREP_SECONDS={scene_render_timings.get('FINAL_RENDER_PREP_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_AUDIO_SECONDS={scene_render_timings.get('FINAL_RENDER_AUDIO_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_SUBTITLE_SECONDS={scene_render_timings.get('FINAL_RENDER_SUBTITLE_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_ENCODE_SECONDS={scene_render_timings.get('FINAL_RENDER_ENCODE_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_SECONDS={final_render_seconds:.3f}s "
                 f"TOTAL_RENDER_SECONDS={total_render_seconds:.3f}s"
             )

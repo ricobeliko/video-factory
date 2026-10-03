@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from time import perf_counter
 import unicodedata
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
@@ -493,11 +494,38 @@ def concat_video_clips_with_ffmpeg(
     threads: int,
     output_dir: str,
     max_duration: float | None = None,
+    allow_stream_copy: bool = False,
 ):
     concat_list_file = os.path.join(output_dir, "ffmpeg-concat-list.txt")
     with open(concat_list_file, "w", encoding="utf-8") as fp:
         for clip_file in clip_files:
             fp.write(f"file '{_format_ffmpeg_concat_path(clip_file)}'\n")
+
+    def build_stream_copy_command() -> list[str]:
+        command = [
+            utils.get_ffmpeg_binary(),
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_file,
+            "-c",
+            "copy",
+        ]
+        if max_duration is not None and max_duration > 0:
+            command.extend(["-t", f"{max_duration:.3f}"])
+        command.append(output_file)
+        return command
+
+    def validate_stream_copy_output(target_file: str) -> bool:
+        if not os.path.exists(target_file):
+            return False
+        try:
+            return os.path.getsize(target_file) > 0
+        except OSError:
+            return False
 
     def build_command(codec: str) -> list[str]:
         command = [
@@ -532,6 +560,32 @@ def concat_video_clips_with_ffmpeg(
         return codec
 
     try:
+        if allow_stream_copy:
+            try:
+                stream_copy_cmd = build_stream_copy_command()
+                res = _run_concat_with_heartbeat(stream_copy_cmd, output_file)
+                if res.returncode == 0 and validate_stream_copy_output(output_file):
+                    logger.info("[SCENE_RENDER] CONCAT_MODE=STREAM_COPY")
+                    return "copy"
+                err_msg = (res.stderr or res.stdout or "stream-copy output validation failed").strip()
+                logger.warning(
+                    f"[SCENE_RENDER] CONCAT_MODE=TRANSCODE_FALLBACK (stream-copy failed: rc={res.returncode}, error={err_msg})"
+                )
+                if os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                    except OSError:
+                        pass
+            except Exception as stream_exc:
+                logger.warning(
+                    f"[SCENE_RENDER] CONCAT_MODE=TRANSCODE_FALLBACK (stream-copy exception: {stream_exc})"
+                )
+                if os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                    except OSError:
+                        pass
+
         effective_codec = _get_effective_video_codec()
         try:
             return run_concat(effective_codec)
@@ -764,7 +818,9 @@ def combine_videos(
     source_groups: dict[str, str] | None = None,
     used_video_paths: List[str] | None = None,
     scene_clip_instructions: List[Any] | None = None,
+    render_timings: dict[str, float] | None = None,
 ) -> str:
+    t_prep_start = perf_counter()
     audio_clip = AudioFileClip(audio_file)
     try:
         # 这里只需要读取旁白音频时长来决定素材视频拼接长度；后续不会再使用
@@ -816,6 +872,12 @@ def combine_videos(
         # apenas a ÚLTIMA cena absorve o residual para garantir cobertura completa do áudio.
         residual_margin = max(0.0, required_video_duration - total_instructions_duration)
 
+        scene_render_prep_seconds = perf_counter() - t_prep_start
+        logger.info(f"[SCENE_RENDER][TIMING] SCENE_RENDER_PREP_SECONDS={scene_render_prep_seconds:.3f}")
+        if render_timings is not None:
+            render_timings["SCENE_RENDER_PREP_SECONDS"] = scene_render_prep_seconds
+
+        t_clips_start = perf_counter()
         for idx, inst in enumerate(sorted_instructions):
             scene_idx = getattr(inst, "scene_index", inst.get("scene_index", idx + 1) if isinstance(inst, dict) else idx + 1)
             mat_path = getattr(inst, "material_path", inst.get("material_path", "") if isinstance(inst, dict) else "")
@@ -896,6 +958,7 @@ def combine_videos(
                         codec=_get_configured_video_codec(),
                         logger=None,
                         fps=fps,
+                        threads=threads or 2,
                     )
                     clip_duration_saved = clip.duration
                     close_clip(clip)
@@ -943,6 +1006,11 @@ def combine_videos(
                 f"SCENE_RENDER_FAILURE: processed scene indexes {processed_indexes} do not match expected {expected_indexes}",
                 reason_code="SCENE_RENDER_FAILURE",
             )
+
+        scene_render_clips_seconds = perf_counter() - t_clips_start
+        logger.info(f"[SCENE_RENDER][TIMING] SCENE_RENDER_CLIPS_SECONDS={scene_render_clips_seconds:.3f}")
+        if render_timings is not None:
+            render_timings["SCENE_RENDER_CLIPS_SECONDS"] = scene_render_clips_seconds
     else:
         # Fluxo legado (inalterado)
         subclipped_items = []
@@ -1123,13 +1191,20 @@ def combine_videos(
 
     clip_files = [clip.file_path for clip in processed_clips]
     logger.info(f"concatenating {len(clip_files)} clips with ffmpeg")
+    t_concat_start = perf_counter()
     concat_video_clips_with_ffmpeg(
         clip_files=clip_files,
         output_file=combined_video_path,
         threads=threads,
         output_dir=output_dir,
         max_duration=audio_duration,
+        allow_stream_copy=bool(scene_clip_instructions),
     )
+    concat_seconds = perf_counter() - t_concat_start
+    if scene_clip_instructions:
+        logger.info(f"[SCENE_RENDER][TIMING] CONCAT_SECONDS={concat_seconds:.3f}")
+        if render_timings is not None:
+            render_timings["CONCAT_SECONDS"] = concat_seconds
     if used_video_paths is not None:
         # Exclude safety-margin clips that FFmpeg trims entirely from the output.
         elapsed = 0.0
@@ -1379,6 +1454,7 @@ def generate_video(
     output_file: str,
     params: VideoParams,
     bgm_file_override: str | None = None,
+    render_timings: dict[str, float] | None = None,
 ) -> bool:
     """
     合成最终视频，并返回本次背景音乐处理是否成功。
@@ -1387,6 +1463,7 @@ def generate_video(
     BGM 但加载、特效或混合失败时返回 False。即使 BGM 失败仍会继续输出只有
     旁白的视频，让任务编排层决定是否向用户展示降级警告。
     """
+    t_final_start = perf_counter()
     aspect = VideoAspect(params.video_aspect)
     video_width, video_height = aspect.to_resolution()
 
@@ -1710,6 +1787,11 @@ def generate_video(
             logger=None,
             fps=fps,
         )
+        final_render_seconds = perf_counter() - t_final_start
+        if getattr(params, "scene_based_generation_enabled", False):
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+        if render_timings is not None:
+            render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
         return bgm_mix_succeeded
 
 

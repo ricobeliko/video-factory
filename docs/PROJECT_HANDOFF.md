@@ -3,8 +3,8 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4 — Scene-Based Video Generation`
-- **ACTIVE_BRANCH** = `feat/v16-4-scene-based-video-generation`
+- **ACTIVE_PHASE** = `V16.4.1 — Scene Render Performance Hardening`
+- **ACTIVE_BRANCH** = `perf/v16-4-1-scene-render-performance`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -16,7 +16,9 @@
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
 - **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
-- **V16.4 Scene-Based Video Generation** = ACTIVE (P1)
+- **V16.4 Scene-Based Video Generation** = PRODUCTION HOMOLOGATED
+- **V16.4.1 Scene Render Performance Hardening** = ACTIVE
+- **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1083,9 +1085,9 @@ Entregas da Fase V16.3:
 
 ---
 
-## 28. V16.4 — Scene-Based Video Generation (Fase Ativa Atual)
+## 28. V16.4 — Scene-Based Video Generation (PRODUCTION HOMOLOGATED)
 
-**Status: 🚀 DEV COMPLETED / READY FOR PR (02/10/2026)**
+**Status: ✅ PRODUCTION HOMOLOGATED (02/10/2026)**
 - **Validação:** 19 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
 - **Regra Fundamental:** `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
 
@@ -1114,3 +1116,26 @@ Arquitetura e Contratos:
    - Modo autônomo define `scene_based_generation_enabled=True`.
    - Modo manual preserva `scene_based_generation_enabled=False` por padrão.
    - Não altera pipelines de legendas (V16.2) nem o Final Media Quality Gate (V16.3).
+
+## 29. V16.4.1 — Scene Render Performance Hardening (Fase Ativa Atual)
+
+**Status: 🚀 ACTIVE (02/10/2026)**
+- **Branch:** `perf/v16-4-1-scene-render-performance`
+- **Validação:** 8 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
+
+Objetivo da Fase V16.4.1A:
+Instrumentação completa e aceleração da renderização de vídeos orientada a cenas, eliminando transcode redundante na concatenação de clipes normalizados e propagando threads de processamento.
+
+Entregas V16.4.1A:
+1. **Instrumentação com `perf_counter`:**
+   - `SCENE_RENDER_PREP_SECONDS`: preparação de instrução e cálculo de duração/residual.
+   - `SCENE_RENDER_CLIPS_SECONDS`: renderização dos clipes individuais de cena.
+   - `CONCAT_SECONDS`: concatenação dos clipes da timeline.
+   - `FINAL_RENDER_SECONDS`: composição final com legenda, presenter e áudio/BGM.
+   - `TOTAL_RENDER_SECONDS`: duração ponta a ponta da renderização por vídeo.
+2. **Concatenação Stream-Copy:**
+   - Tentativa automática com `-c copy` para clipes scene-based normalizados.
+   - Validação de saída com fallback determinístico para transcode (`-c:v libx264`).
+   - Logs explícitos: `CONCAT_MODE=STREAM_COPY` ou `CONCAT_MODE=TRANSCODE_FALLBACK`.
+3. **Propagação de `threads`:**
+   - Parâmetro `threads` propagado corretamente para as escritas de vídeo em `combine_videos`.

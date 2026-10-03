@@ -5,6 +5,7 @@ import re
 import socket
 import threading
 import time
+from time import perf_counter
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from functools import partial
 from os import path
@@ -1062,6 +1063,8 @@ def generate_final_videos(
     _progress = 50
     for i in range(params.video_count):
         index = i + 1
+        t_total_start = perf_counter()
+        scene_render_timings: dict[str, float] = {}
         combined_video_path = path.join(
             utils.task_dir(task_id), f"combined-{index}.mp4"
         )
@@ -1087,6 +1090,7 @@ def generate_final_videos(
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
             scene_clip_instructions=scene_clip_instructions,
+            render_timings=scene_render_timings,
             **batch_options,
         )
         if allocate_batch_materials:
@@ -1155,6 +1159,7 @@ def generate_final_videos(
                 return [], [], [{"code": "subtitle_required_invalid"}]
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
+        t_final_start = perf_counter()
         bgm_mix_succeeded = video.generate_video(
             video_path=combined_video_path,
             audio_path=audio_file,
@@ -1162,7 +1167,32 @@ def generate_final_videos(
             output_file=final_video_path,
             params=params,
             bgm_file_override=bgm_file_override,
+            render_timings=scene_render_timings,
         )
+        final_render_seconds = perf_counter() - t_final_start
+        total_render_seconds = perf_counter() - t_total_start
+        scene_render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+        scene_render_timings["TOTAL_RENDER_SECONDS"] = total_render_seconds
+
+        is_scene_mode = bool(scene_clip_instructions or getattr(params, "scene_based_generation_enabled", False))
+        if is_scene_mode:
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] TOTAL_RENDER_SECONDS={total_render_seconds:.3f}")
+            logger.info(
+                f"[SCENE_RENDER][TIMING_SUMMARY] video_index={index} "
+                f"SCENE_RENDER_PREP_SECONDS={scene_render_timings.get('SCENE_RENDER_PREP_SECONDS', 0.0):.3f}s "
+                f"SCENE_RENDER_CLIPS_SECONDS={scene_render_timings.get('SCENE_RENDER_CLIPS_SECONDS', 0.0):.3f}s "
+                f"CONCAT_SECONDS={scene_render_timings.get('CONCAT_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_SECONDS={final_render_seconds:.3f}s "
+                f"TOTAL_RENDER_SECONDS={total_render_seconds:.3f}s"
+            )
+            try:
+                task_artifacts.patch_script_data(
+                    task_id,
+                    scene_render_timings=scene_render_timings,
+                )
+            except Exception as patch_exc:
+                logger.warning(f"failed to patch scene_render_timings: {patch_exc}")
         if (
             video_music_provider is not None
             and bgm_file_override

@@ -13,8 +13,8 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4 — Scene-Based Video Generation`
-- **ACTIVE_BRANCH** = `feat/v16-4-scene-based-video-generation`
+- **ACTIVE_PHASE** = `V16.4.1 — Scene Render Performance Hardening`
+- **ACTIVE_BRANCH** = `perf/v16-4-1-scene-render-performance`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -27,7 +27,9 @@
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
 - **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
-- **V16.4 Scene-Based Video Generation** = ACTIVE (P1)
+- **V16.4 Scene-Based Video Generation** = PRODUCTION HOMOLOGATED
+- **V16.4.1 Scene Render Performance Hardening** = ACTIVE
+- **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -805,7 +807,7 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem dependências de bibliotecas de Computer Vision.
 
 ## V16.4 — Scene-Based Video Generation
-- **Status:** 🚀 DEV COMPLETED / READY FOR PR
+- **Status:** ✅ PRODUCTION HOMOLOGATED
 - **Validação:** 19 testes PASS em `test/services/test_v16_4_scene_based_video_generation.py`
 - **Priority:** P1
 - **Regra Fundamental:** `AUTONOMOUS_SCENE_VISUALS_MUST_FOLLOW_SCRIPT_ORDER = REQUIRED`
@@ -824,8 +826,26 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem geração de imagem/vídeo por IA (V16.7/V16.8).
   - Sem OCR ou classificação visual de frames.
 
+## V16.4.1 — Scene Render Performance Hardening
+- **Status:** 🚀 ACTIVE
+- **Priority:** P1
+- **Branch:** `perf/v16-4-1-scene-render-performance`
+- **Validação:** 8 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
+- **Objetivo:** Instrumentar e acelerar a pipeline de renderização orientada a cenas sem alterar codecs, filtros ou infraestrutura externa.
+- **Entregas V16.4.1A:**
+  - Instrumentação com `perf_counter` para `SCENE_RENDER_PREP_SECONDS`, `SCENE_RENDER_CLIPS_SECONDS`, `CONCAT_SECONDS`, `FINAL_RENDER_SECONDS` e `TOTAL_RENDER_SECONDS`.
+  - Concatenação stream-copy no caminho scene-based (`-c copy`) com validação de saída e fallback automático para transcode (`CONCAT_MODE=STREAM_COPY` ou `CONCAT_MODE=TRANSCODE_FALLBACK`).
+  - Propagação correta de `threads` nas escritas scene-based em `combine_videos`.
+- **Limites e Escopo (O que NÃO é feito em V16.4.1A):**
+  - Sem ThreadPoolExecutor
+  - Sem libass/ASS
+  - Sem alteração de resolução/fps/bitrate
+  - Sem V16.5
+  - Sem API real
+  - Sem produção / PC FORTE
+
 ## V16.5 — Visual Matching v2
-- **Status:** 📋 PLANNED
+- **Status:** 📋 NOT STARTED
 - **Priority:** P1
 
 ## V16.6 — Subtitle Style System

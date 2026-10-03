@@ -1519,21 +1519,19 @@ def _convert_subtitles_to_ass(
         outline = max(0, int(params.stroke_width))
         font_size = int(params.font_size)
 
-        if params.subtitle_position == "bottom":
+        pos = getattr(params, "subtitle_position", "bottom")
+        if pos in ("bottom", None, ""):
             alignment = 2
             margin_v = max(10, int(video_height * 0.05))
-        elif params.subtitle_position == "top":
+        elif pos == "top":
             alignment = 8
             margin_v = max(10, int(video_height * 0.05))
-        elif params.subtitle_position in ("two_thirds_bottom", "two_thirds", "2/3_bottom"):
-            alignment = 8
-            margin_v = max(10, int(video_height / 3.0))
-        elif params.subtitle_position == "custom":
-            alignment = 8
-            margin_v = max(10, int(video_height * (params.custom_position / 100.0)))
-        else:
+        elif pos == "center":
             alignment = 5
             margin_v = 0
+        else:
+            # two_thirds e custom não devem ser convertidos para ASS
+            return False
 
         header = f"""[Script Info]
 ScriptType: v4.00+
@@ -1603,6 +1601,12 @@ def _can_use_ffmpeg_native_final_render(
         return False
 
     if bool(getattr(params, "rounded_subtitle_background", False)):
+        return False
+
+    # Fail-safe V16.4.1B: apenas bottom, top e center possuem equivalência direta com ASS.
+    # two_thirds e custom dependem da altura renderizada do clipe (clip_height) e devem usar MoviePy.
+    pos = getattr(params, "subtitle_position", "bottom")
+    if pos not in ("bottom", "top", "center", None, ""):
         return False
 
     if params.subtitle_enabled and subtitle_path and os.path.exists(subtitle_path) and os.path.getsize(subtitle_path) > 0:

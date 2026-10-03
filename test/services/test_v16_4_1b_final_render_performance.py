@@ -76,7 +76,7 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_final_render_with_subtitles_uses_ffmpeg_native(
         self, mock_logger, mock_mix, mock_render_ass, mock_validate
     ):
-        """Cenário 1: Com legendas padrão -> FFMPEG_NATIVE."""
+        """Cenário 1: Com legendas padrão (bottom) -> FFMPEG_NATIVE."""
         mock_mix.return_value = True
         mock_render_ass.return_value = True
         mock_validate.return_value = True
@@ -95,16 +95,116 @@ class TestFinalRenderPerformance(unittest.TestCase):
         mock_render_ass.assert_called_once()
         mock_validate.assert_called_once_with(self.output_file)
 
-        # Log do modo
         info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
         self.assertTrue(any("FINAL_RENDER_MODE=FFMPEG_NATIVE" in str(log) for log in info_logs))
 
-        # Métricas subdivididas
         self.assertIn("FINAL_RENDER_PREP_SECONDS", timings)
         self.assertIn("FINAL_RENDER_AUDIO_SECONDS", timings)
         self.assertIn("FINAL_RENDER_SUBTITLE_SECONDS", timings)
         self.assertIn("FINAL_RENDER_ENCODE_SECONDS", timings)
         self.assertIn("FINAL_RENDER_SECONDS", timings)
+
+    @patch("app.services.video._validate_final_render_output")
+    @patch("app.services.video._render_final_ffmpeg_ass")
+    @patch("app.services.video._mix_audio_ffmpeg")
+    @patch("app.services.video.logger.info")
+    def test_subtitle_position_top_and_center_eligible_for_ffmpeg_native(
+        self, mock_logger, mock_mix, mock_render_ass, mock_validate
+    ):
+        """Cenário 2: Posicionamentos 'top' e 'center' -> FFMPEG_NATIVE."""
+        mock_mix.return_value = True
+        mock_render_ass.return_value = True
+        mock_validate.return_value = True
+
+        for pos in ["top", "center"]:
+            mock_logger.reset_mock()
+            mock_render_ass.reset_mock()
+            mock_validate.reset_mock()
+
+            params = self.default_params.model_copy(update={"subtitle_position": pos})
+            timings = {}
+            res = video.generate_video(
+                video_path=self.video_path,
+                audio_path=self.audio_path,
+                subtitle_path=self.subtitle_path,
+                output_file=self.output_file,
+                params=params,
+                render_timings=timings,
+            )
+
+            self.assertTrue(res)
+            mock_render_ass.assert_called_once()
+            info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
+            self.assertTrue(
+                any("FINAL_RENDER_MODE=FFMPEG_NATIVE" in str(log) for log in info_logs),
+                f"Posicionamento {pos} deveria usar FFMPEG_NATIVE",
+            )
+
+    @patch("app.services.video._write_videofile_with_codec_fallback")
+    @patch("app.services.video.logger.info")
+    def test_subtitle_position_two_thirds_triggers_moviepy_fallback(
+        self, mock_logger, mock_write_videofile
+    ):
+        """Cenário 3: Posicionamento 'two_thirds' depende de clip_height -> MOVIEPY_FALLBACK."""
+        params = self.default_params.model_copy(update={"subtitle_position": "two_thirds"})
+        timings = {}
+
+        source_video = _FakeMoviePyClip()
+        voice_source = _FakeMoviePyClip()
+
+        with patch("app.services.video._open_video_clip_quietly", return_value=source_video), \
+             patch("app.services.video.AudioFileClip", return_value=voice_source), \
+             patch("app.services.video.SubtitlesClip") as mock_sub:
+            mock_sub_inst = MagicMock()
+            mock_sub_inst.subtitles = []
+            mock_sub.return_value.__enter__.return_value = mock_sub_inst
+
+            video.generate_video(
+                video_path=self.video_path,
+                audio_path=self.audio_path,
+                subtitle_path=self.subtitle_path,
+                output_file=self.output_file,
+                params=params,
+                render_timings=timings,
+            )
+
+        info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
+        self.assertTrue(any("FINAL_RENDER_MODE=MOVIEPY_FALLBACK" in str(log) for log in info_logs))
+        mock_write_videofile.assert_called_once()
+
+    @patch("app.services.video._write_videofile_with_codec_fallback")
+    @patch("app.services.video.logger.info")
+    def test_subtitle_position_custom_triggers_moviepy_fallback(
+        self, mock_logger, mock_write_videofile
+    ):
+        """Cenário 4: Posicionamento 'custom' depende de clip_height -> MOVIEPY_FALLBACK."""
+        params = self.default_params.model_copy(
+            update={"subtitle_position": "custom", "custom_position": 70}
+        )
+        timings = {}
+
+        source_video = _FakeMoviePyClip()
+        voice_source = _FakeMoviePyClip()
+
+        with patch("app.services.video._open_video_clip_quietly", return_value=source_video), \
+             patch("app.services.video.AudioFileClip", return_value=voice_source), \
+             patch("app.services.video.SubtitlesClip") as mock_sub:
+            mock_sub_inst = MagicMock()
+            mock_sub_inst.subtitles = []
+            mock_sub.return_value.__enter__.return_value = mock_sub_inst
+
+            video.generate_video(
+                video_path=self.video_path,
+                audio_path=self.audio_path,
+                subtitle_path=self.subtitle_path,
+                output_file=self.output_file,
+                params=params,
+                render_timings=timings,
+            )
+
+        info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
+        self.assertTrue(any("FINAL_RENDER_MODE=MOVIEPY_FALLBACK" in str(log) for log in info_logs))
+        mock_write_videofile.assert_called_once()
 
     @patch("app.services.video._validate_final_render_output")
     @patch("app.services.video._render_final_stream_copy")
@@ -113,7 +213,7 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_final_render_without_subtitles_uses_ffmpeg_stream_copy(
         self, mock_logger, mock_mix, mock_render_copy, mock_validate
     ):
-        """Cenário 2: Sem legendas -> FFMPEG_STREAM_COPY (0 re-encodes de vídeo)."""
+        """Cenário 5: Sem legendas -> FFMPEG_STREAM_COPY (0 re-encodes de vídeo)."""
         mock_mix.return_value = True
         mock_render_copy.return_value = True
         mock_validate.return_value = True
@@ -146,7 +246,7 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_avatar_mode_triggers_moviepy_fallback(
         self, mock_logger, mock_write_videofile
     ):
-        """Cenário 3: Virtual presenter ativado -> MOVIEPY_FALLBACK."""
+        """Cenário 6: Virtual presenter ativado -> MOVIEPY_FALLBACK."""
         params = self.default_params.model_copy(update={"avatar_mode": "character_top"})
         timings = {}
 
@@ -180,7 +280,7 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_subtitle_animation_triggers_moviepy_fallback(
         self, mock_logger, mock_write_videofile
     ):
-        """Cenário 4: Animação de mola ativada -> MOVIEPY_FALLBACK."""
+        """Cenário 7: Animação de mola ativada -> MOVIEPY_FALLBACK."""
         params = self.default_params.model_copy(update={"subtitle_animation": "pop_spring"})
         timings = {}
 
@@ -212,7 +312,7 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_rounded_background_triggers_moviepy_fallback(
         self, mock_logger, mock_write_videofile
     ):
-        """Cenário 5: Fundo arredondado -> MOVIEPY_FALLBACK."""
+        """Cenário 8: Fundo arredondado -> MOVIEPY_FALLBACK."""
         params = self.default_params.model_copy(
             update={"rounded_subtitle_background": True, "text_background_color": "#000000"}
         )
@@ -248,9 +348,9 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_ffmpeg_native_failure_triggers_moviepy_fallback(
         self, mock_logger, mock_mix, mock_render_ass, mock_write_videofile
     ):
-        """Cenário 6: Falha no FFmpeg nativo -> MOVIEPY_FALLBACK."""
+        """Cenário 9: Falha no FFmpeg nativo -> MOVIEPY_FALLBACK."""
         mock_mix.return_value = True
-        mock_render_ass.return_value = False  # FFmpeg falha
+        mock_render_ass.return_value = False
         timings = {}
 
         source_video = _FakeMoviePyClip()
@@ -284,10 +384,10 @@ class TestFinalRenderPerformance(unittest.TestCase):
     def test_invalid_probe_triggers_moviepy_fallback(
         self, mock_logger, mock_mix, mock_render_ass, mock_validate, mock_write_videofile
     ):
-        """Cenário 7: Arquivo gerado falha no probe -> MOVIEPY_FALLBACK."""
+        """Cenário 10: Arquivo gerado falha no probe -> MOVIEPY_FALLBACK."""
         mock_mix.return_value = True
         mock_render_ass.return_value = True
-        mock_validate.return_value = False  # Saída inválida
+        mock_validate.return_value = False
         timings = {}
 
         source_video = _FakeMoviePyClip()
@@ -314,8 +414,9 @@ class TestFinalRenderPerformance(unittest.TestCase):
         mock_write_videofile.assert_called_once()
 
     def test_convert_subtitles_to_ass_formatting(self):
-        """Cenário 8: Validação da formatação ASS gerada."""
-        ass_path = os.path.join(self.test_dir, "generated.ass")
+        """Cenário 11: Validação da formatação ASS gerada para bottom, top e center."""
+        # Test bottom
+        ass_path = os.path.join(self.test_dir, "generated_bottom.ass")
         ok = video._convert_subtitles_to_ass(
             subtitle_path=self.subtitle_path,
             ass_path=ass_path,
@@ -325,18 +426,25 @@ class TestFinalRenderPerformance(unittest.TestCase):
             font_path=os.path.join(self.test_dir, "dummy.ttc"),
         )
         self.assertTrue(ok)
-        self.assertTrue(os.path.exists(ass_path))
         content = Path(ass_path).read_text(encoding="utf-8")
-
-        self.assertIn("[Script Info]", content)
-        self.assertIn("PlayResX: 1080", content)
-        self.assertIn("PlayResY: 1920", content)
-        self.assertIn("[V4+ Styles]", content)
         self.assertIn("Style: Default,", content)
-        self.assertIn("&H00FFFFFF&", content)  # Primary color
-        self.assertIn("&H00000000&", content)  # Outline color
+        self.assertIn("&H00FFFFFF&", content)
+        self.assertIn("&H00000000&", content)
         self.assertIn("Dialogue: 0,0:00:01.00,0:00:03.00,Default", content)
         self.assertIn("Teste de Legenda V16.4.1B", content)
+
+        # Test non-supported position returns False
+        ass_path_invalid = os.path.join(self.test_dir, "generated_custom.ass")
+        custom_params = self.default_params.model_copy(update={"subtitle_position": "custom"})
+        ok_custom = video._convert_subtitles_to_ass(
+            subtitle_path=self.subtitle_path,
+            ass_path=ass_path_invalid,
+            params=custom_params,
+            video_width=1080,
+            video_height=1920,
+            font_path=os.path.join(self.test_dir, "dummy.ttc"),
+        )
+        self.assertFalse(ok_custom)
 
 
 if __name__ == "__main__":

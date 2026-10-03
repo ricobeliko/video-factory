@@ -13,8 +13,8 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1 — Scene Render Performance Hardening`
-- **ACTIVE_BRANCH** = `perf/v16-4-1-scene-render-performance`
+- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance`
+- **ACTIVE_BRANCH** = `perf/v16-4-1b-final-render`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -28,7 +28,8 @@
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
 - **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
 - **V16.4 Scene-Based Video Generation** = PRODUCTION HOMOLOGATED
-- **V16.4.1 Scene Render Performance Hardening** = ACTIVE
+- **V16.4.1A Scene Render Performance Hardening** = PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
+- **V16.4.1B Final Render Performance** = ACTIVE
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -827,22 +828,40 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem OCR ou classificação visual de frames.
 
 ## V16.4.1 — Scene Render Performance Hardening
-- **Status:** 🚀 ACTIVE
+
+### V16.4.1A — Scene Render Performance Hardening
+- **Status:** 🟢 PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
 - **Priority:** P1
-- **Branch:** `perf/v16-4-1-scene-render-performance`
-- **Validação:** 8 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
+- **Branch:** `perf/v16-4-1-scene-render-performance` (PR #41)
+- **Validação:** 10 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
 - **Objetivo:** Instrumentar e acelerar a pipeline de renderização orientada a cenas sem alterar codecs, filtros ou infraestrutura externa.
 - **Entregas V16.4.1A:**
   - Instrumentação com `perf_counter` para `SCENE_RENDER_PREP_SECONDS`, `SCENE_RENDER_CLIPS_SECONDS`, `CONCAT_SECONDS`, `FINAL_RENDER_SECONDS` e `TOTAL_RENDER_SECONDS`.
   - Concatenação stream-copy no caminho scene-based (`-c copy`) com validação de saída e fallback automático para transcode (`CONCAT_MODE=STREAM_COPY` ou `CONCAT_MODE=TRANSCODE_FALLBACK`).
   - Propagação correta de `threads` nas escritas scene-based em `combine_videos`.
-- **Limites e Escopo (O que NÃO é feito em V16.4.1A):**
-  - Sem ThreadPoolExecutor
-  - Sem libass/ASS
-  - Sem alteração de resolução/fps/bitrate
+
+### V16.4.1B — Final Render Performance
+- **Status:** 🚀 ACTIVE
+- **Priority:** P1
+- **Branch:** `perf/v16-4-1b-final-render`
+- **Validação:** 8 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py`
+- **Objetivo:** Otimizar exclusivamente a etapa final de renderização (`FINAL_RENDER`), que consumia ~21 min (64% do tempo total de render).
+- **Entregas V16.4.1B:**
+  - Diagnóstico pontual do gargalo de frame loop do MoviePy na composição de áudio e legendas.
+  - Subtitle burn-in nativo acelerado em C via FFmpeg libass (`FINAL_RENDER_MODE=FFMPEG_NATIVE`) mantendo parâmetros visuais idênticos (fonte, tamanho, cor, outline, quebra de linha `wrap_text` e posicionamento).
+  - Stream-copy direto via FFmpeg (`FINAL_RENDER_MODE=FFMPEG_STREAM_COPY`) quando legendas estão desabilitadas (0 re-encodes de vídeo, ~0.3s).
+  - Preservação integral do fallback MoviePy legado (`FINAL_RENDER_MODE=MOVIEPY_FALLBACK`) para apresentador virtual (`avatar_mode`), animações de mola (`subtitle_animation`), fundos customizados (`text_background_color`/`rounded_subtitle_background`) ou falhas de probe.
+  - Instrumentação detalhada de `FINAL_RENDER` com métricas subdivididas persistidas em `scene_render_timings`: `FINAL_RENDER_PREP_SECONDS`, `FINAL_RENDER_AUDIO_SECONDS`, `FINAL_RENDER_SUBTITLE_SECONDS`, `FINAL_RENDER_ENCODE_SECONDS`, `FINAL_RENDER_SECONDS`.
+  - Preservação total de resolução, fps, áudio, BGM, sincronização e Final Media Quality Gate.
+- **Limites e Escopo (O que NÃO é feito em V16.4.1B):**
+  - Sem ThreadPoolExecutor nas cenas
+  - Sem alteração de scene planner
+  - Sem alteração de material matching
+  - Sem alteração de resolução / fps / bitrate
+  - Sem mudança de codec default
+  - Sem tocar PC FORTE / produção
+  - Sem APIs reais
   - Sem V16.5
-  - Sem API real
-  - Sem produção / PC FORTE
 
 ## V16.5 — Visual Matching v2
 - **Status:** 📋 NOT STARTED

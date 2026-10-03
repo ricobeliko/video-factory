@@ -28,7 +28,7 @@ from moviepy import (
     concatenate_videoclips,
 )
 from moviepy.video.tools.subtitles import SubtitlesClip
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageColor
 
 from app.config import config
 from app.models import const
@@ -1461,6 +1461,334 @@ def subtitle_font_supports_text(font_path: str, text: str) -> bool:
     return _subtitle_font_supports_sample(font_path, sample)
 
 
+def _srt_timestamp_to_ass(ts: str) -> str:
+    """Converte timestamp SRT ('00:01:23,450') para formato ASS ('0:01:23.45')."""
+    ts = ts.strip().replace(",", ".")
+    parts = ts.split(":")
+    if len(parts) == 3:
+        h = int(parts[0])
+        m = parts[1]
+        s_ms = parts[2]
+        if "." in s_ms:
+            sec, ms = s_ms.split(".", 1)
+            cs = ms[:2].ljust(2, "0")
+            return f"{h}:{m}:{sec}.{cs}"
+        return f"{h}:{m}:{s_ms}.00"
+    return ts
+
+
+def _hex_to_ass_color(color_str: str, default: str = "&H00FFFFFF&") -> str:
+    """Converte cor hexadecimal (#RRGGBB) para o formato ASS (&HAABBGGRR&)."""
+    try:
+        rgb = ImageColor.getrgb(color_str)
+        return f"&H00{rgb[2]:02X}{rgb[1]:02X}{rgb[0]:02X}&"
+    except Exception:
+        return default
+
+
+def _convert_subtitles_to_ass(
+    subtitle_path: str,
+    ass_path: str,
+    params: VideoParams,
+    video_width: int,
+    video_height: int,
+    font_path: str,
+) -> bool:
+    """Converte legendas SRT para ASS preservando exatamente quebras de linha e estilo."""
+    try:
+        from app.services import subtitle as subtitle_service
+
+        subtitles = subtitle_service.file_to_subtitles(subtitle_path)
+        if not subtitles:
+            return False
+
+        font_family = "Arial"
+        wrap_font = font_path
+        if font_path and os.path.isfile(font_path):
+            try:
+                f = ImageFont.truetype(font_path, int(params.font_size))
+                font_family = f.getname()[0]
+            except Exception:
+                font_family = os.path.splitext(os.path.basename(font_path))[0]
+        else:
+            default_font = os.path.join(utils.font_dir(), "STHeitiMedium.ttc")
+            wrap_font = default_font if os.path.isfile(default_font) else "Arial"
+
+        primary_color = _hex_to_ass_color(params.text_fore_color, "&H00FFFFFF&")
+        outline_color = _hex_to_ass_color(params.stroke_color, "&H00000000&")
+        outline = max(0, int(params.stroke_width))
+        font_size = int(params.font_size)
+
+        if params.subtitle_position == "bottom":
+            alignment = 2
+            margin_v = max(10, int(video_height * 0.05))
+        elif params.subtitle_position == "top":
+            alignment = 8
+            margin_v = max(10, int(video_height * 0.05))
+        elif params.subtitle_position in ("two_thirds_bottom", "two_thirds", "2/3_bottom"):
+            alignment = 8
+            margin_v = max(10, int(video_height / 3.0))
+        elif params.subtitle_position == "custom":
+            alignment = 8
+            margin_v = max(10, int(video_height * (params.custom_position / 100.0)))
+        else:
+            alignment = 5
+            margin_v = 0
+
+        header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {video_width}
+PlayResY: {video_height}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_color},&H00000000,0,0,0,0,100,100,0,0,1,{outline},0,{alignment},20,20,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+        max_width = int(video_width * 0.9)
+        dialogue_lines = []
+        for _idx, times_str, text_item in subtitles:
+            if "-->" not in times_str:
+                continue
+            start_str, end_str = times_str.split("-->", 1)
+            start_ass = _srt_timestamp_to_ass(start_str)
+            end_ass = _srt_timestamp_to_ass(end_str)
+
+            try:
+                wrapped_txt, _ = wrap_text(
+                    text_item.strip(),
+                    max_width=max_width,
+                    font=wrap_font,
+                    fontsize=font_size,
+                )
+            except Exception:
+                wrapped_txt = text_item.strip()
+            dialogue_text = wrapped_txt.replace(chr(10), r"\N")
+            dialogue_lines.append(
+                f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{dialogue_text}"
+            )
+
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(header + "\n".join(dialogue_lines) + "\n")
+        return True
+    except Exception as e:
+        logger.warning(f"failed to convert subtitles to ASS: {e}")
+        return False
+
+
+def _can_use_ffmpeg_native_final_render(
+    params: VideoParams,
+    subtitle_path: str | None,
+    font_path: str,
+) -> bool:
+    """Verifica se a renderização final pode ser executada via FFmpeg nativo sem perda visual."""
+    if getattr(params, "avatar_mode", const.DEFAULT_AVATAR_MODE) not in (
+        const.AVATAR_MODE_NONE,
+        "",
+        None,
+    ):
+        return False
+
+    anim_type = getattr(params, "subtitle_animation", "none")
+    if anim_type in ("pop_spring", "spring", "pop"):
+        return False
+
+    bg_color = params.text_background_color
+    if isinstance(bg_color, bool):
+        bg_color = "#000000" if bg_color else None
+    if bg_color:
+        return False
+
+    if bool(getattr(params, "rounded_subtitle_background", False)):
+        return False
+
+    if params.subtitle_enabled and subtitle_path and os.path.exists(subtitle_path) and os.path.getsize(subtitle_path) > 0:
+        if font_path and not os.path.exists(font_path):
+            return False
+
+    return True
+
+
+def _mix_audio_ffmpeg(
+    voice_file: str,
+    bgm_file: str | None,
+    output_audio_file: str,
+    target_duration: float,
+    voice_volume: float = 1.0,
+    bgm_volume: float = 0.2,
+    loop_bgm: bool = True,
+    threads: int = 2,
+) -> bool:
+    """Mixagem de áudio (voz + BGM) usando FFmpeg nativo em sub-segundo."""
+    ffmpeg_exe = utils.get_ffmpeg_binary()
+    if not bgm_file or not os.path.exists(bgm_file) or bgm_volume <= 0:
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-i", os.path.abspath(voice_file),
+            "-filter:a", f"volume={max(0.0, float(voice_volume)):.2f}",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-threads", str(threads),
+            os.path.abspath(output_audio_file),
+        ]
+    else:
+        fade_start = max(0.0, float(target_duration) - 3.0)
+        v_vol = max(0.0, float(voice_volume))
+        b_vol = max(0.0, float(bgm_volume))
+        filter_str = (
+            f"[0:a]volume={v_vol:.2f}[v];"
+            f"[1:a]volume={b_vol:.2f},afade=t=out:st={fade_start:.2f}:d=3[b];"
+            f"[v][b]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+        )
+        cmd = [ffmpeg_exe, "-y", "-i", os.path.abspath(voice_file)]
+        if loop_bgm:
+            cmd.extend(["-stream_loop", "-1"])
+        cmd.extend([
+            "-i", os.path.abspath(bgm_file),
+            "-filter_complex", filter_str,
+            "-map", "[aout]",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-t", f"{target_duration:.3f}",
+            "-threads", str(threads),
+            os.path.abspath(output_audio_file),
+        ])
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.warning(f"FFmpeg audio mix failed (rc={res.returncode}): {res.stderr[-300:]}")
+            return False
+        return os.path.exists(output_audio_file) and os.path.getsize(output_audio_file) > 0
+    except Exception as exc:
+        logger.warning(f"FFmpeg audio mix exception: {exc}")
+        return False
+
+
+def _render_final_stream_copy(
+    video_path: str,
+    audio_path: str,
+    output_file: str,
+    threads: int = 2,
+) -> bool:
+    """Muxing direto sem re-encode de vídeo quando não há legendas nem overlay."""
+    ffmpeg_exe = utils.get_ffmpeg_binary()
+    output_dir = os.path.dirname(os.path.abspath(output_file))
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i", os.path.abspath(video_path),
+        "-i", os.path.abspath(audio_path),
+        "-c:v", "copy",
+        "-c:a", "copy",
+        "-threads", str(threads),
+        "-shortest",
+        os.path.abspath(output_file),
+    ]
+    try:
+        res = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.warning(f"FFmpeg stream copy render failed (rc={res.returncode}): {res.stderr[-300:]}")
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"FFmpeg stream copy render exception: {e}")
+        return False
+
+
+def _render_final_ffmpeg_ass(
+    video_path: str,
+    audio_path: str,
+    ass_path: str,
+    output_file: str,
+    threads: int = 2,
+    fps: int = 30,
+) -> bool:
+    """Renderização acelerada de legendas via FFmpeg libass nativo."""
+    ffmpeg_exe = utils.get_ffmpeg_binary()
+    output_dir = os.path.dirname(os.path.abspath(output_file))
+    ass_rel = os.path.relpath(ass_path, output_dir).replace("\\", "/")
+    fdir_escaped = utils.font_dir().replace(os.sep, "/").replace(":", r"\\:")
+
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i", os.path.abspath(video_path),
+        "-i", os.path.abspath(audio_path),
+        "-vf", f"ass=filename='{ass_rel}':fontsdir={fdir_escaped}",
+        "-c:v", _get_configured_video_codec(),
+        "-pix_fmt", "yuv420p",
+        "-r", str(fps),
+        "-c:a", "copy",
+        "-threads", str(threads),
+        "-shortest",
+        os.path.abspath(output_file),
+    ]
+    try:
+        res = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.warning(f"FFmpeg native ASS render failed (rc={res.returncode}): {res.stderr[-300:]}")
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"FFmpeg native ASS render exception: {e}")
+        return False
+
+
+def _validate_final_render_output(output_file: str) -> bool:
+    """Valida integridade do arquivo final renderizado antes de aceitar."""
+    if not os.path.exists(output_file):
+        return False
+    try:
+        if os.path.getsize(output_file) <= 0:
+            return False
+    except OSError:
+        return False
+
+    try:
+        probe = probe_media(output_file)
+        if not probe or not probe.get("valid"):
+            if os.path.exists(output_file):
+                try:
+                    os.remove(output_file)
+                except OSError:
+                    pass
+            return False
+        video_streams = probe.get("video_streams") or []
+        audio_streams = probe.get("audio_streams") or []
+        if not video_streams or not audio_streams:
+            if os.path.exists(output_file):
+                try:
+                    os.remove(output_file)
+                except OSError:
+                    pass
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"failed to probe final render output: {e}")
+        if os.path.exists(output_file):
+            try:
+                os.remove(output_file)
+            except OSError:
+                pass
+        return False
+
+
+def _cleanup_temp_files(file_paths: list[str | None]) -> None:
+    """Remove arquivos temporários de forma silenciosa e segura."""
+    for fp in file_paths:
+        if fp and os.path.exists(fp):
+            try:
+                os.remove(fp)
+            except OSError:
+                pass
+
+
+
 def generate_video(
     video_path: str,
     audio_path: str,
@@ -1478,6 +1806,7 @@ def generate_video(
     旁白的视频，让任务编排层决定是否向用户展示降级警告。
     """
     t_final_start = perf_counter()
+    t_prep_start = perf_counter()
     aspect = VideoAspect(params.video_aspect)
     video_width, video_height = aspect.to_resolution()
 
@@ -1509,6 +1838,150 @@ def generate_video(
         if isinstance(params.text_background_color, bool):
             return "#000000" if params.text_background_color else None
         return params.text_background_color
+
+    prep_seconds = perf_counter() - t_prep_start
+
+    # V16.4.1B: Tentar render nativo acelerado por FFmpeg (Stream-copy ou ASS Burn-in)
+    can_native = _can_use_ffmpeg_native_final_render(params, subtitle_path, font_path)
+    temp_audio_file = os.path.join(output_dir, f"temp-audio-{os.path.basename(output_file)}.m4a")
+    temp_ass_file = os.path.join(output_dir, f"temp-sub-{os.path.basename(output_file)}.ass")
+    native_rendered = False
+    bgm_mix_succeeded = True
+
+    audio_seconds = 0.0
+    subtitle_seconds = 0.0
+    encode_seconds = 0.0
+
+    if can_native:
+        t_audio_start = perf_counter()
+        bgm_enabled = bgm_service.should_use_bgm(
+            params.bgm_type, params.bgm_volume
+        )
+        if not bgm_enabled and params.bgm_type:
+            logger.info(
+                f"skipping background music because volume is not positive: "
+                f"type={params.bgm_type}, volume={params.bgm_volume}"
+            )
+
+        bgm_file = ""
+        if bgm_enabled:
+            bgm_file = (
+                bgm_file_override
+                if bgm_file_override is not None
+                else get_bgm_file(
+                    bgm_type=params.bgm_type,
+                    bgm_file=params.bgm_file,
+                )
+            )
+
+        target_duration = 0.0
+        try:
+            probe_a = probe_media(audio_path)
+            if probe_a and probe_a.get("valid"):
+                target_duration = float(probe_a.get("format_duration") or 0.0)
+        except Exception:
+            target_duration = 0.0
+
+        if target_duration <= 0.0:
+            try:
+                probe_v = probe_media(video_path)
+                if probe_v and probe_v.get("valid"):
+                    target_duration = float(probe_v.get("format_duration") or 0.0)
+            except Exception:
+                target_duration = 0.0
+
+        loop_bgm = (bgm_file_override is None)
+        audio_ok = _mix_audio_ffmpeg(
+            voice_file=audio_path,
+            bgm_file=bgm_file if bgm_file else None,
+            output_audio_file=temp_audio_file,
+            target_duration=target_duration if target_duration > 0 else 60.0,
+            voice_volume=params.voice_volume,
+            bgm_volume=params.bgm_volume,
+            loop_bgm=loop_bgm,
+            threads=params.n_threads or 2,
+        )
+        if not audio_ok and bgm_file:
+            bgm_mix_succeeded = False
+            audio_ok = _mix_audio_ffmpeg(
+                voice_file=audio_path,
+                bgm_file=None,
+                output_audio_file=temp_audio_file,
+                target_duration=target_duration if target_duration > 0 else 60.0,
+                voice_volume=params.voice_volume,
+                threads=params.n_threads or 2,
+            )
+
+        audio_seconds = perf_counter() - t_audio_start
+
+        if audio_ok:
+            t_sub_start = perf_counter()
+            has_subtitles = bool(
+                params.subtitle_enabled
+                and subtitle_path
+                and os.path.exists(subtitle_path)
+                and os.path.getsize(subtitle_path) > 0
+            )
+
+            ass_ok = True
+            if has_subtitles:
+                ass_ok = _convert_subtitles_to_ass(
+                    subtitle_path=subtitle_path,
+                    ass_path=temp_ass_file,
+                    params=params,
+                    video_width=video_width,
+                    video_height=video_height,
+                    font_path=font_path,
+                )
+            subtitle_seconds = perf_counter() - t_sub_start
+
+            if ass_ok:
+                t_encode_start = perf_counter()
+                if not has_subtitles:
+                    copy_ok = _render_final_stream_copy(
+                        video_path=video_path,
+                        audio_path=temp_audio_file,
+                        output_file=output_file,
+                        threads=params.n_threads or 2,
+                    )
+                    if copy_ok and _validate_final_render_output(output_file):
+                        encode_seconds = perf_counter() - t_encode_start
+                        native_rendered = True
+                        logger.info("FINAL_RENDER_MODE=FFMPEG_STREAM_COPY")
+                else:
+                    burn_ok = _render_final_ffmpeg_ass(
+                        video_path=video_path,
+                        audio_path=temp_audio_file,
+                        ass_path=temp_ass_file,
+                        output_file=output_file,
+                        threads=params.n_threads or 2,
+                        fps=fps,
+                    )
+                    if burn_ok and _validate_final_render_output(output_file):
+                        encode_seconds = perf_counter() - t_encode_start
+                        native_rendered = True
+                        logger.info("FINAL_RENDER_MODE=FFMPEG_NATIVE")
+
+        if not native_rendered:
+            logger.warning("native FFmpeg final render failed or invalid; falling back to MoviePy")
+            _cleanup_temp_files([temp_audio_file, temp_ass_file, output_file])
+
+    if native_rendered:
+        final_render_seconds = perf_counter() - t_final_start
+        if getattr(params, "scene_based_generation_enabled", False):
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+        if render_timings is not None:
+            render_timings["FINAL_RENDER_PREP_SECONDS"] = prep_seconds
+            render_timings["FINAL_RENDER_AUDIO_SECONDS"] = audio_seconds
+            render_timings["FINAL_RENDER_SUBTITLE_SECONDS"] = subtitle_seconds
+            render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
+            render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+        _cleanup_temp_files([temp_audio_file, temp_ass_file])
+        return bgm_mix_succeeded
+
+    # Fallback MoviePy Legado
+    logger.info("FINAL_RENDER_MODE=MOVIEPY_FALLBACK")
+    t_encode_start = perf_counter()
 
     def create_text_clip(subtitle_item):
         params.font_size = int(params.font_size)
@@ -1802,10 +2275,16 @@ def generate_video(
             fps=fps,
         )
         final_render_seconds = perf_counter() - t_final_start
+        encode_seconds = perf_counter() - t_encode_start
         if getattr(params, "scene_based_generation_enabled", False):
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
         if render_timings is not None:
+            render_timings["FINAL_RENDER_PREP_SECONDS"] = prep_seconds
+            render_timings["FINAL_RENDER_AUDIO_SECONDS"] = audio_seconds
+            render_timings["FINAL_RENDER_SUBTITLE_SECONDS"] = subtitle_seconds
+            render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+        _cleanup_temp_files([temp_audio_file, temp_ass_file])
         return bgm_mix_succeeded
 
 

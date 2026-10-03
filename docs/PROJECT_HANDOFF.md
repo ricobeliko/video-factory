@@ -3,8 +3,8 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1 — Scene Render Performance Hardening`
-- **ACTIVE_BRANCH** = `perf/v16-4-1-scene-render-performance`
+- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance`
+- **ACTIVE_BRANCH** = `perf/v16-4-1b-final-render`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -17,7 +17,8 @@
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
 - **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
 - **V16.4 Scene-Based Video Generation** = PRODUCTION HOMOLOGATED
-- **V16.4.1 Scene Render Performance Hardening** = ACTIVE
+- **V16.4.1A Scene Render Performance Hardening** = PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
+- **V16.4.1B Final Render Performance** = ACTIVE
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1117,25 +1118,35 @@ Arquitetura e Contratos:
    - Modo manual preserva `scene_based_generation_enabled=False` por padrão.
    - Não altera pipelines de legendas (V16.2) nem o Final Media Quality Gate (V16.3).
 
-## 29. V16.4.1 — Scene Render Performance Hardening (Fase Ativa Atual)
+## 29. V16.4.1 — Scene Render Performance Hardening
 
-**Status: 🚀 ACTIVE (02/10/2026)**
-- **Branch:** `perf/v16-4-1-scene-render-performance`
-- **Validação:** 8 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
-
-Objetivo da Fase V16.4.1A:
-Instrumentação completa e aceleração da renderização de vídeos orientada a cenas, eliminando transcode redundante na concatenação de clipes normalizados e propagando threads de processamento.
+### V16.4.1A — Scene Render Performance Hardening
+- **Status:** 🟢 PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
+- **Branch:** `perf/v16-4-1-scene-render-performance` (PR #41)
+- **Validação:** 10 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
 
 Entregas V16.4.1A:
 1. **Instrumentação com `perf_counter`:**
-   - `SCENE_RENDER_PREP_SECONDS`: preparação de instrução e cálculo de duração/residual.
-   - `SCENE_RENDER_CLIPS_SECONDS`: renderização dos clipes individuais de cena.
-   - `CONCAT_SECONDS`: concatenação dos clipes da timeline.
-   - `FINAL_RENDER_SECONDS`: composição final com legenda, presenter e áudio/BGM.
-   - `TOTAL_RENDER_SECONDS`: duração ponta a ponta da renderização por vídeo.
+   - `SCENE_RENDER_PREP_SECONDS`, `SCENE_RENDER_CLIPS_SECONDS`, `CONCAT_SECONDS`, `FINAL_RENDER_SECONDS` e `TOTAL_RENDER_SECONDS`.
 2. **Concatenação Stream-Copy:**
    - Tentativa automática com `-c copy` para clipes scene-based normalizados.
    - Validação de saída com fallback determinístico para transcode (`-c:v libx264`).
    - Logs explícitos: `CONCAT_MODE=STREAM_COPY` ou `CONCAT_MODE=TRANSCODE_FALLBACK`.
 3. **Propagação de `threads`:**
    - Parâmetro `threads` propagado corretamente para as escritas de vídeo em `combine_videos`.
+
+### V16.4.1B — Final Render Performance (Fase Ativa Atual)
+- **Status:** 🚀 ACTIVE (03/10/2026)
+- **Branch:** `perf/v16-4-1b-final-render`
+- **Validação:** 8 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py`
+
+Objetivo da Fase V16.4.1B:
+Otimizar exclusivamente a etapa final de renderização (`FINAL_RENDER`), que consumia ~21 min (64% do tempo total de render).
+
+Entregas V16.4.1B:
+1. **Diagnóstico arquitetural do caminho real de `generate_video`:** identificação e eliminação de re-encodes desnecessários e loops em Python pelo MoviePy.
+2. **Subtitle burn-in nativo acelerado em C via FFmpeg libass:** (`FINAL_RENDER_MODE=FFMPEG_NATIVE`) mantendo parâmetros visuais idênticos (fonte, tamanho, cor, outline, quebra de linha `wrap_text` e alinhamento).
+3. **Stream-copy direto via FFmpeg:** (`FINAL_RENDER_MODE=FFMPEG_STREAM_COPY`) quando legendas estão ausentes (0 re-encodes de vídeo, ~0.3s).
+4. **Preservação de fallback MoviePy legado:** (`FINAL_RENDER_MODE=MOVIEPY_FALLBACK`) para apresentador virtual (`avatar_mode`), animações de mola (`subtitle_animation`), fundos customizados (`text_background_color`/`rounded_subtitle_background`) ou falhas de probe.
+5. **Instrumentação detalhada de `FINAL_RENDER`:** métricas subdivididas persistidas em `scene_render_timings`: `FINAL_RENDER_PREP_SECONDS`, `FINAL_RENDER_AUDIO_SECONDS`, `FINAL_RENDER_SUBTITLE_SECONDS`, `FINAL_RENDER_ENCODE_SECONDS`, `FINAL_RENDER_SECONDS`.
+6. **Preservação integral:** resolução, fps, qualidade, áudio, BGM, sincronização, modo manual, fail-closed e Final Media Quality Gate.

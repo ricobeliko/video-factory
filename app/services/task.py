@@ -9,6 +9,7 @@ from time import perf_counter
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from functools import partial
 from os import path
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
@@ -1064,7 +1065,7 @@ def generate_final_videos(
     for i in range(params.video_count):
         index = i + 1
         t_total_start = perf_counter()
-        scene_render_timings: dict[str, float] = {}
+        scene_render_timings: dict[str, Any] = {}
         combined_video_path = path.join(
             utils.task_dir(task_id), f"combined-{index}.mp4"
         )
@@ -1159,7 +1160,7 @@ def generate_final_videos(
                 return [], [], [{"code": "subtitle_required_invalid"}]
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
-        t_final_start = perf_counter()
+        t_final_call_start = perf_counter()
         bgm_mix_succeeded = video.generate_video(
             video_path=combined_video_path,
             audio_path=audio_file,
@@ -1169,17 +1170,34 @@ def generate_final_videos(
             bgm_file_override=bgm_file_override,
             render_timings=scene_render_timings,
         )
-        final_render_seconds = perf_counter() - t_final_start
-        total_render_seconds = perf_counter() - t_total_start
-        scene_render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+        t_final_call_end = perf_counter()
+        final_render_call_seconds = t_final_call_end - t_final_call_start
+        total_render_seconds = t_final_call_end - t_total_start
+
+        # V16.4.1B timing hardening:
+        # 1. Preservar o FINAL_RENDER_SECONDS canônico interno produzido por video.generate_video().
+        # 2. Registrar o tempo externo da chamada em FINAL_RENDER_CALL_SECONDS.
+        # 3. Registrar o overhead de retorno (diferença entre saída de video.generate_video e retorno a task.py).
+        scene_render_timings["FINAL_RENDER_CALL_SECONDS"] = final_render_call_seconds
+        exit_ts = scene_render_timings.pop("_VIDEO_GENERATE_EXIT_TIMESTAMP", None)
+        if exit_ts is not None:
+            scene_render_timings["FINAL_RENDER_RETURN_OVERHEAD_SECONDS"] = max(0.0, t_final_call_end - exit_ts)
+
+        if "FINAL_RENDER_SECONDS" not in scene_render_timings:
+            scene_render_timings["FINAL_RENDER_SECONDS"] = final_render_call_seconds
+
         scene_render_timings["TOTAL_RENDER_SECONDS"] = total_render_seconds
+
+        final_render_canonical = scene_render_timings.get("FINAL_RENDER_SECONDS", final_render_call_seconds)
 
         is_scene_mode = bool(scene_clip_instructions or getattr(params, "scene_based_generation_enabled", False))
         if is_scene_mode:
-            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_canonical:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_CALL_SECONDS={final_render_call_seconds:.3f}")
             logger.info(f"[SCENE_RENDER][TIMING] TOTAL_RENDER_SECONDS={total_render_seconds:.3f}")
             logger.info(
                 f"[SCENE_RENDER][TIMING_SUMMARY] video_index={index} "
+                f"FINAL_RENDER_MODE={scene_render_timings.get('FINAL_RENDER_MODE', 'UNKNOWN')} "
                 f"SCENE_RENDER_PREP_SECONDS={scene_render_timings.get('SCENE_RENDER_PREP_SECONDS', 0.0):.3f}s "
                 f"SCENE_RENDER_CLIPS_SECONDS={scene_render_timings.get('SCENE_RENDER_CLIPS_SECONDS', 0.0):.3f}s "
                 f"CONCAT_SECONDS={scene_render_timings.get('CONCAT_SECONDS', 0.0):.3f}s "
@@ -1187,7 +1205,11 @@ def generate_final_videos(
                 f"FINAL_RENDER_AUDIO_SECONDS={scene_render_timings.get('FINAL_RENDER_AUDIO_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_SUBTITLE_SECONDS={scene_render_timings.get('FINAL_RENDER_SUBTITLE_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_ENCODE_SECONDS={scene_render_timings.get('FINAL_RENDER_ENCODE_SECONDS', 0.0):.3f}s "
-                f"FINAL_RENDER_SECONDS={final_render_seconds:.3f}s "
+                f"FINAL_RENDER_SECONDS={final_render_canonical:.3f}s "
+                f"FINAL_RENDER_CALL_SECONDS={final_render_call_seconds:.3f}s "
+                f"POST_RENDER_TIMING_STORE_SECONDS={scene_render_timings.get('POST_RENDER_TIMING_STORE_SECONDS', 0.0):.3f}s "
+                f"POST_RENDER_CLEANUP_SECONDS={scene_render_timings.get('POST_RENDER_CLEANUP_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_RETURN_OVERHEAD_SECONDS={scene_render_timings.get('FINAL_RENDER_RETURN_OVERHEAD_SECONDS', 0.0):.3f}s "
                 f"TOTAL_RENDER_SECONDS={total_render_seconds:.3f}s"
             )
             try:

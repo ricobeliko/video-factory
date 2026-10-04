@@ -3,8 +3,8 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance (Timing Hardening)`
-- **ACTIVE_BRANCH** = `fix/v16-4-1b-final-render-timing`
+- **ACTIVE_PHASE** = `V16.4.1C — Render Pipeline Gap Instrumentation`
+- **ACTIVE_BRANCH** = `fix/v16-4-1c-render-gap-instrumentation`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -18,7 +18,8 @@
 - **V16.3 Final Media Quality Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `9e3fde0b35e28781aab67117d5ff33c182b337ef`)
 - **V16.4 Scene-Based Video Generation** = PRODUCTION HOMOLOGATED
 - **V16.4.1A Scene Render Performance Hardening** = PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
-- **V16.4.1B Final Render Performance** = ACTIVE
+- **V16.4.1B Final Render Performance** = PRODUCTION HOMOLOGATED (Deploy SHA: `e7f40ed6f4b7df45e5868cd7de03495239d103ec`, Task Homologada: `f9a9608b-512d-43c4-92f4-f864a0424512`)
+- **V16.4.1C Render Pipeline Gap Instrumentation** = ACTIVE
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1135,23 +1136,33 @@ Entregas V16.4.1A:
 3. **Propagação de `threads`:**
    - Parâmetro `threads` propagado corretamente para as escritas de vídeo em `combine_videos`.
 
-### V16.4.1B — Final Render Performance (Fase Ativa Atual)
-- **Status:** 🚀 ACTIVE / TIMING INSTRUMENTATION HARDENED (04/10/2026)
-- **Branch:** `fix/v16-4-1b-final-render-timing`
-- **Validação:** 13 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py` e 10 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
+### V16.4.1B — Final Render Performance (Homologada em Produção)
+- **Status:** 🟢 PRODUCTION HOMOLOGATED (04/10/2026)
+- **Deploy SHA:** `e7f40ed6f4b7df45e5868cd7de03495239d103ec` (PR #43)
+- **Evidência de Produção:** Task `f9a9608b-512d-43c4-92f4-f864a0424512`, Modo `FFMPEG_NATIVE`, Final Media Quality PASS, sem regressão funcional.
+- **Entregas V16.4.1B:**
+  1. Subtitle burn-in nativo acelerado via FFmpeg libass (`FINAL_RENDER_MODE=FFMPEG_NATIVE`).
+  2. Stream-copy direto via FFmpeg (`FINAL_RENDER_MODE=FFMPEG_STREAM_COPY`) quando legendas estão ausentes.
+  3. Preservação integral do fallback MoviePy legado (`FINAL_RENDER_MODE=MOVIEPY_FALLBACK`).
+  4. Preservação de resolução, fps, qualidade, áudio, BGM e Final Media Quality Gate.
+  5. Hardening de métricas: `FINAL_RENDER_SECONDS` interno canônico preservado e `FINAL_RENDER_CALL_SECONDS` externo registrado.
 
-Objetivo da Fase V16.4.1B:
-Otimizar exclusivamente a etapa final de renderização (`FINAL_RENDER`), que consumia ~21 min (64% do tempo total de render).
-
-Entregas V16.4.1B:
-1. **Diagnóstico arquitetural do caminho real de `generate_video`:** identificação e eliminação de re-encodes desnecessários e loops em Python pelo MoviePy.
-2. **Subtitle burn-in nativo acelerado em C via FFmpeg libass:** (`FINAL_RENDER_MODE=FFMPEG_NATIVE`) mantendo parâmetros visuais idênticos (fonte, tamanho, cor, outline, quebra de linha `wrap_text` e alinhamento).
-3. **Stream-copy direto via FFmpeg:** (`FINAL_RENDER_MODE=FFMPEG_STREAM_COPY`) quando legendas estão ausentes (0 re-encodes de vídeo, ~0.3s).
-4. **Preservação de fallback MoviePy legado:** (`FINAL_RENDER_MODE=MOVIEPY_FALLBACK`) para apresentador virtual (`avatar_mode`), animações de mola (`subtitle_animation`), fundos customizados (`text_background_color`/`rounded_subtitle_background`) ou falhas de probe.
-5. **Instrumentação detalhada de `FINAL_RENDER`:** métricas subdivididas persistidas em `scene_render_timings`: `FINAL_RENDER_PREP_SECONDS`, `FINAL_RENDER_AUDIO_SECONDS`, `FINAL_RENDER_SUBTITLE_SECONDS`, `FINAL_RENDER_ENCODE_SECONDS`, `FINAL_RENDER_SECONDS`.
-6. **Preservação integral:** resolução, fps, qualidade, áudio, BGM, sincronização, modo manual, fail-closed e Final Media Quality Gate.
-7. **Hardening de Instrumentação e Telemetria de Timing:**
-   - O `FINAL_RENDER_SECONDS` canônico reflete o tempo interno real de `video.generate_video()`, não sendo mais sobrescrito por `task.py`.
-   - Criação da métrica externa `FINAL_RENDER_CALL_SECONDS` para o tempo da chamada de alto nível.
-   - Diagnósticos estruturados adicionados: `POST_RENDER_TIMING_STORE_SECONDS`, `POST_RENDER_CLEANUP_SECONDS` e `FINAL_RENDER_RETURN_OVERHEAD_SECONDS`.
-   - Persistência explícita de `FINAL_RENDER_MODE` em `scene_render_timings` e no `script.json`.
+### V16.4.1C — Render Pipeline Gap Instrumentation (Fase Ativa Atual)
+- **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
+- **Branch:** `fix/v16-4-1c-render-gap-instrumentation`
+- **Validação:** 29 testes PASS (`test/services/test_v16_4_1_scene_render_performance.py`, `test/services/test_v16_4_1b_final_render_performance.py`, `test/services/test_v16_4_1c_render_gap_instrumentation.py`).
+- **Objetivo:** Eliminar pontos cegos de telemetria no pipeline de renderização para explicar matematicamente todo `FINAL_RENDER_SECONDS` e `TOTAL_RENDER_SECONDS`.
+- **Classificação de Evidências:**
+  - **CONFIRMED:**
+    - A semântica de `FINAL_RENDER_SECONDS` foi corrigida na V16.4.1B (diferença entre `FINAL_RENDER_SECONDS` e `FINAL_RENDER_CALL_SECONDS` foi de apenas ~0.003s na homologação).
+    - O baseline de produção (Task `f9a9608b-512d-43c4-92f4-f864a0424512`) revelou dois gaps reais:
+      - Gap A: ~1097s dentro de `video.generate_video()` entre o total (1488.96s) e os subtimings conhecidos (391.67s).
+      - Gap B: ~1374s no macro pipeline entre `TOTAL_RENDER_SECONDS` (3293.82s) e os subtimings conhecidos (1919.17s).
+    - Implementação de timers semanticamente separados e contíguos cobrindo todas as fases internas de `generate_video` e `combine_videos`.
+    - Persistência das novas métricas: `FINAL_RENDER_MODE_SELECT_SECONDS`, `FINAL_RENDER_INPUT_PROBE_SECONDS`, `FINAL_RENDER_AUDIO_PROBE_SECONDS`, `FINAL_RENDER_AUDIO_MIX_SECONDS`, `FINAL_RENDER_VALIDATION_SECONDS`, `FINAL_RENDER_OUTPUT_PROBE_SECONDS`, `FINAL_RENDER_POST_ENCODE_SECONDS`, `FINAL_RENDER_UNACCOUNTED_SECONDS`, `SCENE_RENDER_PRE_CONCAT_SECONDS`, `SCENE_RENDER_POST_CONCAT_SECONDS`, `COMBINE_VIDEOS_SECONDS`, `COMBINE_VIDEOS_CALL_SECONDS`, `COMBINE_VIDEOS_UNACCOUNTED_SECONDS`, `PRE_FINAL_RENDER_SECONDS`, `PRE_FINAL_RENDER_BATCH_ALLOCATION_SECONDS`, `PRE_FINAL_RENDER_BGM_GEN_SECONDS`, `PRE_FINAL_RENDER_SUBTITLE_VAL_SECONDS`, `TOTAL_RENDER_UNACCOUNTED_SECONDS`.
+    - Invariante de timing helper criado: `verify_render_timing_invariants`.
+  - **INFERRED:**
+    - A maior parte dos gaps residuais decorre de chamadas não instrumentadas no pipeline (ex: validações de saída `probe_media`, escrita/remoção de arquivos no filesystem Windows, ou geração externa de BGM/metadados).
+    - Com a cobertura contígua dos timers, a próxima execução real registrará a duração exata da etapa que está consumindo o tempo.
+  - **NOT_YET_VALIDATED_IN_PRODUCTION:**
+    - Distribuição dos novos subtimings e valores residuais no hardware do PC forte sob carga de produção (`C:\Projetos\MoneyPrinterTurbo`).

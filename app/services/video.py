@@ -1025,6 +1025,7 @@ def combine_videos(
         logger.info(f"[SCENE_RENDER][TIMING] SCENE_RENDER_CLIPS_SECONDS={scene_render_clips_seconds:.3f}")
         if render_timings is not None:
             render_timings["SCENE_RENDER_CLIPS_SECONDS"] = scene_render_clips_seconds
+        t_pre_concat_start = perf_counter()
     else:
         # Fluxo legado (inalterado)
         subclipped_items = []
@@ -1185,6 +1186,7 @@ def combine_videos(
 
     # merge video clips progressively, avoid loading all videos at once to avoid memory overflow
     logger.info("starting clip merging process")
+    scene_pre_concat_seconds = 0.0
     if scene_clip_instructions:
         if len(processed_clips) != len(scene_clip_instructions):
             raise SceneRenderError(
@@ -1198,6 +1200,9 @@ def combine_videos(
                 f"SCENE_RENDER_FAILURE: processed scene indexes {processed_indexes} do not match expected {expected_indexes}",
                 reason_code="SCENE_RENDER_FAILURE",
             )
+        scene_pre_concat_seconds = perf_counter() - t_pre_concat_start
+        if render_timings is not None:
+            render_timings["SCENE_RENDER_PRE_CONCAT_SECONDS"] = scene_pre_concat_seconds
 
     if not processed_clips:
         logger.warning("no clips available for merging")
@@ -1219,6 +1224,8 @@ def combine_videos(
         logger.info(f"[SCENE_RENDER][TIMING] CONCAT_SECONDS={concat_seconds:.3f}")
         if render_timings is not None:
             render_timings["CONCAT_SECONDS"] = concat_seconds
+
+    t_post_concat_start = perf_counter()
     if used_video_paths is not None:
         # Exclude safety-margin clips that FFmpeg trims entirely from the output.
         elapsed = 0.0
@@ -1230,7 +1237,28 @@ def combine_videos(
     
     # clean temp files
     delete_files(clip_files)
-            
+    scene_post_concat_seconds = perf_counter() - t_post_concat_start
+    if scene_clip_instructions and render_timings is not None:
+        render_timings["SCENE_RENDER_POST_CONCAT_SECONDS"] = scene_post_concat_seconds
+
+    combine_videos_seconds = perf_counter() - t_prep_start
+    if render_timings is not None:
+        render_timings["COMBINE_VIDEOS_SECONDS"] = combine_videos_seconds
+        if scene_clip_instructions:
+            combine_accounted = (
+                scene_render_prep_seconds
+                + scene_render_clips_seconds
+                + scene_pre_concat_seconds
+                + concat_seconds
+                + scene_post_concat_seconds
+            )
+            combine_unaccounted = max(0.0, combine_videos_seconds - combine_accounted)
+            render_timings["COMBINE_VIDEOS_UNACCOUNTED_SECONDS"] = combine_unaccounted
+            if combine_unaccounted > 1.0:
+                logger.warning(
+                    f"[SCENE_RENDER][TIMING_GAP] COMBINE_VIDEOS_UNACCOUNTED_SECONDS={combine_unaccounted:.3f}s exceeds threshold"
+                )
+
     logger.info("video combining completed")
     return combined_video_path
 
@@ -1793,6 +1821,72 @@ def _cleanup_temp_files(file_paths: list[str | None]) -> None:
 
 
 
+def verify_render_timing_invariants(
+    timings: dict[str, Any],
+    tolerance: float = 0.5,
+) -> dict[str, Any]:
+    """
+    Verifica se os invariantes de timing do pipeline de renderização foram respeitados:
+    1. FINAL_RENDER: A soma das etapas internas é próxima de FINAL_RENDER_SECONDS.
+    2. TOTAL_RENDER: A soma das fases macro é próxima de TOTAL_RENDER_SECONDS.
+    3. Residuals não podem ser negativos (< -1e-6).
+    """
+    warnings: list[str] = []
+    final_render_delta = 0.0
+    total_render_delta = 0.0
+    valid = True
+
+    final_render_sec = float(timings.get("FINAL_RENDER_SECONDS", 0.0))
+    if final_render_sec > 0.0:
+        mode = timings.get("FINAL_RENDER_MODE", "UNKNOWN")
+        if mode in ("FFMPEG_NATIVE", "FFMPEG_STREAM_COPY"):
+            prep = float(timings.get("FINAL_RENDER_PREP_SECONDS", 0.0))
+            mode_sel = float(timings.get("FINAL_RENDER_MODE_SELECT_SECONDS", 0.0))
+            audio_probe = float(timings.get("FINAL_RENDER_AUDIO_PROBE_SECONDS", 0.0))
+            audio_mix = float(timings.get("FINAL_RENDER_AUDIO_MIX_SECONDS", 0.0))
+            sub = float(timings.get("FINAL_RENDER_SUBTITLE_SECONDS", 0.0))
+            encode = float(timings.get("FINAL_RENDER_ENCODE_SECONDS", 0.0))
+            val = float(timings.get("FINAL_RENDER_VALIDATION_SECONDS", 0.0))
+            post = float(timings.get("FINAL_RENDER_POST_ENCODE_SECONDS", 0.0))
+            sum_internal = prep + mode_sel + audio_probe + audio_mix + sub + encode + val + post
+            final_render_delta = abs(final_render_sec - sum_internal)
+            if final_render_delta > tolerance:
+                warnings.append(
+                    f"FINAL_RENDER delta {final_render_delta:.3f}s exceeds tolerance {tolerance:.3f}s "
+                    f"(expected ~{final_render_sec:.3f}s, got sum={sum_internal:.3f}s)"
+                )
+                valid = False
+        final_unaccounted = float(timings.get("FINAL_RENDER_UNACCOUNTED_SECONDS", 0.0))
+        if final_unaccounted < -1e-6:
+            warnings.append(f"FINAL_RENDER_UNACCOUNTED_SECONDS is negative: {final_unaccounted:.6f}s")
+            valid = False
+
+    total_render_sec = float(timings.get("TOTAL_RENDER_SECONDS", 0.0))
+    if total_render_sec > 0.0:
+        combine = float(timings.get("COMBINE_VIDEOS_CALL_SECONDS", timings.get("COMBINE_VIDEOS_SECONDS", 0.0)))
+        pre_final = float(timings.get("PRE_FINAL_RENDER_SECONDS", 0.0))
+        final_call = float(timings.get("FINAL_RENDER_CALL_SECONDS", timings.get("FINAL_RENDER_SECONDS", 0.0)))
+        sum_total = combine + pre_final + final_call
+        total_render_delta = abs(total_render_sec - sum_total)
+        if total_render_delta > tolerance:
+            warnings.append(
+                f"TOTAL_RENDER delta {total_render_delta:.3f}s exceeds tolerance {tolerance:.3f}s "
+                f"(expected ~{total_render_sec:.3f}s, got sum={sum_total:.3f}s)"
+            )
+            valid = False
+        total_unaccounted = float(timings.get("TOTAL_RENDER_UNACCOUNTED_SECONDS", 0.0))
+        if total_unaccounted < -1e-6:
+            warnings.append(f"TOTAL_RENDER_UNACCOUNTED_SECONDS is negative: {total_unaccounted:.6f}s")
+            valid = False
+
+    return {
+        "valid": valid,
+        "final_render_delta": final_render_delta,
+        "total_render_delta": total_render_delta,
+        "warnings": warnings,
+    }
+
+
 def generate_video(
     video_path: str,
     audio_path: str,
@@ -1845,7 +1939,8 @@ def generate_video(
 
     prep_seconds = perf_counter() - t_prep_start
 
-    # V16.4.1B: Tentar render nativo acelerado por FFmpeg (Stream-copy ou ASS Burn-in)
+    # V16.4.1C: Instrumentação de seleção de modo e timers semanticamente separados
+    t_mode_start = perf_counter()
     can_native = _can_use_ffmpeg_native_final_render(params, subtitle_path, font_path)
     temp_audio_file = os.path.join(output_dir, f"temp-audio-{os.path.basename(output_file)}.m4a")
     temp_ass_file = os.path.join(output_dir, f"temp-sub-{os.path.basename(output_file)}.ass")
@@ -1853,12 +1948,18 @@ def generate_video(
     final_render_mode = "UNKNOWN"
     bgm_mix_succeeded = True
 
+    audio_probe_seconds = 0.0
+    audio_mix_seconds = 0.0
     audio_seconds = 0.0
     subtitle_seconds = 0.0
     encode_seconds = 0.0
+    validation_seconds = 0.0
+    post_encode_seconds = 0.0
+    mode_select_seconds = perf_counter() - t_mode_start
 
     if can_native:
         t_audio_start = perf_counter()
+        t_audio_probe_start = perf_counter()
         bgm_enabled = bgm_service.should_use_bgm(
             params.bgm_type, params.bgm_volume
         )
@@ -1895,6 +1996,9 @@ def generate_video(
             except Exception:
                 target_duration = 0.0
 
+        audio_probe_seconds = perf_counter() - t_audio_probe_start
+
+        t_audio_mix_start = perf_counter()
         loop_bgm = (bgm_file_override is None)
         audio_ok = _mix_audio_ffmpeg(
             voice_file=audio_path,
@@ -1916,7 +2020,7 @@ def generate_video(
                 voice_volume=params.voice_volume,
                 threads=params.n_threads or 2,
             )
-
+        audio_mix_seconds = perf_counter() - t_audio_mix_start
         audio_seconds = perf_counter() - t_audio_start
 
         if audio_ok:
@@ -1949,11 +2053,18 @@ def generate_video(
                         output_file=output_file,
                         threads=params.n_threads or 2,
                     )
-                    if copy_ok and _validate_final_render_output(output_file):
-                        encode_seconds = perf_counter() - t_encode_start
+                    encode_seconds = perf_counter() - t_encode_start
+
+                    t_val_start = perf_counter()
+                    is_valid = copy_ok and _validate_final_render_output(output_file)
+                    validation_seconds = perf_counter() - t_val_start
+
+                    t_post_start = perf_counter()
+                    if is_valid:
                         native_rendered = True
                         final_render_mode = "FFMPEG_STREAM_COPY"
                         logger.info("FINAL_RENDER_MODE=FFMPEG_STREAM_COPY")
+                    post_encode_seconds = perf_counter() - t_post_start
                 else:
                     burn_ok = _render_final_ffmpeg_ass(
                         video_path=video_path,
@@ -1963,11 +2074,18 @@ def generate_video(
                         threads=params.n_threads or 2,
                         fps=fps,
                     )
-                    if burn_ok and _validate_final_render_output(output_file):
-                        encode_seconds = perf_counter() - t_encode_start
+                    encode_seconds = perf_counter() - t_encode_start
+
+                    t_val_start = perf_counter()
+                    is_valid = burn_ok and _validate_final_render_output(output_file)
+                    validation_seconds = perf_counter() - t_val_start
+
+                    t_post_start = perf_counter()
+                    if is_valid:
                         native_rendered = True
                         final_render_mode = "FFMPEG_NATIVE"
                         logger.info("FINAL_RENDER_MODE=FFMPEG_NATIVE")
+                    post_encode_seconds = perf_counter() - t_post_start
 
         if not native_rendered:
             logger.warning("native FFmpeg final render failed or invalid; falling back to MoviePy")
@@ -1975,17 +2093,43 @@ def generate_video(
 
     if native_rendered:
         final_render_seconds = perf_counter() - t_final_start
+        accounted = (
+            prep_seconds
+            + mode_select_seconds
+            + audio_probe_seconds
+            + audio_mix_seconds
+            + subtitle_seconds
+            + encode_seconds
+            + validation_seconds
+            + post_encode_seconds
+        )
+        final_render_unaccounted = max(0.0, final_render_seconds - accounted)
+
         if getattr(params, "scene_based_generation_enabled", False):
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}")
+
+        if final_render_unaccounted > 1.0:
+            logger.warning(
+                f"[FINAL_RENDER][TIMING_GAP] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}s exceeds threshold"
+            )
 
         t_store_start = perf_counter()
         if render_timings is not None:
             render_timings["FINAL_RENDER_MODE"] = final_render_mode
             render_timings["FINAL_RENDER_PREP_SECONDS"] = prep_seconds
+            render_timings["FINAL_RENDER_MODE_SELECT_SECONDS"] = mode_select_seconds
+            render_timings["FINAL_RENDER_INPUT_PROBE_SECONDS"] = audio_probe_seconds
+            render_timings["FINAL_RENDER_AUDIO_PROBE_SECONDS"] = audio_probe_seconds
+            render_timings["FINAL_RENDER_AUDIO_MIX_SECONDS"] = audio_mix_seconds
             render_timings["FINAL_RENDER_AUDIO_SECONDS"] = audio_seconds
             render_timings["FINAL_RENDER_SUBTITLE_SECONDS"] = subtitle_seconds
             render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
+            render_timings["FINAL_RENDER_VALIDATION_SECONDS"] = validation_seconds
+            render_timings["FINAL_RENDER_OUTPUT_PROBE_SECONDS"] = validation_seconds
+            render_timings["FINAL_RENDER_POST_ENCODE_SECONDS"] = post_encode_seconds
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+            render_timings["FINAL_RENDER_UNACCOUNTED_SECONDS"] = final_render_unaccounted
         post_timing_store_seconds = perf_counter() - t_store_start
         if render_timings is not None:
             render_timings["POST_RENDER_TIMING_STORE_SECONDS"] = post_timing_store_seconds
@@ -2297,17 +2441,33 @@ def generate_video(
         )
         final_render_seconds = perf_counter() - t_final_start
         encode_seconds = perf_counter() - t_encode_start
+        accounted = prep_seconds + mode_select_seconds + encode_seconds
+        final_render_unaccounted = max(0.0, final_render_seconds - accounted)
         if getattr(params, "scene_based_generation_enabled", False):
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}")
+
+        if final_render_unaccounted > 1.0:
+            logger.warning(
+                f"[FINAL_RENDER][TIMING_GAP] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}s exceeds threshold"
+            )
 
         t_store_start = perf_counter()
         if render_timings is not None:
             render_timings["FINAL_RENDER_MODE"] = final_render_mode
             render_timings["FINAL_RENDER_PREP_SECONDS"] = prep_seconds
+            render_timings["FINAL_RENDER_MODE_SELECT_SECONDS"] = mode_select_seconds
+            render_timings["FINAL_RENDER_INPUT_PROBE_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_AUDIO_PROBE_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_AUDIO_MIX_SECONDS"] = 0.0
             render_timings["FINAL_RENDER_AUDIO_SECONDS"] = audio_seconds
             render_timings["FINAL_RENDER_SUBTITLE_SECONDS"] = subtitle_seconds
             render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
+            render_timings["FINAL_RENDER_VALIDATION_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_OUTPUT_PROBE_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_POST_ENCODE_SECONDS"] = 0.0
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+            render_timings["FINAL_RENDER_UNACCOUNTED_SECONDS"] = final_render_unaccounted
         post_timing_store_seconds = perf_counter() - t_store_start
         if render_timings is not None:
             render_timings["POST_RENDER_TIMING_STORE_SECONDS"] = post_timing_store_seconds

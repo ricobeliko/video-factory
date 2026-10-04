@@ -1800,7 +1800,7 @@ def generate_video(
     output_file: str,
     params: VideoParams,
     bgm_file_override: str | None = None,
-    render_timings: dict[str, float] | None = None,
+    render_timings: dict[str, Any] | None = None,
 ) -> bool:
     """
     合成最终视频，并返回本次背景音乐处理是否成功。
@@ -1850,6 +1850,7 @@ def generate_video(
     temp_audio_file = os.path.join(output_dir, f"temp-audio-{os.path.basename(output_file)}.m4a")
     temp_ass_file = os.path.join(output_dir, f"temp-sub-{os.path.basename(output_file)}.ass")
     native_rendered = False
+    final_render_mode = "UNKNOWN"
     bgm_mix_succeeded = True
 
     audio_seconds = 0.0
@@ -1951,6 +1952,7 @@ def generate_video(
                     if copy_ok and _validate_final_render_output(output_file):
                         encode_seconds = perf_counter() - t_encode_start
                         native_rendered = True
+                        final_render_mode = "FFMPEG_STREAM_COPY"
                         logger.info("FINAL_RENDER_MODE=FFMPEG_STREAM_COPY")
                 else:
                     burn_ok = _render_final_ffmpeg_ass(
@@ -1964,6 +1966,7 @@ def generate_video(
                     if burn_ok and _validate_final_render_output(output_file):
                         encode_seconds = perf_counter() - t_encode_start
                         native_rendered = True
+                        final_render_mode = "FFMPEG_NATIVE"
                         logger.info("FINAL_RENDER_MODE=FFMPEG_NATIVE")
 
         if not native_rendered:
@@ -1974,16 +1977,30 @@ def generate_video(
         final_render_seconds = perf_counter() - t_final_start
         if getattr(params, "scene_based_generation_enabled", False):
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+
+        t_store_start = perf_counter()
         if render_timings is not None:
+            render_timings["FINAL_RENDER_MODE"] = final_render_mode
             render_timings["FINAL_RENDER_PREP_SECONDS"] = prep_seconds
             render_timings["FINAL_RENDER_AUDIO_SECONDS"] = audio_seconds
             render_timings["FINAL_RENDER_SUBTITLE_SECONDS"] = subtitle_seconds
             render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+        post_timing_store_seconds = perf_counter() - t_store_start
+        if render_timings is not None:
+            render_timings["POST_RENDER_TIMING_STORE_SECONDS"] = post_timing_store_seconds
+
+        t_cleanup_start = perf_counter()
         _cleanup_temp_files([temp_audio_file, temp_ass_file])
+        post_cleanup_seconds = perf_counter() - t_cleanup_start
+        if render_timings is not None:
+            render_timings["POST_RENDER_CLEANUP_SECONDS"] = post_cleanup_seconds
+            render_timings["_VIDEO_GENERATE_EXIT_TIMESTAMP"] = perf_counter()
+
         return bgm_mix_succeeded
 
     # Fallback MoviePy Legado
+    final_render_mode = "MOVIEPY_FALLBACK"
     logger.info("FINAL_RENDER_MODE=MOVIEPY_FALLBACK")
     t_encode_start = perf_counter()
 
@@ -2282,13 +2299,26 @@ def generate_video(
         encode_seconds = perf_counter() - t_encode_start
         if getattr(params, "scene_based_generation_enabled", False):
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_seconds:.3f}")
+
+        t_store_start = perf_counter()
         if render_timings is not None:
+            render_timings["FINAL_RENDER_MODE"] = final_render_mode
             render_timings["FINAL_RENDER_PREP_SECONDS"] = prep_seconds
             render_timings["FINAL_RENDER_AUDIO_SECONDS"] = audio_seconds
             render_timings["FINAL_RENDER_SUBTITLE_SECONDS"] = subtitle_seconds
             render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
+        post_timing_store_seconds = perf_counter() - t_store_start
+        if render_timings is not None:
+            render_timings["POST_RENDER_TIMING_STORE_SECONDS"] = post_timing_store_seconds
+
+        t_cleanup_start = perf_counter()
         _cleanup_temp_files([temp_audio_file, temp_ass_file])
+        post_cleanup_seconds = perf_counter() - t_cleanup_start
+        if render_timings is not None:
+            render_timings["POST_RENDER_CLEANUP_SECONDS"] = post_cleanup_seconds
+            render_timings["_VIDEO_GENERATE_EXIT_TIMESTAMP"] = perf_counter()
+
         return bgm_mix_succeeded
 
 

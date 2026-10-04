@@ -3,8 +3,8 @@
 ## Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance`
-- **ACTIVE_BRANCH** = `perf/v16-4-1b-final-render`
+- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance (Timing Hardening)`
+- **ACTIVE_BRANCH** = `fix/v16-4-1b-final-render-timing`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -1136,9 +1136,9 @@ Entregas V16.4.1A:
    - Parâmetro `threads` propagado corretamente para as escritas de vídeo em `combine_videos`.
 
 ### V16.4.1B — Final Render Performance (Fase Ativa Atual)
-- **Status:** 🚀 ACTIVE (03/10/2026)
-- **Branch:** `perf/v16-4-1b-final-render`
-- **Validação:** 8 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py`
+- **Status:** 🚀 ACTIVE / TIMING INSTRUMENTATION HARDENED (04/10/2026)
+- **Branch:** `fix/v16-4-1b-final-render-timing`
+- **Validação:** 13 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py` e 10 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
 
 Objetivo da Fase V16.4.1B:
 Otimizar exclusivamente a etapa final de renderização (`FINAL_RENDER`), que consumia ~21 min (64% do tempo total de render).
@@ -1150,3 +1150,8 @@ Entregas V16.4.1B:
 4. **Preservação de fallback MoviePy legado:** (`FINAL_RENDER_MODE=MOVIEPY_FALLBACK`) para apresentador virtual (`avatar_mode`), animações de mola (`subtitle_animation`), fundos customizados (`text_background_color`/`rounded_subtitle_background`) ou falhas de probe.
 5. **Instrumentação detalhada de `FINAL_RENDER`:** métricas subdivididas persistidas em `scene_render_timings`: `FINAL_RENDER_PREP_SECONDS`, `FINAL_RENDER_AUDIO_SECONDS`, `FINAL_RENDER_SUBTITLE_SECONDS`, `FINAL_RENDER_ENCODE_SECONDS`, `FINAL_RENDER_SECONDS`.
 6. **Preservação integral:** resolução, fps, qualidade, áudio, BGM, sincronização, modo manual, fail-closed e Final Media Quality Gate.
+7. **Hardening de Instrumentação e Telemetria de Timing:**
+   - O `FINAL_RENDER_SECONDS` canônico reflete o tempo interno real de `video.generate_video()`, não sendo mais sobrescrito por `task.py`.
+   - Criação da métrica externa `FINAL_RENDER_CALL_SECONDS` para o tempo da chamada de alto nível.
+   - Diagnósticos estruturados adicionados: `POST_RENDER_TIMING_STORE_SECONDS`, `POST_RENDER_CLEANUP_SECONDS` e `FINAL_RENDER_RETURN_OVERHEAD_SECONDS`.
+   - Persistência explícita de `FINAL_RENDER_MODE` em `scene_render_timings` e no `script.json`.

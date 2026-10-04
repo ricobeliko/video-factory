@@ -13,8 +13,8 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance`
-- **ACTIVE_BRANCH** = `perf/v16-4-1b-final-render`
+- **ACTIVE_PHASE** = `V16.4.1B — Final Render Performance (Timing Hardening)`
+- **ACTIVE_BRANCH** = `fix/v16-4-1b-final-render-timing`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -841,10 +841,10 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Propagação correta de `threads` nas escritas scene-based em `combine_videos`.
 
 ### V16.4.1B — Final Render Performance
-- **Status:** 🚀 ACTIVE
+- **Status:** 🚀 ACTIVE / TIMING INSTRUMENTATION HARDENED
 - **Priority:** P1
-- **Branch:** `perf/v16-4-1b-final-render`
-- **Validação:** 8 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py`
+- **Branch:** `fix/v16-4-1b-final-render-timing`
+- **Validação:** 13 testes PASS em `test/services/test_v16_4_1b_final_render_performance.py` e 10 testes PASS em `test/services/test_v16_4_1_scene_render_performance.py`
 - **Objetivo:** Otimizar exclusivamente a etapa final de renderização (`FINAL_RENDER`), que consumia ~21 min (64% do tempo total de render).
 - **Entregas V16.4.1B:**
   - Diagnóstico pontual do gargalo de frame loop do MoviePy na composição de áudio e legendas.
@@ -853,6 +853,11 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Preservação integral do fallback MoviePy legado (`FINAL_RENDER_MODE=MOVIEPY_FALLBACK`) para apresentador virtual (`avatar_mode`), animações de mola (`subtitle_animation`), fundos customizados (`text_background_color`/`rounded_subtitle_background`) ou falhas de probe.
   - Instrumentação detalhada de `FINAL_RENDER` com métricas subdivididas persistidas em `scene_render_timings`: `FINAL_RENDER_PREP_SECONDS`, `FINAL_RENDER_AUDIO_SECONDS`, `FINAL_RENDER_SUBTITLE_SECONDS`, `FINAL_RENDER_ENCODE_SECONDS`, `FINAL_RENDER_SECONDS`.
   - Preservação total de resolução, fps, áudio, BGM, sincronização e Final Media Quality Gate.
+  - **Hardening de Instrumentação e Telemetria de Timing:**
+    - `FINAL_RENDER_SECONDS` canônico reflete estritamente o tempo interno real de `video.generate_video()`, não sendo sobrescrito por `task.py`.
+    - Métrica externa da chamada registrada em `FINAL_RENDER_CALL_SECONDS`.
+    - Diagnósticos temporários/estruturados: `POST_RENDER_TIMING_STORE_SECONDS`, `POST_RENDER_CLEANUP_SECONDS` e `FINAL_RENDER_RETURN_OVERHEAD_SECONDS`.
+    - Persistência estruturada de `FINAL_RENDER_MODE` em `scene_render_timings` e no `script.json`.
 - **Limites e Escopo (O que NÃO é feito em V16.4.1B):**
   - Sem ThreadPoolExecutor nas cenas
   - Sem alteração de scene planner

@@ -1,11 +1,14 @@
-﻿import os
+import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from time import perf_counter
+
 from app.models.schema import VideoParams
+from app.services import task as tm
 from app.services import video
 
 
@@ -98,11 +101,15 @@ class TestFinalRenderPerformance(unittest.TestCase):
         info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
         self.assertTrue(any("FINAL_RENDER_MODE=FFMPEG_NATIVE" in str(log) for log in info_logs))
 
+        self.assertEqual(timings.get("FINAL_RENDER_MODE"), "FFMPEG_NATIVE")
         self.assertIn("FINAL_RENDER_PREP_SECONDS", timings)
         self.assertIn("FINAL_RENDER_AUDIO_SECONDS", timings)
         self.assertIn("FINAL_RENDER_SUBTITLE_SECONDS", timings)
         self.assertIn("FINAL_RENDER_ENCODE_SECONDS", timings)
         self.assertIn("FINAL_RENDER_SECONDS", timings)
+        self.assertIn("POST_RENDER_TIMING_STORE_SECONDS", timings)
+        self.assertIn("POST_RENDER_CLEANUP_SECONDS", timings)
+        self.assertIn("_VIDEO_GENERATE_EXIT_TIMESTAMP", timings)
 
     @patch("app.services.video._validate_final_render_output")
     @patch("app.services.video._render_final_ffmpeg_ass")
@@ -171,6 +178,15 @@ class TestFinalRenderPerformance(unittest.TestCase):
         info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
         self.assertTrue(any("FINAL_RENDER_MODE=MOVIEPY_FALLBACK" in str(log) for log in info_logs))
         mock_write_videofile.assert_called_once()
+        self.assertEqual(timings.get("FINAL_RENDER_MODE"), "MOVIEPY_FALLBACK")
+        self.assertIn("FINAL_RENDER_PREP_SECONDS", timings)
+        self.assertIn("FINAL_RENDER_AUDIO_SECONDS", timings)
+        self.assertIn("FINAL_RENDER_SUBTITLE_SECONDS", timings)
+        self.assertIn("FINAL_RENDER_ENCODE_SECONDS", timings)
+        self.assertIn("FINAL_RENDER_SECONDS", timings)
+        self.assertIn("POST_RENDER_TIMING_STORE_SECONDS", timings)
+        self.assertIn("POST_RENDER_CLEANUP_SECONDS", timings)
+        self.assertIn("_VIDEO_GENERATE_EXIT_TIMESTAMP", timings)
 
     @patch("app.services.video._write_videofile_with_codec_fallback")
     @patch("app.services.video.logger.info")
@@ -236,10 +252,14 @@ class TestFinalRenderPerformance(unittest.TestCase):
         info_logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
         self.assertTrue(any("FINAL_RENDER_MODE=FFMPEG_STREAM_COPY" in str(log) for log in info_logs))
 
+        self.assertEqual(timings.get("FINAL_RENDER_MODE"), "FFMPEG_STREAM_COPY")
         self.assertIn("FINAL_RENDER_PREP_SECONDS", timings)
         self.assertIn("FINAL_RENDER_AUDIO_SECONDS", timings)
         self.assertIn("FINAL_RENDER_ENCODE_SECONDS", timings)
         self.assertIn("FINAL_RENDER_SECONDS", timings)
+        self.assertIn("POST_RENDER_TIMING_STORE_SECONDS", timings)
+        self.assertIn("POST_RENDER_CLEANUP_SECONDS", timings)
+        self.assertIn("_VIDEO_GENERATE_EXIT_TIMESTAMP", timings)
 
     @patch("app.services.video._write_videofile_with_codec_fallback")
     @patch("app.services.video.logger.info")
@@ -445,6 +465,126 @@ class TestFinalRenderPerformance(unittest.TestCase):
             font_path=os.path.join(self.test_dir, "dummy.ttc"),
         )
         self.assertFalse(ok_custom)
+
+    @patch("app.services.task.logger.info")
+    @patch("app.services.task.video.combine_videos")
+    @patch("app.services.task.video.generate_video")
+    @patch("app.services.task.task_artifacts.patch_script_data")
+    @patch("app.services.task.sm.state.update_task")
+    def test_task_generate_final_videos_preserves_internal_final_render_seconds(
+        self, mock_update, mock_patch, mock_gen_video, mock_combine, mock_logger
+    ):
+        """Valida que task.generate_final_videos NÃO sobrescreve FINAL_RENDER_SECONDS interno,
+        registra FINAL_RENDER_CALL_SECONDS separado e calcula FINAL_RENDER_RETURN_OVERHEAD_SECONDS."""
+        mock_combine.return_value = "/path/to/combined.mp4"
+
+        canonical_internal_seconds = 324.3828
+
+        def fake_generate_video(**kwargs):
+            timings = kwargs.get("render_timings")
+            if timings is not None:
+                timings["FINAL_RENDER_MODE"] = "FFMPEG_NATIVE"
+                timings["FINAL_RENDER_PREP_SECONDS"] = 0.0068
+                timings["FINAL_RENDER_AUDIO_SECONDS"] = 4.3367
+                timings["FINAL_RENDER_SUBTITLE_SECONDS"] = 0.5447
+                timings["FINAL_RENDER_ENCODE_SECONDS"] = canonical_internal_seconds
+                timings["FINAL_RENDER_SECONDS"] = canonical_internal_seconds
+                timings["POST_RENDER_TIMING_STORE_SECONDS"] = 0.0002
+                timings["POST_RENDER_CLEANUP_SECONDS"] = 0.0050
+                timings["_VIDEO_GENERATE_EXIT_TIMESTAMP"] = perf_counter()
+            return True
+
+        mock_gen_video.side_effect = fake_generate_video
+
+        params = VideoParams(
+            video_subject="TestTimingHardening",
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+            video_count=1,
+            n_threads=2,
+        )
+
+        tm.generate_final_videos(
+            task_id="task_timing_hardening_test",
+            params=params,
+            downloaded_videos=[self.video_path],
+            audio_file=self.audio_path,
+            subtitle_path=self.subtitle_path,
+            audio_duration=5.0,
+            scene_clip_instructions=[MagicMock()],
+        )
+
+        mock_patch.assert_called()
+        patch_kwargs = mock_patch.call_args[1]
+        self.assertIn("scene_render_timings", patch_kwargs)
+        timings = patch_kwargs["scene_render_timings"]
+
+        # 1. FINAL_RENDER_SECONDS canônico NÃO foi sobrescrito
+        self.assertEqual(timings["FINAL_RENDER_SECONDS"], canonical_internal_seconds)
+
+        # 2. FINAL_RENDER_CALL_SECONDS existe e é >= 0.0
+        self.assertIn("FINAL_RENDER_CALL_SECONDS", timings)
+        self.assertGreaterEqual(timings["FINAL_RENDER_CALL_SECONDS"], 0.0)
+
+        # 3. FINAL_RENDER_RETURN_OVERHEAD_SECONDS existe e é >= 0.0
+        self.assertIn("FINAL_RENDER_RETURN_OVERHEAD_SECONDS", timings)
+        self.assertGreaterEqual(timings["FINAL_RENDER_RETURN_OVERHEAD_SECONDS"], 0.0)
+
+        # 4. _VIDEO_GENERATE_EXIT_TIMESTAMP foi devidamente removido
+        self.assertNotIn("_VIDEO_GENERATE_EXIT_TIMESTAMP", timings)
+
+        # 5. FINAL_RENDER_MODE persistido
+        self.assertEqual(timings["FINAL_RENDER_MODE"], "FFMPEG_NATIVE")
+
+        # 6. TOTAL_RENDER_SECONDS registrado
+        self.assertIn("TOTAL_RENDER_SECONDS", timings)
+        self.assertGreaterEqual(timings["TOTAL_RENDER_SECONDS"], 0.0)
+
+        # 7. Logs refletem a métrica canônica e os novos diagnósticos
+        logged = [call.args[0] for call in mock_logger.call_args_list if call.args]
+        self.assertTrue(any(f"FINAL_RENDER_SECONDS={canonical_internal_seconds:.3f}" in str(log) for log in logged))
+        self.assertTrue(any("FINAL_RENDER_CALL_SECONDS=" in str(log) for log in logged))
+        self.assertTrue(any("FINAL_RENDER_MODE=FFMPEG_NATIVE" in str(log) for log in logged))
+
+    @patch("app.services.task.logger.info")
+    @patch("app.services.task.video.combine_videos")
+    @patch("app.services.task.video.generate_video")
+    @patch("app.services.task.task_artifacts.patch_script_data")
+    @patch("app.services.task.sm.state.update_task")
+    def test_task_generate_final_videos_fallback_if_internal_seconds_missing(
+        self, mock_update, mock_patch, mock_gen_video, mock_combine, mock_logger
+    ):
+        """Valida fallback gracioso se generate_video não preencher FINAL_RENDER_SECONDS."""
+        mock_combine.return_value = "/path/to/combined.mp4"
+        mock_gen_video.return_value = True
+
+        params = VideoParams(
+            video_subject="TestFallbackTiming",
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+            video_count=1,
+            n_threads=2,
+        )
+
+        tm.generate_final_videos(
+            task_id="task_fallback_timing_test",
+            params=params,
+            downloaded_videos=[self.video_path],
+            audio_file=self.audio_path,
+            subtitle_path=self.subtitle_path,
+            audio_duration=5.0,
+            scene_clip_instructions=[MagicMock()],
+        )
+
+        mock_patch.assert_called()
+        patch_kwargs = mock_patch.call_args[1]
+        timings = patch_kwargs["scene_render_timings"]
+
+        self.assertIn("FINAL_RENDER_SECONDS", timings)
+        self.assertIn("FINAL_RENDER_CALL_SECONDS", timings)
+        self.assertEqual(timings["FINAL_RENDER_SECONDS"], timings["FINAL_RENDER_CALL_SECONDS"])
 
 
 if __name__ == "__main__":

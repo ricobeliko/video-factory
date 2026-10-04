@@ -1079,6 +1079,7 @@ def generate_final_videos(
             }
             if allocate_batch_materials else {}
         )
+        t_combine_call_start = perf_counter()
         video.combine_videos(
             combined_video_path=combined_video_path,
             video_paths=downloaded_videos,
@@ -1094,6 +1095,14 @@ def generate_final_videos(
             render_timings=scene_render_timings,
             **batch_options,
         )
+        t_combine_call_end = perf_counter()
+        combine_call_seconds = t_combine_call_end - t_combine_call_start
+        scene_render_timings["COMBINE_VIDEOS_CALL_SECONDS"] = combine_call_seconds
+        if "COMBINE_VIDEOS_SECONDS" not in scene_render_timings:
+            scene_render_timings["COMBINE_VIDEOS_SECONDS"] = combine_call_seconds
+
+        t_pre_final_start = perf_counter()
+        t_batch_start = perf_counter()
         if allocate_batch_materials:
             selected_sources = list(dict.fromkeys(used_video_paths))
             reused_sources = [file for file in selected_sources if source_usage.get(file, 0)]
@@ -1115,6 +1124,7 @@ def generate_final_videos(
                     "video_index": index,
                     "count": len(reused_sources),
                 })
+        batch_allocation_seconds = perf_counter() - t_batch_start
 
         _progress += 50 / params.video_count / 2
         sm.state.update_task(task_id, progress=_progress)
@@ -1123,8 +1133,10 @@ def generate_final_videos(
 
         # 视频配乐模式先明确禁用默认 BGM 解析，避免旧任务残留的 bgm_file 被
         # 误用。只有音量大于 0 才生成代理并调用付费 API；0 音量统一跳过。
+        bgm_gen_seconds = 0.0
         bgm_file_override = "" if video_music_provider else None
         if video_music_requested:
+            t_bgm_start = perf_counter()
             service = video_music_provider["service"]
             display_name = video_music_provider["display_name"]
             warning_code = video_music_provider["warning_code"]
@@ -1149,15 +1161,25 @@ def generate_final_videos(
                 )
                 bgm_file_override = ""
                 warnings.append({"code": warning_code, "video_index": index})
+            bgm_gen_seconds = perf_counter() - t_bgm_start
 
+        sub_val_seconds = 0.0
         if getattr(params, "subtitle_required", False):
+            t_sub_val_start = perf_counter()
             val_res = subtitle.validate_subtitle_file(subtitle_path)
+            sub_val_seconds = perf_counter() - t_sub_val_start
             if not val_res["valid"]:
                 logger.error(
                     f"[RENDER][BLOCKED] Subtitle required but invalid: reason={val_res['reason']}, "
                     f"task_id={task_id}, video_index={index}"
                 )
                 return [], [], [{"code": "subtitle_required_invalid"}]
+
+        pre_final_render_seconds = perf_counter() - t_pre_final_start
+        scene_render_timings["PRE_FINAL_RENDER_SECONDS"] = pre_final_render_seconds
+        scene_render_timings["PRE_FINAL_RENDER_BATCH_ALLOCATION_SECONDS"] = batch_allocation_seconds
+        scene_render_timings["PRE_FINAL_RENDER_BGM_GEN_SECONDS"] = bgm_gen_seconds
+        scene_render_timings["PRE_FINAL_RENDER_SUBTITLE_VAL_SECONDS"] = sub_val_seconds
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         t_final_call_start = perf_counter()
@@ -1174,10 +1196,11 @@ def generate_final_videos(
         final_render_call_seconds = t_final_call_end - t_final_call_start
         total_render_seconds = t_final_call_end - t_total_start
 
-        # V16.4.1B timing hardening:
+        # V16.4.1B/C timing hardening:
         # 1. Preservar o FINAL_RENDER_SECONDS canônico interno produzido por video.generate_video().
         # 2. Registrar o tempo externo da chamada em FINAL_RENDER_CALL_SECONDS.
         # 3. Registrar o overhead de retorno (diferença entre saída de video.generate_video e retorno a task.py).
+        # 4. Calcular TOTAL_RENDER_UNACCOUNTED_SECONDS.
         scene_render_timings["FINAL_RENDER_CALL_SECONDS"] = final_render_call_seconds
         exit_ts = scene_render_timings.pop("_VIDEO_GENERATE_EXIT_TIMESTAMP", None)
         if exit_ts is not None:
@@ -1188,29 +1211,60 @@ def generate_final_videos(
 
         scene_render_timings["TOTAL_RENDER_SECONDS"] = total_render_seconds
 
+        total_accounted = combine_call_seconds + pre_final_render_seconds + final_render_call_seconds
+        total_unaccounted = max(0.0, total_render_seconds - total_accounted)
+        scene_render_timings["TOTAL_RENDER_UNACCOUNTED_SECONDS"] = total_unaccounted
+
         final_render_canonical = scene_render_timings.get("FINAL_RENDER_SECONDS", final_render_call_seconds)
+        final_render_unaccounted = scene_render_timings.get("FINAL_RENDER_UNACCOUNTED_SECONDS", 0.0)
+
+        if final_render_unaccounted > 1.0:
+            logger.warning(
+                f"[SCENE_RENDER][TIMING_GAP] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}s "
+                f"exceeds diagnostic threshold (1.0s) for video {index}"
+            )
+        if total_unaccounted > 1.0:
+            logger.warning(
+                f"[SCENE_RENDER][TIMING_GAP] TOTAL_RENDER_UNACCOUNTED_SECONDS={total_unaccounted:.3f}s "
+                f"exceeds diagnostic threshold (1.0s) for video {index}"
+            )
 
         is_scene_mode = bool(scene_clip_instructions or getattr(params, "scene_based_generation_enabled", False))
         if is_scene_mode:
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_SECONDS={final_render_canonical:.3f}")
             logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_CALL_SECONDS={final_render_call_seconds:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] COMBINE_VIDEOS_SECONDS={scene_render_timings.get('COMBINE_VIDEOS_SECONDS', 0.0):.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] PRE_FINAL_RENDER_SECONDS={pre_final_render_seconds:.3f}")
             logger.info(f"[SCENE_RENDER][TIMING] TOTAL_RENDER_SECONDS={total_render_seconds:.3f}")
+            logger.info(f"[SCENE_RENDER][TIMING] TOTAL_RENDER_UNACCOUNTED_SECONDS={total_unaccounted:.3f}")
             logger.info(
                 f"[SCENE_RENDER][TIMING_SUMMARY] video_index={index} "
                 f"FINAL_RENDER_MODE={scene_render_timings.get('FINAL_RENDER_MODE', 'UNKNOWN')} "
                 f"SCENE_RENDER_PREP_SECONDS={scene_render_timings.get('SCENE_RENDER_PREP_SECONDS', 0.0):.3f}s "
                 f"SCENE_RENDER_CLIPS_SECONDS={scene_render_timings.get('SCENE_RENDER_CLIPS_SECONDS', 0.0):.3f}s "
+                f"SCENE_RENDER_PRE_CONCAT_SECONDS={scene_render_timings.get('SCENE_RENDER_PRE_CONCAT_SECONDS', 0.0):.3f}s "
                 f"CONCAT_SECONDS={scene_render_timings.get('CONCAT_SECONDS', 0.0):.3f}s "
+                f"SCENE_RENDER_POST_CONCAT_SECONDS={scene_render_timings.get('SCENE_RENDER_POST_CONCAT_SECONDS', 0.0):.3f}s "
+                f"COMBINE_VIDEOS_SECONDS={scene_render_timings.get('COMBINE_VIDEOS_SECONDS', 0.0):.3f}s "
+                f"PRE_FINAL_RENDER_SECONDS={pre_final_render_seconds:.3f}s "
                 f"FINAL_RENDER_PREP_SECONDS={scene_render_timings.get('FINAL_RENDER_PREP_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_MODE_SELECT_SECONDS={scene_render_timings.get('FINAL_RENDER_MODE_SELECT_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_INPUT_PROBE_SECONDS={scene_render_timings.get('FINAL_RENDER_INPUT_PROBE_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_AUDIO_MIX_SECONDS={scene_render_timings.get('FINAL_RENDER_AUDIO_MIX_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_AUDIO_SECONDS={scene_render_timings.get('FINAL_RENDER_AUDIO_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_SUBTITLE_SECONDS={scene_render_timings.get('FINAL_RENDER_SUBTITLE_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_ENCODE_SECONDS={scene_render_timings.get('FINAL_RENDER_ENCODE_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_VALIDATION_SECONDS={scene_render_timings.get('FINAL_RENDER_VALIDATION_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_POST_ENCODE_SECONDS={scene_render_timings.get('FINAL_RENDER_POST_ENCODE_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_SECONDS={final_render_canonical:.3f}s "
                 f"FINAL_RENDER_CALL_SECONDS={final_render_call_seconds:.3f}s "
+                f"FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}s "
                 f"POST_RENDER_TIMING_STORE_SECONDS={scene_render_timings.get('POST_RENDER_TIMING_STORE_SECONDS', 0.0):.3f}s "
                 f"POST_RENDER_CLEANUP_SECONDS={scene_render_timings.get('POST_RENDER_CLEANUP_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_RETURN_OVERHEAD_SECONDS={scene_render_timings.get('FINAL_RENDER_RETURN_OVERHEAD_SECONDS', 0.0):.3f}s "
-                f"TOTAL_RENDER_SECONDS={total_render_seconds:.3f}s"
+                f"TOTAL_RENDER_SECONDS={total_render_seconds:.3f}s "
+                f"TOTAL_RENDER_UNACCOUNTED_SECONDS={total_unaccounted:.3f}s"
             )
             try:
                 task_artifacts.patch_script_data(

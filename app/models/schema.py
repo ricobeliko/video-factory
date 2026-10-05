@@ -684,6 +684,13 @@ class SceneMaterialSelection(BaseModel):
     generation_status: Optional[str] = Field(default=None, description="Status: success, fallback, bypassed")
     generated_asset_path: Optional[str] = Field(default=None, description="Path to generated asset file")
     motion_mode: Optional[str] = Field(default=None, description="Motion effect mode if still image")
+    strategy_selected: Optional[str] = Field(default=None, description="Director strategy selected (STOCK_HIGH_CONFIDENCE, GENERATED_IMAGE_PREFERRED, etc.)")
+    scene_importance: Optional[str] = Field(default=None, description="Scene importance classification (LOW, NORMAL, HERO)")
+    stock_score: Optional[float] = Field(default=None, description="Alias/consolidated stock score")
+    stock_candidate: Optional[str] = Field(default=None, description="Identifier or URL of the stock candidate considered")
+    generated_attempted: Optional[bool] = Field(default=None, description="Whether AI generation was attempted for this scene")
+    still_motion_mode: Optional[str] = Field(default=None, description="Still motion mode if keyframe with motion (zoom_in, zoom_out, etc.)")
+    final_visual_source: Optional[str] = Field(default=None, description="Final resolved visual source type (stock, generated_image, image_motion, generated_video)")
 
 
 class SceneClipInstruction(BaseModel):

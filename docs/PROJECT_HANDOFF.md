@@ -25,8 +25,7 @@
 - **V16.4.2A Publishing State Reconciliation** = PRODUCTION HOMOLOGATED (PC Forte Reconciled)
 - **V16.4.2B Publishing Idempotency / Duplicate Protection** = MERGED (PR #50)
 - **V16.4.2C Retry Metadata Cleanup** = MERGED (PR #51)
-- **V16.4.2H Final Publishing Health Audit** = DEV AUDITED / INTEGRATED SUITE PASSED
-- **V16.5 Visual Matching v2** = NOT STARTED
+- **V16.5 Visual Matching v2** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1265,6 +1264,18 @@ Entregas V16.4.1A:
   - Reconciliação e concorrência: JIT guard aborta envio se sucesso ocorrer antes da chamada externa.
   - Preservação estrita: zero DELETE em `publication_events` ou `scheduled_posts`; zero mídia deletada.
 - **Próximo Passo:** `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`.
+
+### V16.5 — Visual Matching v2 (Fase Concluída em DEV)
+- **Status:** 🚀 DEV IMPLEMENTED / VALIDATED (05/10/2026)
+- **Branch:** `feat/v16-5-visual-matching-v2`
+- **Validação:** 9 testes PASS em `test/services/test_visual_matching.py`, 20 testes PASS não-regressão V16.4 em `test/services/test_v16_4_scene_based_video_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Melhorar significativamente a aderência visual dos clipes de vídeo selecionados à narração e intenção das cenas, evitando clipes genéricos ou semanticamente fracos.
+- **Arquitetura Implementada:**
+  - `app/services/visual_matching.py`: motor determinístico de intenção visual (`SceneVisualIntent`), queries v2 em tiers de especificidade, e pontuação de candidatos (0 a 100) baseada em termos semânticos (título, tags, slug), casamento da query, aspect ratio, duração útil e penalidades de repetição (-50 para adjacente, -35 para reutilização global no vídeo).
+  - Enriquecimento de metadados em `app/services/material.py`: extração de título/slug e tags para Pexels, Pixabay e Coverr.
+  - Planejamento de cenas em `app/services/scene_planner.py`: geração de intenção estruturada v2 e queries priorizadas por cena.
+  - Resolução em `app/services/scene_material.py`: busca em cascata, ordenação determinística por score, diversidade global de ativos e persistência de auditoria em `script_data` (`visual_intent`, `match_score`, `selection_reason`, `queries_tried`, `fallback_tier`).
+- **Próximo Passo:** PR / Merge em DEV main e validação de CI contra baseline.
 
 
 

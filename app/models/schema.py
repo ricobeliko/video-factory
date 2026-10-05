@@ -636,6 +636,7 @@ class ScenePlanItem(BaseModel):
     search_terms: List[str] = Field(default_factory=list, description="Ordered list of visual search terms for this scene")
     duration_hint: Optional[float] = Field(default=None, description="Estimated duration in seconds for this scene")
     visual_intent: Optional[str] = Field(default=None, description="Visual intent or mood description for this scene")
+    visual_intent_v2: Optional[dict] = Field(default=None, description="Structured visual intent (V16.5 Visual Matching v2)")
     source_strategy: Optional[str] = Field(default=None, description="Preferred source or strategy for this scene")
 
 
@@ -656,6 +657,11 @@ class SceneMaterialSelection(BaseModel):
     fallback_used: bool = Field(default=False, description="Whether fallback logic was used to find this material")
     duration: float = Field(default=0.0, ge=0.0, description="Duration in seconds of the material")
     provenance: Optional[dict] = Field(default=None, description="Asset provenance details for copyright compliance")
+    visual_intent: Optional[dict] = Field(default=None, description="Visual intent used for material matching")
+    match_score: Optional[float] = Field(default=None, description="Deterministic match score (0-100)")
+    selection_reason: Optional[str] = Field(default=None, description="Reason or breakdown of candidate selection")
+    queries_tried: Optional[List[str]] = Field(default=None, description="Search queries evaluated for this scene")
+    fallback_tier: Optional[int] = Field(default=None, description="Fallback tier index used (0=primary, 1=alt1, etc.)")
 
 
 class SceneClipInstruction(BaseModel):

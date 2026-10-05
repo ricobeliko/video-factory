@@ -13,7 +13,6 @@ Garantias:
 
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
@@ -89,6 +88,25 @@ def publish_youtube_video(
         f"[YOUTUBE_PUBLISHER] Publicando vídeo para task {task_id} via provider '{provider}' "
         f"(channel_id={channel_id}, profile_id={profile_id})"
     )
+
+    # Guard JIT pré-provider (Camada 3 - V16.4.2B)
+    from app.services import publishing_idempotency
+    is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube", db_path=db_path)
+    if not is_safe and canon:
+        logger.info(
+            f"[YOUTUBE_PUBLISHER][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "
+            f"publicação confirmada no YouTube (evento #{canon['event_id']}, external_id={canon['external_id']})."
+        )
+        return {
+            "success": True,
+            "provider": provider,
+            "already_published": True,
+            "request_id": canon["provider_request_id"],
+            "external_id": canon["external_id"],
+            "external_url": canon["external_url"],
+            "privacy_status": canon["privacy_status"] or privacy_status or "public",
+            "error": None,
+        }
 
     if provider == PROVIDER_POST_FOR_ME:
         effective_privacy = privacy_status or "public"

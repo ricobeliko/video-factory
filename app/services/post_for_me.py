@@ -1358,6 +1358,28 @@ class PostForMeClient:
         poll_interval_sec: float = 2.0,
     ) -> Dict[str, Any]:
         """Fluxo completo de publicação no YouTube via Post for Me com proteção de idempotência."""
+        # 0. Guard JIT pré-provider (Camada 3 - V16.4.2B)
+        try:
+            from app.services import publishing_idempotency
+            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube")
+            if not is_safe and canon:
+                logger.info(
+                    f"[POST_FOR_ME][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "
+                    f"publicação confirmada no YouTube (evento #{canon['event_id']}, external_id={canon['external_id']})."
+                )
+                return {
+                    "success": True,
+                    "provider": "post_for_me",
+                    "already_published": True,
+                    "request_id": canon["provider_request_id"],
+                    "external_id": canon["external_id"],
+                    "external_url": canon["external_url"],
+                    "privacy_status": canon["privacy_status"] or privacy_status,
+                    "error": None,
+                }
+        except Exception as exc:
+            logger.warning(f"[POST_FOR_ME] Falha ao checar idempotência JIT: {exc}")
+
         # 1. Validação de API Key
         if not self.is_configured():
             logger.error("[POST_FOR_ME] Tentativa de publicação sem POST_FOR_ME_API_KEY configurada.")
@@ -1777,6 +1799,28 @@ class PostForMeClient:
         poll_interval_sec: float = 2.0,
     ) -> Dict[str, Any]:
         """Fluxo completo de publicação no TikTok via Post for Me Quickstart com proteção de idempotência."""
+        # 0. Guard JIT pré-provider (Camada 3 - V16.4.2B)
+        try:
+            from app.services import publishing_idempotency
+            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "tiktok")
+            if not is_safe and canon:
+                logger.info(
+                    f"[POST_FOR_ME_TIKTOK][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "
+                    f"publicação confirmada no TikTok (evento #{canon['event_id']}, external_id={canon['external_id']})."
+                )
+                return {
+                    "success": True,
+                    "provider": "post_for_me",
+                    "already_published": True,
+                    "request_id": canon["provider_request_id"],
+                    "external_id": canon["external_id"],
+                    "external_url": canon["external_url"],
+                    "privacy_status": canon["privacy_status"] or privacy_status,
+                    "error": None,
+                }
+        except Exception as exc:
+            logger.warning(f"[POST_FOR_ME_TIKTOK] Falha ao checar idempotência JIT: {exc}")
+
         # 1. Validação de API Key
         if not self.is_configured():
             logger.error(f"[POST_FOR_ME_TIKTOK] Tentativa de publicação sem {self._env_api_key_name} configurada.")

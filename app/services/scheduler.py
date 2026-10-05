@@ -948,7 +948,7 @@ def has_existing_or_terminal_destination(
                 """
                 SELECT id FROM scheduled_posts
                 WHERE task_id = ? AND platform = ? AND channel_id = ?
-                AND status IN ('planned', 'ready', 'published', 'cancelled')
+                AND status IN ('planned', 'ready', 'processing', 'published', 'cancelled')
                 LIMIT 1;
                 """,
                 (task_id, clean_plat, clean_channel),
@@ -968,6 +968,7 @@ def has_existing_or_terminal_destination(
             if pub_row:
                 return True
 
+            # 1.1 Verificação canônica da tupla (task_id, platform): sucesso prévio em qualquer canal
             pub_any = c.execute(
                 """
                 SELECT id FROM publication_events
@@ -978,6 +979,19 @@ def has_existing_or_terminal_destination(
                 (task_id, clean_plat),
             ).fetchone()
             if pub_any:
+                return True
+
+            # 1.2 Verificação canônica de post ativo/executável em qualquer canal para a mesma plataforma
+            active_any = c.execute(
+                """
+                SELECT id FROM scheduled_posts
+                WHERE task_id = ? AND platform = ?
+                AND status IN ('planned', 'ready', 'processing', 'published')
+                LIMIT 1;
+                """,
+                (task_id, clean_plat),
+            ).fetchone()
+            if active_any:
                 return True
 
             # 2. Tombstone legado: cancelamento pré-canais sem channel_id atua como wildcard
@@ -1000,7 +1014,7 @@ def has_existing_or_terminal_destination(
                 """
                 SELECT id FROM scheduled_posts
                 WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
-                AND status IN ('planned', 'ready', 'published', 'cancelled')
+                AND status IN ('planned', 'ready', 'processing', 'published', 'cancelled')
                 LIMIT 1;
                 """,
                 (task_id, clean_plat),
@@ -1008,16 +1022,28 @@ def has_existing_or_terminal_destination(
             if row:
                 return True
 
-            pub_row = c.execute(
+            pub_any = c.execute(
                 """
                 SELECT id FROM publication_events
-                WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
+                WHERE task_id = ? AND platform = ?
                 AND status = 'success'
                 LIMIT 1;
                 """,
                 (task_id, clean_plat),
             ).fetchone()
-            if pub_row:
+            if pub_any:
+                return True
+
+            active_any = c.execute(
+                """
+                SELECT id FROM scheduled_posts
+                WHERE task_id = ? AND platform = ?
+                AND status IN ('planned', 'ready', 'processing', 'published')
+                LIMIT 1;
+                """,
+                (task_id, clean_plat),
+            ).fetchone()
+            if active_any:
                 return True
 
             return False
@@ -1371,7 +1397,19 @@ def plan_schedule(
 
             target_slot = candidate_base
 
-            # 3. Insere novo slot planejado com profile_id e channel_id
+            # 3. Verificação final de idempotência antes da inserção (Camada 1 - V16.4.2B)
+            from app.services import publishing_idempotency
+            with get_connection(db_path) as conn:
+                can_sched, sched_block_reason, _ = publishing_idempotency.can_schedule_task(
+                    task_id=task_id,
+                    platform=clean_plat,
+                    conn=conn,
+                )
+            if not can_sched:
+                logger.info(f"[SCHEDULER][PLAN] Agendamento bloqueado por idempotência para ({task_id}, {clean_plat}): {sched_block_reason}")
+                continue
+
+            # 4. Insere novo slot planejado com profile_id e channel_id
             iso_slot = _to_iso(target_slot)
             iso_created = _to_iso(current_time)
             with get_connection(db_path) as conn:
@@ -1748,32 +1786,60 @@ def run_scheduler_cycle(
 
     logger.info(f"[SCHEDULER][CYCLE] candidate id={post_id} task_id={task_id} platform={platform} profile_id={profile_id} channel_id={channel_id} scheduled_at={post['scheduled_at']}")
 
-    # 1.1 Guard Canônico de Publicação Concluída (Fase V16.4.2A):
-    # Se existir publication_events com status = 'success' para task_id + platform,
-    # a publicação já foi concluída com sucesso. NUNCA chamar provider novamente,
-    # nunca republicar, desarmar retry e marcar status = 'published'.
+    # 1.1 Guard Canônico de Publicação e Idempotência (Camada 2 - V16.4.2A / V16.4.2B):
+    from app.services import publishing_idempotency
     with get_connection(db_path) as conn:
-        pub_event = conn.execute(
-            "SELECT id, external_id, external_url, published_at FROM publication_events WHERE task_id = ? AND platform = ? AND status = 'success' LIMIT 1;",
-            (task_id, platform),
-        ).fetchone()
+        can_exec, exec_reason, details = publishing_idempotency.can_execute_scheduled_post(
+            task_id=task_id,
+            platform=platform,
+            post_id=post_id,
+            conn=conn,
+        )
 
-    if pub_event:
-        with get_connection(db_path) as conn:
-            conn.execute(
-                "UPDATE scheduled_posts SET status = 'published', next_attempt_at = NULL WHERE id = ?;",
-                (post_id,),
-            )
-        logger.info(f"[SCHEDULER][CYCLE] skipped reason=already_published ({task_id} - {platform}) event_id={pub_event['id']}")
-        _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado por idempotência (já publicado: evento #{pub_event['id']})", db_path=db_path)
-        return {
-            "status": "skipped",
-            "reason": "already_published",
-            "task_id": task_id,
-            "platform": platform,
-            "publication_event_id": pub_event["id"],
-            "external_id": pub_event["external_id"],
-        }
+    if not can_exec:
+        if exec_reason == "already_published":
+            with get_connection(db_path) as conn:
+                conn.execute(
+                    "UPDATE scheduled_posts SET status = 'published', next_attempt_at = NULL WHERE id = ?;",
+                    (post_id,),
+                )
+                publishing_idempotency.neutralize_duplicate_executable_posts(
+                    task_id=task_id,
+                    platform=platform,
+                    canonical_post_id=post_id,
+                    conn=conn,
+                )
+            canon = details.get("details", {})
+            event_id = canon.get("event_id") or canon.get("id")
+            ext_id = canon.get("external_id")
+            logger.info(f"[SCHEDULER][CYCLE] skipped reason=already_published ({task_id} - {platform}) event_id={event_id}")
+            _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado por idempotência (já publicado: evento #{event_id})", db_path=db_path)
+            return {
+                "status": "skipped",
+                "reason": "already_published",
+                "task_id": task_id,
+                "platform": platform,
+                "publication_event_id": event_id,
+                "external_id": ext_id,
+            }
+        elif exec_reason == "already_processing":
+            logger.warning(f"[SCHEDULER][CYCLE] skipped reason=already_processing ({task_id} - {platform})")
+            _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado: outro post em processamento ativo", db_path=db_path)
+            return {
+                "status": "skipped",
+                "reason": "already_processing",
+                "task_id": task_id,
+                "platform": platform,
+            }
+
+    # Neutraliza proativamente eventuais duplicatas executáveis redundantes para a mesma tupla
+    with get_connection(db_path) as conn:
+        publishing_idempotency.neutralize_duplicate_executable_posts(
+            task_id=task_id,
+            platform=platform,
+            canonical_post_id=post_id,
+            conn=conn,
+        )
 
     # 2. Revalidação: Perfil da task ativo
     prof = profile_manager.get_profile(profile_id, db_path=db_path)
@@ -2146,6 +2212,43 @@ def run_scheduler_cycle(
         db_path=db_path,
     )
     logger.info(f"[SCHEDULER][PUBLISH] Iniciando publicação automática para {task_id} no {platform}")
+
+    # 8.2 Just-In-Time Idempotency Gate (Camada 3 - V16.4.2B):
+    # Detecta se houve race condition ou se evento de sucesso foi registrado após o início do ciclo
+    with get_connection(db_path) as conn:
+        is_safe, canon_jit = publishing_idempotency.jit_provider_idempotency_guard(
+            task_id=task_id,
+            platform=platform,
+            conn=conn,
+        )
+
+    if not is_safe:
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE scheduled_posts SET status = 'published', next_attempt_at = NULL WHERE id = ?;",
+                (post_id,),
+            )
+        pub_now_iso = _to_iso(datetime.now(timezone.utc))
+        _set_executor_status(
+            current_post=None,
+            state="idle",
+            last_run_at=pub_now_iso,
+            last_result=f"Já publicado (race prevenida): {task_id} ({platform})",
+            last_cycle_summary=f"Post {post_id} abortado com segurança antes do provider (evento #{canon_jit['event_id']})",
+            db_path=db_path,
+        )
+        logger.info(
+            f"[SCHEDULER][PUBLISH] Race condition evitada com sucesso para {task_id} ({platform}): "
+            f"já publicado no evento #{canon_jit['event_id']}. Provider NÃO chamado."
+        )
+        return {
+            "status": "published",
+            "reason": "already_published_race_prevented",
+            "task_id": task_id,
+            "platform": platform,
+            "publication_event_id": canon_jit["event_id"],
+            "external_id": canon_jit["external_id"],
+        }
 
     from app.services import task as task_module
     success, err_msg = task_module.publish_task(

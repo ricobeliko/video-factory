@@ -742,7 +742,7 @@ def generate_subtitle(
             except Exception:
                 pass
         if os.path.exists(subtitle_path):
-            logger.error(f"[SUBTITLE][BLOCK] Contaminated subtitle.srt could not be cleared before fallback")
+            logger.error("[SUBTITLE][BLOCK] Contaminated subtitle.srt could not be cleared before fallback")
             return ""
 
         logger.info(f"[SUBTITLE][WHISPER_FALLBACK] task_id={task_id}")
@@ -2510,13 +2510,26 @@ def publish_task(
                     "error": "; ".join(err_messages) if err_messages else None,
                 }
             else:
-                res = upload_post.cross_post_video(
-                    video_path=video_path,
-                    title=post_title,
-                    platforms=list(target_platforms),
-                    youtube_extra=youtube_extra,
-                    external_profile_name=external_profile_name,
-                )
+                from app.services import publishing_idempotency
+                pending_platforms = []
+                for p in target_platforms:
+                    is_safe, _ = publishing_idempotency.jit_provider_idempotency_guard(task_id, p, db_path=db_path)
+                    if is_safe:
+                        pending_platforms.append(p)
+                    else:
+                        logger.info(f"[PUBLISH_TASK] Plataforma '{p}' já publicada com sucesso para task {task_id}. Ignorando no Upload-Post.")
+
+                if not pending_platforms:
+                    logger.info(f"[PUBLISH_TASK] Todas as plataformas {target_platforms} já publicadas para {task_id}. Ignorando chamada ao Upload-Post.")
+                    res = {"success": True, "results": {}, "skipped": True}
+                else:
+                    res = upload_post.cross_post_video(
+                        video_path=video_path,
+                        title=post_title,
+                        platforms=pending_platforms,
+                        youtube_extra=youtube_extra,
+                        external_profile_name=external_profile_name,
+                    )
             if not isinstance(res, dict):
                 res = {"success": False, "error": "Publish provider returned an invalid response"}
             results.append(res)

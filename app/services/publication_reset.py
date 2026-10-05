@@ -1,14 +1,22 @@
-"""Serviço de Auditoria e Reset Controlado de Publicações Pendentes (Fase V16.4.2R).
+"""Serviço de Auditoria e Reset Controlado de Publicações Pendentes (Fase V16.4.2R / V16.4.2R.1).
 
 Fornece operações seguras, auditáveis e não-destrutivas para neutralizar publicações
 pendentes, stale processing ou com retries armados antes de correções no subsistema de publicação.
 
-POLÍTICA DE PRESERVAÇÃO:
+POLÍTICA DE PRESERVAÇÃO E SEGURANÇA (V16.4.2R.1):
 - Preserva integralmente publication_events com status='success'.
+- Preserva scheduled_posts com status='published' (NUNCA transforma em cancelled).
+- Se scheduled_post com status='published' possuir next_attempt_at armado, limpa next_attempt_at
+  e mantém status='published', preservando attempts como histórico (RETRY_DISARMED_AFTER_SUCCESS).
 - Preserva external_id, external_url, published_at e integridade de publicação.
+- Registros com status='failed' que possuem publication_events(success) NÃO são cancelados
+  cegamente: permanecem status='failed', têm seus retries desarmados (next_attempt_at = NULL)
+  e são preservados como inconsistência auditável para reconciliação determinística na V16.4.2A.
+- planned, ready, queued e stale processing são neutralizados para status='cancelled'.
 - Preserva dados de analytics, histórico operacional e perfis/canais.
 - Zero deleção de arquivos de mídia ou diretórios de tarefas.
-- Requer fail-closed: scheduler_enabled=False e auto_publish_enabled=False antes de mutações reais.
+- Requer fail-closed: scheduler_enabled=False, auto_publish_enabled=False e active_primary=False
+  antes de mutações reais.
 - Gera backup consistente prévio com PRAGMA integrity_check e SHA-256.
 - Executa mutações em transação atômica única com registro detalhado em operational_events.
 """
@@ -31,7 +39,7 @@ class PreconditionError(RuntimeError):
 
 
 def check_reset_preconditions(db_path: Optional[str] = None) -> Dict[str, Any]:
-    """Verifica se o scheduler e o auto_publish estão inativos antes do reset."""
+    """Verifica se o scheduler, auto_publish e nó PRIMARY estão inativos antes do reset."""
     target_db = scheduler.get_db_path(db_path)
     if not os.path.isfile(target_db):
         return {
@@ -66,7 +74,10 @@ def check_reset_preconditions(db_path: Optional[str] = None) -> Dict[str, Any]:
     if auto_pub_enabled:
         errors.append("auto_publish_enabled está ativo (True). Produção deve estar parada.")
     if active_primary:
-        errors.append("Instância primária (PRIMARY_FACTORY) está com status ACTIVE em instance_locks.")
+        errors.append(
+            "Instância primária (PRIMARY_FACTORY) está com status ACTIVE em instance_locks. "
+            "Pare a aplicação no host (ex.: schtasks /End /TN MoneyPrinterTurbo) antes de executar o reset real."
+        )
 
     passed = len(errors) == 0
 
@@ -118,7 +129,7 @@ def inventory_before_reset(db_path: Optional[str] = None) -> Dict[str, Any]:
         )
         grouped_counts = [dict(r) for r in counts_cursor.fetchall()]
 
-        # 2. Listagem de posts pendentes / stale / retries armados
+        # 2. Listagem de posts pendentes / stale / retries armados / posts que necessitam de intervenção
         pending_cursor = conn.execute(
             """
             SELECT id, task_id, platform, status, attempts, scheduled_at, next_attempt_at, last_error, profile_id, channel_id
@@ -174,13 +185,28 @@ def inventory_before_reset(db_path: Optional[str] = None) -> Dict[str, Any]:
 
         # 6. Scheduled post pendente que já possua publication_event success
         pending_with_existing_success = []
+        # 6B. Scheduled post 'published' com next_attempt_at armado (para normalização)
+        published_with_armed_retries = []
+        # 6C. Scheduled post 'failed' com publication_event success (inconsistência a preservar)
+        failed_with_existing_success = []
+
         for post in pending_posts:
             row = conn.execute(
                 "SELECT id, external_id, published_at FROM publication_events WHERE task_id = ? AND platform = ? AND status = 'success';",
                 (post["task_id"], post["platform"]),
             ).fetchone()
+
+            if post["status"] == "published" and post.get("next_attempt_at") is not None:
+                published_with_armed_retries.append({
+                    "scheduled_post_id": post["id"],
+                    "task_id": post["task_id"],
+                    "platform": post["platform"],
+                    "next_attempt_at": post["next_attempt_at"],
+                    "attempts": post["attempts"],
+                })
+
             if row:
-                pending_with_existing_success.append({
+                entry = {
                     "scheduled_post_id": post["id"],
                     "task_id": post["task_id"],
                     "platform": post["platform"],
@@ -188,7 +214,11 @@ def inventory_before_reset(db_path: Optional[str] = None) -> Dict[str, Any]:
                     "publication_event_id": row["id"],
                     "external_id": row["external_id"],
                     "published_at": row["published_at"],
-                })
+                }
+                if post["status"] == "failed":
+                    failed_with_existing_success.append(entry)
+                elif post["status"] in ("planned", "ready", "queued", "processing"):
+                    pending_with_existing_success.append(entry)
 
     # 7. Arquivos e vídeos das tarefas pendentes
     tasks_root = os.path.join(os.path.dirname(target_db), "tasks")
@@ -222,6 +252,8 @@ def inventory_before_reset(db_path: Optional[str] = None) -> Dict[str, Any]:
         "duplicate_successes": duplicate_successes,
         "success_without_coherent_post": success_without_coherent_post,
         "pending_with_existing_success": pending_with_existing_success,
+        "published_with_armed_retries": published_with_armed_retries,
+        "failed_with_existing_success": failed_with_existing_success,
         "task_media_info": task_media_info,
         "media_files_deleted": 0,
     }
@@ -242,7 +274,7 @@ def reset_pending_publications(
     if not dry_run and not force_preconditions and not preconditions.get("passed"):
         raise PreconditionError(
             f"Falha de pré-condições para reset: {preconditions.get('errors')}. "
-            "Se scheduler ou auto_publish estiverem ativos: ABORTAR."
+            "Se scheduler ou auto_publish estiverem ativos ou nó primário ativo: ABORTAR."
         )
 
     if not dry_run and confirm_token != "RESET_PENDING_PUBLICATIONS":
@@ -258,30 +290,40 @@ def reset_pending_publications(
     would_clear_next_attempt = 0
     would_neutralize_duplicates = 0
     already_published_preserved = 0
+    normalized_published = 0
+    failed_with_success_preserved = 0
 
     actions_plan: List[Dict[str, Any]] = []
-
-    # Mapeia tarefas que já possuem sucesso publicado
-    success_pairs = {
-        (e["task_id"], e["platform"])
-        for e in before_inv.get("pending_with_existing_success", [])
-    }
-
-    # Detecta duplicatas entre posts pendentes
-    seen_pending_keys = set()
-    duplicate_pending_ids = set()
-    for post in pending_posts:
-        key = (post["task_id"], post.get("channel_id") or "", post["platform"])
-        if key in seen_pending_keys:
-            duplicate_pending_ids.add(post["id"])
-        else:
-            seen_pending_keys.add(key)
 
     with scheduler.get_connection(target_db) as conn:
         pub_count_row = conn.execute(
             "SELECT COUNT(*) AS cnt FROM scheduled_posts WHERE status = 'published';"
         ).fetchone()
         already_published_preserved = pub_count_row["cnt"] if pub_count_row else 0
+
+        # Mapeia todas as tarefas e plataformas que já possuem evento com status = 'success'
+        success_events_rows = conn.execute(
+            "SELECT DISTINCT task_id, platform FROM publication_events WHERE status = 'success';"
+        ).fetchall()
+        success_pairs = {(r["task_id"], r["platform"]) for r in success_events_rows}
+
+        # Mapeia todas as tarefas e plataformas que possuem status = 'published' em scheduled_posts
+        published_rows = conn.execute(
+            "SELECT DISTINCT task_id, platform FROM scheduled_posts WHERE status = 'published';"
+        ).fetchall()
+        published_pairs = {(r["task_id"], r["platform"]) for r in published_rows}
+
+    # Detecta duplicatas entre posts pendentes (excluindo posts 'published')
+    seen_pending_keys = set()
+    duplicate_pending_ids = set()
+    for post in pending_posts:
+        if post["status"] == "published":
+            continue
+        key = (post["task_id"], post.get("channel_id") or "", post["platform"])
+        if key in seen_pending_keys:
+            duplicate_pending_ids.add(post["id"])
+        else:
+            seen_pending_keys.add(key)
 
     for post in pending_posts:
         post_id = post["id"]
@@ -290,28 +332,87 @@ def reset_pending_publications(
         task_id = post["task_id"]
         platform = post["platform"]
 
-        is_already_successful = (task_id, platform) in success_pairs
+        has_published_record = (task_id, platform) in published_pairs
+        has_success_event = (task_id, platform) in success_pairs
+        has_canonical_success = has_published_record or has_success_event
         is_dup = post_id in duplicate_pending_ids
 
-        reason = audit_reason
         resulting_status = "cancelled"
+        reason = audit_reason
 
-        if is_already_successful:
-            reason = f"{audit_reason}: Publication already completed with success in publication_events"
-            would_neutralize_duplicates += 1
-        elif is_dup:
-            reason = f"{audit_reason}: Neutralizing duplicate scheduled post"
-            would_neutralize_duplicates += 1
+        # -------------------------------------------------------------
+        # REGRA 1: PUBLISHED (com ou sem publication_event success)
+        # NUNCA transformar em cancelled! Manter published, limpar next_attempt_at.
+        # -------------------------------------------------------------
+        if status == "published":
+            resulting_status = "published"
+            if next_attempt is not None:
+                would_clear_next_attempt += 1
+                normalized_published += 1
+                reason = f"{audit_reason}: RETRY_DISARMED_AFTER_SUCCESS: Published post normalized, retry disarmed"
+            else:
+                reason = f"{audit_reason}: PUBLISHED_POST_PRESERVED"
 
-        if status in ("planned", "ready", "queued"):
-            would_cancel_planned += 1
+        # -------------------------------------------------------------
+        # REGRA 2: PLANNED / READY / QUEUED
+        # Neutralizar para cancelled. Se já houver sucesso publicado, registrar como duplicata.
+        # -------------------------------------------------------------
+        elif status in ("planned", "ready", "queued"):
+            resulting_status = "cancelled"
+            if next_attempt is not None:
+                would_clear_next_attempt += 1
+
+            if has_canonical_success:
+                would_neutralize_duplicates += 1
+                reason = f"{audit_reason}: PENDING_DUPLICATE_ALREADY_PUBLISHED_CANCELLED: Publication already completed"
+            elif is_dup:
+                would_neutralize_duplicates += 1
+                reason = f"{audit_reason}: PENDING_DUPLICATE_CANCELLED: Neutralizing duplicate scheduled post"
+            else:
+                would_cancel_planned += 1
+                reason = f"{audit_reason}: PENDING_PUBLICATION_CANCELLED"
+
+        # -------------------------------------------------------------
+        # REGRA 3: PROCESSING (stale durante manutenção)
+        # Neutralizar para cancelled. Não volta automaticamente para fila.
+        # -------------------------------------------------------------
         elif status == "processing":
+            resulting_status = "cancelled"
+            if next_attempt is not None:
+                would_clear_next_attempt += 1
             would_cancel_processing += 1
+            reason = f"{audit_reason}: STALE_PROCESSING_CANCELLED"
+
+        # -------------------------------------------------------------
+        # REGRA 4: FAILED
+        # Se possuir publication_event success: NÃO cancelar cegamente.
+        # Manter status='failed', desarmar retry (next_attempt_at = NULL),
+        # preservar para reconciliação na V16.4.2A.
+        # Se NÃO possuir publication_event success: cancelar e desarmar retry.
+        # -------------------------------------------------------------
         elif status == "failed":
+            if next_attempt is not None:
+                would_clear_next_attempt += 1
             would_disarm_retries += 1
 
-        if next_attempt is not None:
-            would_clear_next_attempt += 1
+            if has_canonical_success:
+                resulting_status = "failed"
+                failed_with_success_preserved += 1
+                reason = f"{audit_reason}: FAILED_WITH_SUCCESS_INCONSISTENCY_DISARMED: Preserved as failed for V16.4.2A reconciliation"
+            else:
+                resulting_status = "cancelled"
+                reason = f"{audit_reason}: FAILED_WITHOUT_SUCCESS_CANCELLED: Retry disarmed and post cancelled"
+
+        # -------------------------------------------------------------
+        # REGRA 5: Outros status (ex.: cancelled)
+        # -------------------------------------------------------------
+        else:
+            resulting_status = status
+            if next_attempt is not None:
+                would_clear_next_attempt += 1
+                reason = f"{audit_reason}: RETRY_DISARMED_FOR_POST"
+            else:
+                reason = f"{audit_reason}: POST_STATUS_PRESERVED"
 
         actions_plan.append({
             "scheduled_post_id": post_id,
@@ -391,6 +492,8 @@ def reset_pending_publications(
         "would_clear_next_attempt": would_clear_next_attempt,
         "would_neutralize_duplicates": would_neutralize_duplicates,
         "already_published_preserved": already_published_preserved,
+        "normalized_published": normalized_published,
+        "failed_with_success_preserved": failed_with_success_preserved,
         "media_files_preserved": True,
         "actions_plan": actions_plan,
         "before_inventory": before_inv,
@@ -468,6 +571,21 @@ def audit_after_reset(
             remaining_inconsistencies.append(
                 f"Task {item['task_id']} ({item['platform']}): publicado com sucesso ({item['external_id']}), "
                 f"mas sem registro coerente com status='published' em scheduled_posts."
+            )
+
+    with scheduler.get_connection(target_db) as conn:
+        failed_with_success_cursor = conn.execute(
+            """
+            SELECT sp.id, sp.task_id, sp.platform, pe.external_id
+            FROM scheduled_posts sp
+            JOIN publication_events pe ON sp.task_id = pe.task_id AND sp.platform = pe.platform
+            WHERE sp.status = 'failed' AND pe.status = 'success';
+            """
+        )
+        for row in failed_with_success_cursor.fetchall():
+            remaining_inconsistencies.append(
+                f"Post #{row['id']} (Task {row['task_id']}, {row['platform']}): status='failed' "
+                f"apesar de publicação com sucesso ({row['external_id']}). Preservado para reconciliação na V16.4.2A."
             )
 
     return {

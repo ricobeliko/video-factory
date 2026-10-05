@@ -589,3 +589,32 @@ Após qualquer deploy, hotfix, mudança de arquitetura, nova fase, alteração d
 - `PRODUCTION_RUNBOOK.md`
 
 Nunca salvar secrets, API keys, tokens ou conteúdo sensível de `config.toml`.
+
+---
+
+## 23. Procedimento Operacional: Reset de Publicações (V16.4.2R / V16.4.2R.1)
+
+O reset controlado de publicações pendentes exige que a produção esteja parada (`scheduler_enabled = false`, `auto_publish_enabled = false` e nenhum nó PRIMARY ativo em `instance_locks`).
+
+### Procedimento para colocar a Factory em Manutenção / Offline:
+
+1. **Parar a Scheduled Task no PC Forte:**
+   ```powershell
+   schtasks /End /TN MoneyPrinterTurbo
+   ```
+2. **Confirmar que a porta 8501 foi liberada e o processo encerrou:**
+   ```powershell
+   Test-NetConnection -ComputerName 127.0.0.1 -Port 8501
+   ```
+   O encerramento normal/limpo executa `operator_console.release_instance_lock()`, atualizando o status em `instance_locks` para `STOPPED`.
+3. **NUNCA manipular ou deletar manualmente registros de `instance_locks`:**
+   A infraestrutura de single-instance protege contra corrupção concorrente de banco de dados.
+4. **Executar o Dry-Run do Reset no PC Forte:**
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --dry-run
+   ```
+5. **Executar o Reset Real (apenas após aprovação humana do Dry-Run):**
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --execute --confirm RESET_PENDING_PUBLICATIONS
+   ```
+

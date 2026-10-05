@@ -74,6 +74,10 @@ class RealGenerationGateReport:
     scenes: List[RealSceneEvaluation]
     artifacts_generated: List[str] = field(default_factory=list)
     human_authorization_command: Optional[str] = None
+    generations_requested: int = 0
+    generations_succeeded: int = 0
+    generations_failed: int = 0
+    quality_gates_passed: int = 0
 
 
 # Cenas canônicas da V16.8.1
@@ -131,52 +135,105 @@ HERO_SCENES_METADATA = [
 
 def evaluate_v16_8_1_gate(
     api_key: Optional[str] = None,
+    model: Optional[str] = None,
     output_dir: str = "storage/validation/v16_8_1",
     force_execute: bool = False,
     task_id: str = "17386147-cb1b-4192-b827-251a1bbd411f",
+    run_id: Optional[str] = None,
 ) -> RealGenerationGateReport:
     """
-    Executa a auditoria e o gate da V16.8.1.
-    Se a credencial real não for informada ou o gate de custo não for autorizado,
-    retorna NOT_EXECUTED_REQUIRES_HUMAN_GATE preparando todos os artefatos de revisão.
+    Executa a auditoria e o quality gate da V16.8.1.
+    - Se a credencial real não for informada ou o gate de custo não for autorizado,
+      retorna NOT_EXECUTED_REQUIRES_HUMAN_GATE preparando os artefatos de revisão.
+    - Em execução real, isola os arquivos em diretório versionado de run para impedir
+      reutilização silenciosa de keyframes mock antigos.
+    - Se a chamada externa falhar, não gera preview e marca generated_asset como None.
+    - Calcula decisões estritas: PASS (3/3), PARTIAL (1-2/3), FAIL (0/3), NOT_EXECUTED.
     """
-    os.makedirs(output_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    os.makedirs(output_dir, exist_ok=True)
 
-    resolved_api_key = api_key or os.getenv("NANO_BANANA_API_KEY", "")
+    # Resolução de credenciais com prioridade (GEMINI_API_KEY -> NANO_BANANA_API_KEY)
+    resolved_api_key = (
+        api_key
+        or os.getenv("GEMINI_API_KEY", "")
+        or os.getenv("NANO_BANANA_API_KEY", "")
+    )
     has_credentials = bool(resolved_api_key and resolved_api_key.strip())
+
+    # Resolução de modelo oficial Gemini
+    model_name = (
+        model
+        or os.getenv("GEMINI_IMAGE_MODEL", "")
+        or os.getenv("NANO_BANANA_MODEL", "")
+        or hybrid_visual.DEFAULT_GEMINI_IMAGE_MODEL
+    )
+
+    # Diretório versionado para a execução
+    if has_credentials and force_execute:
+        folder_tag = f"real_{run_id or ts}"
+        run_dir = os.path.join(output_dir, "runs", folder_tag)
+    else:
+        folder_tag = f"mock_{run_id or ts}" if run_id else "mock"
+        run_dir = os.path.join(output_dir, folder_tag)
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Determina status de credencial e gate de custo inicial
+    if not has_credentials:
+        cred_status = "MISSING_API_KEY (GEMINI_API_KEY / NANO_BANANA_API_KEY não configurada no ambiente nem em .env)"
+        cost_gate_active = True
+    elif not force_execute:
+        cred_status = "CREDENTIAL_CONFIGURED_BUT_AWAITING_HUMAN_CONFIRMATION"
+        cost_gate_active = True
+    else:
+        cred_status = "CONFIGURED_AND_AUTHORIZED"
+        cost_gate_active = False
+
+    ffmpeg_bin = utils.get_ffmpeg_binary()
 
     scenes_eval: List[RealSceneEvaluation] = []
     artifacts: List[str] = []
 
-    # Determina o status da credencial e gate de custo
-    if not has_credentials:
-        cred_status = "MISSING_API_KEY (NANO_BANANA_API_KEY não configurada no ambiente nem em .env)"
-        cost_gate_active = True
-        gate_decision = RealGateDecision.NOT_EXECUTED_REQUIRES_HUMAN_GATE
-    elif not force_execute:
-        cred_status = "CREDENTIAL_CONFIGURED_BUT_AWAITING_HUMAN_CONFIRMATION"
-        cost_gate_active = True
-        gate_decision = RealGateDecision.NOT_EXECUTED_REQUIRES_HUMAN_GATE
-    else:
-        cred_status = "CONFIGURED_AND_AUTHORIZED"
-        cost_gate_active = False
-        gate_decision = RealGateDecision.PASS
+    generations_requested = 0
+    generations_succeeded = 0
+    generations_failed = 0
+    quality_gates_passed = 0
 
-    ffmpeg_bin = utils.get_ffmpeg_binary()
-
-    # Prepara cada uma das 3 cenas HERO
+    # Processamento estrito das 3 cenas HERO
     for item in HERO_SCENES_METADATA:
         s_idx = item["scene_index"]
         prompt = item["prompt"]
         motion_mode = item["still_motion_mode"]
 
-        keyframe_path = os.path.join(output_dir, f"scene_{s_idx}_keyframe.png")
-        preview_mp4 = os.path.join(output_dir, f"scene_{s_idx}_still_motion.mp4")
+        keyframe_path = os.path.join(run_dir, f"scene_{s_idx}_keyframe.png")
+        preview_mp4 = os.path.join(run_dir, f"scene_{s_idx}_still_motion.mp4")
 
-        # Se for execução real autorizada
+        # STALE ARTIFACT FIX: Remove artefatos pré-existentes desta cena antes da geração
+        if os.path.exists(keyframe_path):
+            try:
+                os.remove(keyframe_path)
+            except OSError:
+                pass
+        if os.path.exists(preview_mp4):
+            try:
+                os.remove(preview_mp4)
+            except OSError:
+                pass
+
+        generated_asset: Optional[str] = None
+        still_motion_preview_path: Optional[str] = None
+        w: Optional[int] = None
+        h: Optional[int] = None
+        file_sz: Optional[int] = None
+        gen_time: Optional[float] = None
+
         if has_credentials and force_execute:
-            adapter = hybrid_visual.NanoBananaImageAdapter(api_key=resolved_api_key, mock_mode=False)
+            generations_requested += 1
+            adapter = hybrid_visual.NanoBananaImageAdapter(
+                api_key=resolved_api_key,
+                model=model_name,
+                mock_mode=False,
+            )
             req = hybrid_visual.GenerationRequest(
                 scene_id=s_idx,
                 prompt=prompt,
@@ -185,19 +242,37 @@ def evaluate_v16_8_1_gate(
                 target_capability=hybrid_visual.VisualCapability.TEXT_TO_IMAGE,
             )
             gen_res = adapter.generate(req)
-            if gen_res.success:
+
+            if gen_res.success and os.path.exists(keyframe_path) and os.path.getsize(keyframe_path) > 0:
+                generations_succeeded += 1
                 q_gate = hybrid_visual.evaluate_keyframe_quality(keyframe_path, "9:16")
-                q_result = q_gate.reason
+                if q_gate.is_valid:
+                    quality_gates_passed += 1
+                    q_result = "PASS"
+                else:
+                    q_result = f"TECH_GATE_FAILED: {q_gate.reason}"
+
                 w, h = q_gate.width, q_gate.height
                 file_sz = q_gate.file_size_bytes
                 gen_time = gen_res.metrics.generation_time_seconds
+                generated_asset = keyframe_path
             else:
+                generations_failed += 1
                 q_result = f"GEN_FAILED: {gen_res.fallback_reason}"
                 w, h, file_sz, gen_time = None, None, None, None
-                gate_decision = RealGateDecision.PARTIAL
+                generated_asset = None
+                # Garante que nenhum arquivo corrompido ou vazio persista
+                if os.path.exists(keyframe_path):
+                    try:
+                        os.remove(keyframe_path)
+                    except OSError:
+                        pass
         else:
-            # Modo preparação para gate humano: gera keyframe proxy estruturado para validação de layout e still motion
-            adapter = hybrid_visual.NanoBananaImageAdapter(mock_mode=True)
+            # Modo preparação / proxy para gate humano
+            adapter = hybrid_visual.NanoBananaImageAdapter(
+                model=model_name,
+                mock_mode=True,
+            )
             req = hybrid_visual.GenerationRequest(
                 scene_id=s_idx,
                 prompt=prompt,
@@ -211,18 +286,19 @@ def evaluate_v16_8_1_gate(
             w, h = q_gate.width, q_gate.height
             file_sz = q_gate.file_size_bytes
             gen_time = gen_res.metrics.generation_time_seconds
+            generated_asset = keyframe_path
 
-        # Gera preview de still motion com ffmpeg
-        if os.path.exists(keyframe_path):
+        # Gera preview de still motion SOMENTE se houver imagem gerada válida
+        if generated_asset and os.path.exists(generated_asset):
             try:
                 inst = hybrid_visual.generate_still_motion_instructions(
-                    image_path=keyframe_path,
+                    image_path=generated_asset,
                     duration_seconds=3.0,
                     aspect_ratio="9:16",
                     mode=motion_mode,
                 )
                 cmd = [
-                    ffmpeg_bin, "-y", "-loop", "1", "-i", keyframe_path,
+                    ffmpeg_bin, "-y", "-loop", "1", "-i", generated_asset,
                     "-vf", inst["ffmpeg_filter"],
                     "-t", "3.0",
                     "-c:v", "libx264", "-pix_fmt", "yuv420p",
@@ -230,12 +306,12 @@ def evaluate_v16_8_1_gate(
                 ]
                 sub = subprocess.run(cmd, capture_output=True, text=True)
                 if sub.returncode == 0 and os.path.exists(preview_mp4):
+                    still_motion_preview_path = preview_mp4
                     artifacts.append(preview_mp4)
             except Exception as exc:
                 logger.warning(f"Falha ao gerar preview still motion para cena {s_idx}: {exc}")
 
-        if os.path.exists(keyframe_path):
-            artifacts.append(keyframe_path)
+            artifacts.append(generated_asset)
 
         scene_eval = RealSceneEvaluation(
             scene_index=s_idx,
@@ -246,31 +322,44 @@ def evaluate_v16_8_1_gate(
             stock_score=item["stock_score"],
             stock_visual_gap=item["stock_visual_gap"],
             provider="nano_banana",
-            model="nano_banana_image_v1",
+            model=model_name,
             prompt=prompt,
             still_motion_mode=motion_mode,
-            generated_asset=keyframe_path if os.path.exists(keyframe_path) else None,
+            generated_asset=generated_asset,
             width=w,
             height=h,
             aspect_ratio="9:16",
             file_size_bytes=file_sz,
             generation_time_seconds=gen_time,
             quality_gate_result=q_result,
-            still_motion_preview_path=preview_mp4 if os.path.exists(preview_mp4) else None,
+            still_motion_preview_path=still_motion_preview_path,
             expected_perceptual_improvement=item["expected_perceptual_improvement"],
         )
         scenes_eval.append(scene_eval)
 
-    # Gera artefatos lado a lado (Markdown)
+    # Cálculo estrito da decisão do Gate
+    if not has_credentials or not force_execute:
+        gate_decision = RealGateDecision.NOT_EXECUTED_REQUIRES_HUMAN_GATE
+    else:
+        # Execução real concluída
+        if generations_requested == 3 and generations_succeeded == 3 and quality_gates_passed == 3:
+            gate_decision = RealGateDecision.PASS
+        elif quality_gates_passed > 0 or generations_succeeded > 0:
+            gate_decision = RealGateDecision.PARTIAL
+        else:
+            gate_decision = RealGateDecision.FAIL
+
+    # Relatórios Markdown Lado a Lado (Stock vs Generated)
     for s in scenes_eval:
-        md_file = os.path.join(output_dir, f"scene_{s.scene_index}_stock_vs_generated.md")
+        md_file = os.path.join(run_dir, f"scene_{s.scene_index}_stock_vs_generated.md")
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(f"# Comparação Lado a Lado — Cena {s.scene_index}\n\n")
             f.write(f"**Tópico HERO:** {s.hero_topic}  \n")
             f.write(f"**Narração:** *\"{s.narration}\"*  \n\n")
             f.write("| Dimensão | Stock Selecionado (Baseline) | Imagem Contextual (Generated) |\n")
             f.write("|---|---|---|\n")
-            f.write(f"| **Ativo / Identificador** | `{s.stock_candidate_title}` (`{s.stock_asset}`) | `{os.path.basename(s.generated_asset or '')}` |\n")
+            gen_label = f"`{os.path.basename(s.generated_asset)}`" if s.generated_asset else "*Nenhum ativo gerado (Falha na geração)*"
+            f.write(f"| **Ativo / Identificador** | `{s.stock_candidate_title}` (`{s.stock_asset}`) | {gen_label} |\n")
             f.write(f"| **Score de Matching** | `{s.stock_score} / 100` | `88.0 - 95.0 / 100 (Semântico Real)` |\n")
             f.write(f"| **Gap Visual do Stock** | {s.stock_visual_gap} | N/A (Totalmente aderente ao tema marciano) |\n")
             f.write(f"| **Prompt Contextual** | N/A (Palavras-chave genéricas de stock) | `{s.prompt}` |\n")
@@ -285,8 +374,7 @@ def evaluate_v16_8_1_gate(
                 f.write(f"- Preview MP4: `{s.still_motion_preview_path}`\n")
         artifacts.append(md_file)
 
-    # Relatório JSON
-    report_json_path = os.path.join(output_dir, "real_generation_report.json")
+    # Relatório JSON estruturado
     report_dict = {
         "task_id": task_id,
         "timestamp": ts,
@@ -296,16 +384,28 @@ def evaluate_v16_8_1_gate(
         "external_cost_gate_active": cost_gate_active,
         "automated_proxy_score": 94.1,
         "human_visual_review_required": True,
+        "model_used": model_name,
+        "generations_requested": generations_requested,
+        "generations_succeeded": generations_succeeded,
+        "generations_failed": generations_failed,
+        "quality_gates_passed": quality_gates_passed,
         "scenes_selected": [s.scene_index for s in scenes_eval],
         "scenes": [asdict(s) for s in scenes_eval],
     }
-    with open(report_json_path, "w", encoding="utf-8") as f:
+
+    report_json_run = os.path.join(run_dir, "real_generation_report.json")
+    with open(report_json_run, "w", encoding="utf-8") as f:
         json.dump(report_dict, f, indent=2, ensure_ascii=False)
-    artifacts.append(report_json_path)
+    artifacts.append(report_json_run)
+
+    # Copia para a raiz de validation para ponteiros canônicos
+    report_json_root = os.path.join(output_dir, "real_generation_report.json")
+    with open(report_json_root, "w", encoding="utf-8") as f:
+        json.dump(report_dict, f, indent=2, ensure_ascii=False)
 
     # Relatório Markdown Geral
-    report_md_path = os.path.join(output_dir, "real_generation_report.md")
-    with open(report_md_path, "w", encoding="utf-8") as f:
+    report_md_run = os.path.join(run_dir, "real_generation_report.md")
+    with open(report_md_run, "w", encoding="utf-8") as f:
         f.write("# V16.8.1 — Real Generated Image Quality Gate Report\n\n")
         f.write(f"- **Task ID:** `{task_id}`\n")
         f.write("- **Tema:** 3 curiosidades surpreendentes sobre Marte\n")
@@ -313,6 +413,11 @@ def evaluate_v16_8_1_gate(
         f.write(f"- **Gate Decision:** **`{gate_decision.value}`**\n")
         f.write(f"- **Status de Credencial:** `{cred_status}`\n")
         f.write(f"- **Gate de Custo Externo Ativo:** `{cost_gate_active}`\n")
+        f.write(f"- **Modelo Configurado:** `{model_name}`\n")
+        f.write(f"- **Gerações Solicitadas:** `{generations_requested}`\n")
+        f.write(f"- **Gerações com Sucesso:** `{generations_succeeded}`\n")
+        f.write(f"- **Gerações com Falha:** `{generations_failed}`\n")
+        f.write(f"- **Quality Gates Aprovados:** `{quality_gates_passed}`\n")
         f.write("- **Automated Proxy Score:** `94.1 / 100`\n")
         f.write("- **Human Visual Review Required:** `True`\n\n")
         f.write("## Cenas Críticas Avaliadas\n\n")
@@ -326,15 +431,20 @@ def evaluate_v16_8_1_gate(
             f.write(f"- **Quality Gate Result:** `{s.quality_gate_result}`\n\n")
 
         f.write("## Instruções para Execução Real com Autorização Humana\n\n")
-        f.write("Para executar as 3 gerações reais consumindo créditos Nano Banana:\n\n")
+        f.write("Para executar as 3 gerações reais via API Gemini oficial do Google AI Studio:\n\n")
         f.write("```bash\n")
-        f.write("python scripts/run_v16_8_1_real_image_gate.py --api-key <SUA_CHAVE_NANO_BANANA> --execute-real\n")
+        f.write(f"python scripts/run_v16_8_1_real_image_gate.py --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model {model_name} --execute-real\n")
         f.write("```\n")
-    artifacts.append(report_md_path)
+    artifacts.append(report_md_run)
+
+    report_md_root = os.path.join(output_dir, "real_generation_report.md")
+    with open(report_md_root, "w", encoding="utf-8") as f:
+        with open(report_md_run, "r", encoding="utf-8") as fr:
+            f.write(fr.read())
 
     auth_cmd = (
         "python scripts/run_v16_8_1_real_image_gate.py "
-        f"--task-id {task_id} --api-key <NANO_BANANA_API_KEY> --execute-real"
+        f"--task-id {task_id} --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model {model_name} --execute-real"
     )
 
     return RealGenerationGateReport(
@@ -350,4 +460,9 @@ def evaluate_v16_8_1_gate(
         scenes=scenes_eval,
         artifacts_generated=artifacts,
         human_authorization_command=auth_cmd,
+        generations_requested=generations_requested,
+        generations_succeeded=generations_succeeded,
+        generations_failed=generations_failed,
+        quality_gates_passed=quality_gates_passed,
     )
+

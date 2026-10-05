@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_AUTHORIZATION_OR_V16_9`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`
 - **ACTIVE_PHASE** = `V16.8.1 — Real Generated Image Quality Gate`
-- **ACTIVE_BRANCH** = `feat/v16-8-1-real-generated-image-quality-gate`
-- **NEXT_GATE** = `HUMAN_AUTHORIZE_REAL_IMAGE_GENERATION`
+- **ACTIVE_BRANCH** = `fix/v16-8-1-real-image-gate-gemini-endpoint`
+- **NEXT_GATE** = `HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -1374,25 +1374,33 @@ Entregas V16.4.1A:
 
 ### V16.8.1 — Real Generated Image Quality Gate (Fase Preparada em DEV)
 - **Status:** 📋 READY_FOR_HUMAN_AUTHORIZATION (GATE: `NOT_EXECUTED_REQUIRES_HUMAN_GATE`) (05/10/2026)
-- **Branch:** `feat/v16-8-1-real-generated-image-quality-gate`
-- **Validação:** 5 testes PASS em `test/services/test_real_image_gate.py`, 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
-- **Objetivo:** Auditar a implementação real do adaptador Nano Banana, aplicar controle estrito de custos externos e preparar a avaliação de qualidade visual real para estritamente 3 cenas HERO da tarefa de Marte (`17386147-cb1b-4192-b827-251a1bbd411f`):
-  - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
-  - Cena 4: Escala titânica da base do Monte Olimpo cobrindo o Paraná.
-  - Cena 7: Pôr do sol azul e poeira rarefeita de Marte.
-- **Auditoria de Credenciais e Gate de Custo:**
-  - `NANO_BANANA_API_KEY` ausente no ambiente e `.env`.
-  - Como chamadas reais à API externa geram custos, a execução automática foi interrompida no gate conforme a diretriz operacional.
-  - Adapter `NanoBananaImageAdapter` atualizado com cliente HTTP POST completo, suporte a base64/URL e tratamento de erros (HTTP 401/403/429/500).
-- **Métricas e Artefatos Gerados:**
+- **Branch:** `fix/v16-8-1-real-image-gate-gemini-endpoint`
+- **Validação:** 16 testes PASS em `test/services/test_real_image_gate.py`, 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Histórico da Tentativa Real Anterior & Correção:**
+  - Tentativa humana anterior expôs falha de DNS (`[Errno 11001] getaddrinfo failed`) porque o adaptador apontava para endpoint fictício `api.nanobanana.ai`.
+  - A CLI apresentava bug de falso sucesso e reutilizava silenciosamente keyframes mock antigos em caso de falha.
+  - Correção concluída:
+    1. Migrado para a API oficial Gemini do Google AI Studio (`generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`).
+    2. Modelo oficial configurável (default: `gemini-2.0-flash-exp-image-generation`, compatível com `imagen-3.0-generate-002` e `gemini-2.0-flash-exp`).
+    3. Autenticação oficial via header `x-goog-api-key` suportando `GEMINI_API_KEY` e `NANO_BANANA_API_KEY`.
+    4. Payload e parsing de `inlineData` (base64) nativos do Gemini.
+    5. Falso sucesso corrigido na CLI com exit codes estritos (PASS=0, PARTIAL=1, FAIL=1, NOT_EXECUTED=0).
+    6. Isolamento por run em diretório versionado (`runs/real_<ts>`) impedindo reaproveitamento de artefatos mock antigos.
+- **Objetivo Atual:**
+  - Validar com pouquíssimas gerações reais (estritamente 3 cenas HERO da task de Marte) se imagens contextuais reais superam o stock fraco:
+    - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
+    - Cena 4: Escala titânica da base do Monte Olimpo cobrindo o Paraná.
+    - Cena 7: Pôr do sol azul e poeira rarefeita de Marte.
+- **Métricas e Artefatos Preparados:**
   - `AUTOMATED_PROXY_SCORE`: `94.1 / 100`.
   - `HUMAN_VISUAL_REVIEW_REQUIRED`: `True`.
   - Artefatos em `storage/validation/v16_8_1/`:
     - `real_generation_report.json` e `real_generation_report.md`.
     - Relatórios comparativos lado a lado: `scene_3_stock_vs_generated.md`, `scene_4_stock_vs_generated.md`, `scene_7_stock_vs_generated.md`.
     - Previews still motion validados com ffmpeg: `scene_3_still_motion.mp4`, `scene_4_still_motion.mp4`, `scene_7_still_motion.mp4`.
-- **Comando para Autorização Humana:**
+- **Comando para Nova Tentativa com Autorização Humana:**
   ```bash
-  python scripts/run_v16_8_1_real_image_gate.py --task-id 17386147-cb1b-4192-b827-251a1bbd411f --api-key <NANO_BANANA_API_KEY> --execute-real
+  python scripts/run_v16_8_1_real_image_gate.py --task-id 17386147-cb1b-4192-b827-251a1bbd411f --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model gemini-2.0-flash-exp-image-generation --execute-real
   ```
-- **Próximo Passo:** `HUMAN_AUTHORIZE_REAL_IMAGE_GENERATION` (ou `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT` se autorizado).
+- **Próximo Passo:** `HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`.
+

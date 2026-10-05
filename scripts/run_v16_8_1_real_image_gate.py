@@ -8,11 +8,12 @@ aplica o gate de custo externo e prepara os artefatos comparativos.
 """
 
 import argparse
+import sys
 
 from app.services import real_image_gate
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="V16.8.1 Real Generated Image Quality Gate Runner")
     parser.add_argument(
         "--task-id",
@@ -24,7 +25,13 @@ def main():
         "--api-key",
         type=str,
         default=None,
-        help="Chave de API Nano Banana para autorização de geração real",
+        help="Chave de API Gemini / Google AI Studio para autorização de geração real",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Modelo oficial Gemini de imagem (default: gemini-2.0-flash-exp-image-generation)",
     )
     parser.add_argument(
         "--execute-real",
@@ -49,6 +56,7 @@ def main():
 
     report = real_image_gate.evaluate_v16_8_1_gate(
         api_key=args.api_key,
+        model=args.model,
         output_dir=args.output_dir,
         force_execute=args.execute_real,
         task_id=args.task_id,
@@ -60,6 +68,10 @@ def main():
     print(f"AUTOMATED PROXY SCORE          : {report.automated_proxy_score} / 100")
     print(f"HUMAN VISUAL REVIEW REQUIRED   : {report.human_visual_review_required}")
     print(f"CENAS HERO SELECIONADAS        : {report.scenes_selected}")
+    print(f"GERAÇÕES SOLICITADAS           : {report.generations_requested}")
+    print(f"GERAÇÕES COM SUCESSO           : {report.generations_succeeded}")
+    print(f"GERAÇÕES COM FALHA             : {report.generations_failed}")
+    print(f"QUALITY GATES APROVADOS        : {report.quality_gates_passed}")
 
     print("\n--- CENAS AVALIADAS ---")
     for s in report.scenes:
@@ -77,12 +89,21 @@ def main():
     for art in report.artifacts_generated:
         print(f" - {art}")
 
-    if report.gate_decision == real_image_gate.RealGateDecision.NOT_EXECUTED_REQUIRES_HUMAN_GATE:
-        print("\n[GATE ATIVO] Nenhuma chamada paga executada sem autorização humana.")
+    if report.gate_decision == real_image_gate.RealGateDecision.PASS:
+        print("\n[SUCESSO] 3/3 gerações reais aprovadas.\n")
+        return 0
+    elif report.gate_decision == real_image_gate.RealGateDecision.PARTIAL:
+        print("\n[PARCIAL] Uma ou mais gerações falharam. Gate real NÃO aprovado.\n")
+        return 1
+    elif report.gate_decision == real_image_gate.RealGateDecision.FAIL:
+        print("\n[FALHA] Gate real reprovado.\n")
+        return 1
+    elif report.gate_decision == real_image_gate.RealGateDecision.NOT_EXECUTED_REQUIRES_HUMAN_GATE:
+        print("\n[GATE ATIVO] Execução real não realizada.")
         print(f"Comando de autorização:\n{report.human_authorization_command}\n")
-    else:
-        print("\n[SUCESSO] 3/3 gerações reais processadas com sucesso.\n")
+        return 0
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

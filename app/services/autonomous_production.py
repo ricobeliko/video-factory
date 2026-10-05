@@ -1544,7 +1544,16 @@ def build_autonomous_video_params(
         voice_volume = 1.0
 
     try:
-        voice_rate = float(config.ui.get("voice_rate", 1.0))
+        raw_rate = float(config.ui.get("voice_rate", 1.0))
+        # V16.5.1 Narration Recovery: velocidade natural de fala em pt-BR (0.95 - 1.30).
+        # Taxas baixas (como 0.8) degradam a naturalidade tornando a fala arrastada/robótica.
+        if raw_rate < 0.95 or raw_rate > 1.30:
+            logger.warning(
+                f"voice_rate={raw_rate} fora da faixa natural para narração pt-BR (0.95-1.30). Normalizando para 1.0."
+            )
+            voice_rate = 1.0
+        else:
+            voice_rate = raw_rate
     except (ValueError, TypeError):
         voice_rate = 1.0
 
@@ -1590,7 +1599,16 @@ def build_autonomous_video_params(
     # 8. Legendas - Contrato Brasileiro Canônico (V16.1: Legenda Branca Obrigatória)
     subtitle_enabled = True
     font_name = str(config.ui.get("font_name", "MicrosoftYaHeiBold.ttc") or "MicrosoftYaHeiBold.ttc")
-    subtitle_position = str(config.ui.get("subtitle_position", "bottom"))
+    raw_sub_pos = str(config.ui.get("subtitle_position", "bottom"))
+    # V16.5.1 Subtitle Recovery: 'top' não deve ser usado como default na produção autônoma de short-form,
+    # pois colide com controles de navegação e gera distração visual. Normaliza para 'bottom' (região inferior segura).
+    if raw_sub_pos == "top":
+        logger.warning(
+            "subtitle_position='top' detectado; normalizando para 'bottom' (região inferior segura V16.5.1)."
+        )
+        subtitle_position = "bottom"
+    else:
+        subtitle_position = raw_sub_pos
     subtitle_display_mode = _get_valid_ui_choice("subtitle_display_mode", _SUBTITLE_DISPLAY_MODES, "sentence")
     subtitle_animation = _get_valid_ui_choice("subtitle_animation", _SUBTITLE_ANIMATIONS, "none")
     try:
@@ -1602,6 +1620,12 @@ def build_autonomous_video_params(
     try:
         font_size = int(config.ui.get("font_size", 60))
     except (ValueError, TypeError):
+        font_size = 60
+    # V16.5.1 Subtitle Recovery: para formato vertical 9:16, tamanho mínimo legível é 50 (default canônico 60)
+    if video_aspect == VideoAspect.portrait and font_size < 50:
+        logger.warning(
+            f"font_size={font_size} abaixo do mínimo legível (50) para vídeo vertical 9:16. Ajustando para default 60."
+        )
         font_size = 60
 
     stroke_color = "#000000"

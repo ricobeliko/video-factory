@@ -1550,7 +1550,13 @@ def _convert_subtitles_to_ass(
         pos = getattr(params, "subtitle_position", "bottom")
         if pos in ("bottom", None, ""):
             alignment = 2
-            margin_v = max(10, int(video_height * 0.05))
+            if video_height > video_width:
+                # V16.5.1 Subtitle Recovery: Região inferior segura para vídeo vertical (9:16)
+                # O rodapé absoluto (5%) colide com a UI do Shorts/TikTok (nome do canal, som, botões).
+                # Posicionamos a margem vertical em ~22% da altura útil (colocando o texto entre 70% e 80%).
+                margin_v = max(20, int(video_height * 0.22))
+            else:
+                margin_v = max(10, int(video_height * 0.08))
         elif pos == "top":
             alignment = 8
             margin_v = max(10, int(video_height * 0.05))
@@ -1574,7 +1580,8 @@ Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_col
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-        max_width = int(video_width * 0.9)
+        # V16.5.1: Em vídeos verticais (Shorts/TikTok), margem horizontal de 85% evita sobreposição dos botões de ação na lateral direita
+        max_width = int(video_width * 0.85) if video_height > video_width else int(video_width * 0.9)
         dialogue_lines = []
         for _idx, times_str, text_item in subtitles:
             if "-->" not in times_str:
@@ -2195,7 +2202,7 @@ def generate_video(
         params.font_size = int(params.font_size)
         params.stroke_width = int(params.stroke_width)
         phrase = subtitle_item[1]
-        max_width = video_width * 0.9
+        max_width = int(video_width * 0.85) if video_height > video_width else int(video_width * 0.9)
         bg_color = resolve_subtitle_background_color()
         rounded_bg_enabled = bool(
             getattr(params, "rounded_subtitle_background", False) and bg_color
@@ -2340,12 +2347,19 @@ def generate_video(
             _clip = _apply_subtitle_spring_animation(_clip, duration)
 
         if params.subtitle_position == "bottom":
-            _clip = _clip.with_position(("center", video_height * 0.95 - _clip.h))
+            if video_height > video_width:
+                # V16.5.1 Subtitle Recovery: Região inferior segura para vídeo vertical (9:16)
+                # O rodapé absoluto (5%) colide com a UI do Shorts/TikTok (título do som, canal, etc.).
+                # Posiciona o clipe na faixa de 70% a 80% da altura útil.
+                _clip = _clip.with_position(("center", video_height * 0.78 - _clip.h))
+            else:
+                _clip = _clip.with_position(("center", video_height * 0.92 - _clip.h))
         elif params.subtitle_position == "top":
             _clip = _clip.with_position(("center", video_height * 0.05))
         elif params.subtitle_position in ("two_thirds_bottom", "two_thirds", "2/3_bottom"):
-            # 2/3 from the bottom = 1/3 from the top: y = (video_height - _clip.h) * (1/3)
-            y_two_thirds = (video_height - _clip.h) / 3.0
+            # V16.5.1: 2/3 da altura a partir do topo (~67% a 75%), corrigindo o bug histórico
+            # que dividia por 3.0 (jogando a legenda para o terço superior a 33%).
+            y_two_thirds = (video_height - _clip.h) * (2.0 / 3.0)
             _clip = _clip.with_position(("center", y_two_thirds))
         elif params.subtitle_position == "custom":
             # Ensure the subtitle is fully within the screen bounds

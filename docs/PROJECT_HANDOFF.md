@@ -1,11 +1,11 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 04/10/2026
+## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `READY_FOR_CONSOLIDATED_PRODUCTION_DEPLOY / V16_4_2H_AUDITED`
-- **ACTIVE_PHASE** = `V16.4.2H — Final Publishing Health Audit`
-- **ACTIVE_BRANCH** = `feat/v16-4-2h-final-publishing-health-audit`
-- **NEXT_GATE** = `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK`
+- **ACTIVE_PHASE** = `V16.5.1 — Subtitle & Narration Quality Recovery`
+- **ACTIVE_BRANCH** = `feat/v16-5-1-subtitle-narration-recovery`
+- **NEXT_GATE** = `V16.6_PREPARE_OPEN_SOURCE_VIDEO_BENCHMARK`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -25,7 +25,8 @@
 - **V16.4.2A Publishing State Reconciliation** = PRODUCTION HOMOLOGATED (PC Forte Reconciled)
 - **V16.4.2B Publishing Idempotency / Duplicate Protection** = MERGED (PR #50)
 - **V16.4.2C Retry Metadata Cleanup** = MERGED (PR #51)
-- **V16.5 Visual Matching v2** = DEV IMPLEMENTED / VALIDATED
+- **V16.5 Visual Matching v2** = MERGED (PR #53, SHA `b6e900ed93edb6e0e59c00600532f7ca2afeb6bd`)
+- **V16.5.1 Subtitle & Narration Quality Recovery** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED

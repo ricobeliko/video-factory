@@ -388,6 +388,14 @@ def _persist_scene_resolution(
                 "model": getattr(s, "model", None),
                 "generation_time": getattr(s, "generation_time", None),
                 "fallback_reason": getattr(s, "fallback_reason", None),
+                "visual_source_type": getattr(s, "visual_source_type", "stock"),
+                "stock_match_score": getattr(s, "stock_match_score", None),
+                "generation_provider": getattr(s, "generation_provider", None),
+                "generation_model": getattr(s, "generation_model", None),
+                "generation_prompt": getattr(s, "generation_prompt", None),
+                "generation_status": getattr(s, "generation_status", None),
+                "generated_asset_path": getattr(s, "generated_asset_path", None),
+                "motion_mode": getattr(s, "motion_mode", None),
             }
             for s in selections
         ]

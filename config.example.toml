@@ -647,15 +647,25 @@ open_task_folder_on_completion = true
 # rounded_subtitle_background = false
 
 # =============================================================================
-# Hybrid Visual Generation (Fase V16.6)
+# Hybrid Visual Generation & Contextual Image-to-Video (Fase V16.6 / V16.6.2)
 # =============================================================================
 [visual_generation]
 # Enable AI visual generation foundation. Default is false (100% stock footage).
 visual_generation_enabled = false
+generated_image_enabled = false
+generated_video_enabled = false
 
-# Preferred providers: "stock", "comfyui", "wan_2_2", "ltx_video", "framepack", "nano_banana"
-preferred_video_provider = "stock"
+# Visual Matching v2 thresholds for decision policy
+stock_high_confidence_threshold = 60
+generated_image_threshold = 35
+
+# Preferred providers
 preferred_image_provider = "nano_banana"
+preferred_video_provider = "disabled"
+image_to_video_provider = "disabled"
+
+# Subtle motion from still keyframes (Ken Burns / Pan / Zoom)
+still_motion_enabled = true
 
 # ComfyUI headless endpoint for local/PC Forte GPU acceleration
 comfyui_endpoint = "http://127.0.0.1:8188"

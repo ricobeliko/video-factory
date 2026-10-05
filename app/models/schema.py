@@ -142,8 +142,14 @@ class VideoParams(BaseModel):
     final_media_quality_required: bool = False
     scene_based_generation_enabled: bool = False
     visual_generation_enabled: bool = False
-    preferred_video_provider: Optional[str] = "stock"
+    generated_image_enabled: bool = False
+    generated_video_enabled: bool = False
+    stock_high_confidence_threshold: float = 60.0
+    generated_image_threshold: float = 35.0
+    preferred_video_provider: Optional[str] = "disabled"
     preferred_image_provider: Optional[str] = "nano_banana"
+    image_to_video_provider: Optional[str] = "disabled"
+    still_motion_enabled: bool = True
     comfyui_endpoint: Optional[str] = "http://127.0.0.1:8188"
     subtitle_position: Optional[str] = config.ui.get(
         "subtitle_position", "bottom"
@@ -666,10 +672,18 @@ class SceneMaterialSelection(BaseModel):
     selection_reason: Optional[str] = Field(default=None, description="Reason or breakdown of candidate selection")
     queries_tried: Optional[List[str]] = Field(default=None, description="Search queries evaluated for this scene")
     fallback_tier: Optional[int] = Field(default=None, description="Fallback tier index used (0=primary, 1=alt1, etc.)")
-    media_type: Optional[str] = Field(default="stock", description="Media type: stock, generated_video, generated_image")
+    media_type: Optional[str] = Field(default="stock", description="Media type: stock, generated_video, generated_image, image_motion")
     model: Optional[str] = Field(default=None, description="AI Model used if generated")
     generation_time: Optional[float] = Field(default=None, description="Generation time in seconds if AI generated")
     fallback_reason: Optional[str] = Field(default=None, description="Fallback reason if AI generation was bypassed or failed")
+    visual_source_type: Optional[str] = Field(default="stock", description="Visual source: stock, generated_image, generated_video, image_motion")
+    stock_match_score: Optional[float] = Field(default=None, description="Visual matching v2 candidate score")
+    generation_provider: Optional[str] = Field(default=None, description="Provider used if generated")
+    generation_model: Optional[str] = Field(default=None, description="Model used if generated")
+    generation_prompt: Optional[str] = Field(default=None, description="Synthesized prompt used for generation")
+    generation_status: Optional[str] = Field(default=None, description="Status: success, fallback, bypassed")
+    generated_asset_path: Optional[str] = Field(default=None, description="Path to generated asset file")
+    motion_mode: Optional[str] = Field(default=None, description="Motion effect mode if still image")
 
 
 class SceneClipInstruction(BaseModel):

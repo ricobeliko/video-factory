@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK_GPU`
-- **ACTIVE_PHASE** = `V16.6 — Hybrid Visual Generation Foundation & V16.6.1 Benchmark Preparation`
-- **ACTIVE_BRANCH** = `feat/v16-6-hybrid-visual-generation`
-- **NEXT_GATE** = `V16.6.1_GPU_BENCHMARK_ON_PC_FORTE`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_7_HYBRID_SCENE_DIRECTOR`
+- **ACTIVE_PHASE** = `V16.6.2 — Contextual Image-to-Video Foundation`
+- **ACTIVE_BRANCH** = `feat/v16-6-2-contextual-image-to-video`
+- **NEXT_GATE** = `V16.7_HYBRID_SCENE_DIRECTOR`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -27,8 +27,9 @@
 - **V16.4.2C Retry Metadata Cleanup** = MERGED (PR #51)
 - **V16.5 Visual Matching v2** = MERGED (PR #53, SHA `b6e900ed93edb6e0e59c00600532f7ca2afeb6bd`)
 - **V16.5.1 Subtitle & Narration Quality Recovery** = MERGED (PR #54, SHA `4823a799d3030982d27e0eeccea1ab3f73a065f7`)
-- **V16.6 Hybrid Visual Generation Foundation** = DEV IMPLEMENTED / VALIDATED
-- **V16.6.1 Open Source Video Benchmark Preparation** = DEV IMPLEMENTED / VALIDATED
+- **V16.6 Hybrid Visual Generation Foundation** = MERGED (PR #55)
+- **V16.6.1 Open Source Video Benchmark Preparation** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
+- **V16.6.2 Contextual Image-to-Video Foundation** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1280,6 +1281,33 @@ Entregas V16.4.1A:
   - Resolução em `app/services/scene_material.py`: busca em cascata, ordenação determinística por score, diversidade global de ativos e persistência de auditoria em `script_data` (`visual_intent`, `match_score`, `selection_reason`, `queries_tried`, `fallback_tier`).
 - **Próximo Passo:** PR / Merge em DEV main e validação de CI contra baseline.
 
+### V16.6 — Hybrid Visual Generation Foundation (Fase Concluída em DEV)
+- **Status:** 🚀 DEV IMPLEMENTED / VALIDATED (05/10/2026, PR #55)
+- **Branch:** `feat/v16-6-hybrid-visual-generation`
+- **Validação:** 12 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Estabelecer a infraestrutura desacoplada para geração visual híbrida (Stock, Nano Banana Image, ComfyUI Video).
+- **Arquitetura Implementada:**
+  - `app/services/hybrid_visual.py`: Interfaces base e contratos desacoplados (`VisualProvider`, `StockVisualProvider`, `NanoBananaImageAdapter`, `ComfyUIVisualProvider`, `HybridVisualDirector`).
+  - `scripts/benchmark_video_models.py`: Script de benchmark para avaliar performance e viabilidade de modelos abertos.
 
+### V16.6.1 — Hardware-Aware Open Source Benchmark (Fase Concluída em DEV)
+- **Status:** 🚀 DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS (05/10/2026)
+- **Objetivo:** Criar probe e relatório de capacidades de hardware (GPU vendor, VRAM, CUDA/ROCm/DirectML) sem dependência obrigatória de torch e classificar o host localmente.
+- **Classificação Registrada:**
+  - `LOCAL_GENERATIVE_VIDEO_GPU_STATUS = "NOT_RECOMMENDED_ON_CURRENT_HARDWARE"`
+  - Hardware PC Forte: AMD Radeon RX 580 2048SP (~4GB VRAM visível, sem NVIDIA/CUDA).
+  - Modelos locais pesados (Wan 2.2, LTX-Video, FramePack) classificados como NOT_RECOMMENDED.
+  - Recomendação canônica: Provedor remoto, keyframe generation contextual e stock fallback.
 
-
+### V16.6.2 — Contextual Image-to-Video Foundation (Fase Concluída em DEV)
+- **Status:** 🚀 DEV IMPLEMENTED / VALIDATED (05/10/2026)
+- **Branch:** `feat/v16-6-2-contextual-image-to-video`
+- **Validação:** 20 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Entregas Técnicas:**
+  - Decisão Híbrida Inteligente: `HybridDecision` (`STOCK_HIGH_CONFIDENCE`, `GENERATED_IMAGE_PREFERRED`, `GENERATED_VIDEO_PREFERRED`, `FALLBACK_STOCK`) orientada pelo score de `SceneVisualIntent` do Visual Matching v2.
+  - Síntese Contextual de Prompts: geração determinística de prompt fotorealista e cinematic a partir do `SceneVisualIntent` com negative prompt e aspect ratio.
+  - Adapter Nano Banana Configurado: interface abstrata, modo mock com dimensões e aspecto válidos para DEV, zero chamadas pagas e fallback seguro para stock.
+  - Image Quality Gate: avaliação leve de keyframes (existência do arquivo, dimensões mínimas, aspecto/orientação 9:16 ou 16:9, metadados do provedor).
+  - Motion from Still Foundation: suporte a Ken Burns / Pan / Zoom paramétrico (`StillMotionMode`, `StillMotionParams`, `generate_still_motion_instructions`).
+  - Observabilidade Completa: persistência de auditoria em `SceneMaterialSelection` (`visual_source_type`, `stock_match_score`, `generation_provider`, `generation_model`, `generation_prompt`, `generation_status`, `fallback_reason`, `generated_asset_path`, `motion_mode`).
+- **Próximo Passo:** `V16.7_HYBRID_SCENE_DIRECTOR`.

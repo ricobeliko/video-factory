@@ -572,8 +572,14 @@ visual_generation = _SynchronizedConfig(
         "visual_generation",
         {
             "visual_generation_enabled": False,
-            "preferred_video_provider": "stock",
+            "generated_image_enabled": False,
+            "generated_video_enabled": False,
+            "stock_high_confidence_threshold": 60,
+            "generated_image_threshold": 35,
             "preferred_image_provider": "nano_banana",
+            "preferred_video_provider": "disabled",
+            "image_to_video_provider": "disabled",
+            "still_motion_enabled": True,
             "comfyui_endpoint": "http://127.0.0.1:8188",
         },
     )

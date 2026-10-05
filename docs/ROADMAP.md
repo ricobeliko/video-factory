@@ -863,9 +863,8 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Ponto remanescente identificado para investigação: `FINAL_RENDER_POST_ENCODE_SECONDS = 111.4239390` (~1m51s).
 
 ### V16.4.1D — Post-Encode Performance Investigation
-- **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
-- **Priority:** P1
-- **Branch:** `perf/v16-4-1d-post-encode`
+- **Status:** 🟢 MERGED (04/10/2026)
+- **Deploy SHA:** `d13d9347fc96c6a967561821552bbb19452eb281` (PR #45)
 - **Validação:** 34 testes PASS (`test_v16_4_1_scene_render_performance.py`, `test_v16_4_1b_final_render_performance.py`, `test_v16_4_1c_render_gap_instrumentation.py`, `test_v16_4_1d_post_encode_performance.py`)
 - **Objetivo:** Investigar rigorosamente as operações de `FINAL_RENDER_POST_ENCODE_SECONDS`, sub-instrumentar as fases internas e identificar a raiz da retenção pós-encode.
 - **Classificação de Evidências:**
@@ -883,6 +882,21 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem remoção ou enfraquecimento do Final Media Quality Gate
   - Sem otimização especulativa não fundamentada em evidências
   - Sem tocar PC forte / produção
+
+### V16.4.2R — Pre-Repair Publishing Reset
+- **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
+- **Priority:** P1
+- **Branch:** `fix/v16-4-2r-publishing-reset`
+- **Validação:** 5 testes PASS (`test/services/test_v16_4_2r_pre_repair_publishing_reset.py`), Dry-run e Reset real validados com backup íntegro e zero deleção de arquivos.
+- **Objetivo:** Estabelecer um baseline limpo e auditado no subsistema de publicação antes das correções V16.4.2A/B/C, neutralizando todas as publicações antigas pendentes, stale processing ou retries armados.
+- **Entregas V16.4.2R:**
+  - Serviço reutilizável `app/services/publication_reset.py` e CLI `scripts/reset_pending_publications.py`.
+  - Verificação fail-closed de pré-condições (`scheduler_enabled = False`, `auto_publish_enabled = False`).
+  - Backup transacional físico prévio com `PRAGMA integrity_check` e SHA-256 (`storage/backups/database/`).
+  - Neutralização de posts pendentes (`status = 'cancelled'`, `next_attempt_at = NULL`).
+  - Preservação total de `publication_events` com `status = 'success'`, vídeos locais em `storage/tasks/` e posts `published`.
+  - Registro de auditoria detalhado em `operational_events` (`PRE_REPAIR_PUBLICATION_RESET`).
+
 
 
 

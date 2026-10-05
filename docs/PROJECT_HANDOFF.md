@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 02/10/2026
 
-- **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1D — Post-Encode Performance Investigation`
-- **ACTIVE_BRANCH** = `perf/v16-4-1d-post-encode`
-- **NEXT_GATE** = `V16.5 — Visual Matching v2`
+- **PROJECT_STATUS** = `PRODUCTION_STOPPED_FOR_REPAIR / PRE_REPAIR_RESET`
+- **ACTIVE_PHASE** = `V16.4.2R — Pre-Repair Publishing Reset`
+- **ACTIVE_BRANCH** = `fix/v16-4-2r-publishing-reset`
+- **NEXT_GATE** = `V16.4.2A — Publishing State Reconciliation`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -20,7 +20,9 @@
 - **V16.4.1A Scene Render Performance Hardening** = PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
 - **V16.4.1B Final Render Performance** = PRODUCTION HOMOLOGATED (Deploy SHA: `e7f40ed6f4b7df45e5868cd7de03495239d103ec`, Task Homologada: `f9a9608b-512d-43c4-92f4-f864a0424512`)
 - **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
-- **V16.4.1D Post-Encode Performance Investigation** = ACTIVE
+- **V16.4.1D Post-Encode Performance Investigation** = MERGED (Deploy SHA: `d13d9347fc96c6a967561821552bbb19452eb281`, PR #45)
+- **V16.4.2R Pre-Repair Publishing Reset** = ACTIVE / DEV IMPLEMENTED
+- **V16.4.2A Publishing State Reconciliation** = PLANNED
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1158,9 +1160,9 @@ Entregas V16.4.1A:
   - `COMBINE_VIDEOS_UNACCOUNTED_SECONDS = 0.0028849`.
   - Ponto de anomalia remanescente identificado: `FINAL_RENDER_POST_ENCODE_SECONDS = 111.4239390` (~1m51s).
 
-### V16.4.1D — Post-Encode Performance Investigation (Fase Ativa Atual)
-- **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
-- **Branch:** `perf/v16-4-1d-post-encode`
+### V16.4.1D — Post-Encode Performance Investigation
+- **Status:** 🟢 MERGED (04/10/2026)
+- **Deploy SHA:** `d13d9347fc96c6a967561821552bbb19452eb281` (PR #45)
 - **Validação:** 34 testes PASS (`test_v16_4_1_scene_render_performance.py`, `test_v16_4_1b_final_render_performance.py`, `test_v16_4_1c_render_gap_instrumentation.py`, `test_v16_4_1d_post_encode_performance.py`).
 - **Objetivo:** Mapear rigorosamente todas as operações dentro de `FINAL_RENDER_POST_ENCODE_SECONDS`, sub-instrumentar a região de forma contígua e identificar causas de retenção pós-encode.
 - **Mapeamento do Código em Post-Encode:**
@@ -1177,3 +1179,17 @@ Entregas V16.4.1A:
     - A latência anômala de ~111.42s em produção ocorreu devido a pausa síncrona do terminal Windows conhost (QuickEdit Mode ativado com seleção de texto ou foco de clique pelo operador durante os 5 minutos de encode sem logs), ou contenção de lock no stream síncrono de stderr.
   - **NOT_YET_VALIDATED_IN_PRODUCTION:**
     - Decomposição exata sob execução autônoma/não assistida no PC forte (`C:\Projetos\MoneyPrinterTurbo`).
+
+### V16.4.2R — Pre-Repair Publishing Reset (Fase Ativa Atual)
+- **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
+- **Branch:** `fix/v16-4-2r-publishing-reset`
+- **Validação:** 5 testes PASS (`test/services/test_v16_4_2r_pre_repair_publishing_reset.py`), Dry-run e Reset real validados com backup físico íntegro (`video_factory_20261005_003110.db`, SHA-256: `89a5853230ab74774dbac0b860d437181898271aa63df34924e4785ced4d81ec`) e zero deleção de arquivos de mídia.
+- **Objetivo:** Estabelecer um baseline seguro, limpo e auditado no subsistema de publicação antes das correções V16.4.2A/B/C, neutralizando todas as publicações antigas pendentes (`planned`, `ready`, `queued`), stale processing e retries armados (`next_attempt_at = NULL`).
+- **Política do Reset & Preservação:**
+  - `publication_events` com `status = 'success'` 100% preservados (zero deleções).
+  - Identidade de publicações, `external_id`, `external_url` e histórico preservados.
+  - Vídeos e diretórios em `storage/tasks/` 100% preservados (`media_files_deleted = 0`).
+  - Scheduled posts pendentes neutralizados para `status = 'cancelled'` e `next_attempt_at = NULL`.
+  - Pré-condição de segurança fail-closed (`scheduler_enabled = False` e `auto_publish_enabled = False`).
+  - Registro de auditoria detalhado em `operational_events` sob o tipo `PRE_REPAIR_PUBLICATION_RESET`.
+  - Auditoria pós-reset: `EXECUTABLE_PENDING_PUBLICATIONS = 0`, `ARMED_RETRIES = 0`, `STALE_PROCESSING = 0`, `PUBLISHED_SUCCESS_RECORDS_PRESERVED = YES`.

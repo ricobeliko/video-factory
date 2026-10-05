@@ -1223,6 +1223,12 @@ def generate_final_videos(
                 f"[SCENE_RENDER][TIMING_GAP] FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}s "
                 f"exceeds diagnostic threshold (1.0s) for video {index}"
             )
+        post_encode_unaccounted = scene_render_timings.get("FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS", 0.0)
+        if post_encode_unaccounted > 1.0:
+            logger.warning(
+                f"[SCENE_RENDER][TIMING_GAP] FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS={post_encode_unaccounted:.3f}s "
+                f"exceeds diagnostic threshold (1.0s) for video {index}"
+            )
         if total_unaccounted > 1.0:
             logger.warning(
                 f"[SCENE_RENDER][TIMING_GAP] TOTAL_RENDER_UNACCOUNTED_SECONDS={total_unaccounted:.3f}s "
@@ -1257,6 +1263,9 @@ def generate_final_videos(
                 f"FINAL_RENDER_ENCODE_SECONDS={scene_render_timings.get('FINAL_RENDER_ENCODE_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_VALIDATION_SECONDS={scene_render_timings.get('FINAL_RENDER_VALIDATION_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_POST_ENCODE_SECONDS={scene_render_timings.get('FINAL_RENDER_POST_ENCODE_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_POST_ENCODE_STATE_SECONDS={scene_render_timings.get('FINAL_RENDER_POST_ENCODE_STATE_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_POST_ENCODE_NOTIFY_SECONDS={scene_render_timings.get('FINAL_RENDER_POST_ENCODE_NOTIFY_SECONDS', 0.0):.3f}s "
+                f"FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS={scene_render_timings.get('FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS', 0.0):.3f}s "
                 f"FINAL_RENDER_SECONDS={final_render_canonical:.3f}s "
                 f"FINAL_RENDER_CALL_SECONDS={final_render_call_seconds:.3f}s "
                 f"FINAL_RENDER_UNACCOUNTED_SECONDS={final_render_unaccounted:.3f}s "

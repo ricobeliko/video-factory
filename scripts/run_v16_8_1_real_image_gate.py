@@ -8,7 +8,13 @@ aplica o gate de custo externo e prepara os artefatos comparativos.
 """
 
 import argparse
+import os
 import sys
+
+# Garante raiz do repositório no sys.path
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 from app.services import real_image_gate
 

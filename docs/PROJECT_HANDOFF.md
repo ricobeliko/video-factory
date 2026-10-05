@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
-- **ACTIVE_PHASE** = `V16.8 — Controlled Hybrid Render Validation`
-- **ACTIVE_BRANCH** = `feat/v16-8-controlled-hybrid-render-validation`
-- **NEXT_GATE** = `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_AUTHORIZATION_OR_V16_9`
+- **ACTIVE_PHASE** = `V16.8.1 — Real Generated Image Quality Gate`
+- **ACTIVE_BRANCH** = `feat/v16-8-1-real-generated-image-quality-gate`
+- **NEXT_GATE** = `HUMAN_AUTHORIZE_REAL_IMAGE_GENERATION`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -32,7 +32,8 @@
 - **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
 
 - **V16.7 Hybrid Scene Director** = MERGED (PR #57, SHA `ae6738821516d3310493060654d4a8776bc74548`)
-- **V16.8 Controlled Hybrid Render Validation** = DEV VALIDATED
+- **V16.8 Controlled Hybrid Render Validation** = DEV_VALIDATED / STRUCTURAL_AND_PROXY_PASS (PR #58, SHA `fd205f24275a43ab67486e9261cd6b45cfbfd4d8`)
+- **V16.8.1 Real Generated Image Quality Gate** = DEV PREPARED / NOT_EXECUTED_REQUIRES_HUMAN_GATE
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1370,3 +1371,28 @@ Entregas V16.4.1A:
     - `prompts_catalog_<timestamp>.md`
     - `preview_still_motion_scene_3.mp4` (preview H.264 vertical gerado com ffmpeg).
 - **Próximo Passo:** `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`.
+
+### V16.8.1 — Real Generated Image Quality Gate (Fase Preparada em DEV)
+- **Status:** 📋 READY_FOR_HUMAN_AUTHORIZATION (GATE: `NOT_EXECUTED_REQUIRES_HUMAN_GATE`) (05/10/2026)
+- **Branch:** `feat/v16-8-1-real-generated-image-quality-gate`
+- **Validação:** 5 testes PASS em `test/services/test_real_image_gate.py`, 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Auditar a implementação real do adaptador Nano Banana, aplicar controle estrito de custos externos e preparar a avaliação de qualidade visual real para estritamente 3 cenas HERO da tarefa de Marte (`17386147-cb1b-4192-b827-251a1bbd411f`):
+  - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
+  - Cena 4: Escala titânica da base do Monte Olimpo cobrindo o Paraná.
+  - Cena 7: Pôr do sol azul e poeira rarefeita de Marte.
+- **Auditoria de Credenciais e Gate de Custo:**
+  - `NANO_BANANA_API_KEY` ausente no ambiente e `.env`.
+  - Como chamadas reais à API externa geram custos, a execução automática foi interrompida no gate conforme a diretriz operacional.
+  - Adapter `NanoBananaImageAdapter` atualizado com cliente HTTP POST completo, suporte a base64/URL e tratamento de erros (HTTP 401/403/429/500).
+- **Métricas e Artefatos Gerados:**
+  - `AUTOMATED_PROXY_SCORE`: `94.1 / 100`.
+  - `HUMAN_VISUAL_REVIEW_REQUIRED`: `True`.
+  - Artefatos em `storage/validation/v16_8_1/`:
+    - `real_generation_report.json` e `real_generation_report.md`.
+    - Relatórios comparativos lado a lado: `scene_3_stock_vs_generated.md`, `scene_4_stock_vs_generated.md`, `scene_7_stock_vs_generated.md`.
+    - Previews still motion validados com ffmpeg: `scene_3_still_motion.mp4`, `scene_4_still_motion.mp4`, `scene_7_still_motion.mp4`.
+- **Comando para Autorização Humana:**
+  ```bash
+  python scripts/run_v16_8_1_real_image_gate.py --task-id 17386147-cb1b-4192-b827-251a1bbd411f --api-key <NANO_BANANA_API_KEY> --execute-real
+  ```
+- **Próximo Passo:** `HUMAN_AUTHORIZE_REAL_IMAGE_GENERATION` (ou `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT` se autorizado).

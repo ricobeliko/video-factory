@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
-- **ACTIVE_PHASE** = `V16.8 — Controlled Hybrid Render Validation`
-- **ACTIVE_BRANCH** = `feat/v16-8-controlled-hybrid-render-validation`
-- **NEXT_GATE** = `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_AUTHORIZATION_OR_V16_9`
+- **ACTIVE_PHASE** = `V16.8.1 — Real Generated Image Quality Gate`
+- **ACTIVE_BRANCH** = `feat/v16-8-1-real-generated-image-quality-gate`
+- **NEXT_GATE** = `HUMAN_AUTHORIZE_REAL_IMAGE_GENERATION`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
 
@@ -39,7 +39,8 @@
 - **V16.6.1 Hardware-Aware Open Source Benchmark** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
 - **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
 - **V16.7 Hybrid Scene Director** = MERGED (PR #57, SHA `ae6738821516d3310493060654d4a8776bc74548`)
-- **V16.8 Controlled Hybrid Render Validation** = DEV VALIDATED
+- **V16.8 Controlled Hybrid Render Validation** = DEV_VALIDATED / STRUCTURAL_AND_PROXY_PASS (PR #58, SHA `fd205f24275a43ab67486e9261cd6b45cfbfd4d8`)
+- **V16.8.1 Real Generated Image Quality Gate** = DEV PREPARED / NOT_EXECUTED_REQUIRES_HUMAN_GATE
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1073,19 +1074,29 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Resumo de métricas por vídeo (`VideoVisualSummary`): contagem de cenas por estratégia, média de score stock, tentativas e taxas de sucesso de geração.
 
 ## V16.8 — Controlled Hybrid Render Validation
-- **Status:** ✅ DEV_VALIDATED
+- **Status:** ✅ DEV_VALIDATED / STRUCTURAL_AND_PROXY_PASS
 - **Priority:** P1
 - **Resultado do Experimento (Task 17386147... - 3 Curiosidades sobre Marte):**
+  - **Validação Estrutural e Proxy:** PASS (arquitetura, decision engine, fallback, scoring, still motion e observabilidade validados com sucesso).
   - **Baseline Quality Score:** 57.8 / 100 (Stock library retornou praias tropicais e piers terrestres para Marte).
-  - **Hybrid Quality Score:** 94.1 / 100 (Keyframes contextuais Nano Banana + Still Motion dinâmico).
-  - **Quality Delta:** +36.3 pts de ganho perceptual comprovado.
-  - **Estratégias Mistas:** 1 cena stock de alta confiança (espaço cósmico) + 6 cenas contextuais geradas com still-motion (Monte Olimpo colossal, cânions antigos de Marte e pôr do sol azul fantasmagórico).
-  - **Auditoria V16.5.1:** PASS (Posição inferior segura, fonte 60, stroke preto 2.0, texto branco, voz pt-BR 1.0).
-  - **Preview com Still Motion:** Validado com ffmpeg em `storage/validation/preview_still_motion_scene_3.mp4`.
-- **Decisão do Gate:** Ganho perceptual comprovado. Próximo passo aprovado: V16.9.
+  - **Hybrid Quality Score:** 94.1 / 100 (Keyframes contextuais proxy Nano Banana + Still Motion dinâmico).
+  - **Quality Delta:** +36.3 pts de ganho perceptual proxy comprovado.
+  - **Nota Canônica:** A qualidade perceptual real definitiva depende de keyframes gerados por modelo de imagem real (avaliado na V16.8.1).
+
+## V16.8.1 — Real Generated Image Quality Gate
+- **Status:** 📋 READY_FOR_HUMAN_AUTHORIZATION (GATE: NOT_EXECUTED_REQUIRES_HUMAN_GATE)
+- **Priority:** P1
+- **Objetivo:**
+  - Validar com pouquíssimas gerações reais (estritamente 3 cenas HERO da task de Marte) se imagens contextuais reais superam o stock fraco.
+  - Cenas selecionadas:
+    - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
+    - Cena 4: Escala titânica da base do Monte Olimpo.
+    - Cena 7: Pôr do sol azul e poeira rarefeita de Marte.
+  - Gate de Custo Externo: Chamada real à API Nano Banana gera custos externos; parada controlada sem executar automaticamente.
+  - Comando de Execução Humana: `python scripts/run_v16_8_1_real_image_gate.py --api-key <SUA_CHAVE> --execute-real`.
 
 ## V16.9 — Hybrid Visual Production Rollout
-- **Status:** 📋 PLANNED (NEXT GATE)
+- **Status:** 🔮 FUTURE (Planejada para após aprovação humana na V16.8.1)
 - **Priority:** P2
 - **Objetivo:**
   - Definir a estratégia de rollout seguro em produção (PC Forte).

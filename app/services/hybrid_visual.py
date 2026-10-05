@@ -229,6 +229,8 @@ HERO_KEYWORDS = {
     "tornado", "tempestade", "explosão", "destruição", "mistério", "revelação",
     "chocante", "surpreendente", "monstro", "catástrofe", "ápice", "incrível",
     "segredo", "perigo", "confronto", "bizarro", "morte", "inacreditável", "abdução",
+    "vulcão", "volcano", "terremoto", "earthquake", "tsunami", "aurora",
+    "fantasmagórico", "titânica", "titânico", "colossal",
     "explosion", "destruction", "mystery", "shocking", "catastrophe", "climax",
     "spectacular", "danger", "secret", "reveal", "alien", "hero", "epic",
 }

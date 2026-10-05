@@ -660,5 +660,42 @@ A reconciliação determinística sincroniza `publication_events` e `scheduled_p
    .\.venv\Scripts\python.exe scripts\reconcile_publication_state.py --execute --confirm RECONCILE_PUBLICATION_STATE
    ```
 
+## 25. Proteção contra Duplicatas e Idempotência de Publicação (V16.4.2B)
+
+A V16.4.2B estabelece proteção em múltiplas camadas para impedir definitivamente que o sistema crie, agende, processe ou envie mais de uma publicação externa para a mesma tupla canônica `(task_id, platform)`.
+
+### Modelo de Idempotência Canônica
+
+A tupla `(task_id, platform)` é a chave de publicação unificada do sistema. Qualquer evento registrado com `publication_events.status = 'success'` constitui a verdade definitiva de publicação externa concluída para essa tupla.
+
+### Camadas de Proteção Implementadas
+
+1. **Camada 1 — Criação e Agendamento (`app.services.publishing_idempotency.can_schedule_task` / `scheduler.plan_schedule`):**
+   - Antes de inserir novo registro em `scheduled_posts`, verifica se já existe:
+     - Sucesso canônico em `publication_events` (`already_published`).
+     - Post agendado executável ativo (`planned` ou `ready`) (`already_scheduled`).
+     - Post em processamento ativo (`processing`) (`already_processing`).
+     - Post já publicado (`published`) (`already_published`).
+   - Se qualquer um existir, a criação é recusada e bloqueada fail-closed.
+
+2. **Camada 2 — Scheduler Runtime / Seleção de Candidatos (`can_execute_scheduled_post` em `run_scheduler_cycle`):**
+   - Ao selecionar um candidato vencido (`scheduled_at <= now`):
+     - Verifica se já existe `publication_events.status = 'success'`. Se sim, aborta imediatamente o envio ao provider, atualiza o post para `published`, desarma qualquer retry residual (`next_attempt_at = NULL`) e neutraliza posts duplicados executáveis redundantes (`status = 'cancelled'`).
+     - Verifica se há outro post da mesma tupla em `processing`. Se sim, pula a execução para evitar processamento concorrente duplicado (`already_processing`).
+
+3. **Camada 3 — Just-In-Time Idempotency Gate Imediatamente Pré-Provider (`jit_provider_idempotency_guard`):**
+   - Executado imediatamente antes da chamada externa ao provider nos seguintes pontos de entrada:
+     - `app.services.scheduler.run_scheduler_cycle` (logo antes de `task_module.publish_task`)
+     - `app.services.task.publish_task` (logo antes de `upload_post.cross_post_video`)
+     - `app.services.youtube_publisher.publish_youtube_video` (logo antes de PostForMe ou UploadPost)
+     - `app.services.post_for_me.publish_video` e `publish_tiktok_video` (logo antes do client HTTP)
+   - Se um sucesso foi registrado concorrentemente (race condition mitigada), a chamada é abortada com segurança, retornando sucesso idempotente reutilizado e impedindo qualquer requisição externa duplicada.
+
+### Neutralização de Duplicatas Históricas
+
+- Duplicatas em `scheduled_posts` nunca são deletadas (preservação estrita de auditoria).
+- Quando identificadas, duplicatas redundantes em estado executável (`planned`, `ready`) são marcadas como `cancelled` com `next_attempt_at = NULL`, emitindo evento `DUPLICATE_SCHEDULE_NEUTRALIZED` em `operational_events`.
+- Arquivos de mídia e histórico de eventos permanecem 100% intocados.
+
 
 

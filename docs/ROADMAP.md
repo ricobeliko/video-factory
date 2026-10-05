@@ -13,9 +13,9 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1D — Post-Encode Performance Investigation`
-- **ACTIVE_BRANCH** = `perf/v16-4-1d-post-encode`
-- **NEXT_GATE** = `V16.5 — Visual Matching v2`
+- **ACTIVE_PHASE** = `V16.4.2B — Publishing Idempotency / Duplicate Protection`
+- **ACTIVE_BRANCH** = `feat/v16-4-2b-publishing-idempotency-duplicate-protection`
+- **NEXT_GATE** = `V16.4.2C — Retry & Error Metadata Cleanup`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -913,6 +913,23 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - CLI `scripts/reconcile_publication_state.py`: modo `--dry-run` por padrão e execução real protegida via `--execute --confirm RECONCILE_PUBLICATION_STATE`.
   - Auditoria completa com eventos em `operational_events`: `PUBLICATION_RECONCILED_SUCCESS`, `DUPLICATE_SCHEDULE_DETECTED`, `RETRY_DISARMED_AFTER_SUCCESS`, `STALE_PROCESSING_DETECTED`, `HISTORICAL_ORPHAN_SUCCESS_RECONCILED`.
   - Preservação estrita: zero deleção de eventos de publicação, zero deleção de arquivos de mídia, zero requisições externas a providers.
+- **Transição Homologada em Produção:** V16.4.2A executada com 0 mutations pendentes no PC Forte.
+
+### V16.4.2B — Publishing Idempotency / Duplicate Protection
+- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Priority:** P1
+- **Branch:** `feat/v16-4-2b-publishing-idempotency-duplicate-protection`
+- **Validação:** 10 testes PASS em `test/services/test_publishing_idempotency.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Impedir definitivamente que o sistema crie, agende, processe ou envie mais de uma publicação externa para a mesma tupla canônica `(task_id, platform)` quando já existir sucesso registrado ou fluxo executável equivalente.
+- **Entregas V16.4.2B:**
+  - Multi-Layer Protection:
+    - Camada 1: Criação e Agendamento (`app.services.publishing_idempotency.can_schedule_task` / `scheduler.plan_schedule`): bloqueia se já houver sucesso canônico, post agendado executável, processamento ativo ou post publicado.
+    - Camada 2: Scheduler Runtime / Seleção de Candidatos (`can_execute_scheduled_post` em `run_scheduler_cycle`): detecta sucesso canônico antes do ciclo e neutraliza duplicatas para `cancelled` (`next_attempt_at = NULL`).
+    - Camada 3: Just-In-Time Idempotency Gate imediatamente pré-provider (`jit_provider_idempotency_guard`): executado no scheduler, `task.publish_task`, `youtube_publisher` e `post_for_me` client logo antes de qualquer requisição externa.
+  - Race condition mitigada: se sucesso for registrado entre o início do ciclo e a chamada ao provider, a chamada é abortada com segurança e o post é marcado como `published`.
+  - Duplicatas históricas canceladas não interferem com posts ativos elegíveis.
+  - Múltiplas plataformas para a mesma task permanecem independentes.
+  - Preservação estrita: zero deleção de registros em `publication_events` ou `scheduled_posts`; zero deleção de arquivos de mídia.
 
 
 

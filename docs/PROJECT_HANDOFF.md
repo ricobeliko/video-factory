@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 04/10/2026
 
-- **PROJECT_STATUS** = `PRODUCTION_STOPPED_FOR_REPAIR / RECONCILIATION_V16_4_2A`
-- **ACTIVE_PHASE** = `V16.4.2A — Publishing State Reconciliation`
-- **ACTIVE_BRANCH** = `feat/v16-4-2a-publishing-state-reconciliation`
-- **NEXT_GATE** = `SAFE_UPDATE_AND_PRODUCTION_RECONCILIATION_V16_4_2A`
+- **PROJECT_STATUS** = `DEVELOPMENT / V16_4_2B_IDEMPOTENCY_PROTECTION`
+- **ACTIVE_PHASE** = `V16.4.2B — Publishing Idempotency / Duplicate Protection`
+- **ACTIVE_BRANCH** = `feat/v16-4-2b-publishing-idempotency-duplicate-protection`
+- **NEXT_GATE** = `V16.4.2C — Retry & Error Metadata Cleanup`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -22,7 +22,8 @@
 - **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
 - **V16.4.1D Post-Encode Performance Investigation** = MERGED (Deploy SHA: `d13d9347fc96c6a967561821552bbb19452eb281`, PR #45)
 - **V16.4.2R Pre-Repair Publishing Reset** = PRODUCTION HOMOLOGATED (Deploy SHA: `83be45cb95fc5c8b74c43844621ebf9c6d328b9c`, PR #48)
-- **V16.4.2A Publishing State Reconciliation** = DEV IMPLEMENTED / TARGETED TESTS PASSED
+- **V16.4.2A Publishing State Reconciliation** = PRODUCTION HOMOLOGATED (PC Forte Reconciled)
+- **V16.4.2B Publishing Idempotency / Duplicate Protection** = DEV IMPLEMENTED / TARGETED TESTS PASSED
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1212,6 +1213,22 @@ Entregas V16.4.1A:
   - Nenhuma linha de `publication_events` ou `scheduled_posts` é deletada; nenhum arquivo de mídia é deletado.
 - **Guard em Tempo de Execução:** `scheduler.run_scheduler_cycle` e `scheduler.has_existing_or_terminal_destination` contam com guard canônico antecipado: antes de qualquer checagem de perfil/vídeo ou tentativa de publicação externa, se houver evento de publicação prévio com sucesso, o post é marcado `published`, retries são zerados e a execução retorna `skipped: already_published` sem acionar provider.
 - **Serviço e CLI:** Implementados em `app/services/publication_reconciliation.py` e `scripts/reconcile_publication_state.py` com suporte a `--dry-run` e execução real via confirmação `--execute --confirm RECONCILE_PUBLICATION_STATE`, com backup automático pré-mutação.
+
+### V16.4.2B — Publishing Idempotency / Duplicate Protection (Fase Concluída em DEV)
+- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Branch:** `feat/v16-4-2b-publishing-idempotency-duplicate-protection`
+- **Validação:** 10 testes PASS em `test/services/test_publishing_idempotency.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Impedir definitivamente que o sistema crie, agende, processe ou envie mais de uma publicação externa para a mesma tupla canônica `(task_id, platform)` quando já existir sucesso registrado ou fluxo executável equivalente.
+- **Modelo de Idempotência e Camadas de Proteção:**
+  - **Camada 1 — Criação e Agendamento (`app.services.publishing_idempotency.can_schedule_task` / `scheduler.plan_schedule`):**
+    - Bloqueia criação de novos agendamentos se já houver: sucesso canônico (`already_published`), post executável (`already_scheduled`), processamento ativo (`already_processing`) ou post publicado (`already_published`).
+  - **Camada 2 — Scheduler Runtime / Seleção de Candidatos (`can_execute_scheduled_post` em `run_scheduler_cycle`):**
+    - Detecta sucesso canônico antes do ciclo, desarma retries (`next_attempt_at = NULL`), marca o post como `published` e neutraliza agendamentos duplicados concorrentes como `cancelled`.
+  - **Camada 3 — Just-In-Time Idempotency Gate Imediatamente Pré-Provider (`jit_provider_idempotency_guard`):**
+    - Executado imediatamente antes do envio em `scheduler`, `task.publish_task`, `youtube_publisher.publish_youtube_video` e `post_for_me` client (`publish_video` / `publish_tiktok_video`).
+    - Se sucesso canônico for registrado entre o início do ciclo e a chamada (race condition mitigada), aborta fail-safe e não chama o provider externo.
+- **Preservação Auditável:** Duplicatas históricas canceladas não interferem com posts elegíveis; zero deleção de registros em `publication_events` ou `scheduled_posts`; zero deleção de mídia.
+- **Próximo Passo:** `V16.4.2C_RETRY_METADATA_CLEANUP`.
 
 
 

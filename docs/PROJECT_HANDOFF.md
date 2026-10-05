@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 04/10/2026
 
-- **PROJECT_STATUS** = `DEVELOPMENT / V16_4_2B_IDEMPOTENCY_PROTECTION`
-- **ACTIVE_PHASE** = `V16.4.2B — Publishing Idempotency / Duplicate Protection`
-- **ACTIVE_BRANCH** = `feat/v16-4-2b-publishing-idempotency-duplicate-protection`
-- **NEXT_GATE** = `V16.4.2C — Retry & Error Metadata Cleanup`
+- **PROJECT_STATUS** = `DEVELOPMENT / V16_4_2C_RETRY_CLEANUP`
+- **ACTIVE_PHASE** = `V16.4.2C — Retry Metadata Cleanup`
+- **ACTIVE_BRANCH** = `feat/v16-4-2c-retry-metadata-cleanup`
+- **NEXT_GATE** = `V16.4.2H — Final Publishing Health Audit`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -23,7 +23,8 @@
 - **V16.4.1D Post-Encode Performance Investigation** = MERGED (Deploy SHA: `d13d9347fc96c6a967561821552bbb19452eb281`, PR #45)
 - **V16.4.2R Pre-Repair Publishing Reset** = PRODUCTION HOMOLOGATED (Deploy SHA: `83be45cb95fc5c8b74c43844621ebf9c6d328b9c`, PR #48)
 - **V16.4.2A Publishing State Reconciliation** = PRODUCTION HOMOLOGATED (PC Forte Reconciled)
-- **V16.4.2B Publishing Idempotency / Duplicate Protection** = DEV IMPLEMENTED / TARGETED TESTS PASSED
+- **V16.4.2B Publishing Idempotency / Duplicate Protection** = MERGED (PR #50)
+- **V16.4.2C Retry Metadata Cleanup** = DEV IMPLEMENTED / TARGETED TESTS PASSED
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1228,7 +1229,25 @@ Entregas V16.4.1A:
     - Executado imediatamente antes do envio em `scheduler`, `task.publish_task`, `youtube_publisher.publish_youtube_video` e `post_for_me` client (`publish_video` / `publish_tiktok_video`).
     - Se sucesso canônico for registrado entre o início do ciclo e a chamada (race condition mitigada), aborta fail-safe e não chama o provider externo.
 - **Preservação Auditável:** Duplicatas históricas canceladas não interferem com posts elegíveis; zero deleção de registros em `publication_events` ou `scheduled_posts`; zero deleção de mídia.
-- **Próximo Passo:** `V16.4.2C_RETRY_METADATA_CLEANUP`.
+
+### V16.4.2C — Retry Metadata Cleanup (Fase Concluída em DEV)
+- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Branch:** `feat/v16-4-2c-retry-metadata-cleanup`
+- **Validação:** 12 testes PASS em `test/services/test_publishing_retry_cleanup.py`, 8 testes PASS não-regressão V16.4.2A, 10 testes PASS não-regressão V16.4.2B, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Eliminar estados residuais e regras inconsistentes de retry que possam rearmar publicações já concluídas, canceladas, reconciliadas ou terminalmente falhadas.
+- **Regras da Política Canônica de Retry:**
+  - `published`: Estado terminal imutável, `next_attempt_at = NULL`.
+  - `cancelled`: Estado terminal imutável, `next_attempt_at = NULL`.
+  - `failed` permanente ou esgotado (`attempts >= 3`): Estado terminal, `next_attempt_at = NULL`.
+  - `success canônico` em `publication_events`: Desarma imediatamente qualquer retry correspondente em `scheduled_posts`.
+  - `processing ativo`: Não rearma durante processamento.
+  - `failed retryable`: Reagendamento permitido apenas para erros transitórios (`429`, quota 24h, 5xx, timeout, socket) dentro do limite de 3 tentativas com backoff progressivo.
+- **Entregas Técnicas:**
+  - `app/services/retry_policy.py`: centralização canônica de `evaluate_retry_decision` e `cleanup_residual_retries`.
+  - `app/services/scheduler.py`: integração de limpeza preventiva no início de cada ciclo (`run_scheduler_cycle`) e aplicação de `next_attempt_at = NULL` em todas as transições de terminal/falha.
+  - `app/services/post_for_me.py`: desarmamento de retry na reconciliação de sucesso remoto.
+  - `scripts/cleanup_retry_metadata.py`: CLI de auditoria (`--dry-run`) e execução controlada (`--execute --confirm CLEANUP_RETRY_METADATA`).
+- **Próximo Passo:** `V16.4.2H_FINAL_PUBLISHING_HEALTH_AUDIT`.
 
 
 

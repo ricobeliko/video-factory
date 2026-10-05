@@ -697,5 +697,38 @@ A tupla `(task_id, platform)` é a chave de publicação unificada do sistema. Q
 - Quando identificadas, duplicatas redundantes em estado executável (`planned`, `ready`) são marcadas como `cancelled` com `next_attempt_at = NULL`, emitindo evento `DUPLICATE_SCHEDULE_NEUTRALIZED` em `operational_events`.
 - Arquivos de mídia e histórico de eventos permanecem 100% intocados.
 
+## 26. Política Canônica de Retry e Cleanup de Metadados Residuais (V16.4.2C)
+
+A V16.4.2C unifica e centraliza a política de retries do subsistema de publicação, eliminando qualquer estado residual em `next_attempt_at` que possa rearmar publicações terminais ou já concluídas.
+
+### Regras Canônicas de Retry
+
+1. **Estados Terminais Imutáveis (`next_attempt_at = NULL`):**
+   - `published`: Concluído com sucesso. Nunca recebe novo agendamento ou retry.
+   - `cancelled`: Cancelado manual ou neutralizado como duplicata redundante. Nunca rearma automaticamente.
+   - `failed` permanente: Erros de autorização (`invalid_grant`, `401`), arquivo ausente (`video_not_found`), canal desativado, termos de uso ou violações de política não são retryable.
+   - `failed` por esgotamento: `attempts >= 3` encerra permanentemente o fluxo em `failed` com `next_attempt_at = NULL`.
+   - `success canônico`: A presença de registro em `publication_events(status = 'success')` para a tupla `(task_id, platform)` desarma imediatamente qualquer retry residual existente em `scheduled_posts`.
+
+2. **Falhas Transitórias Retryable (`attempts < 3`):**
+   - Apenas erros transitórios comprovados (`429`, `rate limit`, quota diária de 24h, `500`, `502`, `503`, `504`, `timeout`, `econnreset`) são autorizados a agendar nova tentativa.
+   - Backoff: 15 minutos para a 2ª tentativa, 60 minutos para a 3ª tentativa (ou 24 horas em caso de quota diária do YouTube).
+
+3. **Limpeza Preventiva e Resiliente:**
+   - O Scheduler executa `retry_policy.cleanup_residual_retries()` automaticamente no início de cada ciclo antes de selecionar candidatos vencidos, protegendo a fábrica contra restarts de worker, crashes anteriores ou incertezas pós-reboot.
+
+### Procedimento Operacional: Auditoria e Limpeza Manual (CLI)
+
+1. **Auditoria (Dry-Run):**
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\cleanup_retry_metadata.py --dry-run
+   ```
+
+2. **Execução Real:**
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\cleanup_retry_metadata.py --execute --confirm CLEANUP_RETRY_METADATA
+   ```
+
+
 
 

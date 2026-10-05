@@ -856,7 +856,7 @@ def record_publication_event(
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'published', last_error = NULL
+                    SET status = 'published', last_error = NULL, next_attempt_at = NULL
                     WHERE task_id = ? AND platform = ? AND channel_id = ? AND status IN ('planned', 'ready', 'processing', 'published');
                     """,
                     (task_id, clean_platform, channel_id),
@@ -865,7 +865,7 @@ def record_publication_event(
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'published', last_error = NULL
+                    SET status = 'published', last_error = NULL, next_attempt_at = NULL
                     WHERE task_id = ? AND platform = ? AND status IN ('planned', 'ready', 'processing', 'published');
                     """,
                     (task_id, clean_platform),
@@ -1573,53 +1573,21 @@ def is_youtube_daily_quota_error(error_msg: str) -> bool:
 
 
 def get_retry_after_hint(error_msg: str) -> Optional[int]:
-    """Retorna hint de retry_after em segundos baseado no tipo específico de erro.
-
-    Para erro de quota diária de upload do YouTube: 86400s (24h).
-    Para demais erros: None.
-    """
-    if is_youtube_daily_quota_error(error_msg):
-        return 86400  # 24 horas para quota diária de upload do YouTube
-    return None
+    """Retorna hint de retry_after em segundos baseado no tipo específico de erro."""
+    from app.services import retry_policy
+    return retry_policy.get_retry_after_hint(error_msg)
 
 
 def classify_error(error_msg: str) -> str:
     """Classifica um erro de publicação em 'transient' ou 'permanent'."""
-    err = (error_msg or "").lower()
-    if is_youtube_daily_quota_error(error_msg):
-        return "transient"
-    transient_keywords = [
-        "429",
-        "rate limit",
-        "too many requests",
-        "timeout",
-        "timed out",
-        "connection",
-        "network",
-        "500",
-        "502",
-        "503",
-        "504",
-        "server error",
-        "service unavailable",
-        "temporary",
-        "econnreset",
-    ]
-    for kw in transient_keywords:
-        if kw in err:
-            return "transient"
-    return "permanent"
+    from app.services import retry_policy
+    return retry_policy.classify_retry_error(error_msg)
 
 
 def calculate_backoff_seconds(attempt: int, retry_after: Optional[int] = None) -> int:
     """Calcula o tempo de espera em segundos para retry de falhas temporárias."""
-    if retry_after is not None and retry_after > 0:
-        return retry_after
-    if attempt == 1:
-        return 15 * 60  # 15 minutos
-    if attempt == 2:
-        return 60 * 60  # 60 minutos
-    return 60 * 60
+    from app.services import retry_policy
+    return retry_policy.calculate_backoff_seconds(attempt, retry_after)
 
 
 
@@ -1741,6 +1709,13 @@ def run_scheduler_cycle(
         post_for_me.reconcile_pending_post_for_me_posts(db_path=db_path)
     except Exception as exc:
         logger.warning(f"[SCHEDULER][CYCLE] Erro na reconciliação de posts pendentes: {exc}")
+
+    # 0.1 Limpeza preventiva de metadados residuais de retry (V16.4.2C)
+    try:
+        from app.services import retry_policy
+        retry_policy.cleanup_residual_retries(db_path=db_path)
+    except Exception as exc:
+        logger.warning(f"[SCHEDULER][CYCLE] Erro na limpeza de retries residuais: {exc}")
 
     # 1. Busca o post vencido mais antigo
     with get_connection(db_path) as conn:
@@ -2278,12 +2253,18 @@ def run_scheduler_cycle(
         logger.success(f"[SCHEDULER][PUBLISH] Tarefa {task_id} publicada com sucesso no {platform}")
         return {"status": "published", "task_id": task_id, "platform": platform}
     else:
-        err_type = classify_error(err_msg)
+        from app.services import retry_policy
         new_attempts = attempts + 1
-        if err_type == "transient" and new_attempts < 3:
-            retry_hint = get_retry_after_hint(err_msg)
-            backoff_sec = calculate_backoff_seconds(new_attempts, retry_after=retry_hint)
-            next_retry = current_time + timedelta(seconds=backoff_sec)
+        decision = retry_policy.evaluate_retry_decision(
+            task_id=task_id,
+            platform=platform,
+            current_status="processing",
+            attempts=attempts,
+            error_msg=err_msg,
+            current_time=current_time,
+            db_path=db_path,
+        )
+        if decision.can_retry:
             with get_connection(db_path) as conn:
                 conn.execute(
                     """
@@ -2291,25 +2272,25 @@ def run_scheduler_cycle(
                     SET status = 'ready', attempts = ?, last_error = ?, next_attempt_at = ?
                     WHERE id = ?;
                     """,
-                    (new_attempts, (err_msg or "")[:500], _to_iso(next_retry), post_id),
+                    (new_attempts, (err_msg or "")[:500], decision.next_attempt_at, post_id),
                 )
             _set_executor_status(
                 state="error",
                 message=f"Retry {new_attempts}/3 agendado ({platform})",
-                last_result=f"Falha temporária ({platform}): {(err_msg or '')[:100]} - Retry {new_attempts}/3 em {backoff_sec//60}min",
+                last_result=f"Falha temporária ({platform}): {(err_msg or '')[:100]} - Retry {new_attempts}/3 em {decision.backoff_seconds//60}min",
                 last_cycle_summary=f"Retry agendado para post {post_id} ({platform})",
                 db_path=db_path,
             )
             logger.warning(
                 f"[SCHEDULER][RETRY] Falha transitória na task {task_id} ({platform}): {err_msg}. "
-                f"Reagendando tentativa {new_attempts}/3 para {_to_iso(next_retry)}"
+                f"Reagendando tentativa {new_attempts}/3 para {decision.next_attempt_at}"
             )
             return {
                 "status": "retry_scheduled",
                 "task_id": task_id,
                 "platform": platform,
                 "attempt": new_attempts,
-                "next_attempt": _to_iso(next_retry),
+                "next_attempt": decision.next_attempt_at,
                 "error": err_msg,
             }
         else:
@@ -2317,19 +2298,19 @@ def run_scheduler_cycle(
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'failed', attempts = ?, last_error = ?
+                    SET status = ?, attempts = ?, last_error = ?, next_attempt_at = NULL
                     WHERE id = ?;
                     """,
-                    (new_attempts, (err_msg or "")[:500], post_id),
+                    (decision.resulting_status, new_attempts, (err_msg or "")[:500], post_id),
                 )
             _set_executor_status(
                 state="error",
-                message=f"Falha permanente ({platform})",
+                message=f"Falha terminal ({platform})",
                 last_result=f"Falha ({platform}): {(err_msg or '')[:100]}",
                 last_cycle_summary=f"Falha no post {post_id} ({platform})",
                 db_path=db_path,
             )
-            logger.error(f"[SCHEDULER] Falha na publicação da task {task_id} ({platform}): {err_msg}. Marcada como failed.")
+            logger.error(f"[SCHEDULER] Falha na publicação da task {task_id} ({platform}): {err_msg}. Marcada como {decision.resulting_status} (sem retry).")
             return {
                 "status": "failed",
                 "task_id": task_id,
@@ -2666,6 +2647,8 @@ def cancel_scheduled_post(
 
         # 3. 'cancelled' é idempotente
         if curr_status == STATUS_CANCELLED:
+            if post["next_attempt_at"] is not None:
+                conn.execute("UPDATE scheduled_posts SET next_attempt_at = NULL WHERE id = ?;", (scheduled_post_id,))
             return {
                 "success": True,
                 "id": scheduled_post_id,
@@ -2678,6 +2661,8 @@ def cancel_scheduled_post(
 
         # 4. 'failed' é terminal e idempotente
         if curr_status == STATUS_FAILED:
+            if post["next_attempt_at"] is not None:
+                conn.execute("UPDATE scheduled_posts SET next_attempt_at = NULL WHERE id = ?;", (scheduled_post_id,))
             return {
                 "success": True,
                 "id": scheduled_post_id,

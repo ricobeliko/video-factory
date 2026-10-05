@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Script de Reset Controlado e Seguro de Publicações Pendentes — Fase V16.4.2R.
+"""Script de Reset Controlado e Seguro de Publicações Pendentes — Fase V16.4.2R / V16.4.2R.1.
 
 COMPORTAMENTO PADRÃO: DRY-RUN (Estritamente READ-ONLY).
 
@@ -42,7 +42,7 @@ def format_inventory_table(inv: dict) -> str:
             f"{str(g.get('prof', '')):<15} | {str(g.get('chan', '')):<25} | {g.get('cnt', 0):<5}"
         )
 
-    lines.append(f"\n[2] PUBLICAÇÕES PENDENTES / RETRIES ARMADOS ENCONTRADOS: {inv.get('pending_count', 0)}")
+    lines.append(f"\n[2] PUBLICAÇÕES A SEREM ANALISADAS / RESETADAS: {inv.get('pending_count', 0)}")
     if inv.get("pending_posts"):
         lines.append(f"{'ID':<4} | {'TASK_ID':<38} | {'PLAT':<8} | {'STATUS':<10} | {'ATT':<4} | {'NEXT_ATTEMPT':<25}")
         lines.append("-" * 95)
@@ -52,6 +52,18 @@ def format_inventory_table(inv: dict) -> str:
                 f"{p.get('id', ''):<4} | {p.get('task_id', ''):<38} | {p.get('platform', ''):<8} | "
                 f"{p.get('status', ''):<10} | {p.get('attempts', 0):<4} | {next_att:<25}"
             )
+
+    if inv.get("published_with_armed_retries"):
+        lines.append(f"\n  [NORMALIZAÇÃO] Posts 'published' com next_attempt_at armado: {len(inv['published_with_armed_retries'])}")
+        lines.append("  (Ação: manter status='published', desarmar retry limpando next_attempt_at)")
+        for r in inv["published_with_armed_retries"]:
+            lines.append(f"    - Post #{r['scheduled_post_id']} (Task {r['task_id']}, {r['platform']}): next_attempt={r['next_attempt_at']}")
+
+    if inv.get("failed_with_existing_success"):
+        lines.append(f"\n  [INCONSISTÊNCIA] Posts 'failed' com evento de sucesso: {len(inv['failed_with_existing_success'])}")
+        lines.append("  (Ação: manter status='failed', desarmar retry e preservar para reconciliação na V16.4.2A)")
+        for f in inv["failed_with_existing_success"]:
+            lines.append(f"    - Post #{f['scheduled_post_id']} (Task {f['task_id']}, {f['platform']}): Event #{f['publication_event_id']} ({f['external_id']})")
 
     lines.append("\n[3] PUBLICATION_EVENTS:")
     lines.append(f"  Total: {inv.get('total_publication_events', 0)}")
@@ -64,7 +76,7 @@ def format_inventory_table(inv: dict) -> str:
             lines.append(f"    - Task {d['task_id']} ({d['platform']}): {d['cnt']} sucessos registrados")
 
     if inv.get("pending_with_existing_success"):
-        lines.append(f"\n  [ANOMALIA] Posts pendentes que JÁ POSSUEM publicação com sucesso: {len(inv['pending_with_existing_success'])}")
+        lines.append(f"\n  [DUPLICATAS PENDENTES] Posts pendentes que JÁ POSSUEM publicação com sucesso: {len(inv['pending_with_existing_success'])}")
         for a in inv["pending_with_existing_success"]:
             lines.append(f"    - Post #{a['scheduled_post_id']} (Task {a['task_id']}, {a['platform']}): status='{a['scheduled_post_status']}' mas Event #{a['publication_event_id']} já é SUCCESS ({a['external_id']})")
 
@@ -94,15 +106,25 @@ def format_reset_report(res: dict) -> str:
     if pre.get("errors"):
         for err in pre["errors"]:
             lines.append(f"  [ERRO] {err}")
+        if pre.get("active_primary"):
+            lines.append("\n  [PROCEDIMENTO PARA LIBERAÇÃO DO NÓ PRIMÁRIO]:")
+            lines.append("  1. No host de produção, pare o serviço da aplicação:")
+            lines.append("     powershell> schtasks /End /TN MoneyPrinterTurbo")
+            lines.append("     (ou encerre o processo do Streamlit/worker em execução).")
+            lines.append("  2. O encerramento limpo executa operator_console.release_instance_lock().")
+            lines.append("  3. NUNCA delete registros de instance_locks manualmente.")
+            lines.append("  4. Repita a verificação do dry-run/reset.")
 
     lines.append("\nAÇÕES:")
-    lines.append(f"  would_cancel_planned        : {res.get('would_cancel_planned', 0)}")
-    lines.append(f"  would_cancel_processing     : {res.get('would_cancel_processing', 0)}")
-    lines.append(f"  would_disarm_retries        : {res.get('would_disarm_retries', 0)}")
-    lines.append(f"  would_clear_next_attempt    : {res.get('would_clear_next_attempt', 0)}")
-    lines.append(f"  would_neutralize_duplicates : {res.get('would_neutralize_duplicates', 0)}")
-    lines.append(f"  already_published_preserved : {res.get('already_published_preserved', 0)}")
-    lines.append(f"  media_files_preserved       : {res.get('media_files_preserved')}")
+    lines.append(f"  would_cancel_planned          : {res.get('would_cancel_planned', 0)}")
+    lines.append(f"  would_cancel_processing       : {res.get('would_cancel_processing', 0)}")
+    lines.append(f"  would_disarm_retries          : {res.get('would_disarm_retries', 0)}")
+    lines.append(f"  would_clear_next_attempt      : {res.get('would_clear_next_attempt', 0)}")
+    lines.append(f"  would_neutralize_duplicates   : {res.get('would_neutralize_duplicates', 0)}")
+    lines.append(f"  already_published_preserved   : {res.get('already_published_preserved', 0)}")
+    lines.append(f"  normalized_published          : {res.get('normalized_published', 0)}")
+    lines.append(f"  failed_with_success_preserved : {res.get('failed_with_success_preserved', 0)}")
+    lines.append(f"  media_files_preserved         : {res.get('media_files_preserved')}")
 
     backup = res.get("backup_info")
     if backup:
@@ -123,7 +145,7 @@ def format_reset_report(res: dict) -> str:
     lines.append(f"  MEDIA_FILES_DELETED                 : {after.get('media_files_deleted')}")
 
     if after.get("remaining_inconsistencies"):
-        lines.append("\nINCONSISTÊNCIAS REMANESCENTES (PARA TRATAMENTO NA V16.4.2A):")
+        lines.append("\nINCONSISTÊNCIAS REMANESCENTES (PARA RECONCILIAÇÃO DETERMINÍSTICA NA V16.4.2A):")
         for inc in after["remaining_inconsistencies"]:
             lines.append(f"  - {inc}")
     else:
@@ -133,7 +155,7 @@ def format_reset_report(res: dict) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Auditoria e Reset de Publicações Pendentes (V16.4.2R)")
+    parser = argparse.ArgumentParser(description="Auditoria e Reset de Publicações Pendentes (V16.4.2R / V16.4.2R.1)")
     parser.add_argument("--db-path", default=None, help="Caminho alternativo para o banco SQLite")
     parser.add_argument("--dry-run", action="store_true", default=True, help="Execução em modo simulação (padrão)")
     parser.add_argument("--execute", action="store_true", help="Executa o reset real no banco")

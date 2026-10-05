@@ -1180,16 +1180,20 @@ Entregas V16.4.1A:
   - **NOT_YET_VALIDATED_IN_PRODUCTION:**
     - Decomposição exata sob execução autônoma/não assistida no PC forte (`C:\Projetos\MoneyPrinterTurbo`).
 
-### V16.4.2R — Pre-Repair Publishing Reset (Fase Ativa Atual)
+### V16.4.2R / V16.4.2R.1 — Pre-Repair Publishing Reset & Safety Fix (Fase Ativa Atual)
 - **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
-- **Branch:** `fix/v16-4-2r-publishing-reset`
-- **Validação:** 5 testes PASS (`test/services/test_v16_4_2r_pre_repair_publishing_reset.py`), Dry-run e Reset real validados com backup físico íntegro (`video_factory_20261005_003110.db`, SHA-256: `89a5853230ab74774dbac0b860d437181898271aa63df34924e4785ced4d81ec`) e zero deleção de arquivos de mídia.
+- **Branch:** `fix/v16-4-2r1-production-reset-safety`
+- **Validação:** 8 testes PASS (`test/services/test_v16_4_2r_pre_repair_publishing_reset.py`), Dry-run e Reset real validados com backup físico íntegro e zero deleção de arquivos de mídia.
 - **Objetivo:** Estabelecer um baseline seguro, limpo e auditado no subsistema de publicação antes das correções V16.4.2A/B/C, neutralizando todas as publicações antigas pendentes (`planned`, `ready`, `queued`), stale processing e retries armados (`next_attempt_at = NULL`).
-- **Política do Reset & Preservação:**
+- **Política de Preservação e Correção de Segurança (V16.4.2R.1):**
+  - **Preservação de Published:** Registros com `scheduled_posts.status = 'published'` NUNCA são convertidos em `cancelled`. Caso possuam `next_attempt_at` armado (residual), este é limpo (`NULL`), desarmando retries e mantendo `status = 'published'` e `attempts` intactos (`RETRY_DISARMED_AFTER_SUCCESS`).
+  - **Inconsistência Failed com Sucesso:** Registros com `scheduled_posts.status = 'failed'` que já possuem `publication_events(status='success')` NÃO são cancelados cegamente; seus retries são desarmados (`next_attempt_at = NULL`), o status é mantido como `failed` e são preservados para reconciliação determinística na V16.4.2A (`FAILED_WITH_SUCCESS_INCONSISTENCY_DISARMED`).
   - `publication_events` com `status = 'success'` 100% preservados (zero deleções).
   - Identidade de publicações, `external_id`, `external_url` e histórico preservados.
   - Vídeos e diretórios em `storage/tasks/` 100% preservados (`media_files_deleted = 0`).
   - Scheduled posts pendentes neutralizados para `status = 'cancelled'` e `next_attempt_at = NULL`.
-  - Pré-condição de segurança fail-closed (`scheduler_enabled = False` e `auto_publish_enabled = False`).
+  - Pré-condição de segurança fail-closed (`scheduler_enabled = False`, `auto_publish_enabled = False` e `active_primary = False`).
+  - Procedimento documentado para encerramento seguro do nó primário antes do reset via `schtasks /End /TN MoneyPrinterTurbo` (sem deletar `instance_locks`).
   - Registro de auditoria detalhado em `operational_events` sob o tipo `PRE_REPAIR_PUBLICATION_RESET`.
   - Auditoria pós-reset: `EXECUTABLE_PENDING_PUBLICATIONS = 0`, `ARMED_RETRIES = 0`, `STALE_PROCESSING = 0`, `PUBLISHED_SUCCESS_RECORDS_PRESERVED = YES`.
+

@@ -141,6 +141,10 @@ class VideoParams(BaseModel):
     subtitle_required: bool = False
     final_media_quality_required: bool = False
     scene_based_generation_enabled: bool = False
+    visual_generation_enabled: bool = False
+    preferred_video_provider: Optional[str] = "stock"
+    preferred_image_provider: Optional[str] = "nano_banana"
+    comfyui_endpoint: Optional[str] = "http://127.0.0.1:8188"
     subtitle_position: Optional[str] = config.ui.get(
         "subtitle_position", "bottom"
     )  # top, bottom, center, custom, two_thirds_bottom
@@ -662,6 +666,10 @@ class SceneMaterialSelection(BaseModel):
     selection_reason: Optional[str] = Field(default=None, description="Reason or breakdown of candidate selection")
     queries_tried: Optional[List[str]] = Field(default=None, description="Search queries evaluated for this scene")
     fallback_tier: Optional[int] = Field(default=None, description="Fallback tier index used (0=primary, 1=alt1, etc.)")
+    media_type: Optional[str] = Field(default="stock", description="Media type: stock, generated_video, generated_image")
+    model: Optional[str] = Field(default=None, description="AI Model used if generated")
+    generation_time: Optional[float] = Field(default=None, description="Generation time in seconds if AI generated")
+    fallback_reason: Optional[str] = Field(default=None, description="Fallback reason if AI generation was bypassed or failed")
 
 
 class SceneClipInstruction(BaseModel):

@@ -645,3 +645,17 @@ open_task_folder_on_completion = true
 # subtitle_background_enabled = false
 # subtitle_background_color = "#000000"
 # rounded_subtitle_background = false
+
+# =============================================================================
+# Hybrid Visual Generation (Fase V16.6)
+# =============================================================================
+[visual_generation]
+# Enable AI visual generation foundation. Default is false (100% stock footage).
+visual_generation_enabled = false
+
+# Preferred providers: "stock", "comfyui", "wan_2_2", "ltx_video", "framepack", "nano_banana"
+preferred_video_provider = "stock"
+preferred_image_provider = "nano_banana"
+
+# ComfyUI headless endpoint for local/PC Forte GPU acceleration
+comfyui_endpoint = "http://127.0.0.1:8188"

@@ -501,6 +501,7 @@ def save_config():
         config_to_save["fish_audio"] = dict(fish_audio)
         config_to_save["voxcpm"] = dict(voxcpm)
         config_to_save["ui"] = dict(ui)
+        config_to_save["visual_generation"] = dict(visual_generation)
         serialized_config = toml.dumps(config_to_save)
 
         # WebUI 完整 rerun 结束时会调用保存。内容没有变化时直接返回，避免每次
@@ -563,6 +564,17 @@ ui = _SynchronizedConfig(
         "ui",
         {
             "hide_log": False,
+        },
+    )
+)
+visual_generation = _SynchronizedConfig(
+    _cfg.get(
+        "visual_generation",
+        {
+            "visual_generation_enabled": False,
+            "preferred_video_provider": "stock",
+            "preferred_image_provider": "nano_banana",
+            "comfyui_endpoint": "http://127.0.0.1:8188",
         },
     )
 )

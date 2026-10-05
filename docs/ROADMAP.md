@@ -12,10 +12,11 @@
 
 # Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK_GPU`
-- **ACTIVE_PHASE** = `V16.6 — Hybrid Visual Generation Foundation & V16.6.1 Benchmark Preparation`
-- **ACTIVE_BRANCH** = `feat/v16-6-hybrid-visual-generation`
-- **NEXT_GATE** = `V16.6.1_GPU_BENCHMARK_ON_PC_FORTE`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_7_HYBRID_SCENE_DIRECTOR`
+- **ACTIVE_PHASE** = `V16.6.2 — Contextual Image-to-Video Foundation`
+- **ACTIVE_BRANCH** = `feat/v16-6-2-contextual-image-to-video`
+- **NEXT_GATE** = `V16.7_HYBRID_SCENE_DIRECTOR`
+- **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -34,8 +35,9 @@
 - **V16.4.1D Post-Encode Performance Investigation** = ACTIVE
 - **V16.5 Visual Matching v2** = MERGED (PR #53, SHA `b6e900ed93edb6e0e59c00600532f7ca2afeb6bd`)
 - **V16.5.1 Subtitle & Narration Quality Recovery** = MERGED (PR #54, SHA `4823a799d3030982d27e0eeccea1ab3f73a065f7`)
-- **V16.6 Hybrid Visual Generation Foundation** = DEV IMPLEMENTED / VALIDATED
-- **V16.6.1 Open Source Video Benchmark Preparation** = DEV IMPLEMENTED / VALIDATED
+- **V16.6 Hybrid Visual Generation Foundation** = MERGED (PR #55, SHA `ae988e76777b0ab879385c33807361090990c45e`)
+- **V16.6.1 Hardware-Aware Open Source Benchmark** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
+- **V16.6.2 Contextual Image-to-Video Foundation** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1011,36 +1013,39 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Compatibilidade: `visual_generation_enabled = false` por padrão em `config.toml`, `config.example.toml` e `VideoParams`.
   - Validação direcionada: 13 testes unitários com 100% de sucesso (`test/services/test_hybrid_visual_generation.py`).
 
-## V16.6.1 — Open Source Video Benchmark
-- **Status:** ✅ DEV HARNESS & ADAPTER READY / PENDING GPU BENCHMARK ON PC FORTE
+## V16.6.1 — Hardware-Aware Open Source Benchmark
+- **Status:** ✅ DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
 - **Priority:** P1
-- **Modelos Alvo Padronizados:**
-  - Wan 2.2 (Alibaba)
-  - LTX-Video (Lightricks)
-  - FramePack
+- **Hardware Audit & Registro Operacional:**
+  - `LOCAL_GENERATIVE_VIDEO_GPU_STATUS = NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
+  - PC Forte de Produção: AMD Radeon RX 580 2048SP (~4 GB VRAM visível, sem NVIDIA, sem CUDA, sem ComfyUI/torch).
+  - Modelos modernos de difusão de vídeo (Wan 2.2, LTX-Video, FramePack) exigem >= 8-16 GB VRAM com aceleração CUDA. Forçar execução local causaria lentidão extrema e instabilidade.
+  - Alternativas viáveis adotadas: Provedor de vídeo remoto, geração contextual de keyframes estáticos (Nano Banana) e efeitos leves de motion local (Ken Burns / Pan / Zoom).
 - **Harness e Script Entregues:**
-  - `scripts/benchmark_video_models.py` com modo `--dry-run` para DEV/CI e suporte a ComfyUI headless para o PC Forte.
-  - Cenário e prompt padrão canônico:
-    `"large tornado rotating across rural field under dark storm clouds, cinematic realistic footage, vertical 9:16"`
-  - Duração: 3 a 5 segundos (default 4.0s) em aspect ratio vertical 9:16.
-  - Métricas estruturadas coletadas:
-    - `model` e `provider`
-    - `generation_time_seconds` e `startup_load_time_seconds`
-    - `vram_peak_mb` (via PyTorch CUDA quando disponível) e `ram_peak_mb`
-    - `output_resolution`, `frames_generated`, `fps`, `file_size_bytes`
-    - Placeholders de qualidade subjetiva: `subjective_quality`, `prompt_adherence`, `temporal_consistency`, `realism`.
-  - Relatórios automáticos estruturados em JSON e CSV salvos em `storage/benchmarks/`.
-  - Zero downloads pesados de checkpoints no notebook DEV.
+  - `scripts/benchmark_video_models.py` com suporte a `--hardware-probe` (relatório completo de vendor, VRAM, CUDA, ROCm, classificação e modelos recomendados).
+  - Classificação automática: `LOCAL_GPU_READY` (NVIDIA >=16GB), `LIMITED` (8-15GB), `NOT_RECOMMENDED` (<8GB / sem CUDA).
+  - Execução segura: se classificado como `NOT_RECOMMENDED`, avisa e previne execução GPU não viável, mantendo suporte ao modo `--dry-run`.
 
-## V16.6.2 — Contextual Image-to-Video
-- **Status:** 📋 PLANNED
-- **Priority:** P2
-- **Escopo:**
-  - Geração de keyframe estático altamente aderente à narrativa da cena.
-  - Nano Banana como provider opcional de geração de imagem.
-  - Animação do keyframe via provider de vídeo (Image-to-Video via ComfyUI/LTX/Wan).
-  - Fallback resiliente para stock clips.
-  - Modo opcional e configurável (não obrigatório para toda geração).
+## V16.6.2 — Contextual Image-to-Video Foundation
+- **Status:** ✅ DEV IMPLEMENTED / VALIDATED
+- **Priority:** P1
+- **Escopo e Componentes Entregues:**
+  - **Decisão Híbrida Inteligente (`HybridVisualDirector`):**
+    - `STOCK_HIGH_CONFIDENCE`: score de matching >= threshold (default 60) utiliza clipe de stock direto.
+    - `GENERATED_IMAGE_PREFERRED`: score intermediário (35 a 59) gera keyframe contextual de alta qualidade via Nano Banana.
+    - `GENERATED_VIDEO_PREFERRED`: score fraco (< 35) tenta geração de vídeo ou imagem + motion.
+    - `FALLBACK_STOCK`: qualquer falha técnica, indisponibilidade ou timeout aciona fallback transparente para stock.
+  - **Síntese Contextual de Prompts (`build_image_prompt_from_visual_intent`):**
+    - Transforma `SceneVisualIntent` (`visual_intent_v2`) em prompts descritivos concisos (sujeito + ação + ambiente + estilo foto-realista + aspect ratio vertical 9:16 + prompt negativo anti-artefatos e sem marca d'água).
+  - **Adapter Nano Banana Configurável:**
+    - `NanoBananaImageAdapter` integrado, suportando modo mock leve e seguro para testes sem chamadas pagas.
+  - **Image Quality Gate (`evaluate_keyframe_quality`):**
+    - Verificação de existência, tamanho, formato, resolução mínima e orientação vertical (9:16 portrait).
+  - **Motion from Still Foundation (`generate_still_motion_instructions`):**
+    - Efeitos de movimento suave em keyframes estáticos (`zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `ken_burns`) sem carga pesada de render nos testes.
+  - **Observabilidade por Cena:**
+    - Persistência estruturada em `SceneMaterialSelection` e `script_data` (`visual_source_type`, `stock_match_score`, `generation_provider`, `generation_model`, `generation_prompt`, `generation_status`, `generated_asset_path`, `motion_mode`).
+  - **Validação Local:** 20 testes unitários direcionados com 100% de sucesso (`test/services/test_hybrid_visual_generation.py`).
 
 ## V16.7 — Hybrid Scene Director
 - **Status:** 📋 PLANNED

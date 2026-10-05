@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Open-Source Video Generation Benchmark Harness (Fase V16.6.1).
+Open-Source Video Generation Benchmark Harness (Fase V16.6.1 / V16.6.2).
 
-Prepara e padroniza o benchmark comparativo para modelos open-source de vídeo:
+Prepara, padroniza e avalia a viabilidade de execução para modelos open-source de vídeo:
 1. Wan 2.2 (Alibaba)
 2. LTX-Video (Lightricks)
 3. FramePack
 
 Contrato Operacional:
-- Execução real em GPU (VRAM intensiva) será executada no PC Forte.
+- Execução real em GPU (VRAM intensiva) reservada para hardware compatível (NVIDIA CUDA >=16GB).
+- No PC Forte atual (AMD Radeon RX 580 2048SP ~4 GB VRAM sem CUDA):
+  detecta e reporta NOT_RECOMMENDED_ON_CURRENT_HARDWARE, sugerindo alternativas viáveis
+  (provedor remoto, keyframe generation via Nano Banana, motion simples local).
 - No ambiente DEV: suporta modo `--dry-run` para validar métricas, estrutura,
   formatos JSON/CSV e pipeline sem requerer GPU nem baixar pesos gigantes.
-- Utiliza rigorosamente o mesmo cenário/prompt para todos os modelos:
-  "large tornado rotating across rural field under dark storm clouds, cinematic realistic footage, vertical 9:16"
 """
 
 from __future__ import annotations
@@ -32,23 +33,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
 from app.services.hybrid_visual import (
+    BENCHMARK_MODELS,
     ComfyUIClient,
     ComfyUIVisualProvider,
     GenerationRequest,
+    HardwareClassification,
+    LOCAL_GENERATIVE_VIDEO_GPU_STATUS,
+    STANDARD_BENCHMARK_PROMPT,
     VisualCapability,
+    probe_hardware_capability,
 )
-
-# Cenário Canônico Padronizado
-STANDARD_BENCHMARK_PROMPT = (
-    "large tornado rotating across rural field under dark storm clouds, "
-    "cinematic realistic footage, vertical 9:16"
-)
-
-BENCHMARK_MODELS = [
-    "wan_2_2",
-    "ltx_video",
-    "framepack",
-]
 
 
 @dataclass
@@ -138,7 +132,6 @@ class VideoBenchmarkRunner:
         expected_frames = int(duration_seconds * 24)
 
         if self.dry_run:
-            # Simulação determinística para validação em DEV sem GPU
             simulated_gen_times = {
                 "wan_2_2": 24.5,
                 "ltx_video": 12.8,
@@ -155,7 +148,6 @@ class VideoBenchmarkRunner:
             mock_output_path = os.path.join(
                 self.output_dir, f"dry_run_{model_name}_tornado.mp4"
             )
-            # Cria arquivo representativo vazio para simular output
             with open(mock_output_path, "wb") as f:
                 f.write(b"\x00" * 1024)
 
@@ -270,18 +262,17 @@ class VideoBenchmarkRunner:
         json_path = os.path.join(self.output_dir, f"{prefix}_{timestamp}.json")
         csv_path = os.path.join(self.output_dir, f"{prefix}_{timestamp}.csv")
 
-        # 1. Salva JSON
         data = {
             "timestamp": timestamp,
             "prompt": entries[0].prompt if entries else STANDARD_BENCHMARK_PROMPT,
             "models_tested": [e.model for e in entries],
             "dry_run": self.dry_run,
+            "hardware_status": LOCAL_GENERATIVE_VIDEO_GPU_STATUS,
             "results": [e.to_dict() for e in entries],
         }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-        # 2. Salva CSV
         if entries:
             fieldnames = list(entries[0].to_dict().keys())
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -297,7 +288,12 @@ class VideoBenchmarkRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MoneyPrinterTurbo Open-Source Video Benchmark")
+    parser = argparse.ArgumentParser(description="MoneyPrinterTurbo Open-Source Video Benchmark & Hardware Probe")
+    parser.add_argument(
+        "--hardware-probe",
+        action="store_true",
+        help="Probe and report host hardware capabilities for AI video generation",
+    )
     parser.add_argument(
         "--models",
         type=str,
@@ -347,6 +343,41 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Modo Hardware Probe
+    if args.hardware_probe:
+        report = probe_hardware_capability()
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print("\n=== Hardware Capability Report ===")
+            print(f"GPU Vendor:             {report.gpu_vendor}")
+            print(f"GPU Name:               {report.gpu_name}")
+            print(f"VRAM (MB):              {report.vram_mb or 'N/A'}")
+            print(f"CUDA Available:         {report.cuda_available}")
+            print(f"ROCm Available:         {report.rocm_available}")
+            print(f"Classification:         {report.classification.value}")
+            print(f"Recommended Models:     {', '.join(report.recommended_local_models) or 'None'}")
+            print(f"Not Recommended Models: {', '.join(report.not_recommended_models) or 'None'}")
+            print(f"Reason:                 {report.reason}")
+            print("Suggested Alternatives:")
+            for alt in report.suggested_alternatives:
+                print(f"  - {alt}")
+        return 0
+
+    # Verificação de hardware pré-benchmark
+    hw_report = probe_hardware_capability()
+    if hw_report.classification == HardwareClassification.NOT_RECOMMENDED and not args.dry_run:
+        logger.warning(
+            f"[HARDWARE_POLICY] Hardware classified as NOT_RECOMMENDED for local video models. "
+            f"Reason: {hw_report.reason}. Use --dry-run for simulation or rely on stock/remote providers."
+        )
+        print("\n[HARDWARE_POLICY] Notice:")
+        print(f"Current hardware: {hw_report.gpu_vendor} {hw_report.gpu_name} (~{hw_report.vram_mb or 'N/A'} MB VRAM)")
+        print(f"Status: {LOCAL_GENERATIVE_VIDEO_GPU_STATUS}")
+        print("To simulate benchmark metrics without GPU, rerun with: --dry-run")
+        return 0
+
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     duration = max(3.0, min(5.0, args.duration))
 

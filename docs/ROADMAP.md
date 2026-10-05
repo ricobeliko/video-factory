@@ -10,12 +10,12 @@
 
 ---
 
-# Estado Atual Canônico — 02/10/2026
+# Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK`
-- **ACTIVE_PHASE** = `V16.5.1 — Subtitle & Narration Quality Recovery`
-- **ACTIVE_BRANCH** = `feat/v16-5-1-subtitle-narration-recovery`
-- **NEXT_GATE** = `V16.6_PREPARE_OPEN_SOURCE_VIDEO_BENCHMARK`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK_GPU`
+- **ACTIVE_PHASE** = `V16.6 — Hybrid Visual Generation Foundation & V16.6.1 Benchmark Preparation`
+- **ACTIVE_BRANCH** = `feat/v16-6-hybrid-visual-generation`
+- **NEXT_GATE** = `V16.6.1_GPU_BENCHMARK_ON_PC_FORTE`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -33,7 +33,9 @@
 - **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
 - **V16.4.1D Post-Encode Performance Investigation** = ACTIVE
 - **V16.5 Visual Matching v2** = MERGED (PR #53, SHA `b6e900ed93edb6e0e59c00600532f7ca2afeb6bd`)
-- **V16.5.1 Subtitle & Narration Quality Recovery** = DEV IMPLEMENTED / VALIDATED
+- **V16.5.1 Subtitle & Narration Quality Recovery** = MERGED (PR #54, SHA `4823a799d3030982d27e0eeccea1ab3f73a065f7`)
+- **V16.6 Hybrid Visual Generation Foundation** = DEV IMPLEMENTED / VALIDATED
+- **V16.6.1 Open Source Video Benchmark Preparation** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -996,34 +998,39 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - **Licenciamento Comercial:** Kokoro-82M (Apache 2.0) possui licença comercial permissiva mas suporte pt-BR ainda experimental sem word-level timestamps; Edge-TTS / Azure Neural mantidos como baseline canônico e estável.
 
 ## V16.6 — Hybrid Visual Generation Foundation
-- **Status:** 📋 PLANNED (Trilha Híbrida IA)
+- **Status:** ✅ DEV IMPLEMENTED / VALIDATED
 - **Priority:** P1
-- **Escopo:**
-  - Arquitetura provider-agnostic para camadas visuais:
-    - `stock` (Pexels, Pixabay, etc.)
-    - `generated_image` (Flux, SDXL, Nano Banana)
-    - `generated_video` (Wan 2.2, LTX-Video, FramePack)
-  - Fallback para material de stock sempre preservado em qualquer falha de síntese.
-  - Sem acoplamento rígido a um único modelo de geração ou hardware.
+- **Escopo e Componentes Entregues:**
+  - Arquitetura provider-agnostic implementada em `app/services/hybrid_visual.py`.
+  - Contratos de dados: `ProviderCapabilities`, `GenerationRequest`, `GenerationResult`, `GenerationMetrics`.
+  - Providers preparados:
+    - `StockVisualProvider`: Baseline de alta confiabilidade (Pexels, Pixabay, biblioteca local).
+    - `NanoBananaImageAdapter`: Adapter para geração de keyframe de imagem estática (`text_to_image`) em modo stub/configurável (zero chamadas pagas, zero credencial obrigatória em DEV).
+    - `ComfyUIClient` + `ComfyUIVisualProvider`: Suporte a backend headless local/remoto no PC Forte (endpoints `/system_stats`, `/prompt`, `/history`, `/view`).
+  - Orquestrador: `HybridVisualDirector` com política rigorosa de fallback transparente para stock footage em caso de indisponibilidade, timeout, erro ou capability não suportada. O pipeline nunca falha por indisponibilidade de IA.
+  - Compatibilidade: `visual_generation_enabled = false` por padrão em `config.toml`, `config.example.toml` e `VideoParams`.
+  - Validação direcionada: 13 testes unitários com 100% de sucesso (`test/services/test_hybrid_visual_generation.py`).
 
 ## V16.6.1 — Open Source Video Benchmark
-- **Status:** 📋 ARCHITECTURE / ADAPTER PREPARATION IN DEV
+- **Status:** ✅ DEV HARNESS & ADAPTER READY / PENDING GPU BENCHMARK ON PC FORTE
 - **Priority:** P1
-- **Candidatos Iniciais:**
+- **Modelos Alvo Padronizados:**
   - Wan 2.2 (Alibaba)
   - LTX-Video (Lightricks)
   - FramePack
-  - ComfyUI como backend/orquestrador headless
-- **Execução do Benchmark:**
-  - O benchmark real em GPU (VRAM intensiva) será executado posteriormente no **PC Forte** pelo usuário.
-  - No ambiente **DEV**, preparar:
-    - Arquitetura de interface (`VideoGenerationProvider`)
-    - Adapters de integração (API/WebSocket para ComfyUI local)
-    - Documentação operacional e guias de instalação
-    - Scripts de benchmark padronizados
-    - Biblioteca de prompts de teste por categoria de cena
-    - Métricas objetivas (tempo/frame, VRAM pico, consistência temporal)
-    - Zero download de checkpoints gigantes no notebook DEV.
+- **Harness e Script Entregues:**
+  - `scripts/benchmark_video_models.py` com modo `--dry-run` para DEV/CI e suporte a ComfyUI headless para o PC Forte.
+  - Cenário e prompt padrão canônico:
+    `"large tornado rotating across rural field under dark storm clouds, cinematic realistic footage, vertical 9:16"`
+  - Duração: 3 a 5 segundos (default 4.0s) em aspect ratio vertical 9:16.
+  - Métricas estruturadas coletadas:
+    - `model` e `provider`
+    - `generation_time_seconds` e `startup_load_time_seconds`
+    - `vram_peak_mb` (via PyTorch CUDA quando disponível) e `ram_peak_mb`
+    - `output_resolution`, `frames_generated`, `fps`, `file_size_bytes`
+    - Placeholders de qualidade subjetiva: `subjective_quality`, `prompt_adherence`, `temporal_consistency`, `realism`.
+  - Relatórios automáticos estruturados em JSON e CSV salvos em `storage/benchmarks/`.
+  - Zero downloads pesados de checkpoints no notebook DEV.
 
 ## V16.6.2 — Contextual Image-to-Video
 - **Status:** 📋 PLANNED

@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK`
-- **ACTIVE_PHASE** = `V16.5.1 — Subtitle & Narration Quality Recovery`
-- **ACTIVE_BRANCH** = `feat/v16-5-1-subtitle-narration-recovery`
-- **NEXT_GATE** = `V16.6_PREPARE_OPEN_SOURCE_VIDEO_BENCHMARK`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK_GPU`
+- **ACTIVE_PHASE** = `V16.6 — Hybrid Visual Generation Foundation & V16.6.1 Benchmark Preparation`
+- **ACTIVE_BRANCH** = `feat/v16-6-hybrid-visual-generation`
+- **NEXT_GATE** = `V16.6.1_GPU_BENCHMARK_ON_PC_FORTE`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -26,7 +26,9 @@
 - **V16.4.2B Publishing Idempotency / Duplicate Protection** = MERGED (PR #50)
 - **V16.4.2C Retry Metadata Cleanup** = MERGED (PR #51)
 - **V16.5 Visual Matching v2** = MERGED (PR #53, SHA `b6e900ed93edb6e0e59c00600532f7ca2afeb6bd`)
-- **V16.5.1 Subtitle & Narration Quality Recovery** = DEV IMPLEMENTED / VALIDATED
+- **V16.5.1 Subtitle & Narration Quality Recovery** = MERGED (PR #54, SHA `4823a799d3030982d27e0eeccea1ab3f73a065f7`)
+- **V16.6 Hybrid Visual Generation Foundation** = DEV IMPLEMENTED / VALIDATED
+- **V16.6.1 Open Source Video Benchmark Preparation** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED

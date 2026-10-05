@@ -384,6 +384,10 @@ def _persist_scene_resolution(
                 "queries_tried": s.queries_tried,
                 "fallback_tier": s.fallback_tier,
                 "visual_intent": s.visual_intent,
+                "media_type": getattr(s, "media_type", "stock"),
+                "model": getattr(s, "model", None),
+                "generation_time": getattr(s, "generation_time", None),
+                "fallback_reason": getattr(s, "fallback_reason", None),
             }
             for s in selections
         ]

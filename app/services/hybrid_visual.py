@@ -923,15 +923,114 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                 },
             )
 
-        # Chamada real futura (requer credencial autorizada)
-        return GenerationResult(
-            scene_id=request.scene_id,
-            success=False,
-            provider=self.name,
-            model="nano_banana_image_v1",
-            fallback_reason="NANO_BANANA_STUB_MODE",
-            error="Real generation not executed in DEV environment",
+        # Chamada real para a API do provedor Nano Banana
+        url = self.endpoint.rstrip("/")
+        if not url.endswith("/images/generations") and not url.endswith("/generate"):
+            url = f"{url}/images/generations"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "MoneyPrinterTurbo-NanoBananaAdapter/1.0",
+        }
+
+        w = 1080 if request.aspect_ratio == "9:16" else (1920 if request.aspect_ratio == "16:9" else 1080)
+        h = 1920 if request.aspect_ratio == "9:16" else (1080 if request.aspect_ratio == "16:9" else 1080)
+
+        payload = {
+            "prompt": request.prompt,
+            "negative_prompt": request.negative_prompt,
+            "aspect_ratio": request.aspect_ratio,
+            "width": w,
+            "height": h,
+            "n": 1,
+            "response_format": "b64_json",
+        }
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
         )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                resp_bytes = resp.read()
+                data = json.loads(resp_bytes.decode("utf-8"))
+
+            gen_time = round(time.time() - start_time, 3)
+            out_file = request.output_path or f"storage/nano_banana_scene_{request.scene_id}.png"
+            os.makedirs(os.path.dirname(os.path.abspath(out_file)), exist_ok=True)
+
+            img_b64 = None
+            if "data" in data and len(data["data"]) > 0:
+                first = data["data"][0]
+                img_b64 = first.get("b64_json") or first.get("image")
+                if not img_b64 and "url" in first:
+                    with urllib.request.urlopen(first["url"], timeout=self.timeout_seconds) as img_resp:
+                        with open(out_file, "wb") as f_out:
+                            f_out.write(img_resp.read())
+            elif "image" in data:
+                img_b64 = data["image"]
+
+            if img_b64:
+                import base64
+                img_data = base64.b64decode(img_b64)
+                with open(out_file, "wb") as f_out:
+                    f_out.write(img_data)
+
+            if not os.path.exists(out_file) or os.path.getsize(out_file) == 0:
+                return GenerationResult(
+                    scene_id=request.scene_id,
+                    success=False,
+                    provider=self.name,
+                    model="nano_banana_image_v1",
+                    fallback_reason="NANO_BANANA_EMPTY_OUTPUT",
+                    error="API response did not contain valid image data",
+                )
+
+            file_size = os.path.getsize(out_file)
+            return GenerationResult(
+                scene_id=request.scene_id,
+                success=True,
+                provider=self.name,
+                model="nano_banana_image_v1",
+                output_path=out_file,
+                media_type="image",
+                metrics=GenerationMetrics(
+                    generation_time_seconds=gen_time,
+                    width=w,
+                    height=h,
+                    file_size_bytes=file_size,
+                ),
+                metadata={
+                    "prompt": request.prompt,
+                    "aspect_ratio": request.aspect_ratio,
+                    "visual_source_type": "generated_image",
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+            logger.error(f"[NANO_BANANA][HTTP_ERROR] status={exc.code} reason={exc.reason} body={err_body[:200]}")
+            return GenerationResult(
+                scene_id=request.scene_id,
+                success=False,
+                provider=self.name,
+                model="nano_banana_image_v1",
+                fallback_reason="NANO_BANANA_HTTP_ERROR",
+                error=f"HTTP {exc.code}: {exc.reason}",
+            )
+        except Exception as exc:
+            logger.error(f"[NANO_BANANA][REQUEST_FAILED] error={exc}")
+            return GenerationResult(
+                scene_id=request.scene_id,
+                success=False,
+                provider=self.name,
+                model="nano_banana_image_v1",
+                fallback_reason="NANO_BANANA_REQUEST_FAILED",
+                error=str(exc),
+            )
 
 
 # =============================================================================

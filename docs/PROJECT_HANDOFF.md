@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 04/10/2026
 
-- **PROJECT_STATUS** = `DEVELOPMENT / V16_4_2C_RETRY_CLEANUP`
-- **ACTIVE_PHASE** = `V16.4.2C — Retry Metadata Cleanup`
-- **ACTIVE_BRANCH** = `feat/v16-4-2c-retry-metadata-cleanup`
-- **NEXT_GATE** = `V16.4.2H — Final Publishing Health Audit`
+- **PROJECT_STATUS** = `READY_FOR_CONSOLIDATED_PRODUCTION_DEPLOY / V16_4_2H_AUDITED`
+- **ACTIVE_PHASE** = `V16.4.2H — Final Publishing Health Audit`
+- **ACTIVE_BRANCH** = `feat/v16-4-2h-final-publishing-health-audit`
+- **NEXT_GATE** = `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -24,7 +24,8 @@
 - **V16.4.2R Pre-Repair Publishing Reset** = PRODUCTION HOMOLOGATED (Deploy SHA: `83be45cb95fc5c8b74c43844621ebf9c6d328b9c`, PR #48)
 - **V16.4.2A Publishing State Reconciliation** = PRODUCTION HOMOLOGATED (PC Forte Reconciled)
 - **V16.4.2B Publishing Idempotency / Duplicate Protection** = MERGED (PR #50)
-- **V16.4.2C Retry Metadata Cleanup** = DEV IMPLEMENTED / TARGETED TESTS PASSED
+- **V16.4.2C Retry Metadata Cleanup** = MERGED (PR #51)
+- **V16.4.2H Final Publishing Health Audit** = DEV AUDITED / INTEGRATED SUITE PASSED
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1248,6 +1249,23 @@ Entregas V16.4.1A:
   - `app/services/post_for_me.py`: desarmamento de retry na reconciliação de sucesso remoto.
   - `scripts/cleanup_retry_metadata.py`: CLI de auditoria (`--dry-run`) e execução controlada (`--execute --confirm CLEANUP_RETRY_METADATA`).
 - **Próximo Passo:** `V16.4.2H_FINAL_PUBLISHING_HEALTH_AUDIT`.
+
+### V16.4.2H — Final Publishing Health Audit (Fase Concluída em DEV)
+- **Status:** 🚀 DEV AUDITED / INTEGRATED SUITE PASSED (05/10/2026)
+- **Branch:** `feat/v16-4-2h-final-publishing-health-audit`
+- **Validação:** 10 testes PASS em `test/services/test_publishing_health_audit.py`, 8 testes PASS não-regressão V16.4.2A, 10 testes PASS não-regressão V16.4.2B, 12 testes PASS não-regressão V16.4.2C, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Realizar a auditoria final do subsistema de publicação e provar que o conjunto consolidado A+B+C está seguro para deploy em produção.
+- **Auditoria de Código Conduzida:**
+  - JIT Idempotency Guard integrado ao caminho de fallback Upload-Post em `task._execute_cross_post_process`.
+  - Transições para estados terminais (`status = 'failed'` e `status = 'published'`) em `scheduler.py` reforçadas com `next_attempt_at = NULL` incondicional.
+  - Zero pontos de escape de idempotência ou rearmamento indevido detectados.
+- **Garantias Comprovadas:**
+  - Idempotência canônica: exatamente 1 chamada ao provedor para publicação nova; 0 chamadas adicionais em reexecuções, restarts ou simulações.
+  - Retries: falha transitória agenda retry com backoff; falha permanente e tentativas esgotadas tornam-se terminais (`next_attempt_at = NULL`).
+  - Reconciliação e concorrência: JIT guard aborta envio se sucesso ocorrer antes da chamada externa.
+  - Preservação estrita: zero DELETE em `publication_events` ou `scheduled_posts`; zero mídia deletada.
+- **Próximo Passo:** `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`.
+
 
 
 

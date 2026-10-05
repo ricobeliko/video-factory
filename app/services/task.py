@@ -1744,13 +1744,26 @@ def _run_cross_post(
                     "error": "; ".join(err_messages) if err_messages else None,
                 }
             else:
-                result = upload_post.cross_post_video(
-                    video_path=video_path,
-                    title=post_title,
-                    platforms=list(platforms),
-                    youtube_extra=youtube_extra,
-                    external_profile_name=external_profile_name,
-                )
+                from app.services import publishing_idempotency
+                pending_platforms = []
+                for p in platforms:
+                    is_safe, _ = publishing_idempotency.jit_provider_idempotency_guard(task_id, p, db_path=db_path)
+                    if is_safe:
+                        pending_platforms.append(p)
+                    else:
+                        logger.info(f"[CROSS_POST] Plataforma '{p}' já publicada com sucesso para task {task_id}. Ignorando no Upload-Post.")
+
+                if not pending_platforms:
+                    logger.info(f"[CROSS_POST] Todas as plataformas {platforms} já publicadas para {task_id}. Ignorando chamada ao Upload-Post.")
+                    result = {"success": True, "results": {}, "skipped": True}
+                else:
+                    result = upload_post.cross_post_video(
+                        video_path=video_path,
+                        title=post_title,
+                        platforms=pending_platforms,
+                        youtube_extra=youtube_extra,
+                        external_profile_name=external_profile_name,
+                    )
             if not isinstance(result, dict):
                 result = {
                     "success": False,

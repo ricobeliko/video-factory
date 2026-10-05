@@ -219,6 +219,85 @@ class HybridDecision(str, Enum):
     FALLBACK_STOCK = "FALLBACK_STOCK"
 
 
+class SceneImportance(str, Enum):
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HERO = "HERO"
+
+
+HERO_KEYWORDS = {
+    "tornado", "tempestade", "explosão", "destruição", "mistério", "revelação",
+    "chocante", "surpreendente", "monstro", "catástrofe", "ápice", "incrível",
+    "segredo", "perigo", "confronto", "bizarro", "morte", "inacreditável", "abdução",
+    "explosion", "destruction", "mystery", "shocking", "catastrophe", "climax",
+    "spectacular", "danger", "secret", "reveal", "alien", "hero", "epic",
+}
+
+TRANSITION_KEYWORDS = {
+    "enquanto isso", "por exemplo", "além disso", "segundo fontes", "assim",
+    "portanto", "entretanto", "no entanto", "dessa forma", "em seguida",
+    "meanwhile", "for example", "furthermore", "in addition", "therefore",
+    "transition", "bridge",
+}
+
+
+def classify_scene_importance(
+    scene_index: int,
+    total_scenes: int = 1,
+    narration: str = "",
+    visual_intent: Optional[Any] = None,
+    duration_seconds: float = 4.0,
+    source_strategy: Optional[str] = None,
+) -> SceneImportance:
+    """
+    Classifica a importância da cena de forma leve e determinística (sem LLM pago).
+    Categorias:
+    - HERO: Abertura (hook / cena 1), clímax narrativo, momentos com forte carga dramática / visual.
+    - LOW: Transições, pontes sonoras ou cenas muito curtas (< 2.5s) que devem economizar IA.
+    - NORMAL: Cenas narrativas regulares do corpo do vídeo.
+    """
+    if source_strategy:
+        strat_clean = str(source_strategy).lower().strip()
+        if strat_clean in ("hero", "hook", "climax", "key", "highlight"):
+            return SceneImportance.HERO
+        if strat_clean in ("low", "bridge", "transition", "filler", "ambient"):
+            return SceneImportance.LOW
+        if strat_clean in ("normal", "body", "narrative"):
+            return SceneImportance.NORMAL
+
+    # 1. Posição no vídeo: Primeira cena é o gancho principal (HERO)
+    if scene_index == 1:
+        return SceneImportance.HERO
+
+    # 2. Texto / Intent para análise de keywords
+    text_corpus = narration.lower() if narration else ""
+    if visual_intent:
+        if isinstance(visual_intent, dict):
+            subj = str(visual_intent.get("primary_subject", "")).lower()
+            act = str(visual_intent.get("action", "")).lower()
+            env = str(visual_intent.get("environment", "")).lower()
+        else:
+            subj = str(getattr(visual_intent, "primary_subject", "")).lower()
+            act = str(getattr(visual_intent, "action", "")).lower()
+            env = str(getattr(visual_intent, "environment", "")).lower()
+        text_corpus += f" {subj} {act} {env}"
+
+    # 3. Keywords de alto impacto promovem a cena para HERO
+    for kw in HERO_KEYWORDS:
+        if kw in text_corpus:
+            return SceneImportance.HERO
+
+    # 4. Transições ou duração muito curta rebaixam para LOW
+    if duration_seconds < 2.5:
+        return SceneImportance.LOW
+
+    for kw in TRANSITION_KEYWORDS:
+        if kw in text_corpus:
+            return SceneImportance.LOW
+
+    return SceneImportance.NORMAL
+
+
 @dataclass
 class ProviderCapabilities:
     supports_text_to_image: bool = False
@@ -292,6 +371,96 @@ class GenerationResult:
         res = asdict(self)
         res["metrics"] = self.metrics.to_dict()
         return res
+
+
+@dataclass
+class VideoVisualSummary:
+    total_scenes: int = 0
+    stock_scenes: int = 0
+    generated_image_scenes: int = 0
+    generated_video_scenes: int = 0
+    fallback_scenes: int = 0
+    average_stock_score: float = 0.0
+    generation_attempts: int = 0
+    generation_successes: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def compute_video_visual_summary(
+    selections: List[Any],
+) -> VideoVisualSummary:
+    """
+    Computa o resumo estatístico e de governança visual para o vídeo completo (V16.7).
+    """
+    total = len(selections)
+    if total == 0:
+        return VideoVisualSummary()
+
+    stock_count = 0
+    gen_img_count = 0
+    gen_vid_count = 0
+    fallback_count = 0
+    attempts = 0
+    successes = 0
+    total_score = 0.0
+
+    for s in selections:
+        score = None
+        if hasattr(s, "stock_score") and s.stock_score is not None:
+            score = float(s.stock_score)
+        elif hasattr(s, "stock_match_score") and s.stock_match_score is not None:
+            score = float(s.stock_match_score)
+        elif hasattr(s, "match_score") and s.match_score is not None:
+            score = float(s.match_score)
+        elif isinstance(s, dict):
+            score = s.get("stock_score") or s.get("stock_match_score") or s.get("match_score")
+        if score is not None:
+            total_score += float(score)
+
+        source_type = "stock"
+        if hasattr(s, "final_visual_source") and s.final_visual_source:
+            source_type = s.final_visual_source
+        elif hasattr(s, "visual_source_type") and s.visual_source_type:
+            source_type = s.visual_source_type
+        elif isinstance(s, dict):
+            source_type = s.get("final_visual_source") or s.get("visual_source_type") or "stock"
+
+        if source_type in ("generated_image", "image_motion"):
+            gen_img_count += 1
+        elif source_type == "generated_video":
+            gen_vid_count += 1
+        else:
+            stock_count += 1
+
+        fallback_used = False
+        if hasattr(s, "fallback_used"):
+            fallback_used = bool(s.fallback_used)
+        elif isinstance(s, dict):
+            fallback_used = bool(s.get("fallback_used"))
+        if fallback_used:
+            fallback_count += 1
+
+        gen_status = getattr(s, "generation_status", None) if not isinstance(s, dict) else s.get("generation_status")
+        gen_attempted = getattr(s, "generated_attempted", None) if not isinstance(s, dict) else s.get("generated_attempted")
+
+        if gen_attempted or (gen_status and gen_status in ("success", "fallback")):
+            attempts += 1
+            if gen_status == "success":
+                successes += 1
+
+    avg_score = round(total_score / total, 2) if total > 0 else 0.0
+    return VideoVisualSummary(
+        total_scenes=total,
+        stock_scenes=stock_count,
+        generated_image_scenes=gen_img_count,
+        generated_video_scenes=gen_vid_count,
+        fallback_scenes=fallback_count,
+        average_stock_score=avg_score,
+        generation_attempts=attempts,
+        generation_successes=successes,
+    )
 
 
 # =============================================================================
@@ -530,6 +699,55 @@ def generate_still_motion_instructions(
         "resolution": f"{w}x{h}",
         "ffmpeg_filter": ffmpeg_filter,
     }
+
+
+def select_still_motion_mode(
+    scene_index: int,
+    visual_intent: Optional[Any] = None,
+    narration: str = "",
+) -> StillMotionMode:
+    """
+    Seleciona determinística e cinematicamente o modo de still motion para keyframes (V16.7).
+    Garante variação entre cenas e alinhamento com a semântica da ação.
+    """
+    text_corpus = (narration or "").lower()
+    if visual_intent:
+        if isinstance(visual_intent, dict):
+            act = str(visual_intent.get("action", "")).lower()
+            subj = str(visual_intent.get("primary_subject", "")).lower()
+            env = str(visual_intent.get("environment", "")).lower()
+        else:
+            act = str(getattr(visual_intent, "action", "")).lower()
+            subj = str(getattr(visual_intent, "primary_subject", "")).lower()
+            env = str(getattr(visual_intent, "environment", "")).lower()
+        text_corpus += f" {act} {subj} {env}"
+
+    if any(
+        k in text_corpus
+        for k in (
+            "aproxim", "zoom in", "close", "revel", "detalh", "foco", "focus",
+            "touching", "desce", "descendo", "rotating", "funil", "tornado",
+            "ground", "solo", "impact",
+        )
+    ):
+        return StillMotionMode.ZOOM_IN
+    if any(k in text_corpus for k in ("afast", "zoom out", "panorâm", "amplo", "wide", "paisag", "aerial", "sky", "céu")):
+        return StillMotionMode.ZOOM_OUT
+    if any(k in text_corpus for k in ("caminh", "pass", "andando", "movend", "pan right", "direita", "right", "estrada", "road")):
+        return StillMotionMode.PAN_RIGHT
+    if any(k in text_corpus for k in ("esquerda", "left", "olhando", "pan left")):
+        return StillMotionMode.PAN_LEFT
+    if any(k in text_corpus for k in ("parado", "estático", "static", "imóvel", "congel", "still")):
+        return StillMotionMode.STATIC
+
+    modes = [
+        StillMotionMode.ZOOM_IN,
+        StillMotionMode.PAN_RIGHT,
+        StillMotionMode.ZOOM_OUT,
+        StillMotionMode.PAN_LEFT,
+        StillMotionMode.STATIC,
+    ]
+    return modes[(max(1, scene_index) - 1) % len(modes)]
 
 
 # =============================================================================
@@ -1049,31 +1267,85 @@ class HybridVisualDirector:
         self,
         stock_match_score: Optional[float] = None,
         visual_intent: Optional[Any] = None,
+        scene_importance: Optional[Union[str, SceneImportance]] = None,
+        candidate_is_reused: bool = False,
+        candidate_aspect_ratio: Optional[str] = None,
+        target_aspect_ratio: str = "9:16",
+        candidate_duration: Optional[float] = None,
+        scene_duration: float = 4.0,
+        fallback_history_count: int = 0,
     ) -> HybridDecision:
         """
-        Determina a estratégia visual para a cena com base no score de stock e configurações:
-        - Se visual_generation_enabled=False: STOCK_HIGH_CONFIDENCE
-        - Se stock_match_score >= stock_high_confidence_threshold (default 60): STOCK_HIGH_CONFIDENCE
-        - Se generated_image_threshold <= score < stock_high_confidence_threshold (35 a 59):
-          GENERATED_IMAGE_PREFERRED (se generated_image_enabled, senão STOCK_HIGH_CONFIDENCE)
-        - Se score < generated_image_threshold (< 35):
-          GENERATED_VIDEO_PREFERRED (se vídeo habilitado e provider != "disabled",
-          senão GENERATED_IMAGE_PREFERRED se imagem habilitada, senão STOCK_HIGH_CONFIDENCE)
+        Determina a estratégia visual para a cena com base no score de stock, importância da cena
+        e heurística de custo/benefício (V16.7):
+        - visual_generation_enabled=False -> STOCK_HIGH_CONFIDENCE
+        - Aplica modificadores de threshold baseados em:
+          * scene_importance: HERO (+10 stock threshold, mais propenso a IA), LOW (-10 stock threshold, prioriza stock).
+          * candidate_aspect_ratio: nativo alinhado (-5 stock threshold) vs crop desalinhado (+5 stock threshold).
+          * candidate_is_reused: repetição (+15 stock threshold, desestimula repetir stock).
+          * fallback_history_count: falha prévia de IA (-10 stock threshold, cautela com retries).
+          * candidate_duration: duração insuficiente (+5 stock threshold).
+        - score >= effective_stock_threshold -> STOCK_HIGH_CONFIDENCE
+        - score >= effective_image_threshold -> GENERATED_IMAGE_PREFERRED (se imagem habilitada)
+        - score < effective_image_threshold -> GENERATED_VIDEO_PREFERRED (se vídeo habilitado e != disabled)
+          ou GENERATED_IMAGE_PREFERRED (se imagem habilitada)
+        - Fallback padrão: STOCK_HIGH_CONFIDENCE
         """
         if not self.visual_generation_enabled:
             return HybridDecision.STOCK_HIGH_CONFIDENCE
 
         score = 0.0 if stock_match_score is None else float(stock_match_score)
 
-        if score >= self.stock_high_confidence_threshold:
+        effective_stock_threshold = float(self.stock_high_confidence_threshold)
+        effective_image_threshold = float(self.generated_image_threshold)
+
+        # 1. Scene Importance
+        imp_str = (
+            scene_importance.value
+            if isinstance(scene_importance, SceneImportance)
+            else str(scene_importance or "NORMAL").upper()
+        )
+        if imp_str == SceneImportance.HERO.value:
+            effective_stock_threshold += 10.0
+            effective_image_threshold -= 5.0
+        elif imp_str == SceneImportance.LOW.value:
+            effective_stock_threshold -= 10.0
+            effective_image_threshold += 5.0
+
+        # 2. Aspect Ratio do candidato
+        if candidate_aspect_ratio:
+            c_asp = str(candidate_aspect_ratio).strip().lower()
+            t_asp = str(target_aspect_ratio).strip().lower()
+            if c_asp == t_asp or (c_asp == "portrait" and t_asp == "9:16") or (c_asp == "landscape" and t_asp == "16:9"):
+                effective_stock_threshold -= 5.0
+            elif (c_asp in ("16:9", "landscape") and t_asp in ("9:16", "portrait")):
+                effective_stock_threshold += 5.0
+
+        # 3. Penalidade de reuso (repetition penalty)
+        if candidate_is_reused:
+            effective_stock_threshold += 15.0
+
+        # 4. Histórico de falhas de IA nesta execução
+        if fallback_history_count > 0:
+            effective_stock_threshold -= 10.0
+
+        # 5. Duração insuficiente do stock
+        if candidate_duration is not None and candidate_duration < scene_duration:
+            effective_stock_threshold += 5.0
+
+        # Clamps para limites razoáveis
+        effective_stock_threshold = max(20.0, min(95.0, effective_stock_threshold))
+        effective_image_threshold = max(10.0, min(effective_stock_threshold - 5.0, effective_image_threshold))
+
+        if score >= effective_stock_threshold:
             return HybridDecision.STOCK_HIGH_CONFIDENCE
 
-        if score >= self.generated_image_threshold:
+        if score >= effective_image_threshold:
             if self.generated_image_enabled:
                 return HybridDecision.GENERATED_IMAGE_PREFERRED
             return HybridDecision.STOCK_HIGH_CONFIDENCE
 
-        # score < self.generated_image_threshold (< 35)
+        # score < effective_image_threshold
         if self.generated_video_enabled and self.preferred_video_provider not in ("disabled", "stock"):
             return HybridDecision.GENERATED_VIDEO_PREFERRED
         if self.generated_image_enabled:
@@ -1090,23 +1362,69 @@ class HybridVisualDirector:
         aspect_ratio: str = "9:16",
         duration_seconds: float = 4.0,
         stock_asset_resolver: Optional[Callable[[], Any]] = None,
+        scene_importance: Optional[Union[str, SceneImportance]] = None,
+        candidate_aspect_ratio: Optional[str] = None,
+        target_aspect_ratio: str = "9:16",
+        candidate_is_reused: bool = False,
+        candidate_duration: Optional[float] = None,
+        candidate_identifier: Optional[str] = None,
+        fallback_history_count: int = 0,
     ) -> GenerationResult:
         """
-        Resolve o ativo visual da cena aplicando a política contextual híbrida (V16.6.2).
-        Avalia o score de stock, sintetiza keyframe contextual se necessário, passa pelo
-        Quality Gate, injeta parâmetros de still motion e preserva fallback resiliente.
+        Resolve o ativo visual da cena aplicando a política contextual híbrida (V16.7).
+        Avalia score de stock, importância da cena, heurística de custo/benefício,
+        sintetiza keyframe contextual se necessário, passa pelo Quality Gate,
+        injeta still motion determinístico e preserva fallback resiliente com observabilidade.
         """
+        if scene_importance is None:
+            scene_importance = classify_scene_importance(
+                scene_index=scene_index,
+                narration=narration,
+                visual_intent=visual_intent,
+                duration_seconds=duration_seconds,
+            )
+
+        imp_val = (
+            scene_importance.value
+            if isinstance(scene_importance, SceneImportance)
+            else str(scene_importance).upper()
+        )
+        score_val = float(stock_match_score) if stock_match_score is not None else 0.0
+
         strategy = self.determine_scene_strategy(
             stock_match_score=stock_match_score,
             visual_intent=visual_intent,
+            scene_importance=scene_importance,
+            candidate_aspect_ratio=candidate_aspect_ratio,
+            target_aspect_ratio=target_aspect_ratio or aspect_ratio,
+            candidate_is_reused=candidate_is_reused,
+            candidate_duration=candidate_duration,
+            scene_duration=duration_seconds,
+            fallback_history_count=fallback_history_count,
         )
-        score_val = float(stock_match_score) if stock_match_score is not None else 0.0
+
+        base_meta = {
+            "strategy_selected": strategy.value,
+            "scene_importance": imp_val,
+            "stock_score": score_val,
+            "stock_candidate": candidate_identifier or "",
+            "decision": strategy.value,
+            "stock_match_score": score_val,
+        }
 
         # Caso 1: Stock de alta confiança ou geração global desabilitada
         if strategy == HybridDecision.STOCK_HIGH_CONFIDENCE:
             logger.info(
-                f"[HYBRID_DECISION] Scene {scene_index} -> STOCK_HIGH_CONFIDENCE (score={score_val:.1f})"
+                f"[HYBRID_DECISION] Scene {scene_index} ({imp_val}) -> STOCK_HIGH_CONFIDENCE (score={score_val:.1f})"
             )
+            meta = dict(base_meta)
+            meta.update({
+                "visual_source_type": "stock",
+                "final_visual_source": "stock",
+                "generation_status": "bypassed",
+                "generated_attempted": False,
+                "fallback_used": False,
+            })
             return self._execute_stock_fallback(
                 request=GenerationRequest(
                     scene_id=scene_index,
@@ -1116,18 +1434,13 @@ class HybridVisualDirector:
                 ),
                 reason="STOCK_HIGH_CONFIDENCE",
                 stock_resolver_fallback=stock_asset_resolver,
-                metadata={
-                    "decision": strategy.value,
-                    "stock_match_score": score_val,
-                    "visual_source_type": "stock",
-                    "generation_status": "bypassed",
-                },
+                metadata=meta,
             )
 
         # Caso 2: Geração de Imagem / Keyframe Contextual
         if strategy == HybridDecision.GENERATED_IMAGE_PREFERRED:
             logger.info(
-                f"[HYBRID_DECISION] Scene {scene_index} -> GENERATED_IMAGE_PREFERRED (score={score_val:.1f})"
+                f"[HYBRID_DECISION] Scene {scene_index} ({imp_val}) -> GENERATED_IMAGE_PREFERRED (score={score_val:.1f})"
             )
             prompt_payload = build_image_prompt_from_visual_intent(
                 intent=visual_intent,
@@ -1143,6 +1456,16 @@ class HybridVisualDirector:
                 logger.warning(
                     f"[HYBRID_DECISION][FALLBACK] Image provider '{provider_name}' {reason}. Fallback to stock."
                 )
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "stock",
+                    "final_visual_source": "stock",
+                    "generation_status": "fallback",
+                    "generated_attempted": True,
+                    "generation_provider": provider_name,
+                    "fallback_used": True,
+                    "fallback_reason": reason,
+                })
                 return self._execute_stock_fallback(
                     request=GenerationRequest(
                         scene_id=scene_index,
@@ -1152,12 +1475,7 @@ class HybridVisualDirector:
                     ),
                     reason=reason,
                     stock_resolver_fallback=stock_asset_resolver,
-                    metadata={
-                        "decision": strategy.value,
-                        "stock_match_score": score_val,
-                        "visual_source_type": "stock",
-                        "generation_status": "fallback",
-                    },
+                    metadata=meta,
                 )
 
             req = GenerationRequest(
@@ -1172,38 +1490,69 @@ class HybridVisualDirector:
 
             try:
                 gen_res = provider.generate(req)
+            except TimeoutError as exc:
+                logger.warning(f"[HYBRID_DECISION][FALLBACK] Image provider timeout: {exc}. Fallback to stock.")
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "stock",
+                    "final_visual_source": "stock",
+                    "generation_status": "fallback",
+                    "generated_attempted": True,
+                    "generation_provider": provider_name,
+                    "fallback_used": True,
+                    "fallback_reason": "PROVIDER_TIMEOUT",
+                })
+                return self._execute_stock_fallback(
+                    request=req,
+                    reason="PROVIDER_TIMEOUT",
+                    error=str(exc),
+                    stock_resolver_fallback=stock_asset_resolver,
+                    metadata=meta,
+                )
             except Exception as exc:
                 logger.error(
                     f"[HYBRID_DECISION][FALLBACK] Exception in image provider: {exc}. Fallback to stock."
                 )
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "stock",
+                    "final_visual_source": "stock",
+                    "generation_status": "fallback",
+                    "generated_attempted": True,
+                    "generation_provider": provider_name,
+                    "fallback_used": True,
+                    "fallback_reason": "GENERATION_EXCEPTION",
+                })
                 return self._execute_stock_fallback(
                     request=req,
                     reason="GENERATION_EXCEPTION",
                     error=str(exc),
                     stock_resolver_fallback=stock_asset_resolver,
-                    metadata={
-                        "decision": strategy.value,
-                        "stock_match_score": score_val,
-                        "visual_source_type": "stock",
-                        "generation_status": "fallback",
-                    },
+                    metadata=meta,
                 )
 
             if not gen_res.success:
+                fallback_rsn = gen_res.fallback_reason or "IMAGE_GENERATION_FAILED"
                 logger.warning(
-                    f"[HYBRID_DECISION][FALLBACK] Image generation failed ({gen_res.fallback_reason}). Fallback to stock."
+                    f"[HYBRID_DECISION][FALLBACK] Image generation failed ({fallback_rsn}). Fallback to stock."
                 )
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "stock",
+                    "final_visual_source": "stock",
+                    "generation_status": "fallback",
+                    "generated_attempted": True,
+                    "generation_provider": gen_res.provider,
+                    "generation_model": gen_res.model,
+                    "fallback_used": True,
+                    "fallback_reason": fallback_rsn,
+                })
                 return self._execute_stock_fallback(
                     request=req,
-                    reason=gen_res.fallback_reason or "IMAGE_GENERATION_FAILED",
+                    reason=fallback_rsn,
                     error=gen_res.error,
                     stock_resolver_fallback=stock_asset_resolver,
-                    metadata={
-                        "decision": strategy.value,
-                        "stock_match_score": score_val,
-                        "visual_source_type": "stock",
-                        "generation_status": "fallback",
-                    },
+                    metadata=meta,
                 )
 
             # Image Quality Gate
@@ -1212,42 +1561,54 @@ class HybridVisualDirector:
                 logger.warning(
                     f"[HYBRID_DECISION][FALLBACK] Keyframe quality gate failed: {qg.reason}. Fallback to stock."
                 )
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "stock",
+                    "final_visual_source": "stock",
+                    "generation_status": "fallback",
+                    "generated_attempted": True,
+                    "generation_provider": gen_res.provider,
+                    "generation_model": gen_res.model,
+                    "fallback_used": True,
+                    "fallback_reason": f"QUALITY_GATE_{qg.reason}",
+                    "quality_gate_details": qg.details,
+                })
                 return self._execute_stock_fallback(
                     request=req,
                     reason=f"QUALITY_GATE_{qg.reason}",
                     error=qg.reason,
                     stock_resolver_fallback=stock_asset_resolver,
-                    metadata={
-                        "decision": strategy.value,
-                        "stock_match_score": score_val,
-                        "visual_source_type": "stock",
-                        "generation_status": "fallback",
-                        "quality_gate_details": qg.details,
-                    },
+                    metadata=meta,
                 )
 
             # Sucesso no Keyframe
-            meta = {
-                "decision": strategy.value,
-                "stock_match_score": score_val,
+            chosen_mode = select_still_motion_mode(scene_index, visual_intent, narration)
+            meta = dict(base_meta)
+            meta.update({
+                "generated_attempted": True,
                 "generation_prompt": prompt_payload.prompt,
                 "generation_model": gen_res.model,
                 "generation_provider": gen_res.provider,
                 "generation_status": "success",
                 "generated_asset_path": gen_res.output_path,
-            }
+                "fallback_used": False,
+                "fallback_reason": None,
+            })
             if self.still_motion_enabled:
                 motion = generate_still_motion_instructions(
                     image_path=gen_res.output_path or "",
                     duration_seconds=duration_seconds,
                     aspect_ratio=aspect_ratio,
-                    mode=StillMotionMode.ZOOM_IN,
+                    mode=chosen_mode,
                 )
-                meta["motion_mode"] = StillMotionMode.ZOOM_IN.value
+                meta["still_motion_mode"] = chosen_mode.value
+                meta["motion_mode"] = chosen_mode.value
                 meta["motion_instructions"] = motion
                 meta["visual_source_type"] = "image_motion"
+                meta["final_visual_source"] = "image_motion"
             else:
                 meta["visual_source_type"] = "generated_image"
+                meta["final_visual_source"] = "generated_image"
 
             gen_res.metadata.update(meta)
             return gen_res
@@ -1255,7 +1616,7 @@ class HybridVisualDirector:
         # Caso 3: Vídeo Generativo Preferido
         if strategy == HybridDecision.GENERATED_VIDEO_PREFERRED:
             logger.info(
-                f"[HYBRID_DECISION] Scene {scene_index} -> GENERATED_VIDEO_PREFERRED (score={score_val:.1f})"
+                f"[HYBRID_DECISION] Scene {scene_index} ({imp_val}) -> GENERATED_VIDEO_PREFERRED (score={score_val:.1f})"
             )
             v_provider = self.get_provider(self.preferred_video_provider)
             if v_provider and v_provider.is_available():
@@ -1270,19 +1631,25 @@ class HybridVisualDirector:
                 try:
                     res = v_provider.generate(req)
                     if res.success:
-                        res.metadata.update({
-                            "decision": strategy.value,
-                            "stock_match_score": score_val,
+                        meta = dict(base_meta)
+                        meta.update({
+                            "generated_attempted": True,
                             "visual_source_type": "generated_video",
+                            "final_visual_source": "generated_video",
                             "generation_status": "success",
+                            "fallback_used": False,
+                            "fallback_reason": None,
                         })
+                        res.metadata.update(meta)
                         return res
+                except TimeoutError as exc:
+                    logger.warning(f"[HYBRID_DECISION] Video provider timeout: {exc}")
                 except Exception as exc:
                     logger.warning(f"[HYBRID_DECISION] Video provider exception: {exc}")
 
             # Fallback para generated_image se vídeo falhar
             if self.generated_image_enabled:
-                logger.info("[HYBRID_DECISION] Video provider unavailable. Attempting generated image fallback.")
+                logger.info("[HYBRID_DECISION] Video provider unavailable/failed. Attempting generated image fallback.")
                 return self.resolve_contextual_scene_visual(
                     scene_index=scene_index,
                     stock_match_score=self.generated_image_threshold + 5.0,  # Força ramo de imagem
@@ -1291,26 +1658,47 @@ class HybridVisualDirector:
                     aspect_ratio=aspect_ratio,
                     duration_seconds=duration_seconds,
                     stock_asset_resolver=stock_asset_resolver,
+                    scene_importance=scene_importance,
+                    candidate_aspect_ratio=candidate_aspect_ratio,
+                    target_aspect_ratio=target_aspect_ratio,
+                    candidate_is_reused=candidate_is_reused,
+                    candidate_duration=candidate_duration,
+                    candidate_identifier=candidate_identifier,
+                    fallback_history_count=fallback_history_count,
                 )
 
             # Fallback para stock se tudo mais falhar
+            meta = dict(base_meta)
+            meta.update({
+                "visual_source_type": "stock",
+                "final_visual_source": "stock",
+                "generation_status": "fallback",
+                "generated_attempted": True,
+                "fallback_used": True,
+                "fallback_reason": "VIDEO_GENERATION_FAILED_OR_DISABLED",
+            })
             return self._execute_stock_fallback(
                 request=GenerationRequest(scene_id=scene_index, prompt=narration, aspect_ratio=aspect_ratio, duration_seconds=duration_seconds),
                 reason="VIDEO_GENERATION_FAILED_OR_DISABLED",
                 stock_resolver_fallback=stock_asset_resolver,
-                metadata={
-                    "decision": strategy.value,
-                    "stock_match_score": score_val,
-                    "visual_source_type": "stock",
-                    "generation_status": "fallback",
-                },
+                metadata=meta,
             )
 
         # Fallback padrão
+        meta = dict(base_meta)
+        meta.update({
+            "visual_source_type": "stock",
+            "final_visual_source": "stock",
+            "generation_status": "fallback",
+            "generated_attempted": False,
+            "fallback_used": True,
+            "fallback_reason": "DEFAULT_FALLBACK",
+        })
         return self._execute_stock_fallback(
             request=GenerationRequest(scene_id=scene_index, prompt=narration, aspect_ratio=aspect_ratio, duration_seconds=duration_seconds),
             reason="DEFAULT_FALLBACK",
             stock_resolver_fallback=stock_asset_resolver,
+            metadata=meta,
         )
 
     def resolve_scene_visual(

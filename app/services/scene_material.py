@@ -127,6 +127,36 @@ def resolve_scene_materials(
 
     from app.services import visual_matching
 
+    visual_cfg = config.app.get("visual_generation", {})
+    visual_gen_enabled = getattr(params, "visual_generation_enabled", False) or bool(
+        visual_cfg.get("visual_generation_enabled", False)
+    )
+
+    director = None
+    if visual_gen_enabled:
+        from app.services import hybrid_visual
+
+        merged_cfg = dict(visual_cfg)
+        merged_cfg["visual_generation_enabled"] = True
+        if hasattr(params, "generated_image_enabled") and params.generated_image_enabled is not None:
+            merged_cfg["generated_image_enabled"] = bool(params.generated_image_enabled)
+        if hasattr(params, "generated_video_enabled") and params.generated_video_enabled is not None:
+            merged_cfg["generated_video_enabled"] = bool(params.generated_video_enabled)
+        if hasattr(params, "stock_high_confidence_threshold") and params.stock_high_confidence_threshold is not None:
+            merged_cfg["stock_high_confidence_threshold"] = float(params.stock_high_confidence_threshold)
+        if hasattr(params, "generated_image_threshold") and params.generated_image_threshold is not None:
+            merged_cfg["generated_image_threshold"] = float(params.generated_image_threshold)
+        if hasattr(params, "preferred_video_provider") and params.preferred_video_provider is not None:
+            merged_cfg["preferred_video_provider"] = str(params.preferred_video_provider)
+        if hasattr(params, "preferred_image_provider") and params.preferred_image_provider is not None:
+            merged_cfg["preferred_image_provider"] = str(params.preferred_image_provider)
+        if hasattr(params, "still_motion_enabled") and params.still_motion_enabled is not None:
+            merged_cfg["still_motion_enabled"] = bool(params.still_motion_enabled)
+
+        director = hybrid_visual.build_hybrid_visual_director(merged_cfg)
+
+    fallback_history_count = 0
+
     for scene in scene_plan.scenes:
         scene_idx = scene.scene_index
         logger.info(f"[SCENE_MATERIAL][START] task_id={tid_str} scene_index={scene_idx}")
@@ -302,24 +332,6 @@ def resolve_scene_materials(
             else:
                 continue
 
-        # Baixa / salva o arquivo de vídeo
-        saved_path = material.save_video(
-            video_url=resolved_item.url,
-            save_dir=material_directory,
-        )
-
-        if not saved_path or not os.path.exists(saved_path):
-            logger.error(
-                f"[SCENE_MATERIAL][BLOCK] task_id={tid_str} scene_index={scene_idx} "
-                f"reason=SCENE_MATERIAL_DOWNLOAD_FAILED url={resolved_item.url}"
-            )
-            if strict:
-                raise SceneMaterialError(
-                    f"SCENE_MATERIAL_DOWNLOAD_FAILED: failed to download material for scene {scene_idx}",
-                    reason_code="SCENE_MATERIAL_DOWNLOAD_FAILED",
-                )
-            continue
-
         source_info = (
             resolved_item.source_info
             if isinstance(resolved_item.source_info, dict)
@@ -327,25 +339,168 @@ def resolve_scene_materials(
         )
         asset_id = str(source_info.get("asset_id") or source_info.get("id") or "")
         source_url = str(source_info.get("source_page") or resolved_item.url or "")
-        prov_record = material._material_source_record(resolved_item, saved_path)
-        material_sources_records.append(prov_record)
 
-        selection = SceneMaterialSelection(
-            scene_index=scene_idx,
-            material_path=saved_path,
-            provider=resolved_item.provider or source,
-            asset_id=asset_id or None,
-            source_url=source_url or None,
-            search_term_used=term_used,
-            fallback_used=fallback_used,
-            duration=float(resolved_item.duration or 0.0),
-            provenance=prov_record,
-            visual_intent=intent.to_dict(),
-            match_score=resolved_score,
-            selection_reason=resolved_reason,
-            queries_tried=queries_tried,
-            fallback_tier=chosen_tier,
+        cand_aspect = str(
+            getattr(resolved_item, "aspect_ratio", "")
+            or ("portrait" if video_aspect == VideoAspect.portrait else "landscape")
         )
+        cand_id = asset_id or resolved_item.url
+        cand_is_reused = (cand_id in used_asset_ids) or (resolved_item.url in used_asset_ids)
+        cand_dur = float(resolved_item.duration or 0.0) if resolved_item.duration else None
+
+        saved_path = None
+        if director:
+            from app.services import hybrid_visual
+
+            scene_importance = hybrid_visual.classify_scene_importance(
+                scene_index=scene_idx,
+                total_scenes=len(scene_plan.scenes),
+                narration=scene.narration or "",
+                visual_intent=intent,
+                duration_seconds=scene.duration_hint or float(min_clip_dur),
+                source_strategy=getattr(scene, "source_strategy", None),
+            )
+
+            gen_res = director.resolve_contextual_scene_visual(
+                scene_index=scene_idx,
+                stock_match_score=resolved_score,
+                visual_intent=intent,
+                narration=scene.narration or "",
+                aspect_ratio=video_aspect.value,
+                duration_seconds=scene.duration_hint or float(min_clip_dur),
+                stock_asset_resolver=lambda: material.save_video(
+                    video_url=resolved_item.url,
+                    save_dir=material_directory,
+                ),
+                scene_importance=scene_importance,
+                candidate_aspect_ratio=cand_aspect,
+                target_aspect_ratio=video_aspect.value,
+                candidate_is_reused=cand_is_reused,
+                candidate_duration=cand_dur,
+                candidate_identifier=cand_id,
+                fallback_history_count=fallback_history_count,
+            )
+
+            final_source = gen_res.metadata.get("final_visual_source", "stock")
+            if gen_res.metadata.get("generation_status") == "fallback":
+                fallback_history_count += 1
+
+            if (
+                final_source in ("image_motion", "generated_image", "generated_video")
+                and gen_res.output_path
+                and os.path.exists(gen_res.output_path)
+            ):
+                saved_path = gen_res.output_path
+                prov_record = {
+                    "source": gen_res.provider,
+                    "asset_id": f"ai_gen_{scene_idx}",
+                    "media_type": gen_res.media_type,
+                    "model": gen_res.model,
+                    "prompt": gen_res.metadata.get("generation_prompt"),
+                }
+                material_sources_records.append(prov_record)
+            else:
+                saved_path = gen_res.output_path
+                if not saved_path or not os.path.exists(saved_path):
+                    saved_path = material.save_video(
+                        video_url=resolved_item.url,
+                        save_dir=material_directory,
+                    )
+                if not saved_path or not os.path.exists(saved_path):
+                    logger.error(
+                        f"[SCENE_MATERIAL][BLOCK] task_id={tid_str} scene_index={scene_idx} "
+                        f"reason=SCENE_MATERIAL_DOWNLOAD_FAILED url={resolved_item.url}"
+                    )
+                    if strict:
+                        raise SceneMaterialError(
+                            f"SCENE_MATERIAL_DOWNLOAD_FAILED: failed to download material for scene {scene_idx}",
+                            reason_code="SCENE_MATERIAL_DOWNLOAD_FAILED",
+                        )
+                    continue
+                prov_record = material._material_source_record(resolved_item, saved_path)
+                material_sources_records.append(prov_record)
+
+            selection = SceneMaterialSelection(
+                scene_index=scene_idx,
+                material_path=saved_path,
+                provider=gen_res.provider if final_source != "stock" else (resolved_item.provider or source),
+                asset_id=asset_id or None if final_source == "stock" else f"gen_{scene_idx}",
+                source_url=source_url or None,
+                search_term_used=term_used,
+                fallback_used=bool(fallback_used or gen_res.metadata.get("fallback_used", False)),
+                duration=float(resolved_item.duration or 0.0) if final_source == "stock" else float(scene.duration_hint or min_clip_dur),
+                provenance=prov_record,
+                visual_intent=intent.to_dict(),
+                match_score=resolved_score,
+                selection_reason=resolved_reason,
+                queries_tried=queries_tried,
+                fallback_tier=chosen_tier,
+                media_type=gen_res.media_type,
+                model=gen_res.model,
+                generation_time=gen_res.metrics.generation_time_seconds,
+                fallback_reason=gen_res.fallback_reason,
+                visual_source_type=gen_res.metadata.get("visual_source_type", "stock"),
+                stock_match_score=resolved_score,
+                generation_provider=gen_res.metadata.get("generation_provider") or gen_res.provider,
+                generation_model=gen_res.metadata.get("generation_model") or gen_res.model,
+                generation_prompt=gen_res.metadata.get("generation_prompt"),
+                generation_status=gen_res.metadata.get("generation_status"),
+                generated_asset_path=gen_res.metadata.get("generated_asset_path"),
+                motion_mode=gen_res.metadata.get("motion_mode"),
+                strategy_selected=gen_res.metadata.get("strategy_selected"),
+                scene_importance=gen_res.metadata.get("scene_importance"),
+                stock_score=resolved_score,
+                stock_candidate=cand_id,
+                generated_attempted=gen_res.metadata.get("generated_attempted", False),
+                still_motion_mode=gen_res.metadata.get("still_motion_mode"),
+                final_visual_source=final_source,
+            )
+        else:
+            # Comportamento legado stock
+            saved_path = material.save_video(
+                video_url=resolved_item.url,
+                save_dir=material_directory,
+            )
+            if not saved_path or not os.path.exists(saved_path):
+                logger.error(
+                    f"[SCENE_MATERIAL][BLOCK] task_id={tid_str} scene_index={scene_idx} "
+                    f"reason=SCENE_MATERIAL_DOWNLOAD_FAILED url={resolved_item.url}"
+                )
+                if strict:
+                    raise SceneMaterialError(
+                        f"SCENE_MATERIAL_DOWNLOAD_FAILED: failed to download material for scene {scene_idx}",
+                        reason_code="SCENE_MATERIAL_DOWNLOAD_FAILED",
+                    )
+                continue
+
+            prov_record = material._material_source_record(resolved_item, saved_path)
+            material_sources_records.append(prov_record)
+
+            selection = SceneMaterialSelection(
+                scene_index=scene_idx,
+                material_path=saved_path,
+                provider=resolved_item.provider or source,
+                asset_id=asset_id or None,
+                source_url=source_url or None,
+                search_term_used=term_used,
+                fallback_used=fallback_used,
+                duration=float(resolved_item.duration or 0.0),
+                provenance=prov_record,
+                visual_intent=intent.to_dict(),
+                match_score=resolved_score,
+                selection_reason=resolved_reason,
+                queries_tried=queries_tried,
+                fallback_tier=chosen_tier,
+                visual_source_type="stock",
+                final_visual_source="stock",
+                strategy_selected="STOCK_HIGH_CONFIDENCE",
+                scene_importance="NORMAL",
+                stock_score=resolved_score,
+                stock_candidate=asset_id or None,
+                generated_attempted=False,
+                generation_status="bypassed",
+            )
+
         selections.append(selection)
 
         last_selected_asset_id = asset_id or resolved_item.url
@@ -357,8 +512,16 @@ def resolve_scene_materials(
             f"score={resolved_score:.1f} fallback={fallback_used} path={saved_path}"
         )
 
-    # Persiste materiais de cena e fontes de proveniência no script_data
-    _persist_scene_resolution(task_id, selections, material_sources_records)
+    # Persiste materiais de cena, fontes de proveniência e resumo visual no script_data
+    from app.services import hybrid_visual
+
+    visual_summary = hybrid_visual.compute_video_visual_summary(selections)
+    _persist_scene_resolution(
+        task_id=task_id,
+        selections=selections,
+        material_sources=material_sources_records,
+        visual_summary=visual_summary.to_dict(),
+    )
 
     return selections
 
@@ -367,8 +530,9 @@ def _persist_scene_resolution(
     task_id: str,
     selections: List[SceneMaterialSelection],
     material_sources: List[dict[str, Any]],
+    visual_summary: Optional[dict[str, Any]] = None,
 ) -> None:
-    """Persiste dados de materiais de cenas e proveniência de forma segura."""
+    """Persiste dados de materiais de cenas, proveniência e resumo visual no script_data."""
     try:
         serialized_materials = [
             {
@@ -396,13 +560,26 @@ def _persist_scene_resolution(
                 "generation_status": getattr(s, "generation_status", None),
                 "generated_asset_path": getattr(s, "generated_asset_path", None),
                 "motion_mode": getattr(s, "motion_mode", None),
+                "strategy_selected": getattr(s, "strategy_selected", None),
+                "scene_importance": getattr(s, "scene_importance", None),
+                "stock_score": getattr(s, "stock_score", None),
+                "stock_candidate": getattr(s, "stock_candidate", None),
+                "generated_attempted": getattr(s, "generated_attempted", None),
+                "still_motion_mode": getattr(s, "still_motion_mode", None),
+                "final_visual_source": getattr(s, "final_visual_source", "stock"),
             }
             for s in selections
         ]
+        patch_kwargs = {
+            "scene_materials": serialized_materials,
+            "material_sources": material_sources,
+        }
+        if visual_summary:
+            patch_kwargs["visual_summary"] = visual_summary
+
         task_artifacts.patch_script_data(
             task_id,
-            scene_materials=serialized_materials,
-            material_sources=material_sources,
+            **patch_kwargs,
         )
     except Exception as exc:
         logger.warning(

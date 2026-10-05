@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_7_HYBRID_SCENE_DIRECTOR`
-- **ACTIVE_PHASE** = `V16.6.2 — Contextual Image-to-Video Foundation`
-- **ACTIVE_BRANCH** = `feat/v16-6-2-contextual-image-to-video`
-- **NEXT_GATE** = `V16.7_HYBRID_SCENE_DIRECTOR`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_8_CONTROLLED_HYBRID_RENDER_VALIDATION`
+- **ACTIVE_PHASE** = `V16.7 — Hybrid Scene Director`
+- **ACTIVE_BRANCH** = `feat/v16-7-hybrid-scene-director`
+- **NEXT_GATE** = `V16.8_CONTROLLED_HYBRID_RENDER_VALIDATION`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
 
@@ -37,7 +37,8 @@
 - **V16.5.1 Subtitle & Narration Quality Recovery** = MERGED (PR #54, SHA `4823a799d3030982d27e0eeccea1ab3f73a065f7`)
 - **V16.6 Hybrid Visual Generation Foundation** = MERGED (PR #55, SHA `ae988e76777b0ab879385c33807361090990c45e`)
 - **V16.6.1 Hardware-Aware Open Source Benchmark** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
-- **V16.6.2 Contextual Image-to-Video Foundation** = DEV IMPLEMENTED / VALIDATED
+- **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
+- **V16.7 Hybrid Scene Director** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1048,26 +1049,37 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - **Validação Local:** 20 testes unitários direcionados com 100% de sucesso (`test/services/test_hybrid_visual_generation.py`).
 
 ## V16.7 — Hybrid Scene Director
-- **Status:** 📋 PLANNED
-- **Priority:** P2
+- **Status:** ✅ COMPLETED
+- **Priority:** P1
 - **Princípio Operacional:**
-  - Não gerar 100% dos vídeos por IA generativa (evitar custo, tempo excessivo de render e perda de dinamismo).
-  - IA generativa reservada primariamente para cenas onde o stock library possui baixa aderência semântica.
-- **Decisão Automática por Cena:**
-  1. **Stock de alta qualidade** (Match Score >= 80) -> Utiliza clipe de stock direto.
-  2. **Stock fraco** (Match Score < 65) -> Tenta `generated_image` + `image-to-video`.
-  3. **Cena simples/conceitual** -> Imagem estática com movimento/parallax/ken burns se suficiente.
-  4. **Falha de síntese IA / timeout** -> Fallback seguro em cascata para stock da biblioteca.
+  - IA generativa não deve ser chamada indiscriminadamente (evitar desperdício de GPU, custo, tempo de render e perda de dinamismo).
+  - Decisão automática por cena baseada em score de aderência semântica de stock, importância da cena, aspect ratio, penalidade de repetição e duração.
+- **Decision Engine Canônico:**
+  1. `STOCK_HIGH_CONFIDENCE` (Score >= 60): Usa clipe stock direto sem acionar IA.
+  2. `GENERATED_IMAGE_PREFERRED` (35 <= Score < 60): Gera keyframe contextual (ex: Nano Banana). Se aprovado, usa Still Motion (ou I2V se provider habilitado).
+  3. `GENERATED_VIDEO_PREFERRED` (Score < 35): Tenta geração de imagem + I2V se habilitado; caso contrário fallback para stock.
+  4. `FALLBACK_STOCK`: Fail-safe robusto e transparente para qualquer timeout, erro ou falha no quality gate.
+- **Classificação Leve de Importância de Cena (Sem LLM):**
+  - `HERO`: Cenas de abertura (hook), clímax, keywords de ação/urgência ou duração ultra-curta (< 2.5s). Limiares mais agressivos para permitir geração.
+  - `NORMAL`: Comportamento balanceado padrão.
+  - `LOW`: Cenas de transição ou genéricas. Prioriza stock para economizar recursos.
+- **Heurística de Custo/Benefício:**
+  - Ajustes dinâmicos de limiares considerando aspect ratio (alinhamento vertical 9:16), penalidade por reuso de candidato stock e histórico de fallbacks da tarefa.
+- **Still Motion Integrado:**
+  - Suporte determinístico a 5 modos de movimento (`zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `static`) quando I2V estiver desabilitado.
+- **Observabilidade Completa & Resumo de Vídeo:**
+  - Metadados por cena em `SceneMaterialSelection` e `script_data`.
+  - Resumo de métricas por vídeo (`VideoVisualSummary`): contagem de cenas por estratégia, média de score stock, tentativas e taxas de sucesso de geração.
 
-## V16.7.1 — Gemini / Nano Banana Adapter
-- **Status:** 📋 PLANNED
+## V16.8 — Controlled Hybrid Render Validation
+- **Status:** 📋 PLANNED (NEXT GATE)
 - **Priority:** P2
-- **Integração com Nano Banana:** Provider opcional de imagem para keyframes e ilustrações conceituais de cena.
-
-## V16.8 — AI Video Generation Production Pipeline
-- **Status:** 🔮 FUTURE
-- **Priority:** P3
-- Orquestração distribuída entre DEV (planejamento/prompts) e PC Forte (inferência GPU acelerada).
+- **Objetivo Futuro:**
+  - Gerar um único vídeo completo no DEV / PC Forte com o pipeline híbrido ativo.
+  - Comparar qualidade visual e dinamismo (stock vs keyframe still-motion vs I2V).
+  - Comparar tempo total de processamento e renderização.
+  - Verificar se a geração generativa contextual realmente melhora a percepção visual do conteúdo.
+  - *Nota: Não executar a geração completa da V16.8 ainda.*
 
 ## V16.9 — Audiovisual Feedback Learning
 - **Status:** 🔮 FUTURE

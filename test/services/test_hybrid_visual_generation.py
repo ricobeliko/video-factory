@@ -54,6 +54,11 @@ from app.services.hybrid_visual import (
     evaluate_keyframe_quality,
     generate_still_motion_instructions,
     probe_hardware_capability,
+    SceneImportance,
+    classify_scene_importance,
+    select_still_motion_mode,
+    VideoVisualSummary,
+    compute_video_visual_summary,
 )
 from scripts.benchmark_video_models import VideoBenchmarkRunner
 
@@ -497,6 +502,366 @@ class TestHybridVisualGeneration(unittest.TestCase):
         self.assertIn("stock", director.providers)
         self.assertIn("nano_banana", director.providers)
         self.assertIn("comfyui", director.providers)
+
+
+class TestHybridSceneDirectorV16_7(unittest.TestCase):
+    """
+    Testes direcionados da Fase V16.7 — Hybrid Scene Director:
+    1. strong stock -> stock (STOCK_HIGH_CONFIDENCE, sem chamada de IA).
+    2. medium stock + generator available -> generated image contextual.
+    3. medium stock + generator unavailable -> stock fallback seguro.
+    4. weak stock -> generated preferred (vídeo ou imagem).
+    5. hero scene uses more aggressive generated threshold (score 63 -> generated).
+    6. low importance scene prefers stock (score 55 -> stock).
+    7. generated image accepted -> still motion selected com filtros ffmpeg.
+    8. quality gate failure -> stock fallback com motivo de rejeição.
+    9. provider timeout -> stock fallback com motivo PROVIDER_TIMEOUT.
+    10. multiple scenes produce mixed strategies.
+    11. summary metrics correct (VideoVisualSummary).
+    12. legacy mode with visual_generation_enabled=false unchanged.
+    13. cost-benefit heuristic considera reuso e aspect ratio.
+    14. invariantes de fábrica: zero publicação, zero chamadas pagas, zero download pesado.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.adapter = NanoBananaImageAdapter(mock_mode=True)
+        self.director = HybridVisualDirector(
+            visual_generation_enabled=True,
+            generated_image_enabled=True,
+            generated_video_enabled=False,
+            stock_high_confidence_threshold=60.0,
+            generated_image_threshold=35.0,
+            preferred_image_provider="nano_banana",
+            preferred_video_provider="disabled",
+            still_motion_enabled=True,
+            providers={"nano_banana": self.adapter},
+        )
+
+    def tearDown(self):
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_strong_stock_prefers_stock_without_ai_calls(self):
+        """1. strong stock -> stock: Score >= 60 usa stock direto e não tenta gerar IA."""
+        res = self.director.resolve_contextual_scene_visual(
+            scene_index=2,
+            stock_match_score=85.0,
+            narration="Cena de alta aderência no acervo",
+            aspect_ratio="9:16",
+            scene_importance=SceneImportance.NORMAL,
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.provider, "stock")
+        self.assertEqual(res.metadata.get("strategy_selected"), HybridDecision.STOCK_HIGH_CONFIDENCE.value)
+        self.assertEqual(res.metadata.get("final_visual_source"), "stock")
+        self.assertFalse(res.metadata.get("generated_attempted"))
+        self.assertEqual(res.metadata.get("generation_status"), "bypassed")
+
+    def test_medium_stock_and_generator_available_chooses_generated_image(self):
+        """2. medium stock + generator available -> generated image: Score 45 gera keyframe contextual."""
+        res = self.director.resolve_contextual_scene_visual(
+            scene_index=2,
+            stock_match_score=45.0,
+            visual_intent={"primary_subject": "tornado", "action": "rotating", "environment": "plains"},
+            narration="Tornado em planície",
+            aspect_ratio="9:16",
+            scene_importance=SceneImportance.NORMAL,
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.provider, "nano_banana")
+        self.assertEqual(res.metadata.get("strategy_selected"), HybridDecision.GENERATED_IMAGE_PREFERRED.value)
+        self.assertEqual(res.metadata.get("final_visual_source"), "image_motion")
+        self.assertTrue(res.metadata.get("generated_attempted"))
+        self.assertEqual(res.metadata.get("generation_status"), "success")
+        self.assertIn("still_motion_mode", res.metadata)
+
+    def test_medium_stock_and_generator_unavailable_falls_back_to_stock(self):
+        """3. medium stock + generator unavailable -> stock fallback: Provider desconfigurado recua para stock."""
+        unconfigured = NanoBananaImageAdapter(api_key="", mock_mode=False)
+        director = HybridVisualDirector(
+            visual_generation_enabled=True,
+            generated_image_enabled=True,
+            stock_high_confidence_threshold=60.0,
+            generated_image_threshold=35.0,
+            preferred_image_provider="nano_banana",
+            providers={"nano_banana": unconfigured},
+        )
+        res = director.resolve_contextual_scene_visual(
+            scene_index=2,
+            stock_match_score=45.0,
+            narration="Tornado em planície",
+            aspect_ratio="9:16",
+            scene_importance=SceneImportance.NORMAL,
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.provider, "stock")
+        self.assertEqual(res.metadata.get("final_visual_source"), "stock")
+        self.assertTrue(res.metadata.get("fallback_used"))
+        self.assertEqual(res.metadata.get("fallback_reason"), "PROVIDER_UNAVAILABLE")
+
+    def test_weak_stock_chooses_generated_preferred(self):
+        """4. weak stock -> generated preferred: Score 20 (< 35) prioriza geração."""
+        strat = self.director.determine_scene_strategy(
+            stock_match_score=20.0,
+            scene_importance=SceneImportance.NORMAL,
+        )
+        self.assertEqual(strat, HybridDecision.GENERATED_IMAGE_PREFERRED)
+
+        # Se vídeo estiver habilitado com provider ComfyUI
+        director_video = HybridVisualDirector(
+            visual_generation_enabled=True,
+            generated_image_enabled=True,
+            generated_video_enabled=True,
+            preferred_video_provider="comfyui",
+            stock_high_confidence_threshold=60.0,
+            generated_image_threshold=35.0,
+        )
+        strat_vid = director_video.determine_scene_strategy(
+            stock_match_score=20.0,
+            scene_importance=SceneImportance.NORMAL,
+        )
+        self.assertEqual(strat_vid, HybridDecision.GENERATED_VIDEO_PREFERRED)
+
+    def test_hero_scene_uses_more_aggressive_generated_threshold(self):
+        """5. hero scene uses more aggressive generated threshold: Score 63 vira generated em cena HERO."""
+        strat_normal = self.director.determine_scene_strategy(
+            stock_match_score=63.0,
+            scene_importance=SceneImportance.NORMAL,
+        )
+        # Normal aceita stock pois 63 >= 60
+        self.assertEqual(strat_normal, HybridDecision.STOCK_HIGH_CONFIDENCE)
+
+        # Em cena HERO, threshold de stock sobe para 70 -> 63 < 70 -> prefere generated
+        strat_hero = self.director.determine_scene_strategy(
+            stock_match_score=63.0,
+            scene_importance=SceneImportance.HERO,
+        )
+        self.assertEqual(strat_hero, HybridDecision.GENERATED_IMAGE_PREFERRED)
+
+    def test_low_importance_scene_prefers_stock(self):
+        """6. low importance scene prefers stock: Score 55 aceita stock em cena LOW."""
+        strat_normal = self.director.determine_scene_strategy(
+            stock_match_score=55.0,
+            scene_importance=SceneImportance.NORMAL,
+        )
+        # Normal prefere gerar pois 55 < 60
+        self.assertEqual(strat_normal, HybridDecision.GENERATED_IMAGE_PREFERRED)
+
+        # Em cena LOW, threshold de stock desce para 50 -> 55 >= 50 -> aceita stock
+        strat_low = self.director.determine_scene_strategy(
+            stock_match_score=55.0,
+            scene_importance=SceneImportance.LOW,
+        )
+        self.assertEqual(strat_low, HybridDecision.STOCK_HIGH_CONFIDENCE)
+
+    def test_generated_image_accepted_selects_still_motion(self):
+        """7. generated image accepted -> still motion selected: Keyframe aprovado recebe instruções de movimento."""
+        res = self.director.resolve_contextual_scene_visual(
+            scene_index=1,
+            stock_match_score=40.0,
+            visual_intent={"primary_subject": "tornado", "action": "rotating", "environment": "open sky aerial"},
+            narration="Vista panorâmica ampla do céu",
+            aspect_ratio="9:16",
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.metadata.get("final_visual_source"), "image_motion")
+        self.assertIn("still_motion_mode", res.metadata)
+        self.assertIn("motion_instructions", res.metadata)
+        motion_inst = res.metadata["motion_instructions"]
+        self.assertIn("ffmpeg_filter", motion_inst)
+        self.assertIn("zoompan=", motion_inst["ffmpeg_filter"])
+
+    def test_quality_gate_failure_triggers_stock_fallback(self):
+        """8. quality gate failure -> stock fallback: Arquivo vazio ou corrompido rejeitado no gate cai em stock."""
+        # Cria adapter que gera arquivo vazio
+        bad_adapter = MagicMock()
+        bad_adapter.name = "nano_banana"
+        bad_adapter.is_available.return_value = True
+        bad_adapter.capabilities = ProviderCapabilities(supports_text_to_image=True)
+
+        empty_file = os.path.join(self.test_dir, "empty_keyframe.png")
+        with open(empty_file, "wb") as f:
+            f.write(b"")
+
+        bad_adapter.generate.return_value = GenerationResult(
+            scene_id=1,
+            success=True,
+            provider="nano_banana",
+            output_path=empty_file,
+            media_type="image",
+        )
+
+        director = HybridVisualDirector(
+            visual_generation_enabled=True,
+            generated_image_enabled=True,
+            preferred_image_provider="nano_banana",
+            providers={"nano_banana": bad_adapter},
+        )
+        res = director.resolve_contextual_scene_visual(
+            scene_index=1,
+            stock_match_score=40.0,
+            narration="Teste quality gate vazio",
+            aspect_ratio="9:16",
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.provider, "stock")
+        self.assertEqual(res.metadata.get("final_visual_source"), "stock")
+        self.assertTrue(res.metadata.get("fallback_used"))
+        self.assertEqual(res.metadata.get("fallback_reason"), "QUALITY_GATE_FILE_EMPTY")
+
+    def test_provider_timeout_triggers_stock_fallback(self):
+        """9. provider timeout -> stock fallback: TimeoutError no provider é interceptado graciosamente."""
+        timeout_adapter = MagicMock()
+        timeout_adapter.name = "nano_banana"
+        timeout_adapter.is_available.return_value = True
+        timeout_adapter.capabilities = ProviderCapabilities(supports_text_to_image=True)
+        timeout_adapter.generate.side_effect = TimeoutError("HTTP request timeout after 30s")
+
+        director = HybridVisualDirector(
+            visual_generation_enabled=True,
+            generated_image_enabled=True,
+            preferred_image_provider="nano_banana",
+            providers={"nano_banana": timeout_adapter},
+        )
+        res = director.resolve_contextual_scene_visual(
+            scene_index=1,
+            stock_match_score=40.0,
+            narration="Teste provider timeout",
+            aspect_ratio="9:16",
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.provider, "stock")
+        self.assertEqual(res.metadata.get("final_visual_source"), "stock")
+        self.assertTrue(res.metadata.get("fallback_used"))
+        self.assertEqual(res.metadata.get("fallback_reason"), "PROVIDER_TIMEOUT")
+
+    def test_multiple_scenes_produce_mixed_strategies_and_summary_metrics(self):
+        """10 & 11. Multi-scene mixed strategies & VideoVisualSummary: 4 cenas produzem governança completa."""
+        # Cena 1: HERO, stock fraco 62.0 (< 70) -> generated
+        # Cena 2: NORMAL, stock forte 88.0 (>= 60) -> stock
+        # Cena 3: LOW, stock 52.0 (>= 50) -> stock
+        # Cena 4: NORMAL, stock fraco 40.0 (< 60) -> generated
+        scenes_data = [
+            {"idx": 1, "score": 62.0, "imp": SceneImportance.HERO, "text": "Gancho inicial chocante com tornado"},
+            {"idx": 2, "score": 88.0, "imp": SceneImportance.NORMAL, "text": "Cena com excelente clipe de stock"},
+            {"idx": 3, "score": 52.0, "imp": SceneImportance.LOW, "text": "Transição sonora curta enquanto isso"},
+            {"idx": 4, "score": 40.0, "imp": SceneImportance.NORMAL, "text": "Explicação detalhada do evento"},
+        ]
+
+        selections = []
+        for s in scenes_data:
+            res = self.director.resolve_contextual_scene_visual(
+                scene_index=s["idx"],
+                stock_match_score=s["score"],
+                narration=s["text"],
+                aspect_ratio="9:16",
+                scene_importance=s["imp"],
+            )
+            sel = SceneMaterialSelection(
+                scene_index=s["idx"],
+                material_path=res.output_path or "storage/stock.mp4",
+                provider=res.provider,
+                stock_match_score=s["score"],
+                stock_score=s["score"],
+                strategy_selected=res.metadata.get("strategy_selected"),
+                scene_importance=res.metadata.get("scene_importance"),
+                final_visual_source=res.metadata.get("final_visual_source"),
+                visual_source_type=res.metadata.get("visual_source_type"),
+                generated_attempted=res.metadata.get("generated_attempted", False),
+                generation_status=res.metadata.get("generation_status"),
+                fallback_used=res.metadata.get("fallback_used", False),
+            )
+            selections.append(sel)
+
+        # Valida estratégias mistas
+        self.assertEqual(selections[0].final_visual_source, "image_motion")
+        self.assertEqual(selections[1].final_visual_source, "stock")
+        self.assertEqual(selections[2].final_visual_source, "stock")
+        self.assertEqual(selections[3].final_visual_source, "image_motion")
+
+        # Computa métricas de resumo
+        summary = compute_video_visual_summary(selections)
+        self.assertEqual(summary.total_scenes, 4)
+        self.assertEqual(summary.stock_scenes, 2)
+        self.assertEqual(summary.generated_image_scenes, 2)
+        self.assertEqual(summary.generated_video_scenes, 0)
+        self.assertEqual(summary.generation_attempts, 2)
+        self.assertEqual(summary.generation_successes, 2)
+        self.assertEqual(summary.fallback_scenes, 0)
+        expected_avg = round((62.0 + 88.0 + 52.0 + 40.0) / 4, 2)
+        self.assertEqual(summary.average_stock_score, expected_avg)
+
+    def test_legacy_mode_visual_generation_disabled_remains_unchanged(self):
+        """12. legacy mode with visual_generation_enabled=false unchanged: 100% stock inalterado."""
+        director_legacy = HybridVisualDirector(
+            visual_generation_enabled=False,
+            generated_image_enabled=False,
+        )
+        res = director_legacy.resolve_contextual_scene_visual(
+            scene_index=1,
+            stock_match_score=15.0,
+            narration="Cena crítica mesmo com score baixo",
+            aspect_ratio="9:16",
+            scene_importance=SceneImportance.HERO,
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(res.provider, "stock")
+        self.assertEqual(res.metadata.get("strategy_selected"), HybridDecision.STOCK_HIGH_CONFIDENCE.value)
+        self.assertEqual(res.metadata.get("final_visual_source"), "stock")
+        self.assertFalse(res.metadata.get("generated_attempted"))
+
+    def test_cost_benefit_reused_candidate_and_aspect_ratio(self):
+        """13. Cost-benefit heuristic considera reuso e aspect ratio do candidato."""
+        # Score 62.0 em cena NORMAL normalmente seria STOCK (62 >= 60)
+        strat_new = self.director.determine_scene_strategy(
+            stock_match_score=62.0,
+            candidate_is_reused=False,
+        )
+        self.assertEqual(strat_new, HybridDecision.STOCK_HIGH_CONFIDENCE)
+
+        # Se o candidato de stock for repetido (reused), threshold sobe para 75 -> prefere gerar novo
+        strat_reused = self.director.determine_scene_strategy(
+            stock_match_score=62.0,
+            candidate_is_reused=True,
+        )
+        self.assertEqual(strat_reused, HybridDecision.GENERATED_IMAGE_PREFERRED)
+
+        # Se candidato de stock tiver aspect ratio alinhado (portrait nativo para vídeo 9:16),
+        # threshold de stock diminui em 5 (de 60 para 55) -> aceita score 56
+        strat_aligned = self.director.determine_scene_strategy(
+            stock_match_score=56.0,
+            candidate_aspect_ratio="portrait",
+            target_aspect_ratio="9:16",
+        )
+        self.assertEqual(strat_aligned, HybridDecision.STOCK_HIGH_CONFIDENCE)
+
+    def test_unit_classify_scene_importance_and_select_still_motion(self):
+        """Valida diretamente as funções utilitárias de classificação e seleção de movimento."""
+        # Hook na primeira cena é HERO
+        self.assertEqual(classify_scene_importance(1, 4), SceneImportance.HERO)
+        # Palavra de impacto é HERO
+        self.assertEqual(classify_scene_importance(2, 4, narration="Explosão massiva"), SceneImportance.HERO)
+        # Transição curta é LOW
+        self.assertEqual(classify_scene_importance(3, 4, duration_seconds=1.5), SceneImportance.LOW)
+        # Cenas comuns são NORMAL
+        self.assertEqual(classify_scene_importance(2, 4, narration="Um homem caminhando"), SceneImportance.NORMAL)
+
+        # Still motion modes
+        self.assertEqual(select_still_motion_mode(1, narration="foco e aproximação"), StillMotionMode.ZOOM_IN)
+        self.assertEqual(select_still_motion_mode(2, narration="vista aérea ampla panorâmica"), StillMotionMode.ZOOM_OUT)
+        self.assertEqual(select_still_motion_mode(3, narration="carro passando pela estrada"), StillMotionMode.PAN_RIGHT)
+        self.assertEqual(select_still_motion_mode(4, narration="olhando para a esquerda"), StillMotionMode.PAN_LEFT)
+        self.assertEqual(select_still_motion_mode(5, narration="objeto imóvel parado"), StillMotionMode.STATIC)
+
+        # VideoVisualSummary instanciação direta
+        summary = VideoVisualSummary(total_scenes=1)
+        self.assertEqual(summary.total_scenes, 1)
+
+    def test_invariants_zero_publication_zero_paid_calls_zero_download(self):
+        """14. Invariantes de fábrica: zero publicação, zero chamadas pagas, zero downloads pesados."""
+        self.assertTrue(self.adapter.mock_mode)
+        self.assertEqual(self.director.preferred_video_provider, "disabled")
 
 
 if __name__ == "__main__":

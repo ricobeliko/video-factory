@@ -1886,7 +1886,7 @@ def run_scheduler_cycle(
     if planned_platforms and platform not in planned_platforms:
         with get_connection(db_path) as conn:
             conn.execute(
-                "UPDATE scheduled_posts SET status = 'failed', last_error = ? WHERE id = ?;",
+                "UPDATE scheduled_posts SET status = 'failed', last_error = ?, next_attempt_at = NULL WHERE id = ?;",
                 (f"Plataforma {platform} não está planejada para a tarefa", post_id),
             )
         logger.error(f"[SCHEDULER][CYCLE] skipped reason=platform_not_planned ({platform}) na task {task_id}")
@@ -1898,7 +1898,7 @@ def run_scheduler_cycle(
     if not video_file or not os.path.isfile(video_file):
         with get_connection(db_path) as conn:
             conn.execute(
-                "UPDATE scheduled_posts SET status = 'failed', last_error = 'Arquivo de vídeo final não encontrado' WHERE id = ?;",
+                "UPDATE scheduled_posts SET status = 'failed', last_error = 'Arquivo de vídeo final não encontrado', next_attempt_at = NULL WHERE id = ?;",
                 (post_id,),
             )
         logger.error(f"[SCHEDULER][CYCLE] skipped reason=video_not_found para a task {task_id}")
@@ -1929,7 +1929,7 @@ def run_scheduler_cycle(
     if pub_event or other_pub:
         with get_connection(db_path) as conn:
             conn.execute(
-                "UPDATE scheduled_posts SET status = 'published', last_error = NULL WHERE id = ?;",
+                "UPDATE scheduled_posts SET status = 'published', last_error = NULL, next_attempt_at = NULL WHERE id = ?;",
                 (post_id,),
             )
         logger.info(f"[SCHEDULER][CYCLE] skipped reason=already_published ({task_id} - {platform})")
@@ -2158,7 +2158,7 @@ def run_scheduler_cycle(
             logger.error(f"[SCHEDULER][CYCLE] Post {post_id} inconsistente/ambíguo remotamente. Marcando como failed (Fail Closed).")
             with get_connection(db_path) as conn:
                 conn.execute(
-                    "UPDATE scheduled_posts SET status = 'failed', last_error = ? WHERE id = ?;",
+                    "UPDATE scheduled_posts SET status = 'failed', last_error = ?, next_attempt_at = NULL WHERE id = ?;",
                     (recon.get("error") or "remote_inconsistent_ambiguous", post_id),
                 )
             _set_executor_status(
@@ -2240,7 +2240,7 @@ def run_scheduler_cycle(
     if success:
         with get_connection(db_path) as conn:
             conn.execute(
-                "UPDATE scheduled_posts SET status = 'published', last_error = NULL WHERE id = ?;",
+                "UPDATE scheduled_posts SET status = 'published', last_error = NULL, next_attempt_at = NULL WHERE id = ?;",
                 (post_id,),
             )
         _set_executor_status(

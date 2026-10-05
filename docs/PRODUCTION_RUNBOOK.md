@@ -729,6 +729,51 @@ A V16.4.2C unifica e centraliza a política de retries do subsistema de publica�
    .\.venv\Scripts\python.exe scripts\cleanup_retry_metadata.py --execute --confirm CLEANUP_RETRY_METADATA
    ```
 
+## 27. Auditoria Final de Saúde de Publicação e Homologação Consolidada (V16.4.2H)
+
+A fase V16.4.2H formaliza a validação integrada e os critérios de aprovação de ponta a ponta do subsistema de publicação antes do deploy consolidado em produção (A+B+C+H).
+
+### Invariantes de Saúde de Publicação Comprovados
+
+1. **Idempotência Canônica:**
+   - Evento de sucesso em `publication_events` bloqueia 100% de quaisquer chamadas a providers externos para a mesma tupla `(task_id, platform)`.
+   - Apenas um fluxo executável por tupla; duplicatas redundantes são neutralizadas como `cancelled` (`next_attempt_at = NULL`).
+   - Múltiplas plataformas para a mesma task permanecem independentes.
+
+2. **Política Estrita de Retries:**
+   - Posts `published`, `cancelled` e falhas permanentes ou com tentativas esgotadas (`attempts >= 3`) mantêm rigorosamente `next_attempt_at = NULL`.
+   - Falhas transitórias (`429`, quota 24h, 5xx, timeout) agendam retry progressivo (15min, 60min) apenas enquanto `attempts < 3`.
+   - Reinicializações de worker ou reboot da máquina não rearmam posts em estados terminais.
+
+3. **Reconciliação e Preservação:**
+   - Sucesso registrado com post em falha é reconciliado para `published` preservando histórico de erro e tentativas.
+   - Zero `DELETE` em `publication_events` e zero `DELETE` em `scheduled_posts`.
+   - Todos os arquivos de mídia em disco permanecem 100% preservados.
+
+4. **Segurança Externa e Contagem de Provedores:**
+   - Para posts novos válidos: exatamente 1 chamada ao provedor externo.
+   - Para re-execuções, restarts ou tentativas repetidas: 0 chamadas adicionais (total permanece exatamente 1).
+   - Sucessos preexistentes: 0 chamadas ao provedor externo.
+
+5. **Métricas Operacionais Finais Alvo:**
+   ```
+   EXECUTABLE_PENDING_PUBLICATIONS = 0
+   ARMED_RETRIES = 0
+   STALE_PROCESSING = 0
+   REMAINING_MUTATIONS_NEEDED = 0
+   ```
+
+### Procedimento de Deploy Consolidado (PC Forte)
+
+Após aprovação e merge da V16.4.2H em DEV, o deploy no PC Forte seguirá o procedimento canônico:
+1. Validar que Scheduler e Auto-Publish continuam OFF no PC Forte.
+2. Executar `git pull --ff-only origin main` no PC Forte.
+3. Executar `scripts/reconcile_publication_state.py --dry-run` e verificar se há mutações pendentes.
+4. Executar `scripts/cleanup_retry_metadata.py --dry-run` e verificar conformidade.
+5. Executar suíte de auditoria integrada: `uv run pytest test/services/test_publishing_health_audit.py -v`.
+6. Realizar teste de publicação controlada único para homologação final.
+
+
 
 
 

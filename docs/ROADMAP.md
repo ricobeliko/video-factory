@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 02/10/2026
 
-- **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.2C — Retry Metadata Cleanup`
-- **ACTIVE_BRANCH** = `feat/v16-4-2c-retry-metadata-cleanup`
-- **NEXT_GATE** = `V16.4.2H — Final Publishing Health Audit`
+- **PROJECT_STATUS** = `READY_FOR_CONSOLIDATED_PRODUCTION_DEPLOY / V16_4_2H_AUDITED`
+- **ACTIVE_PHASE** = `V16.4.2H — Final Publishing Health Audit`
+- **ACTIVE_BRANCH** = `feat/v16-4-2h-final-publishing-health-audit`
+- **NEXT_GATE** = `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -932,7 +932,7 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Preservação estrita: zero deleção de registros em `publication_events` ou `scheduled_posts`; zero deleção de arquivos de mídia.
 
 ### V16.4.2C — Retry Metadata Cleanup
-- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Status:** 🚀 MERGED (PR #51) (04/10/2026)
 - **Priority:** P1
 - **Branch:** `feat/v16-4-2c-retry-metadata-cleanup`
 - **Validação:** 12 testes PASS em `test/services/test_publishing_retry_cleanup.py`, 8 testes PASS não-regressão V16.4.2A, 10 testes PASS não-regressão V16.4.2B, ruff 0 erros nos arquivos alterados.
@@ -945,6 +945,19 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Scheduler Runtime integrado: executa limpeza de retries residuais preventivamente antes da busca de posts vencidos em cada ciclo.
   - CLI `scripts/cleanup_retry_metadata.py`: suporta auditoria (`--dry-run`) e execução controlada (`--execute --confirm CLEANUP_RETRY_METADATA`).
   - Preservação estrita: zero deleção de registros e zero deleção de mídia.
+
+### V16.4.2H — Final Publishing Health Audit
+- **Status:** 🚀 DEV AUDITED / INTEGRATED SUITE PASSED (05/10/2026)
+- **Priority:** P1
+- **Branch:** `feat/v16-4-2h-final-publishing-health-audit`
+- **Validação:** 10 testes PASS em `test/services/test_publishing_health_audit.py`, 8 testes PASS não-regressão V16.4.2A, 10 testes PASS não-regressão V16.4.2B, 12 testes PASS não-regressão V16.4.2C, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Auditoria final do subsistema de publicação e comprovação de segurança para deploy consolidado em produção.
+- **Entregas V16.4.2H:**
+  - JIT Idempotency Guard integrado ao caminho de fallback Upload-Post em `task._execute_cross_post_process`.
+  - Transições de terminal em `scheduler.py` reforçadas com `next_attempt_at = NULL`.
+  - Suíte de auditoria integrada em `test/services/test_publishing_health_audit.py` cobrindo ciclo de vida controlado, contagem estrita de chamadas ao provider, retries progressivos, falhas terminais, concorrência JIT, independência de plataformas e invariantes de métricas operacionais.
+  - Zero pontos de escape ou regressão identificados.
+- **Próximo Passo:** `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`.
 
 
 

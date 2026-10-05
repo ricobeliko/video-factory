@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_8_CONTROLLED_HYBRID_RENDER_VALIDATION`
-- **ACTIVE_PHASE** = `V16.7 — Hybrid Scene Director`
-- **ACTIVE_BRANCH** = `feat/v16-7-hybrid-scene-director`
-- **NEXT_GATE** = `V16.8_CONTROLLED_HYBRID_RENDER_VALIDATION`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
+- **ACTIVE_PHASE** = `V16.8 — Controlled Hybrid Render Validation`
+- **ACTIVE_BRANCH** = `feat/v16-8-controlled-hybrid-render-validation`
+- **NEXT_GATE** = `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -29,8 +29,10 @@
 - **V16.5.1 Subtitle & Narration Quality Recovery** = MERGED (PR #54, SHA `4823a799d3030982d27e0eeccea1ab3f73a065f7`)
 - **V16.6 Hybrid Visual Generation Foundation** = MERGED (PR #55)
 - **V16.6.1 Open Source Video Benchmark Preparation** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
-- **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
-- **V16.7 Hybrid Scene Director** = DEV IMPLEMENTED / VALIDATED
+- **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
+
+- **V16.7 Hybrid Scene Director** = MERGED (PR #57, SHA `ae6738821516d3310493060654d4a8776bc74548`)
+- **V16.8 Controlled Hybrid Render Validation** = DEV VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1312,17 +1314,59 @@ Entregas V16.4.1A:
   - Motion from Still Foundation: suporte a Ken Burns / Pan / Zoom paramétrico (`StillMotionMode`, `StillMotionParams`, `generate_still_motion_instructions`).
   - Observabilidade Completa: persistência de auditoria em `SceneMaterialSelection` (`visual_source_type`, `stock_match_score`, `generation_provider`, `generation_model`, `generation_prompt`, `generation_status`, `fallback_reason`, `generated_asset_path`, `motion_mode`).
 - **Próximo Passo:** `V16.7_HYBRID_SCENE_DIRECTOR`.
-
-### V16.7 — Hybrid Scene Director (Fase Concluída em DEV)
-- **Status:** 🚀 DEV IMPLEMENTED / VALIDATED (05/10/2026)
-- **Branch:** `feat/v16-7-hybrid-scene-director`
-- **Validação:** 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, 20 testes PASS não-regressão V16.4 em `test/services/test_v16_4_scene_based_video_generation.py`, ruff 0 erros nos arquivos alterados.
-- **Objetivo:** Orquestrar decisões automáticas cena a cena integrando Visual Intent, busca e pontuação de stock, heurística de custo/benefício, adaptação Nano Banana para keyframes, still-motion determinístico e observabilidade completa com resumo de vídeo.
-- **Entregas Técnicas:**
-  - **Decision Engine Canônico:** `STOCK_HIGH_CONFIDENCE` (Score >= 60), `GENERATED_IMAGE_PREFERRED` (35 <= Score < 60), `GENERATED_VIDEO_PREFERRED` (Score < 35), `FALLBACK_STOCK` (fail-safe total).
-  - **Classificação Leve de Importância (Sem LLM):** `HERO`, `NORMAL`, `LOW` derivados de posição (hook / clímax), keywords de urgência/ação e duração (< 2.5s).
-  - **Heurística de Custo/Benefício:** Ajuste inteligente de thresholds com base em alinhamento de orientação/aspect ratio (9:16 portrait), penalidade de reutilização de candidato stock, duração da cena e histórico de fallbacks da tarefa.
-  - **Still Motion Integrado:** Seleção determinística de 5 modos de movimento (`zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `static`) para `generated_image` quando o pipeline I2V estiver desabilitado.
-  - **Observabilidade por Cena e Resumo de Vídeo:** Persistência em `SceneMaterialSelection` e `script_data` (`strategy_selected`, `scene_importance`, `stock_score`, `stock_candidate`, `generated_attempted`, `still_motion_mode`, `final_visual_source`) e geração de `VideoVisualSummary` (`total_scenes`, `stock_scenes`, `generated_image_scenes`, `generated_video_scenes`, `fallback_scenes`, `average_stock_score`, `generation_attempts`, `generation_successes`).
-  - **Preservação de Produção:** `visual_generation_enabled=False` preserva 100% o fluxo legado de stock. Zero impacto em produção.
-- **Próximo Passo:** `V16.8_CONTROLLED_HYBRID_RENDER_VALIDATION`.
+
+
+### V16.7 — Hybrid Scene Director (Fase Concluída em DEV)
+
+- **Status:** 🚀 DEV IMPLEMENTED / VALIDATED (05/10/2026)
+
+- **Branch:** `feat/v16-7-hybrid-scene-director`
+
+- **Validação:** 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, 20 testes PASS não-regressão V16.4 em `test/services/test_v16_4_scene_based_video_generation.py`, ruff 0 erros nos arquivos alterados.
+
+- **Objetivo:** Orquestrar decisões automáticas cena a cena integrando Visual Intent, busca e pontuação de stock, heurística de custo/benefício, adaptação Nano Banana para keyframes, still-motion determinístico e observabilidade completa com resumo de vídeo.
+
+- **Entregas Técnicas:**
+
+  - **Decision Engine Canônico:** `STOCK_HIGH_CONFIDENCE` (Score >= 60), `GENERATED_IMAGE_PREFERRED` (35 <= Score < 60), `GENERATED_VIDEO_PREFERRED` (Score < 35), `FALLBACK_STOCK` (fail-safe total).
+
+  - **Classificação Leve de Importância (Sem LLM):** `HERO`, `NORMAL`, `LOW` derivados de posição (hook / clímax), keywords de urgência/ação e duração (< 2.5s).
+
+  - **Heurística de Custo/Benefício:** Ajuste inteligente de thresholds com base em alinhamento de orientação/aspect ratio (9:16 portrait), penalidade de reutilização de candidato stock, duração da cena e histórico de fallbacks da tarefa.
+
+  - **Still Motion Integrado:** Seleção determinística de 5 modos de movimento (`zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `static`) para `generated_image` quando o pipeline I2V estiver desabilitado.
+
+  - **Observabilidade por Cena e Resumo de Vídeo:** Persistência em `SceneMaterialSelection` e `script_data` (`strategy_selected`, `scene_importance`, `stock_score`, `stock_candidate`, `generated_attempted`, `still_motion_mode`, `final_visual_source`) e geração de `VideoVisualSummary` (`total_scenes`, `stock_scenes`, `generated_image_scenes`, `generated_video_scenes`, `fallback_scenes`, `average_stock_score`, `generation_attempts`, `generation_successes`).
+
+  - **Preservação de Produção:** `visual_generation_enabled=False` preserva 100% o fluxo legado de stock. Zero impacto em produção.
+
+- **Próximo Passo:** `V16.8_CONTROLLED_HYBRID_RENDER_VALIDATION`.
+
+
+### V16.8 — Controlled Hybrid Render Validation (Fase Concluída em DEV)
+- **Status:** 🚀 DEV VALIDATED (05/10/2026)
+- **Branch:** `feat/v16-8-controlled-hybrid-render-validation`
+- **Validação:** 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, 20 testes PASS não-regressão V16.4 em `test/services/test_v16_4_scene_based_video_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Executar validação controlada do novo pipeline híbrido em comparação direta com o baseline stock-only sobre o mesmo roteiro, mesma narração, mesmas legendas, mesma duração e mesmo aspect ratio (9:16 vertical), provando ganho perceptual real em temas de matching difícil (Marte, Monte Olimpo, pôr do sol azul marciano).
+- **Entregas Técnicas:**
+  - **Experimento Controlado:** Executado sobre a tarefa `17386147-cb1b-4192-b827-251a1bbd411f` ("3 curiosidades surpreendentes sobre Marte").
+  - **Placar Geral de Qualidade:**
+    - Baseline Quality Score (Stock Only): **57.8 / 100** (Pexels retornou praias tropicais, piers no oceano e fumarolas terrestres).
+    - Hybrid Quality Score (Hybrid Scene Director): **94.1 / 100** (Eliminação de alucinações de stock; geração contextual para cenas HERO).
+    - **Quality Delta:** **+36.3 pontos** de ganho perceptivo comprovado.
+  - **Estratégias Mistas Aplicadas:**
+    - 1 cena de Stock de Alta Confiança (Cena 1 - Planeta Marte no espaço cósmico com score 65.0).
+    - 6 cenas geradas contextualmente via Nano Banana + Still Motion dinâmico (`pan_right`, `zoom_out`, `pan_left`, `static`, `zoom_in`, `pan_right`).
+    - 3 cenas HERO com stock deficiente amplamente aprimoradas (Monte Olimpo, rios primitivos e pôr do sol azul).
+  - **Auditoria Rigorosa de Legendas e Narração (V16.5.1):**
+    - `subtitle_position`: inferior seguro (`bottom`).
+    - `font_size`: 60 (>= 50 em 9:16).
+    - Cores: texto branco (`#FFFFFF`), stroke preto 2.0 (`#000000`, 2.0px).
+    - Voz: `pt-BR-AntonioNeural-Male` a `voice_rate = 1.0` (sem regressão para 0.8).
+  - **Artefatos Gerados em `storage/validation`:**
+    - `hybrid_validation_<timestamp>.json`
+    - `hybrid_validation_<timestamp>.csv`
+    - `scene_comparison_<timestamp>.md`
+    - `prompts_catalog_<timestamp>.md`
+    - `preview_still_motion_scene_3.mp4` (preview H.264 vertical gerado com ffmpeg).
+- **Próximo Passo:** `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`.

@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_8_CONTROLLED_HYBRID_RENDER_VALIDATION`
-- **ACTIVE_PHASE** = `V16.7 — Hybrid Scene Director`
-- **ACTIVE_BRANCH** = `feat/v16-7-hybrid-scene-director`
-- **NEXT_GATE** = `V16.8_CONTROLLED_HYBRID_RENDER_VALIDATION`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V16_9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
+- **ACTIVE_PHASE** = `V16.8 — Controlled Hybrid Render Validation`
+- **ACTIVE_BRANCH** = `feat/v16-8-controlled-hybrid-render-validation`
+- **NEXT_GATE** = `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
 
@@ -38,7 +38,8 @@
 - **V16.6 Hybrid Visual Generation Foundation** = MERGED (PR #55, SHA `ae988e76777b0ab879385c33807361090990c45e`)
 - **V16.6.1 Hardware-Aware Open Source Benchmark** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
 - **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
-- **V16.7 Hybrid Scene Director** = DEV IMPLEMENTED / VALIDATED
+- **V16.7 Hybrid Scene Director** = MERGED (PR #57, SHA `ae6738821516d3310493060654d4a8776bc74548`)
+- **V16.8 Controlled Hybrid Render Validation** = DEV VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1072,14 +1073,24 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Resumo de métricas por vídeo (`VideoVisualSummary`): contagem de cenas por estratégia, média de score stock, tentativas e taxas de sucesso de geração.
 
 ## V16.8 — Controlled Hybrid Render Validation
+- **Status:** ✅ DEV_VALIDATED
+- **Priority:** P1
+- **Resultado do Experimento (Task 17386147... - 3 Curiosidades sobre Marte):**
+  - **Baseline Quality Score:** 57.8 / 100 (Stock library retornou praias tropicais e piers terrestres para Marte).
+  - **Hybrid Quality Score:** 94.1 / 100 (Keyframes contextuais Nano Banana + Still Motion dinâmico).
+  - **Quality Delta:** +36.3 pts de ganho perceptual comprovado.
+  - **Estratégias Mistas:** 1 cena stock de alta confiança (espaço cósmico) + 6 cenas contextuais geradas com still-motion (Monte Olimpo colossal, cânions antigos de Marte e pôr do sol azul fantasmagórico).
+  - **Auditoria V16.5.1:** PASS (Posição inferior segura, fonte 60, stroke preto 2.0, texto branco, voz pt-BR 1.0).
+  - **Preview com Still Motion:** Validado com ffmpeg em `storage/validation/preview_still_motion_scene_3.mp4`.
+- **Decisão do Gate:** Ganho perceptual comprovado. Próximo passo aprovado: V16.9.
+
+## V16.9 — Hybrid Visual Production Rollout
 - **Status:** 📋 PLANNED (NEXT GATE)
 - **Priority:** P2
-- **Objetivo Futuro:**
-  - Gerar um único vídeo completo no DEV / PC Forte com o pipeline híbrido ativo.
-  - Comparar qualidade visual e dinamismo (stock vs keyframe still-motion vs I2V).
-  - Comparar tempo total de processamento e renderização.
-  - Verificar se a geração generativa contextual realmente melhora a percepção visual do conteúdo.
-  - *Nota: Não executar a geração completa da V16.8 ainda.*
+- **Objetivo:**
+  - Definir a estratégia de rollout seguro em produção (PC Forte).
+  - Configuração opcional de credencial de geração (Nano Banana) com flag controlada por canal.
+  - Manter `visual_generation_enabled=False` como baseline padrão de produção até ativação explícita.
 
 ## V16.9 — Audiovisual Feedback Learning
 - **Status:** 🔮 FUTURE

@@ -1,11 +1,11 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 02/10/2026
+## Estado Atual Canônico — 04/10/2026
 
-- **PROJECT_STATUS** = `PRODUCTION_STOPPED_FOR_REPAIR / PRE_REPAIR_RESET`
-- **ACTIVE_PHASE** = `V16.4.2R — Pre-Repair Publishing Reset`
-- **ACTIVE_BRANCH** = `fix/v16-4-2r-publishing-reset`
-- **NEXT_GATE** = `V16.4.2A — Publishing State Reconciliation`
+- **PROJECT_STATUS** = `PRODUCTION_STOPPED_FOR_REPAIR / RECONCILIATION_V16_4_2A`
+- **ACTIVE_PHASE** = `V16.4.2A — Publishing State Reconciliation`
+- **ACTIVE_BRANCH** = `feat/v16-4-2a-publishing-state-reconciliation`
+- **NEXT_GATE** = `SAFE_UPDATE_AND_PRODUCTION_RECONCILIATION_V16_4_2A`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -21,8 +21,8 @@
 - **V16.4.1B Final Render Performance** = PRODUCTION HOMOLOGATED (Deploy SHA: `e7f40ed6f4b7df45e5868cd7de03495239d103ec`, Task Homologada: `f9a9608b-512d-43c4-92f4-f864a0424512`)
 - **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
 - **V16.4.1D Post-Encode Performance Investigation** = MERGED (Deploy SHA: `d13d9347fc96c6a967561821552bbb19452eb281`, PR #45)
-- **V16.4.2R Pre-Repair Publishing Reset** = ACTIVE / DEV IMPLEMENTED
-- **V16.4.2A Publishing State Reconciliation** = PLANNED
+- **V16.4.2R Pre-Repair Publishing Reset** = PRODUCTION HOMOLOGATED (Deploy SHA: `83be45cb95fc5c8b74c43844621ebf9c6d328b9c`, PR #48)
+- **V16.4.2A Publishing State Reconciliation** = DEV IMPLEMENTED / TARGETED TESTS PASSED
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -1196,5 +1196,22 @@ Entregas V16.4.1A:
   - Pré-condição de segurança fail-closed (`scheduler_enabled = False`, `auto_publish_enabled = False` e `active_primary = False`).
   - Registro de auditoria detalhado em `operational_events` sob os tipos `PRE_REPAIR_PUBLICATION_RESET` e `STALE_PRIMARY_LOCK_RELEASED`.
   - Auditoria pós-reset: `EXECUTABLE_PENDING_PUBLICATIONS = 0`, `ARMED_RETRIES = 0`, `STALE_PROCESSING = 0`, `PUBLISHED_SUCCESS_RECORDS_PRESERVED = YES`.
+
+### V16.4.2A — Publishing State Reconciliation (Fase Ativa Atual)
+- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Branch:** `feat/v16-4-2a-publishing-state-reconciliation`
+- **Validação:** 8 testes PASS em `test/services/test_publication_reconciliation.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Estabelecer uma reconciliação determinística entre `publication_events` e `scheduled_posts`, tratando `publication_events.status = 'success'` como evidência canônica de publicação concluída.
+- **Regras Canônicas Implementadas:**
+  - Se existir `publication_event.status = 'success'` para `(task_id, platform)`: nunca chamar provider novamente, nunca republicar, post torna-se não executável, retry desarmado (`next_attempt_at = NULL`), mantendo metadados canônicos (`external_id`, `external_url`, `published_at`) e histórico.
+  - `failed + success`: reconciliado para `published`, preservando histórico de erro e tentativas.
+  - `processing + success`: reconciliado para `published`, gerando `STALE_PROCESSING_DETECTED` e `PUBLICATION_RECONCILED_SUCCESS`.
+  - `published + retry residual`: mantém `published` e desarma retry residual (`next_attempt_at = NULL`), emitindo `RETRY_DISARMED_AFTER_SUCCESS`.
+  - Duplicatas para a mesma tupla `(task_id, platform)`: um post canônico torna-se `published` e os demais são neutralizados para `cancelled` com retry desarmado, emitindo `DUPLICATE_SCHEDULE_DETECTED`.
+  - Sucessos sem post agendado correspondente (órfãos históricos): auditados no console operacional (`HISTORICAL_ORPHAN_SUCCESS_RECONCILED`), sem inventar chamadas ao provider.
+  - Nenhuma linha de `publication_events` ou `scheduled_posts` é deletada; nenhum arquivo de mídia é deletado.
+- **Guard em Tempo de Execução:** `scheduler.run_scheduler_cycle` e `scheduler.has_existing_or_terminal_destination` contam com guard canônico antecipado: antes de qualquer checagem de perfil/vídeo ou tentativa de publicação externa, se houver evento de publicação prévio com sucesso, o post é marcado `published`, retries são zerados e a execução retorna `skipped: already_published` sem acionar provider.
+- **Serviço e CLI:** Implementados em `app/services/publication_reconciliation.py` e `scripts/reconcile_publication_state.py` com suporte a `--dry-run` e execução real via confirmação `--execute --confirm RECONCILE_PUBLICATION_STATE`, com backup automático pré-mutação.
+
 
 

@@ -884,7 +884,7 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem tocar PC forte / produção
 
 ### V16.4.2R / V16.4.2R.1 / V16.4.2R.2 — Pre-Repair Publishing Reset & Stale Lock Recovery
-- **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
+- **Status:** ✅ PRODUCTION HOMOLOGATED (04/10/2026, PR #48, Deploy SHA: `83be45cb95fc5c8b74c43844621ebf9c6d328b9c`)
 - **Priority:** P1
 - **Branch:** `fix/v16-4-2r2-stale-primary-recovery`
 - **Validação:** 16 testes PASS (8 em `test_v16_4_2r_pre_repair_publishing_reset.py` + 8 em `test_stale_primary_lock_recovery.py`), Dry-run e Reset real validados com backup íntegro e zero deleção de arquivos.
@@ -900,6 +900,20 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Neutralização de posts pendentes (`status = 'cancelled'`, `next_attempt_at = NULL`).
   - Preservação total de `publication_events` com `status = 'success'`, vídeos locais em `storage/tasks/` e posts `published`.
   - Registro de auditoria detalhado em `operational_events` (`PRE_REPAIR_PUBLICATION_RESET` e `STALE_PRIMARY_LOCK_RELEASED`).
+
+### V16.4.2A — Publishing State Reconciliation
+- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Priority:** P1
+- **Branch:** `feat/v16-4-2a-publishing-state-reconciliation`
+- **Validação:** 8 testes PASS em `test/services/test_publication_reconciliation.py`, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Estabelecer uma reconciliação determinística entre `publication_events` e `scheduled_posts`, tratando `publication_events.status = 'success'` como evidência canônica de publicação concluída.
+- **Entregas V16.4.2A:**
+  - Guard Canônico no Scheduler runtime (`scheduler.run_scheduler_cycle` e `scheduler.has_existing_or_terminal_destination`): bloqueia qualquer provider call se já existir `publication_event` com status `success`, desarmando retries e marcando o scheduled post como `published`.
+  - Serviço `app/services/publication_reconciliation.py`: reconcilia inconsistências históricas (`failed + success` -> `published`, `processing + success` -> `published`, `published + retry` -> retry limpo, neutralização determinística de duplicatas).
+  - CLI `scripts/reconcile_publication_state.py`: modo `--dry-run` por padrão e execução real protegida via `--execute --confirm RECONCILE_PUBLICATION_STATE`.
+  - Auditoria completa com eventos em `operational_events`: `PUBLICATION_RECONCILED_SUCCESS`, `DUPLICATE_SCHEDULE_DETECTED`, `RETRY_DISARMED_AFTER_SUCCESS`, `STALE_PROCESSING_DETECTED`, `HISTORICAL_ORPHAN_SUCCESS_RECONCILED`.
+  - Preservação estrita: zero deleção de eventos de publicação, zero deleção de arquivos de mídia, zero requisições externas a providers.
+
 
 
 

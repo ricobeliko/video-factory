@@ -559,6 +559,10 @@ class KeyframeQualityResult:
     height: int = 0
     details: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def passed(self) -> bool:
+        return self.is_valid
+
 
 def evaluate_keyframe_quality(
     image_path: Optional[str],
@@ -820,30 +824,58 @@ class StockVisualProvider(VisualGenerationProvider):
 
 
 # =============================================================================
-# Nano Banana Adapter (Configurable Keyframe Image Generator)
+# Nano Banana / Gemini Adapter (Configurable Keyframe Image Generator)
 # =============================================================================
+
+DEFAULT_GEMINI_ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp-image-generation"
+SUPPORTED_GEMINI_IMAGE_MODELS = [
+    "gemini-2.0-flash-exp-image-generation",
+    "gemini-2.0-flash-exp",
+    "imagen-3.0-generate-002",
+]
+
 
 class NanoBananaImageAdapter(VisualGenerationProvider):
     """
-    Adapter para o gerador de imagem Nano Banana (Fases V16.6 / V16.6.2 / V16.7.1).
+    Adapter para o gerador de imagem Nano Banana / Gemini (Fases V16.6 / V16.7 / V16.8.1).
 
     Contrato Operacional:
     - Provider opcional de imagem para keyframes e ilustrações conceituais de cena.
-    - Em ambiente DEV: implementado em modo configurável sem chamadas pagas nos testes.
-    - Suporta modo mock determinístico que gera imagens válidas para o Quality Gate.
+    - Utiliza a API oficial Gemini (Google AI Studio) via endpoint:
+      https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+    - Modelo oficial configurável (default: gemini-2.0-flash-exp-image-generation).
+    - Autenticação via header x-goog-api-key suportando GEMINI_API_KEY e NANO_BANANA_API_KEY.
+    - Em ambiente DEV: modo mock determinístico para testes sem chamadas externas.
     - Se a chave de API não estiver configurada, is_available() retorna False e
       o HybridVisualDirector realiza fallback seguro para stock.
+    - Secrets nunca são logados ou persistidos.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        endpoint: str = "https://api.nanobanana.ai/v1",
+        endpoint: Optional[str] = None,
+        model: Optional[str] = None,
         timeout_seconds: float = 30.0,
         mock_mode: bool = False,
     ):
-        self.api_key = api_key or os.getenv("NANO_BANANA_API_KEY", "")
-        self.endpoint = endpoint
+        self.api_key = (
+            api_key
+            or os.getenv("GEMINI_API_KEY", "")
+            or os.getenv("NANO_BANANA_API_KEY", "")
+        )
+        self.model = (
+            model
+            or os.getenv("GEMINI_IMAGE_MODEL", "")
+            or os.getenv("NANO_BANANA_MODEL", "")
+            or DEFAULT_GEMINI_IMAGE_MODEL
+        )
+        self.endpoint = (
+            endpoint
+            or os.getenv("GEMINI_ENDPOINT_TEMPLATE", "")
+            or DEFAULT_GEMINI_ENDPOINT_TEMPLATE
+        )
         self.timeout_seconds = timeout_seconds
         self.mock_mode = mock_mode
 
@@ -867,9 +899,9 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                 scene_id=request.scene_id,
                 success=False,
                 provider=self.name,
-                model="nano_banana_image_v1",
+                model=self.model,
                 fallback_reason="NANO_BANANA_NOT_CONFIGURED",
-                error="Nano Banana API key not configured",
+                error="Gemini / Nano Banana API key not configured",
             )
 
         if not self.capabilities.has_capability(request.target_capability):
@@ -877,7 +909,7 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                 scene_id=request.scene_id,
                 success=False,
                 provider=self.name,
-                model="nano_banana_image_v1",
+                model=self.model,
                 fallback_reason="CAPABILITY_UNSUPPORTED",
                 error=f"Capability '{request.target_capability}' not supported by Nano Banana",
             )
@@ -907,7 +939,7 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                 scene_id=request.scene_id,
                 success=True,
                 provider=self.name,
-                model="nano_banana_image_v1",
+                model=self.model,
                 output_path=out_file,
                 media_type="image",
                 metrics=GenerationMetrics(
@@ -923,28 +955,38 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                 },
             )
 
-        # Chamada real para a API do provedor Nano Banana
-        url = self.endpoint.rstrip("/")
-        if not url.endswith("/images/generations") and not url.endswith("/generate"):
-            url = f"{url}/images/generations"
+        # Chamada real para a API oficial do Gemini (Google AI Studio)
+        if "{model}" in self.endpoint:
+            url = self.endpoint.format(model=self.model)
+        elif ":generateContent" in self.endpoint or ":predict" in self.endpoint:
+            url = self.endpoint
+        else:
+            url = f"{self.endpoint.rstrip('/')}/models/{self.model}:generateContent"
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "x-goog-api-key": self.api_key,
             "Content-Type": "application/json",
-            "User-Agent": "MoneyPrinterTurbo-NanoBananaAdapter/1.0",
+            "User-Agent": "MoneyPrinterTurbo-GeminiImageAdapter/1.0",
         }
 
-        w = 1080 if request.aspect_ratio == "9:16" else (1920 if request.aspect_ratio == "16:9" else 1080)
-        h = 1920 if request.aspect_ratio == "9:16" else (1080 if request.aspect_ratio == "16:9" else 1080)
+        # Constrói prompt com diretrizes de aspect ratio
+        prompt_text = request.prompt
+        if request.aspect_ratio:
+            prompt_text = f"{prompt_text}\nAspect ratio: {request.aspect_ratio} vertical portrait."
+        if request.negative_prompt:
+            prompt_text = f"{prompt_text}\nNegative prompt / avoid: {request.negative_prompt}"
 
         payload = {
-            "prompt": request.prompt,
-            "negative_prompt": request.negative_prompt,
-            "aspect_ratio": request.aspect_ratio,
-            "width": w,
-            "height": h,
-            "n": 1,
-            "response_format": "b64_json",
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt_text}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "responseModalities": ["IMAGE"]
+            }
         }
 
         req = urllib.request.Request(
@@ -964,14 +1006,34 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
             os.makedirs(os.path.dirname(os.path.abspath(out_file)), exist_ok=True)
 
             img_b64 = None
-            if "data" in data and len(data["data"]) > 0:
+
+            # Parsing 1: candidates[].content.parts[].inlineData (formato oficial Gemini generateContent)
+            if "candidates" in data and len(data["candidates"]) > 0:
+                first_cand = data["candidates"][0]
+                parts = first_cand.get("content", {}).get("parts", [])
+                for p in parts:
+                    inline = p.get("inlineData") or p.get("inline_data")
+                    if inline and ("data" in inline or "bytesBase64Encoded" in inline):
+                        img_b64 = inline.get("data") or inline.get("bytesBase64Encoded")
+                        break
+                    elif "image" in p:
+                        img_b64 = p["image"]
+                        break
+
+            # Parsing 2: predictions[] (formato Imagen / Vertex / AI Studio predict)
+            if not img_b64 and "predictions" in data and len(data["predictions"]) > 0:
+                pred = data["predictions"][0]
+                img_b64 = pred.get("bytesBase64Encoded") or pred.get("image") or pred.get("b64_json")
+
+            # Parsing 3: data[] ou image direta
+            if not img_b64 and "data" in data and len(data["data"]) > 0:
                 first = data["data"][0]
                 img_b64 = first.get("b64_json") or first.get("image")
                 if not img_b64 and "url" in first:
                     with urllib.request.urlopen(first["url"], timeout=self.timeout_seconds) as img_resp:
                         with open(out_file, "wb") as f_out:
                             f_out.write(img_resp.read())
-            elif "image" in data:
+            elif not img_b64 and "image" in data:
                 img_b64 = data["image"]
 
             if img_b64:
@@ -985,23 +1047,33 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                     scene_id=request.scene_id,
                     success=False,
                     provider=self.name,
-                    model="nano_banana_image_v1",
+                    model=self.model,
                     fallback_reason="NANO_BANANA_EMPTY_OUTPUT",
                     error="API response did not contain valid image data",
                 )
+
+            # Obtém dimensões reais da imagem
+            actual_w = 1080 if request.aspect_ratio == "9:16" else 1920
+            actual_h = 1920 if request.aspect_ratio == "9:16" else 1080
+            try:
+                from PIL import Image
+                with Image.open(out_file) as im:
+                    actual_w, actual_h = im.size
+            except Exception:
+                pass
 
             file_size = os.path.getsize(out_file)
             return GenerationResult(
                 scene_id=request.scene_id,
                 success=True,
                 provider=self.name,
-                model="nano_banana_image_v1",
+                model=self.model,
                 output_path=out_file,
                 media_type="image",
                 metrics=GenerationMetrics(
                     generation_time_seconds=gen_time,
-                    width=w,
-                    height=h,
+                    width=actual_w,
+                    height=actual_h,
                     file_size_bytes=file_size,
                 ),
                 metadata={
@@ -1017,20 +1089,34 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                 scene_id=request.scene_id,
                 success=False,
                 provider=self.name,
-                model="nano_banana_image_v1",
+                model=self.model,
                 fallback_reason="NANO_BANANA_HTTP_ERROR",
                 error=f"HTTP {exc.code}: {exc.reason}",
             )
-        except Exception as exc:
+        except (urllib.error.URLError, ConnectionError, OSError) as exc:
             logger.error(f"[NANO_BANANA][REQUEST_FAILED] error={exc}")
             return GenerationResult(
                 scene_id=request.scene_id,
                 success=False,
                 provider=self.name,
-                model="nano_banana_image_v1",
+                model=self.model,
                 fallback_reason="NANO_BANANA_REQUEST_FAILED",
                 error=str(exc),
             )
+        except Exception as exc:
+            logger.error(f"[NANO_BANANA][UNEXPECTED_ERROR] error={exc}")
+            return GenerationResult(
+                scene_id=request.scene_id,
+                success=False,
+                provider=self.name,
+                model=self.model,
+                fallback_reason="NANO_BANANA_UNEXPECTED_ERROR",
+                error=str(exc),
+            )
+
+
+# Alias canônico para a integração oficial Gemini
+GeminiImageAdapter = NanoBananaImageAdapter
 
 
 # =============================================================================

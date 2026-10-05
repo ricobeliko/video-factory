@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_AUTHORIZATION_OR_V16_9`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`
 - **ACTIVE_PHASE** = `V16.8.1 — Real Generated Image Quality Gate`
-- **ACTIVE_BRANCH** = `feat/v16-8-1-real-generated-image-quality-gate`
-- **NEXT_GATE** = `HUMAN_AUTHORIZE_REAL_IMAGE_GENERATION`
+- **ACTIVE_BRANCH** = `fix/v16-8-1-real-image-gate-gemini-endpoint`
+- **NEXT_GATE** = `HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
 
@@ -1086,14 +1086,26 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
 ## V16.8.1 — Real Generated Image Quality Gate
 - **Status:** 📋 READY_FOR_HUMAN_AUTHORIZATION (GATE: NOT_EXECUTED_REQUIRES_HUMAN_GATE)
 - **Priority:** P1
-- **Objetivo:**
-  - Validar com pouquíssimas gerações reais (estritamente 3 cenas HERO da task de Marte) se imagens contextuais reais superam o stock fraco.
-  - Cenas selecionadas:
+- **Histórico da Tentativa Real Anterior & Correção:**
+  - Tentativa humana anterior expôs falha de DNS (`[Errno 11001] getaddrinfo failed`) porque o adaptador apontava para endpoint fictício `api.nanobanana.ai`.
+  - A CLI apresentava bug de falso sucesso e reutilizava silenciosamente keyframes mock antigos em caso de falha.
+  - Correção concluída:
+    1. Migrado para a API oficial Gemini do Google AI Studio (`generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`).
+    2. Modelo oficial configurável (default: `gemini-2.0-flash-exp-image-generation`, compatível com `imagen-3.0-generate-002` e `gemini-2.0-flash-exp`).
+    3. Autenticação oficial via header `x-goog-api-key` suportando `GEMINI_API_KEY` e `NANO_BANANA_API_KEY`.
+    4. Payload e parsing de `inlineData` (base64) nativos do Gemini.
+    5. Falso sucesso corrigido na CLI com exit codes estritos (PASS=0, PARTIAL=1, FAIL=1, NOT_EXECUTED=0).
+    6. Isolamento por run em diretório versionado (`runs/real_<ts>`) impedindo reaproveitamento de artefatos mock antigos.
+- **Objetivo Atual:**
+  - Validar com pouquíssimas gerações reais (estritamente 3 cenas HERO da task de Marte) se imagens contextuais reais superam o stock fraco:
     - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
     - Cena 4: Escala titânica da base do Monte Olimpo.
     - Cena 7: Pôr do sol azul e poeira rarefeita de Marte.
-  - Gate de Custo Externo: Chamada real à API Nano Banana gera custos externos; parada controlada sem executar automaticamente.
-  - Comando de Execução Humana: `python scripts/run_v16_8_1_real_image_gate.py --api-key <SUA_CHAVE> --execute-real`.
+  - Gate de Custo Externo: Chamada real à API Gemini gera custos externos; parada controlada sem executar automaticamente no DEV.
+  - Comando de Execução Humana para Nova Tentativa:
+    ```bash
+    python scripts/run_v16_8_1_real_image_gate.py --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model gemini-2.0-flash-exp-image-generation --execute-real
+    ```
 
 ## V16.9 — Hybrid Visual Production Rollout
 - **Status:** 🔮 FUTURE (Planejada para após aprovação humana na V16.8.1)

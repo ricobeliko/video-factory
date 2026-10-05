@@ -12,7 +12,7 @@ evitando repetições consecutivas desnecessárias e preservando proveniência.
 from __future__ import annotations
 
 import os
-from typing import Any, List, Optional, Set
+from typing import Any, List, Optional, Set, Tuple
 
 from loguru import logger
 
@@ -124,7 +124,8 @@ def resolve_scene_materials(
     material_sources_records: List[dict[str, Any]] = []
     used_asset_ids: Set[str] = set()
     last_selected_asset_id: Optional[str] = None
-    last_selected_path: Optional[str] = None
+
+    from app.services import visual_matching
 
     for scene in scene_plan.scenes:
         scene_idx = scene.scene_index
@@ -151,7 +152,25 @@ def resolve_scene_materials(
                     continue
                 terms_to_try.append(t_clean)
 
-        # 2. Termos derivados da narration da própria cena
+        # 2. Intenção visual estruturada V16.5
+        if getattr(scene, "visual_intent_v2", None) and isinstance(scene.visual_intent_v2, dict):
+            intent = visual_matching.SceneVisualIntent.from_dict(scene.visual_intent_v2)
+        else:
+            intent = visual_matching.extract_scene_visual_intent(
+                narration=scene.narration or "",
+                video_subject=params.video_subject,
+                scene_index=scene_idx,
+                total_scenes=len(scene_plan.scenes),
+            )
+
+        for q in intent.search_queries:
+            q_clean = q.strip()
+            if q_clean and q_clean not in terms_to_try:
+                if strict and q_clean.lower() in BANNED_GENERIC_TERMS:
+                    continue
+                terms_to_try.append(q_clean)
+
+        # 3. Termos derivados da narration da própria cena
         if scene.narration:
             from app.services.scene_planner import _extract_scene_search_terms
             derived = _extract_scene_search_terms(
@@ -166,14 +185,14 @@ def resolve_scene_materials(
                         continue
                     terms_to_try.append(dt_clean)
 
-        # 3. visual_intent contextualizado com a cena
+        # 4. visual_intent textual contextualizado com a cena
         if getattr(scene, "visual_intent", None):
             vi = str(scene.visual_intent).strip()
             if vi and vi not in terms_to_try:
                 if not (strict and vi.lower() in BANNED_GENERIC_TERMS):
                     terms_to_try.append(vi)
 
-        # 4. video_subject contextualizado com a cena, se aplicável
+        # 5. video_subject contextualizado com a cena, se aplicável
         if params.video_subject:
             vs = str(params.video_subject).strip()
             if vs and vs not in terms_to_try:
@@ -191,14 +210,20 @@ def resolve_scene_materials(
             if "cinematic visual" not in terms_to_try:
                 terms_to_try.append("cinematic visual")
 
+        queries_tried: List[str] = []
+        evaluated_candidates: List[Tuple[MaterialInfo, float, dict, str, int]] = []
         resolved_item: Optional[MaterialInfo] = None
+        resolved_score: float = 0.0
+        resolved_reason: str = ""
         term_used: str = ""
+        chosen_tier: int = 0
         fallback_used: bool = False
 
         for term_i, term in enumerate(terms_to_try):
             if strict and term.lower() in BANNED_GENERIC_TERMS:
                 continue
 
+            queries_tried.append(term)
             candidates = _search_candidates(
                 search_term=term,
                 source=source,
@@ -209,29 +234,60 @@ def resolve_scene_materials(
             if not candidates:
                 continue
 
-            # Tenta evitar repetição consecutiva com a cena anterior se houver alternativas
-            selected_candidate: Optional[MaterialInfo] = None
-            if last_selected_asset_id or last_selected_path:
-                non_duplicate_candidates = [
-                    c for c in candidates
-                    if str((c.source_info or {}).get("asset_id", "") or c.url) != last_selected_asset_id
-                ]
-                if non_duplicate_candidates:
-                    selected_candidate = non_duplicate_candidates[0]
-                else:
-                    selected_candidate = candidates[0]
-            else:
-                selected_candidate = candidates[0]
+            # Avalia e pontua candidatos com o score determinístico v2
+            scored_current: List[Tuple[MaterialInfo, float, dict]] = []
+            for c in candidates:
+                sc, bd = visual_matching.score_candidate_material(
+                    candidate=c,
+                    visual_intent=intent,
+                    target_aspect=video_aspect,
+                    used_asset_ids=used_asset_ids,
+                    last_selected_asset_id=last_selected_asset_id,
+                    scene_duration_hint=scene.duration_hint,
+                    search_query_used=term,
+                )
+                evaluated_candidates.append((c, sc, bd, term, term_i))
+                scored_current.append((c, sc, bd))
 
-            resolved_item = selected_candidate
-            term_used = term
-            fallback_used = (term_i > 0)
+            scored_current.sort(key=lambda x: x[1], reverse=True)
+            best_cand, best_sc, best_bd = scored_current[0]
+
+            # Critério de parada:
+            # 1. Se for o primeiro termo e tem score razoável (>= 25.0) sem penalidade imediata
+            # 2. Ou se for termo subsequente com alta aderência (score >= 45.0) sem penalidade imediata
+            repetition_pen = best_bd.get("repetition_penalty", 0.0)
+            if best_sc >= 15.0 and repetition_pen == 0.0:
+                resolved_item = best_cand
+                resolved_score = best_sc
+                term_used = term
+                chosen_tier = term_i
+                fallback_used = (term_i > 0)
+                matched_str = ",".join(best_bd.get("matched_terms", [])[:3])
+                resolved_reason = f"score={best_sc:.1f} terms=[{matched_str}] tier={term_i}"
+                if fallback_used:
+                    logger.info(
+                        f"[SCENE_MATERIAL][FALLBACK] task_id={tid_str} "
+                        f"scene_index={scene_idx} term_used='{term}' fallback_index={term_i}"
+                    )
+                break
+
+        # Se nenhum candidato atingiu o critério de parada rápida mas temos candidatos avaliados:
+        if not resolved_item and evaluated_candidates:
+            # Ordena decrescente por score global
+            evaluated_candidates.sort(key=lambda x: x[1], reverse=True)
+            best_cand, best_sc, best_bd, cand_term, cand_tier = evaluated_candidates[0]
+            resolved_item = best_cand
+            resolved_score = best_sc
+            term_used = cand_term
+            chosen_tier = cand_tier
+            fallback_used = (cand_tier > 0 or best_bd.get("repetition_penalty", 0.0) < 0.0)
+            matched_str = ",".join(best_bd.get("matched_terms", [])[:3])
+            resolved_reason = f"relaxed_score={best_sc:.1f} terms=[{matched_str}] tier={cand_tier}"
             if fallback_used:
                 logger.info(
                     f"[SCENE_MATERIAL][FALLBACK] task_id={tid_str} "
-                    f"scene_index={scene_idx} term_used='{term}' fallback_index={term_i}"
+                    f"scene_index={scene_idx} term_used='{cand_term}' fallback_index={cand_tier}"
                 )
-            break
 
         if not resolved_item:
             logger.error(
@@ -244,7 +300,6 @@ def resolve_scene_materials(
                     reason_code="SCENE_MATERIAL_MISSING",
                 )
             else:
-                # Se não estrito, continua
                 continue
 
         # Baixa / salva o arquivo de vídeo
@@ -285,17 +340,21 @@ def resolve_scene_materials(
             fallback_used=fallback_used,
             duration=float(resolved_item.duration or 0.0),
             provenance=prov_record,
+            visual_intent=intent.to_dict(),
+            match_score=resolved_score,
+            selection_reason=resolved_reason,
+            queries_tried=queries_tried,
+            fallback_tier=chosen_tier,
         )
         selections.append(selection)
 
         last_selected_asset_id = asset_id or resolved_item.url
-        last_selected_path = saved_path
         used_asset_ids.add(last_selected_asset_id)
 
         logger.info(
             f"[SCENE_MATERIAL][SELECTED] task_id={tid_str} scene_index={scene_idx} "
             f"asset_id={asset_id or 'unknown'} search_term='{term_used}' "
-            f"fallback={fallback_used} path={saved_path}"
+            f"score={resolved_score:.1f} fallback={fallback_used} path={saved_path}"
         )
 
     # Persiste materiais de cena e fontes de proveniência no script_data
@@ -320,6 +379,11 @@ def _persist_scene_resolution(
                 "search_term_used": s.search_term_used,
                 "fallback_used": s.fallback_used,
                 "duration": s.duration,
+                "match_score": s.match_score,
+                "selection_reason": s.selection_reason,
+                "queries_tried": s.queries_tried,
+                "fallback_tier": s.fallback_tier,
+                "visual_intent": s.visual_intent,
             }
             for s in selections
         ]

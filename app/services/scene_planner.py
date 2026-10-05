@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from loguru import logger
 
@@ -268,17 +268,38 @@ def plan_scenes(
         raise ScenePlanError("SCENE_PLAN_EMPTY: no valid sentences could be extracted", reason_code="SCENE_PLAN_EMPTY")
 
     video_subject = params.video_subject if params else None
-    if params and getattr(params, "video_clip_duration", None):
-        target_scene_duration = float(params.video_clip_duration)
+
+    from app.services import visual_matching
 
     scenes: List[ScenePlanItem] = []
+    prev_intent = None
     for idx, narration in enumerate(segments):
         scene_index = idx + 1
-        search_terms = _extract_scene_search_terms(
+        intent_v2 = visual_matching.extract_scene_visual_intent(
+            narration=narration,
+            video_subject=video_subject,
+            scene_index=scene_index,
+            total_scenes=len(segments),
+            previous_intent=prev_intent,
+        )
+        prev_intent = intent_v2
+
+        # Combina queries priorizadas da intenção visual v2 com termos lexicais
+        combined_terms: List[str] = []
+        for q in intent_v2.search_queries:
+            q_clean = q.strip()
+            if q_clean and q_clean not in combined_terms:
+                combined_terms.append(q_clean)
+
+        raw_terms = _extract_scene_search_terms(
             narration=narration,
             video_subject=video_subject,
             max_terms=3,
         )
+        for rt in raw_terms:
+            rt_clean = rt.strip()
+            if rt_clean and rt_clean not in combined_terms:
+                combined_terms.append(rt_clean)
 
         # Estimativa de duração da cena com base no número de palavras (~2.5 palavras/segundo)
         words_count = len(narration.split())
@@ -289,9 +310,10 @@ def plan_scenes(
         scene_item = ScenePlanItem(
             scene_index=scene_index,
             narration=narration,
-            search_terms=search_terms,
+            search_terms=combined_terms[:5],
             duration_hint=est_duration,
             visual_intent=visual_intent,
+            visual_intent_v2=intent_v2.to_dict(),
             source_strategy="stock_video",
         )
         scenes.append(scene_item)
@@ -300,7 +322,7 @@ def plan_scenes(
         scenes=scenes,
         total_scenes=len(scenes),
         script_hash=script_hash,
-        planner_version="v1.0",
+        planner_version="v2.0",
     )
 
     is_valid, reasons = validate_scene_plan(scene_plan, strict=True)

@@ -32,7 +32,7 @@
 - **V16.4.1B Final Render Performance** = PRODUCTION HOMOLOGATED (Deploy SHA: `e7f40ed6f4b7df45e5868cd7de03495239d103ec`, Task Homologada: `f9a9608b-512d-43c4-92f4-f864a0424512`)
 - **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
 - **V16.4.1D Post-Encode Performance Investigation** = ACTIVE
-- **V16.5 Visual Matching v2** = NOT STARTED
+- **V16.5 Visual Matching v2** = DEV IMPLEMENTED / VALIDATED (PR TBD)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -966,8 +966,16 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
 
 
 ## V16.5 — Visual Matching v2
-- **Status:** 📋 NOT STARTED
+- **Status:** ✅ DEV IMPLEMENTED / VALIDATED
 - **Priority:** P1
+- **Escopo:**
+  - Extração de intenção visual estruturada por cena (`SceneVisualIntent`: primary_subject, action, environment, style, must_include, avoid, search_queries).
+  - Search Query v2: geração de consultas em inglês ricas e em tiers de especificidade, evitando pesquisas genéricas.
+  - Pontuação determinística de candidatos (0-100 pts) considerando aderência semântica de termos, título/tags, proporção/aspecto, duração útil e penalidade de repetição.
+  - Diversidade global: penalização (-35 pts) de repetição de ativo no mesmo vídeo (além de -50 pts para repetição consecutiva imediata).
+  - Fallback resiliente em cascata sem quebra de pipeline.
+  - Observabilidade e auditoria persistidas em `script_data` (`visual_intent`, `match_score`, `selection_reason`, `queries_tried`, `fallback_tier`).
+  - Suíte de 9 testes direcionados + 20 testes da V16.4 passando com 100% de sucesso.
 
 ## V16.6 — Subtitle Style System
 - **Status:** 📋 PLANNED

@@ -6,9 +6,10 @@ import random
 import threading
 import time
 import uuid
+import re
 from pathlib import Path
-from typing import Any, Callable, List
-from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
+from typing import Any, Callable, List, Optional
+from urllib.parse import quote_plus, urlencode, urlparse, urlsplit, urlunsplit
 
 import requests
 from loguru import logger
@@ -81,6 +82,22 @@ def _creator_info(value: Any) -> dict[str, str] | None:
     if creator_page:
         creator["profile_page"] = creator_page
     return creator or None
+
+
+def _extract_title_from_url(url: Optional[str]) -> str:
+    """Extrai título semântico legível a partir da slug de uma URL de provedor."""
+    if not url or not isinstance(url, str):
+        return ""
+    try:
+        path = urlparse(url.strip()).path
+        parts = [p for p in path.strip("/").split("/") if p]
+        if parts:
+            slug = parts[-1]
+            slug = re.sub(r"-\d+$", "", slug)
+            return slug.replace("-", " ").replace("_", " ").strip()
+    except Exception:
+        pass
+    return ""
 
 
 def _material_source_record(item: MaterialInfo, local_path: str) -> dict[str, Any]:
@@ -389,6 +406,8 @@ def search_videos_pexels(
                     item.provider = "pexels"
                     item.url = video["link"]
                     item.duration = duration
+                    pexels_title = _extract_title_from_url(v.get("url"))
+                    pexels_tags = [pexels_title] if pexels_title else []
                     item.source_info = {
                         "provider": "pexels",
                         "search_term": search_term,
@@ -397,6 +416,8 @@ def search_videos_pexels(
                         ),
                         "source_page": _safe_public_url(v.get("url")),
                         "creator": _creator_info(v.get("user")),
+                        "title": pexels_title,
+                        "tags": pexels_tags,
                         "rendition": {
                             "id": (
                                 str(video.get("id"))
@@ -513,6 +534,9 @@ def search_videos_pixabay(
                     item.provider = "pixabay"
                     item.url = video["url"]
                     item.duration = duration
+                    raw_pixabay_tags = str(v.get("tags") or "")
+                    pixabay_tags = [t.strip() for t in raw_pixabay_tags.split(",") if t.strip()]
+                    pixabay_title = _extract_title_from_url(v.get("pageURL"))
                     item.source_info = {
                         "provider": "pixabay",
                         "search_term": search_term,
@@ -526,6 +550,8 @@ def search_videos_pixabay(
                                 "name": v.get("user"),
                             }
                         ),
+                        "title": pixabay_title,
+                        "tags": pixabay_tags,
                         "rendition": {
                             "id": video_type,
                             "width": w,
@@ -626,12 +652,22 @@ def search_videos_coverr(
             item.provider = "coverr"
             item.url = mp4_download_url
             item.duration = duration
+            raw_coverr_tags = v.get("tags") or []
+            if isinstance(raw_coverr_tags, str):
+                coverr_tags = [t.strip() for t in raw_coverr_tags.split(",") if t.strip()]
+            elif isinstance(raw_coverr_tags, list):
+                coverr_tags = [str(t).strip() for t in raw_coverr_tags if str(t).strip()]
+            else:
+                coverr_tags = []
+            coverr_title = str(v.get("title") or _extract_title_from_url(v.get("canonical_url") or v.get("url")) or "")
             item.source_info = {
                 "provider": "coverr",
                 "search_term": search_term,
                 "asset_id": str(video_id),
                 "source_page": _safe_public_url(v.get("canonical_url") or v.get("url")),
                 "creator": _creator_info(v.get("creator") or v.get("author")),
+                "title": coverr_title,
+                "tags": coverr_tags,
                 "rendition": {
                     "id": "mp4_download",
                     "width": v.get("max_width"),

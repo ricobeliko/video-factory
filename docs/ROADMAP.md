@@ -13,8 +13,8 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.1C — Render Pipeline Gap Instrumentation`
-- **ACTIVE_BRANCH** = `fix/v16-4-1c-render-gap-instrumentation`
+- **ACTIVE_PHASE** = `V16.4.1D — Post-Encode Performance Investigation`
+- **ACTIVE_BRANCH** = `perf/v16-4-1d-post-encode`
 - **NEXT_GATE** = `V16.5 — Visual Matching v2`
 - **BLOCKED_BY** = `NONE`
 
@@ -30,7 +30,8 @@
 - **V16.4 Scene-Based Video Generation** = PRODUCTION HOMOLOGATED
 - **V16.4.1A Scene Render Performance Hardening** = PRODUCTION HOMOLOGATED (Deploy SHA: `8ea3fe225eef709ed7915d99ddf21b507a44c4d1`)
 - **V16.4.1B Final Render Performance** = PRODUCTION HOMOLOGATED (Deploy SHA: `e7f40ed6f4b7df45e5868cd7de03495239d103ec`, Task Homologada: `f9a9608b-512d-43c4-92f4-f864a0424512`)
-- **V16.4.1C Render Pipeline Gap Instrumentation** = ACTIVE
+- **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
+- **V16.4.1D Post-Encode Performance Investigation** = ACTIVE
 - **V16.5 Visual Matching v2** = NOT STARTED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
@@ -852,31 +853,37 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Hardening de métricas: `FINAL_RENDER_SECONDS` interno canônico e `FINAL_RENDER_CALL_SECONDS` externo.
 
 ### V16.4.1C — Render Pipeline Gap Instrumentation
+- **Status:** 🟢 PRODUCTION HOMOLOGATED (04/10/2026)
+- **Deploy SHA:** `d231e3900bbbace180c0c71e60e9fb08c2d713e0` (PR #44)
+- **Evidência de Produção:** Task `337639bb-1740-4398-a923-c5f75b1f236a`, Modo `FFMPEG_NATIVE`, Final Media Quality PASS, sem regressão funcional.
+- **Resultados de Produção:**
+  - `FINAL_RENDER_UNACCOUNTED_SECONDS = 0.0000273` (gaps internos de render final eliminados).
+  - `TOTAL_RENDER_UNACCOUNTED_SECONDS = 0.0033855` (gaps macro do pipeline eliminados).
+  - `COMBINE_VIDEOS_UNACCOUNTED_SECONDS = 0.0028849`.
+  - Ponto remanescente identificado para investigação: `FINAL_RENDER_POST_ENCODE_SECONDS = 111.4239390` (~1m51s).
+
+### V16.4.1D — Post-Encode Performance Investigation
 - **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
 - **Priority:** P1
-- **Branch:** `fix/v16-4-1c-render-gap-instrumentation`
-- **Validação:** 29 testes PASS (`test/services/test_v16_4_1_scene_render_performance.py`, `test/services/test_v16_4_1b_final_render_performance.py`, `test/services/test_v16_4_1c_render_gap_instrumentation.py`)
-- **Objetivo:** Eliminar pontos cegos de telemetria no pipeline de renderização para explicar matematicamente todo `FINAL_RENDER_SECONDS` e `TOTAL_RENDER_SECONDS`.
+- **Branch:** `perf/v16-4-1d-post-encode`
+- **Validação:** 34 testes PASS (`test_v16_4_1_scene_render_performance.py`, `test_v16_4_1b_final_render_performance.py`, `test_v16_4_1c_render_gap_instrumentation.py`, `test_v16_4_1d_post_encode_performance.py`)
+- **Objetivo:** Investigar rigorosamente as operações de `FINAL_RENDER_POST_ENCODE_SECONDS`, sub-instrumentar as fases internas e identificar a raiz da retenção pós-encode.
 - **Classificação de Evidências:**
   - **CONFIRMED:**
-    - A semântica de `FINAL_RENDER_SECONDS` foi corrigida na V16.4.1B (diferença entre `FINAL_RENDER_SECONDS` e `FINAL_RENDER_CALL_SECONDS` foi de apenas ~0.003s na homologação).
-    - O baseline de produção (Task `f9a9608b-512d-43c4-92f4-f864a0424512`) revelou dois gaps reais:
-      - Gap A: ~1097s dentro de `video.generate_video()` entre o total (1488.96s) e os subtimings conhecidos (391.67s).
-      - Gap B: ~1374s no macro pipeline entre `TOTAL_RENDER_SECONDS` (3293.82s) e os subtimings conhecidos (1919.17s).
-    - Implementação de timers semanticamente separados e contíguos cobrindo todas as fases internas de `generate_video` e `combine_videos`.
-    - Persistência das novas métricas: `FINAL_RENDER_MODE_SELECT_SECONDS`, `FINAL_RENDER_INPUT_PROBE_SECONDS`, `FINAL_RENDER_AUDIO_PROBE_SECONDS`, `FINAL_RENDER_AUDIO_MIX_SECONDS`, `FINAL_RENDER_VALIDATION_SECONDS`, `FINAL_RENDER_OUTPUT_PROBE_SECONDS`, `FINAL_RENDER_POST_ENCODE_SECONDS`, `FINAL_RENDER_UNACCOUNTED_SECONDS`, `SCENE_RENDER_PRE_CONCAT_SECONDS`, `SCENE_RENDER_POST_CONCAT_SECONDS`, `COMBINE_VIDEOS_SECONDS`, `COMBINE_VIDEOS_CALL_SECONDS`, `COMBINE_VIDEOS_UNACCOUNTED_SECONDS`, `PRE_FINAL_RENDER_SECONDS`, `PRE_FINAL_RENDER_BATCH_ALLOCATION_SECONDS`, `PRE_FINAL_RENDER_BGM_GEN_SECONDS`, `PRE_FINAL_RENDER_SUBTITLE_VAL_SECONDS`, `TOTAL_RENDER_UNACCOUNTED_SECONDS`.
-    - Invariante de timing helper criado: `verify_render_timing_invariants`.
+    - Não existem probes duplicados, reaberturas MoviePy, handles pendentes, retries ou I/O de disco oculto dentro de `FINAL_RENDER_POST_ENCODE_SECONDS`.
+    - A região pós-encode executa unicamente a atribuição de estado local (`native_rendered`, `final_render_mode`) e a emissão do log `logger.info("FINAL_RENDER_MODE=...")`.
+    - Sub-instrumentação contígua implementada: `FINAL_RENDER_POST_ENCODE_STATE_SECONDS`, `FINAL_RENDER_POST_ENCODE_NOTIFY_SECONDS` e `FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS`.
+    - Invariantes matemáticos pós-encode validados em `verify_render_timing_invariants`.
   - **INFERRED:**
-    - A maior parte dos gaps residuais decorre de chamadas não instrumentadas no pipeline (ex: validações de saída `probe_media`, escrita/remoção de arquivos no filesystem Windows, ou geração externa de BGM/metadados).
-    - Com a cobertura contígua dos timers, a próxima execução real registrará a duração exata da etapa que está consumindo o tempo.
+    - O tempo anômalo de 111.42s em ambiente interativo Windows decorreu de suspensão por console lock (QuickEdit Mode no conhost bloqueando `sys.stderr` após interação de mouse/seleção durante os 5 minutos de encode contínuo).
   - **NOT_YET_VALIDATED_IN_PRODUCTION:**
-    - Distribuição dos novos subtimings e valores residuais no hardware do PC forte sob carga de produção (`C:\Projetos\MoneyPrinterTurbo`).
-- **Limites e Escopo (O que NÃO é feito em V16.4.1C):**
-  - Sem alteração de algoritmo de renderização
-  - Sem alteração de codec, resolução, FPS, preset, CRF, legendas, BGM ou qualidade
-  - Sem alteração de scene planner
-  - Sem tocar PC FORTE / produção
-  - Sem iniciar V16.4.2A
+    - Verificação da latência pós-encode em execução totalmente desassistida no PC forte (`C:\Projetos\MoneyPrinterTurbo`).
+- **Limites e Escopo (O que NÃO é feito em V16.4.1D):**
+  - Sem alteração de parâmetros de vídeo (codec, resolução, FPS, CRF, preset)
+  - Sem remoção ou enfraquecimento do Final Media Quality Gate
+  - Sem otimização especulativa não fundamentada em evidências
+  - Sem tocar PC forte / produção
+
 
 
 ## V16.5 — Visual Matching v2

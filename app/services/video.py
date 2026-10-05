@@ -1856,6 +1856,21 @@ def verify_render_timing_invariants(
                     f"(expected ~{final_render_sec:.3f}s, got sum={sum_internal:.3f}s)"
                 )
                 valid = False
+            post_state = float(timings.get("FINAL_RENDER_POST_ENCODE_STATE_SECONDS", 0.0))
+            post_notify = float(timings.get("FINAL_RENDER_POST_ENCODE_NOTIFY_SECONDS", 0.0))
+            post_unacc = float(timings.get("FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS", 0.0))
+            if post > 0.0:
+                sum_post = post_state + post_notify + post_unacc
+                post_delta = abs(post - sum_post)
+                if post_delta > tolerance:
+                    warnings.append(
+                        f"POST_ENCODE delta {post_delta:.3f}s exceeds tolerance {tolerance:.3f}s "
+                        f"(expected ~{post:.3f}s, got sum={sum_post:.3f}s)"
+                    )
+                    valid = False
+            if post_unacc < -1e-6:
+                warnings.append(f"FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS is negative: {post_unacc:.6f}s")
+                valid = False
         final_unaccounted = float(timings.get("FINAL_RENDER_UNACCOUNTED_SECONDS", 0.0))
         if final_unaccounted < -1e-6:
             warnings.append(f"FINAL_RENDER_UNACCOUNTED_SECONDS is negative: {final_unaccounted:.6f}s")
@@ -1954,6 +1969,9 @@ def generate_video(
     subtitle_seconds = 0.0
     encode_seconds = 0.0
     validation_seconds = 0.0
+    post_encode_state_seconds = 0.0
+    post_encode_notify_seconds = 0.0
+    post_encode_unaccounted = 0.0
     post_encode_seconds = 0.0
     mode_select_seconds = perf_counter() - t_mode_start
 
@@ -2060,11 +2078,22 @@ def generate_video(
                     validation_seconds = perf_counter() - t_val_start
 
                     t_post_start = perf_counter()
+                    t_state_start = perf_counter()
                     if is_valid:
                         native_rendered = True
                         final_render_mode = "FFMPEG_STREAM_COPY"
+                    post_encode_state_seconds = perf_counter() - t_state_start
+
+                    t_notify_start = perf_counter()
+                    if is_valid:
                         logger.info("FINAL_RENDER_MODE=FFMPEG_STREAM_COPY")
+                    post_encode_notify_seconds = perf_counter() - t_notify_start
+
                     post_encode_seconds = perf_counter() - t_post_start
+                    post_encode_unaccounted = max(
+                        0.0,
+                        post_encode_seconds - (post_encode_state_seconds + post_encode_notify_seconds),
+                    )
                 else:
                     burn_ok = _render_final_ffmpeg_ass(
                         video_path=video_path,
@@ -2081,11 +2110,22 @@ def generate_video(
                     validation_seconds = perf_counter() - t_val_start
 
                     t_post_start = perf_counter()
+                    t_state_start = perf_counter()
                     if is_valid:
                         native_rendered = True
                         final_render_mode = "FFMPEG_NATIVE"
+                    post_encode_state_seconds = perf_counter() - t_state_start
+
+                    t_notify_start = perf_counter()
+                    if is_valid:
                         logger.info("FINAL_RENDER_MODE=FFMPEG_NATIVE")
+                    post_encode_notify_seconds = perf_counter() - t_notify_start
+
                     post_encode_seconds = perf_counter() - t_post_start
+                    post_encode_unaccounted = max(
+                        0.0,
+                        post_encode_seconds - (post_encode_state_seconds + post_encode_notify_seconds),
+                    )
 
         if not native_rendered:
             logger.warning("native FFmpeg final render failed or invalid; falling back to MoviePy")
@@ -2127,6 +2167,9 @@ def generate_video(
             render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
             render_timings["FINAL_RENDER_VALIDATION_SECONDS"] = validation_seconds
             render_timings["FINAL_RENDER_OUTPUT_PROBE_SECONDS"] = validation_seconds
+            render_timings["FINAL_RENDER_POST_ENCODE_STATE_SECONDS"] = post_encode_state_seconds
+            render_timings["FINAL_RENDER_POST_ENCODE_NOTIFY_SECONDS"] = post_encode_notify_seconds
+            render_timings["FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS"] = post_encode_unaccounted
             render_timings["FINAL_RENDER_POST_ENCODE_SECONDS"] = post_encode_seconds
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
             render_timings["FINAL_RENDER_UNACCOUNTED_SECONDS"] = final_render_unaccounted
@@ -2465,6 +2508,9 @@ def generate_video(
             render_timings["FINAL_RENDER_ENCODE_SECONDS"] = encode_seconds
             render_timings["FINAL_RENDER_VALIDATION_SECONDS"] = 0.0
             render_timings["FINAL_RENDER_OUTPUT_PROBE_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_POST_ENCODE_STATE_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_POST_ENCODE_NOTIFY_SECONDS"] = 0.0
+            render_timings["FINAL_RENDER_POST_ENCODE_UNACCOUNTED_SECONDS"] = 0.0
             render_timings["FINAL_RENDER_POST_ENCODE_SECONDS"] = 0.0
             render_timings["FINAL_RENDER_SECONDS"] = final_render_seconds
             render_timings["FINAL_RENDER_UNACCOUNTED_SECONDS"] = final_render_unaccounted

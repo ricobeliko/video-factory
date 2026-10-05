@@ -1,9 +1,10 @@
-import os
 import json
+import math
+import os
 import re
 import sqlite3
 import threading
-import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from loguru import logger
@@ -28,9 +29,6 @@ ACTIVE_SCHEDULE_STATUSES = (STATUS_PLANNED, STATUS_READY)
 PLANNER_BLOCKING_STATUSES = (STATUS_PLANNED, STATUS_READY, STATUS_PUBLISHED, STATUS_CANCELLED)
 
 _FINAL_VIDEO_PATTERN = re.compile(r"^final-(?P<index>\d+)\.mp4$")
-
-
-from contextlib import contextmanager
 
 
 def get_db_path(custom_path: Optional[str] = None) -> str:
@@ -701,7 +699,7 @@ def get_platform_rate_limits(
         else:
             global_sched_count = 0
         global_total_used = global_used_past + global_sched_count
-        global_slots = max(0, technical_limit - global_total_used) if enabled else 0
+        _global_slots = max(0, technical_limit - global_total_used) if enabled else 0
 
         if profile_id:
             from app.services import profile_manager
@@ -968,6 +966,18 @@ def has_existing_or_terminal_destination(
                 (task_id, clean_plat, clean_channel),
             ).fetchone()
             if pub_row:
+                return True
+
+            pub_any = c.execute(
+                """
+                SELECT id FROM publication_events
+                WHERE task_id = ? AND platform = ?
+                AND status = 'success'
+                LIMIT 1;
+                """,
+                (task_id, clean_plat),
+            ).fetchone()
+            if pub_any:
                 return True
 
             # 2. Tombstone legado: cancelamento pré-canais sem channel_id atua como wildcard
@@ -1738,6 +1748,33 @@ def run_scheduler_cycle(
 
     logger.info(f"[SCHEDULER][CYCLE] candidate id={post_id} task_id={task_id} platform={platform} profile_id={profile_id} channel_id={channel_id} scheduled_at={post['scheduled_at']}")
 
+    # 1.1 Guard Canônico de Publicação Concluída (Fase V16.4.2A):
+    # Se existir publication_events com status = 'success' para task_id + platform,
+    # a publicação já foi concluída com sucesso. NUNCA chamar provider novamente,
+    # nunca republicar, desarmar retry e marcar status = 'published'.
+    with get_connection(db_path) as conn:
+        pub_event = conn.execute(
+            "SELECT id, external_id, external_url, published_at FROM publication_events WHERE task_id = ? AND platform = ? AND status = 'success' LIMIT 1;",
+            (task_id, platform),
+        ).fetchone()
+
+    if pub_event:
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE scheduled_posts SET status = 'published', next_attempt_at = NULL WHERE id = ?;",
+                (post_id,),
+            )
+        logger.info(f"[SCHEDULER][CYCLE] skipped reason=already_published ({task_id} - {platform}) event_id={pub_event['id']}")
+        _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado por idempotência (já publicado: evento #{pub_event['id']})", db_path=db_path)
+        return {
+            "status": "skipped",
+            "reason": "already_published",
+            "task_id": task_id,
+            "platform": platform,
+            "publication_event_id": pub_event["id"],
+            "external_id": pub_event["external_id"],
+        }
+
     # 2. Revalidação: Perfil da task ativo
     prof = profile_manager.get_profile(profile_id, db_path=db_path)
     if prof and not prof.get("is_active"):
@@ -1795,11 +1832,11 @@ def run_scheduler_cycle(
 
     # 4. Revalidação: Plataforma habilitada nas configurações
     if platform == "tiktok" and not settings["tiktok_enabled"]:
-        logger.info(f"[SCHEDULER][CYCLE] skipped reason=platform_disabled (tiktok)")
+        logger.info("[SCHEDULER][CYCLE] skipped reason=platform_disabled (tiktok)")
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado: tiktok desativado", db_path=db_path)
         return {"status": "skipped", "reason": "platform_disabled", "platform": platform}
     if platform == "youtube" and not settings["youtube_enabled"]:
-        logger.info(f"[SCHEDULER][CYCLE] skipped reason=platform_disabled (youtube)")
+        logger.info("[SCHEDULER][CYCLE] skipped reason=platform_disabled (youtube)")
         _set_executor_status(last_cycle_summary=f"Post {post_id} ignorado: youtube desativado", db_path=db_path)
         return {"status": "skipped", "reason": "platform_disabled", "platform": platform}
 

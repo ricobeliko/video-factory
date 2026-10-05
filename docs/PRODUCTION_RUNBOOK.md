@@ -627,4 +627,38 @@ O reset controlado de publicações pendentes exige que a produção esteja para
    .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --execute --confirm RESET_PENDING_PUBLICATIONS
    ```
 
+## 24. Procedimento Operacional: Reconciliação do Estado de Publicação (V16.4.2A)
+
+A reconciliação determinística sincroniza `publication_events` e `scheduled_posts`, tratando `publication_events.status = 'success'` como evidência canônica de publicação concluída.
+
+### Regras da Reconciliação:
+1. `publication_events` com status `success` é a verdade definitiva sobre a publicação.
+2. Se houver `success` para `(task_id, platform)`:
+   - Nunca chamar provider novamente e nunca republicar.
+   - O post agendado correspondente torna-se não executável.
+   - Retries residuais são desarmados (`next_attempt_at = NULL`).
+   - Metadados canônicos (`external_id`, `external_url`, `published_at`) são preservados/sincronizados.
+3. `failed + success`: reconciliado para `published` preservando histórico de erro e tentativas.
+4. `processing + success`: reconciliado para `published` emitindo `STALE_PROCESSING_DETECTED` e `PUBLICATION_RECONCILED_SUCCESS`.
+5. `published + retry residual`: mantém `published` e desarma retry residual (`next_attempt_at = NULL`).
+6. Duplicatas para o mesmo `(task_id, platform)`: um post canônico é marcado `published` e os demais são neutralizados como `cancelled` (`next_attempt_at = NULL`).
+7. `success` sem post agendado correspondente (órfão histórico): auditado no console operacional (`HISTORICAL_ORPHAN_SUCCESS_RECONCILED`), sem inventar chamadas a provider.
+8. Nenhuma linha de `publication_events` ou `scheduled_posts` é deletada; nenhum arquivo de mídia é deletado.
+
+### Precondições:
+- `scheduler_enabled = false`
+- `auto_publish_enabled = false`
+- `active_primary = false`
+
+### Execução:
+1. **Executar o Dry-Run:**
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\reconcile_publication_state.py --dry-run
+   ```
+2. **Executar a Reconciliação Real (backup automático do banco pré-mutação):**
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\reconcile_publication_state.py --execute --confirm RECONCILE_PUBLICATION_STATE
+   ```
+
+
 

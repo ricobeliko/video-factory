@@ -51,6 +51,7 @@ EVENT_INSTANCE_VIEW_ONLY_STARTED = "INSTANCE_VIEW_ONLY_STARTED"
 EVENT_INSTANCE_HEARTBEAT_STALE = "INSTANCE_HEARTBEAT_STALE"
 EVENT_INSTANCE_TAKEOVER = "INSTANCE_TAKEOVER"
 EVENT_INSTANCE_STOPPED = "INSTANCE_STOPPED"
+EVENT_STALE_PRIMARY_LOCK_RELEASED = "STALE_PRIMARY_LOCK_RELEASED"
 
 DEFAULT_INSTANCE_LOCK_KEY = "PRIMARY_FACTORY"
 DEFAULT_INSTANCE_TIMEOUT_SECONDS = 90
@@ -631,6 +632,199 @@ def release_instance_lock(db_path: Optional[str] = None) -> None:
 
 
 atexit.register(release_instance_lock)
+
+
+def release_stale_instance_lock(
+    lock_key: str = DEFAULT_INSTANCE_LOCK_KEY,
+    stale_timeout_seconds: int = DEFAULT_INSTANCE_TIMEOUT_SECONDS,
+    dry_run: bool = True,
+    confirm_token: Optional[str] = None,
+    db_path: Optional[str] = None,
+    force_ignore_flags: bool = False,
+) -> Dict[str, Any]:
+    """Recupera administrativamente um lock de PRIMARY_FACTORY que ficou com status ACTIVE após parada do processo.
+
+    OPERAÇÃO ADMINISTRATIVA FAIL-CLOSED (V16.4.2R.2):
+    1. scheduler_enabled deve ser False (ou force_ignore_flags=True apenas em testes)
+    2. auto_publish_enabled deve ser False (ou force_ignore_flags=True apenas em testes)
+    3. Status em instance_locks deve ser ACTIVE
+    4. Heartbeat deve ser mais antigo que stale_timeout_seconds (stale)
+    5. Se o processo registrado pertencer ao host local, o PID NÃO pode estar vivo
+    6. Requer confirm_token='RELEASE_STALE_PRIMARY' para execução real (dry_run=False)
+    7. Zero deleção de linhas: realiza apenas UPDATE ACTIVE -> STOPPED
+    8. Registra evento STALE_PRIMARY_LOCK_RELEASED em operational_events
+    """
+    from app.services import scheduler
+
+    target_db = get_db_path(db_path)
+    init_operator_db(target_db)
+
+    # 1. Verificar flags de produção (scheduler_enabled e auto_publish_enabled)
+    settings = scheduler.get_all_settings(db_path=target_db)
+    sched_enabled = bool(settings.get("scheduler_enabled", False))
+    auto_pub_enabled = bool(settings.get("auto_publish_enabled", False))
+
+    flag_errors: List[str] = []
+    if not force_ignore_flags:
+        if sched_enabled:
+            flag_errors.append("scheduler_enabled está ativo (True). Produção deve estar parada.")
+        if auto_pub_enabled:
+            flag_errors.append("auto_publish_enabled está ativo (True). Produção deve estar parada.")
+
+    # 2. Consultar o registro do lock
+    with get_connection(target_db) as conn:
+        row = conn.execute(
+            "SELECT * FROM instance_locks WHERE lock_key = ?;",
+            (lock_key,),
+        ).fetchone()
+
+    if not row:
+        return {
+            "lock_found": False,
+            "lock_key": lock_key,
+            "status": None,
+            "can_release": False,
+            "would_release": False,
+            "released": False,
+            "reason": f"Lock '{lock_key}' não encontrado na tabela instance_locks.",
+            "dry_run": dry_run,
+        }
+
+    r = dict(row)
+    node_id = r.get("node_id")
+    node_name = r.get("node_name")
+    hostname = r.get("hostname")
+    pid = r.get("pid") or 0
+    last_heartbeat = r.get("last_heartbeat")
+    status = r.get("status")
+
+    # 3. Se status já não é ACTIVE (ex.: STOPPED) -> idempotente / no-op
+    if status != INSTANCE_STATUS_ACTIVE:
+        return {
+            "lock_found": True,
+            "lock_key": lock_key,
+            "node_id": node_id,
+            "node_name": node_name,
+            "hostname": hostname,
+            "pid": pid,
+            "status": status,
+            "previous_status": status,
+            "resulting_status": status,
+            "last_heartbeat": last_heartbeat,
+            "stale_age_seconds": None,
+            "process_alive": None,
+            "is_heartbeat_stale": False,
+            "can_release": False,
+            "would_release": False,
+            "released": False,
+            "reason": f"Lock '{lock_key}' já está com status='{status}' (não está ACTIVE). Nenhuma ação necessária.",
+            "dry_run": dry_run,
+        }
+
+    # 4. Avaliar tempo do heartbeat
+    now_utc = datetime.now(timezone.utc)
+    hb_dt = _parse_iso_utc(last_heartbeat)
+    stale_age_seconds: Optional[float] = None
+    is_heartbeat_stale = False
+
+    if hb_dt:
+        stale_age_seconds = (now_utc - hb_dt).total_seconds()
+        if stale_age_seconds > stale_timeout_seconds:
+            is_heartbeat_stale = True
+    else:
+        is_heartbeat_stale = True
+
+    # 5. Avaliar vivacidade do processo se estiver no host local
+    my_hostname = platform.node() or socket.gethostname() or "unknown_host"
+    is_same_host = bool(hostname and my_hostname and hostname.lower() == my_hostname.lower())
+    process_alive: Optional[bool] = None
+
+    if is_same_host and pid > 0:
+        process_alive = _is_local_pid_alive(pid)
+
+    # 6. Avaliar se o release é permitido
+    block_reasons: List[str] = []
+    if flag_errors:
+        block_reasons.extend(flag_errors)
+
+    if not is_heartbeat_stale:
+        age_str = f"{stale_age_seconds:.1f}s" if stale_age_seconds is not None else "indeterminado"
+        block_reasons.append(
+            f"Heartbeat recente ({age_str} <= threshold de {stale_timeout_seconds}s). Instância pode estar ativa."
+        )
+
+    if process_alive is True:
+        block_reasons.append(
+            f"Processo registrado (PID {pid} no host '{hostname}') ainda está vivo em execução."
+        )
+
+    can_release = (len(block_reasons) == 0)
+    would_release = can_release
+    reason = (
+        f"Lock está stale (idade: {stale_age_seconds:.1f}s > {stale_timeout_seconds}s) e processo local não está em execução."
+        if can_release
+        else "; ".join(block_reasons)
+    )
+
+    if not dry_run:
+        if not can_release:
+            raise RuntimeError(f"Bloqueio de segurança: Não é seguro liberar o lock '{lock_key}': {reason}")
+        if confirm_token != "RELEASE_STALE_PRIMARY":
+            raise ValueError(
+                "Confirmação obrigatória ausente. Use confirm_token='RELEASE_STALE_PRIMARY' para executar."
+            )
+
+        # Mutação segura: apenas UPDATE ACTIVE -> STOPPED. Zero deleção.
+        with get_connection(target_db) as conn:
+            conn.execute(
+                """
+                UPDATE instance_locks
+                SET status = ?
+                WHERE lock_key = ? AND status = ?;
+                """,
+                (INSTANCE_STATUS_STOPPED, lock_key, INSTANCE_STATUS_ACTIVE),
+            )
+
+        log_operational_event(
+            component="InstanceLock",
+            severity=SEVERITY_WARNING,
+            event_type=EVENT_STALE_PRIMARY_LOCK_RELEASED,
+            message=f"Lock primário stale '{lock_key}' (nó '{node_id}', PID {pid} em '{hostname}') foi liberado administrativamente (ACTIVE -> STOPPED).",
+            metadata={
+                "lock_key": lock_key,
+                "node_id": node_id,
+                "hostname": hostname,
+                "pid": pid,
+                "previous_status": INSTANCE_STATUS_ACTIVE,
+                "resulting_status": INSTANCE_STATUS_STOPPED,
+                "stale_age_seconds": stale_age_seconds,
+                "reason": reason,
+            },
+            db_path=target_db,
+        )
+
+    resulting_status = INSTANCE_STATUS_STOPPED if (can_release and not dry_run) else status
+
+    return {
+        "lock_found": True,
+        "lock_key": lock_key,
+        "node_id": node_id,
+        "node_name": node_name,
+        "hostname": hostname,
+        "pid": pid,
+        "status": status,
+        "previous_status": status,
+        "resulting_status": resulting_status,
+        "last_heartbeat": last_heartbeat,
+        "stale_age_seconds": stale_age_seconds,
+        "process_alive": process_alive,
+        "is_heartbeat_stale": is_heartbeat_stale,
+        "can_release": can_release,
+        "would_release": would_release,
+        "released": (can_release and not dry_run),
+        "reason": reason,
+        "dry_run": dry_run,
+    }
 
 
 def get_instance_info(db_path: Optional[str] = None) -> Dict[str, Any]:

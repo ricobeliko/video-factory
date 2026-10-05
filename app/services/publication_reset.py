@@ -599,3 +599,23 @@ def audit_after_reset(
         "media_files_deleted": 0,
         "remaining_inconsistencies": remaining_inconsistencies,
     }
+
+
+def release_stale_primary_lock(
+    db_path: Optional[str] = None,
+    dry_run: bool = True,
+    confirm_token: Optional[str] = None,
+    stale_timeout_seconds: int = operator_console.DEFAULT_INSTANCE_TIMEOUT_SECONDS,
+    force_ignore_flags: bool = False,
+) -> Dict[str, Any]:
+    """Recupera administrativamente o lock PRIMARY_FACTORY stale antes do reset."""
+    target_db = scheduler.get_db_path(db_path)
+    return operator_console.release_stale_instance_lock(
+        lock_key=operator_console.DEFAULT_INSTANCE_LOCK_KEY,
+        stale_timeout_seconds=stale_timeout_seconds,
+        dry_run=dry_run,
+        confirm_token=confirm_token,
+        db_path=target_db,
+        force_ignore_flags=force_ignore_flags,
+    )
+

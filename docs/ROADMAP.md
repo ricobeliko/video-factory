@@ -883,21 +883,24 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Sem otimização especulativa não fundamentada em evidências
   - Sem tocar PC forte / produção
 
-### V16.4.2R / V16.4.2R.1 — Pre-Repair Publishing Reset & Safety Fix
+### V16.4.2R / V16.4.2R.1 / V16.4.2R.2 — Pre-Repair Publishing Reset & Stale Lock Recovery
 - **Status:** 🚀 ACTIVE / DEV IMPLEMENTED (04/10/2026)
 - **Priority:** P1
-- **Branch:** `fix/v16-4-2r1-production-reset-safety`
-- **Validação:** 8 testes PASS (`test/services/test_v16_4_2r_pre_repair_publishing_reset.py`), Dry-run e Reset real validados com backup íntegro e zero deleção de arquivos.
-- **Objetivo:** Estabelecer um baseline limpo e auditado no subsistema de publicação antes das correções V16.4.2A/B/C, neutralizando todas as publicações antigas pendentes, stale processing ou retries armados, preservando integralmente o histórico de publicações realizadas com sucesso.
-- **Entregas V16.4.2R / V16.4.2R.1:**
+- **Branch:** `fix/v16-4-2r2-stale-primary-recovery`
+- **Validação:** 16 testes PASS (8 em `test_v16_4_2r_pre_repair_publishing_reset.py` + 8 em `test_stale_primary_lock_recovery.py`), Dry-run e Reset real validados com backup íntegro e zero deleção de arquivos.
+- **Objetivo:** Estabelecer um baseline limpo e auditado no subsistema de publicação antes das correções V16.4.2A/B/C, neutralizando todas as publicações antigas pendentes, stale processing ou retries armados, preservando integralmente o histórico de publicações realizadas com sucesso e fornecendo recuperação segura e auditada de locks primários stale.
+- **Entregas V16.4.2R / V16.4.2R.1 / V16.4.2R.2:**
   - Serviço reutilizável `app/services/publication_reset.py` e CLI `scripts/reset_pending_publications.py`.
+  - Operação administrativa `release_stale_instance_lock` em `app/services/operator_console.py` (`--release-stale-primary` no CLI).
+  - Critério objetivo e conservador de detecção de stale (heartbeat > 90s e ausência de processo local com mesmo PID/host).
   - Verificação fail-closed de pré-condições (`scheduler_enabled = False`, `auto_publish_enabled = False`, `active_primary = False`).
   - Preservação obrigatória de `scheduled_posts.status = 'published'`: posts publicados com retry residual têm `next_attempt_at` limpo sem conversão indevida para `cancelled`.
   - Preservação de registros `failed` com `publication_events(success)` para reconciliação determinística na V16.4.2A (retry desarmado, não executável).
   - Backup transacional físico prévio com `PRAGMA integrity_check` e SHA-256 (`storage/backups/database/`).
   - Neutralização de posts pendentes (`status = 'cancelled'`, `next_attempt_at = NULL`).
   - Preservação total de `publication_events` com `status = 'success'`, vídeos locais em `storage/tasks/` e posts `published`.
-  - Registro de auditoria detalhado em `operational_events` (`PRE_REPAIR_PUBLICATION_RESET`).
+  - Registro de auditoria detalhado em `operational_events` (`PRE_REPAIR_PUBLICATION_RESET` e `STALE_PRIMARY_LOCK_RELEASED`).
+
 
 
 

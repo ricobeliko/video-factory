@@ -155,12 +155,14 @@ def format_reset_report(res: dict) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Auditoria e Reset de Publicações Pendentes (V16.4.2R / V16.4.2R.1)")
+    parser = argparse.ArgumentParser(description="Auditoria e Reset de Publicações Pendentes (V16.4.2R / V16.4.2R.1 / V16.4.2R.2)")
     parser.add_argument("--db-path", default=None, help="Caminho alternativo para o banco SQLite")
     parser.add_argument("--dry-run", action="store_true", default=True, help="Execução em modo simulação (padrão)")
-    parser.add_argument("--execute", action="store_true", help="Executa o reset real no banco")
+    parser.add_argument("--execute", action="store_true", help="Executa a operação real no banco")
     parser.add_argument("--confirm", default="", help="Token de confirmação obrigatório para execução real")
     parser.add_argument("--disable-scheduler", action="store_true", help="Desativa administrativamente scheduler_enabled e auto_publish_enabled antes do reset")
+    parser.add_argument("--release-stale-primary", action="store_true", help="Recupera administrativamente o lock PRIMARY_FACTORY se estiver stale")
+    parser.add_argument("--stale-timeout", type=int, default=90, help="Threshold em segundos para considerar o heartbeat stale (padrão: 90s)")
     parser.add_argument("--force-preconditions", action="store_true", help="Ignora verificação de scheduler ativo (apenas testes)")
     parser.add_argument("--json", action="store_true", help="Exibe saída estruturada em JSON")
 
@@ -172,15 +174,54 @@ def main():
         print(f"Desativando scheduler_enabled e auto_publish_enabled em: {target_db}...")
         status = publication_reset.disable_scheduler_preconditions(target_db)
         print(f"Novas pré-condições: {status}")
-        if not args.execute:
+        if not args.execute and not args.release_stale_primary:
             return
-
-    is_dry_run = not args.execute
 
     target_db = scheduler.get_db_path(args.db_path)
     if not os.path.isfile(target_db):
         print(f"ERRO: Banco de dados não encontrado em {target_db}", file=sys.stderr)
         sys.exit(1)
+
+    # Operação administrativa: Recuperação de Lock Primário Stale
+    if args.release_stale_primary:
+        is_dry_run = not args.execute
+        try:
+            res = publication_reset.release_stale_primary_lock(
+                db_path=args.db_path,
+                dry_run=is_dry_run,
+                confirm_token=args.confirm,
+                stale_timeout_seconds=args.stale_timeout,
+                force_ignore_flags=args.force_preconditions,
+            )
+
+            if args.json:
+                print(json.dumps(res, indent=2, default=str))
+            else:
+                print("=" * 80)
+                print(f"RECUPERAÇÃO DE LOCK STALE: PRIMARY_FACTORY {'(DRY-RUN / SIMULAÇÃO)' if is_dry_run else '(EXECUÇÃO REAL)'}")
+                print("=" * 80)
+                print(f"  lock_key      : {res.get('lock_key')}")
+                print(f"  node_id       : {res.get('node_id')}")
+                print(f"  hostname      : {res.get('hostname')}")
+                print(f"  pid           : {res.get('pid')}")
+                print(f"  status atual  : {res.get('status')}")
+                print(f"  last heartbeat: {res.get('last_heartbeat')}")
+                age = res.get('stale_age_seconds')
+                age_str = f"{age:.1f}s" if age is not None else "N/A"
+                print(f"  stale age     : {age_str}")
+                print(f"  process_alive : {res.get('process_alive')}")
+                if is_dry_run:
+                    print(f"  would_release : {'SIM' if res.get('would_release') else 'NÃO'}")
+                else:
+                    print(f"  resulting_status: {res.get('resulting_status')}")
+                    print(f"  released      : {'SIM' if res.get('released') else 'NÃO'}")
+                print(f"  reason        : {res.get('reason')}")
+            return
+        except Exception as exc:
+            print(f"\n[BLOQUEIO DE SEGURANÇA] {exc}", file=sys.stderr)
+            sys.exit(2)
+
+    is_dry_run = not args.execute
 
     try:
         res = publication_reset.reset_pending_publications(
@@ -202,6 +243,7 @@ def main():
     except Exception as exc:
         print(f"\n[ERRO CRÍTICO] {exc}", file=sys.stderr)
         sys.exit(1)
+
 
 
 if __name__ == "__main__":

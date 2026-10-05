@@ -592,7 +592,7 @@ Nunca salvar secrets, API keys, tokens ou conteúdo sensível de `config.toml`.
 
 ---
 
-## 23. Procedimento Operacional: Reset de Publicações (V16.4.2R / V16.4.2R.1)
+## 23. Procedimento Operacional: Reset de Publicações (V16.4.2R / V16.4.2R.1 / V16.4.2R.2)
 
 O reset controlado de publicações pendentes exige que a produção esteja parada (`scheduler_enabled = false`, `auto_publish_enabled = false` e nenhum nó PRIMARY ativo em `instance_locks`).
 
@@ -606,15 +606,25 @@ O reset controlado de publicações pendentes exige que a produção esteja para
    ```powershell
    Test-NetConnection -ComputerName 127.0.0.1 -Port 8501
    ```
-   O encerramento normal/limpo executa `operator_console.release_instance_lock()`, atualizando o status em `instance_locks` para `STOPPED`.
+   Se o processo encerrou de forma abrupta (sem disparar `atexit`), o lock `PRIMARY_FACTORY` pode permanecer com status `ACTIVE`.
 3. **NUNCA manipular ou deletar manualmente registros de `instance_locks`:**
-   A infraestrutura de single-instance protege contra corrupção concorrente de banco de dados.
-4. **Executar o Dry-Run do Reset no PC Forte:**
+   A infraestrutura de single-instance protege contra corrupção concorrente de banco de dados. Linhas nunca devem ser removidas da tabela.
+4. **Recuperação de Lock Stale (se `instance_locks` permanecer ACTIVE com processo morto):**
+   Executar primeiro a simulação (dry-run):
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --release-stale-primary
+   ```
+   Se `would_release = SIM`, executar a liberação administrativa auditada:
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --release-stale-primary --execute --confirm RELEASE_STALE_PRIMARY
+   ```
+5. **Executar o Dry-Run do Reset no PC Forte:**
    ```powershell
    .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --dry-run
    ```
-5. **Executar o Reset Real (apenas após aprovação humana do Dry-Run):**
+6. **Executar o Reset Real (apenas após aprovação humana do Dry-Run):**
    ```powershell
    .\.venv\Scripts\python.exe scripts\reset_pending_publications.py --execute --confirm RESET_PENDING_PUBLICATIONS
    ```
+
 

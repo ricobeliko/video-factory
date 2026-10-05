@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 02/10/2026
 
-- **PROJECT_STATUS** = `READY_FOR_CONSOLIDATED_PRODUCTION_DEPLOY / V16_4_2H_AUDITED`
-- **ACTIVE_PHASE** = `V16.4.2H — Final Publishing Health Audit`
-- **ACTIVE_BRANCH** = `feat/v16-4-2h-final-publishing-health-audit`
-- **NEXT_GATE** = `CONSOLIDATED_PRODUCTION_DEPLOY_AND_CONTROLLED_PUBLICATION_TEST`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_OPEN_SOURCE_VIDEO_BENCHMARK`
+- **ACTIVE_PHASE** = `V16.5.1 — Subtitle & Narration Quality Recovery`
+- **ACTIVE_BRANCH** = `feat/v16-5-1-subtitle-narration-recovery`
+- **NEXT_GATE** = `V16.6_PREPARE_OPEN_SOURCE_VIDEO_BENCHMARK`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -32,7 +32,8 @@
 - **V16.4.1B Final Render Performance** = PRODUCTION HOMOLOGATED (Deploy SHA: `e7f40ed6f4b7df45e5868cd7de03495239d103ec`, Task Homologada: `f9a9608b-512d-43c4-92f4-f864a0424512`)
 - **V16.4.1C Render Pipeline Gap Instrumentation** = PRODUCTION HOMOLOGATED (Deploy SHA: `d231e3900bbbace180c0c71e60e9fb08c2d713e0`, Task Homologada: `337639bb-1740-4398-a923-c5f75b1f236a`)
 - **V16.4.1D Post-Encode Performance Investigation** = ACTIVE
-- **V16.5 Visual Matching v2** = DEV IMPLEMENTED / VALIDATED (PR TBD)
+- **V16.5 Visual Matching v2** = MERGED (PR #53, SHA `b6e900ed93edb6e0e59c00600532f7ca2afeb6bd`)
+- **V16.5.1 Subtitle & Narration Quality Recovery** = DEV IMPLEMENTED / VALIDATED
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -977,21 +978,89 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Observabilidade e auditoria persistidas em `script_data` (`visual_intent`, `match_score`, `selection_reason`, `queries_tried`, `fallback_tier`).
   - Suíte de 9 testes direcionados + 20 testes da V16.4 passando com 100% de sucesso.
 
-## V16.6 — Subtitle Style System
-- **Status:** 📋 PLANNED
+## V16.5.1 — Subtitle & Narration Quality Recovery
+- **Status:** ✅ DEV IMPLEMENTED / VALIDATED
 - **Priority:** P1
+- **Objetivo:** Recuperar a qualidade perceptual de legenda e narração observada em degradação recente antes de novo render completo em produção.
+- **Root Causes & Correções Implementadas:**
+  - **Legenda no Topo / Margem 5%:** O rodapé absoluto histórico (5% da altura) colidia diretamente com a barra de UI do Shorts/TikTok (título do som, perfil, botões). Subtitle position "top" foi rejeitado como default e normalizado para safe bottom. Margem vertical em 9:16 portrait ajustada para ~22% (`margin_v = int(video_height * 0.22)` em ASS e `video_height * 0.78 - _clip.h` em MoviePy), mantendo as legendas confortavelmente na zona segura entre 70% e 80% da altura útil.
+  - **Bug Histórico 2/3:** Corrigido bug na MoviePy que calculava `(video_height - _clip.h) / 3.0` (33% do topo), restaurando o posicionamento no terço inferior (67%-75%).
+  - **Fonte Pequena (30px):** Guard implementado para vídeo vertical garantindo tamanho legível mínimo de 50px (default canônico 60px).
+  - **Margem Horizontal em 9:16:** Reduzida para 85% (`0.85 * video_width`) para evitar sobreposição dos ícones laterais do TikTok/Shorts (like, salvar, compartilhar).
+  - **Contraste & Stroke:** Contrato visual reforçado com texto branco puro (`#FFFFFF`), contorno preto (`#000000`) e stroke mínimo de 2.0px.
+  - **Narração Arrastada (Rate 0.8):** A velocidade 0.8 tornava as vozes neurais em pt-BR artificiais, sonolentas e arrastadas. Normalizado para velocidade natural canônica 1.0 (faixa de segurança 0.95 - 1.30).
+  - **Benchmark Local de Vozes:** Validado áudio sintético em DEV sem publicação:
+    - Baseline 1: `pt-BR-AntonioNeural` @ rate 1.0 (38.1 KB, 4.7s) -> natural, claro, ritmo dinâmico.
+    - Degraded State: `pt-BR-AntonioNeural` @ rate 0.8 (47.6 KB, 5.9s) -> +25% tempo, cadência lenta/artificial.
+    - Candidate 2: `pt-BR-FranciscaNeural` @ rate 1.0 (39.8 KB, 4.9s) -> expressiva, fluida e excelente para formato vertical.
+  - **Licenciamento Comercial:** Kokoro-82M (Apache 2.0) possui licença comercial permissiva mas suporte pt-BR ainda experimental sem word-level timestamps; Edge-TTS / Azure Neural mantidos como baseline canônico e estável.
 
-## V16.7 — Gemini / Nano Banana Adapter
+## V16.6 — Hybrid Visual Generation Foundation
+- **Status:** 📋 PLANNED (Trilha Híbrida IA)
+- **Priority:** P1
+- **Escopo:**
+  - Arquitetura provider-agnostic para camadas visuais:
+    - `stock` (Pexels, Pixabay, etc.)
+    - `generated_image` (Flux, SDXL, Nano Banana)
+    - `generated_video` (Wan 2.2, LTX-Video, FramePack)
+  - Fallback para material de stock sempre preservado em qualquer falha de síntese.
+  - Sem acoplamento rígido a um único modelo de geração ou hardware.
+
+## V16.6.1 — Open Source Video Benchmark
+- **Status:** 📋 ARCHITECTURE / ADAPTER PREPARATION IN DEV
+- **Priority:** P1
+- **Candidatos Iniciais:**
+  - Wan 2.2 (Alibaba)
+  - LTX-Video (Lightricks)
+  - FramePack
+  - ComfyUI como backend/orquestrador headless
+- **Execução do Benchmark:**
+  - O benchmark real em GPU (VRAM intensiva) será executado posteriormente no **PC Forte** pelo usuário.
+  - No ambiente **DEV**, preparar:
+    - Arquitetura de interface (`VideoGenerationProvider`)
+    - Adapters de integração (API/WebSocket para ComfyUI local)
+    - Documentação operacional e guias de instalação
+    - Scripts de benchmark padronizados
+    - Biblioteca de prompts de teste por categoria de cena
+    - Métricas objetivas (tempo/frame, VRAM pico, consistência temporal)
+    - Zero download de checkpoints gigantes no notebook DEV.
+
+## V16.6.2 — Contextual Image-to-Video
 - **Status:** 📋 PLANNED
 - **Priority:** P2
+- **Escopo:**
+  - Geração de keyframe estático altamente aderente à narrativa da cena.
+  - Nano Banana como provider opcional de geração de imagem.
+  - Animação do keyframe via provider de vídeo (Image-to-Video via ComfyUI/LTX/Wan).
+  - Fallback resiliente para stock clips.
+  - Modo opcional e configurável (não obrigatório para toda geração).
 
-## V16.8 — AI Video Generation
+## V16.7 — Hybrid Scene Director
+- **Status:** 📋 PLANNED
+- **Priority:** P2
+- **Princípio Operacional:**
+  - Não gerar 100% dos vídeos por IA generativa (evitar custo, tempo excessivo de render e perda de dinamismo).
+  - IA generativa reservada primariamente para cenas onde o stock library possui baixa aderência semântica.
+- **Decisão Automática por Cena:**
+  1. **Stock de alta qualidade** (Match Score >= 80) -> Utiliza clipe de stock direto.
+  2. **Stock fraco** (Match Score < 65) -> Tenta `generated_image` + `image-to-video`.
+  3. **Cena simples/conceitual** -> Imagem estática com movimento/parallax/ken burns se suficiente.
+  4. **Falha de síntese IA / timeout** -> Fallback seguro em cascata para stock da biblioteca.
+
+## V16.7.1 — Gemini / Nano Banana Adapter
+- **Status:** 📋 PLANNED
+- **Priority:** P2
+- **Integração com Nano Banana:** Provider opcional de imagem para keyframes e ilustrações conceituais de cena.
+
+## V16.8 — AI Video Generation Production Pipeline
 - **Status:** 🔮 FUTURE
 - **Priority:** P3
+- Orquestração distribuída entre DEV (planejamento/prompts) e PC Forte (inferência GPU acelerada).
 
 ## V16.9 — Audiovisual Feedback Learning
 - **Status:** 🔮 FUTURE
 - **Priority:** P3
+- Feedback loop estendido: métricas de retenção por tipo visual (stock vs IA gerada) alimentando as decisões do Hybrid Scene Director.
 
 ---
 

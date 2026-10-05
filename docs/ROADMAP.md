@@ -13,9 +13,9 @@
 # Estado Atual Canônico — 02/10/2026
 
 - **PROJECT_STATUS** = `PRODUCTION_RUNNING / QUALITY_STABILIZATION`
-- **ACTIVE_PHASE** = `V16.4.2B — Publishing Idempotency / Duplicate Protection`
-- **ACTIVE_BRANCH** = `feat/v16-4-2b-publishing-idempotency-duplicate-protection`
-- **NEXT_GATE** = `V16.4.2C — Retry & Error Metadata Cleanup`
+- **ACTIVE_PHASE** = `V16.4.2C — Retry Metadata Cleanup`
+- **ACTIVE_BRANCH** = `feat/v16-4-2c-retry-metadata-cleanup`
+- **NEXT_GATE** = `V16.4.2H — Final Publishing Health Audit`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -930,6 +930,21 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Duplicatas históricas canceladas não interferem com posts ativos elegíveis.
   - Múltiplas plataformas para a mesma task permanecem independentes.
   - Preservação estrita: zero deleção de registros em `publication_events` ou `scheduled_posts`; zero deleção de arquivos de mídia.
+
+### V16.4.2C — Retry Metadata Cleanup
+- **Status:** 🚀 DEV IMPLEMENTED / TARGETED TESTS PASSED (04/10/2026)
+- **Priority:** P1
+- **Branch:** `feat/v16-4-2c-retry-metadata-cleanup`
+- **Validação:** 12 testes PASS em `test/services/test_publishing_retry_cleanup.py`, 8 testes PASS não-regressão V16.4.2A, 10 testes PASS não-regressão V16.4.2B, ruff 0 erros nos arquivos alterados.
+- **Objetivo:** Eliminar estados residuais e regras inconsistentes de retry que possam rearmar publicações já concluídas, canceladas, reconciliadas ou terminalmente falhadas.
+- **Entregas V16.4.2C:**
+  - Módulo canônico `app/services/retry_policy.py`: centraliza classificação de erros, elegibilidade de retry (`evaluate_retry_decision`) e cleanup determinístico de metadados residuais (`cleanup_residual_retries`).
+  - Estados terminais garantidos com `next_attempt_at = NULL`: `published`, `cancelled` e falhas permanentes/esgotadas (`attempts >= 3`).
+  - Sucesso canônico em `publication_events` sempre desarma retry em `scheduled_posts`.
+  - Reagendamento de retry restrito a falhas transitórias comprovadas com `attempts < 3`.
+  - Scheduler Runtime integrado: executa limpeza de retries residuais preventivamente antes da busca de posts vencidos em cada ciclo.
+  - CLI `scripts/cleanup_retry_metadata.py`: suporta auditoria (`--dry-run`) e execução controlada (`--execute --confirm CLEANUP_RETRY_METADATA`).
+  - Preservação estrita: zero deleção de registros e zero deleção de mídia.
 
 
 

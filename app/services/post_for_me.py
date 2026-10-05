@@ -2347,13 +2347,13 @@ def reconcile_post_for_me_status(
             db_path=db_path,
         )
 
-        # Atualiza scheduled_posts para 'published' mantendo attempts
+        # Atualiza scheduled_posts para 'published' mantendo attempts e desarmando retries
         with scheduler.get_connection(db_path) as conn:
             if resolved_cid:
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'published', last_error = NULL
+                    SET status = 'published', last_error = NULL, next_attempt_at = NULL
                     WHERE task_id = ? AND platform = ? AND (channel_id = ? OR channel_id IS NULL)
                       AND status IN ('ready', 'processing', 'planned', 'published');
                     """,
@@ -2363,7 +2363,7 @@ def reconcile_post_for_me_status(
                 conn.execute(
                     """
                     UPDATE scheduled_posts
-                    SET status = 'published', last_error = NULL
+                    SET status = 'published', last_error = NULL, next_attempt_at = NULL
                     WHERE task_id = ? AND platform = ?
                       AND status IN ('ready', 'processing', 'planned', 'published');
                     """,

@@ -1437,5 +1437,21 @@ Entregas V16.4.1A:
 - **Próximo Passo / Gate Seguro:**
   - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
 
+### V16.11 — Adaptive Visual Feedback (Homologada em DEV)
+- **Status:** ✅ `DEV_HOMOLOGATED / READY_FOR_ADAPTIVE_VISUAL_PRODUCTION_DEPLOY` (06/10/2026)
+- **Branch:** `feat/v16-11-adaptive-visual-feedback`
+- **Componentes e Arquitetura:**
+  - `app/services/adaptive_visual_feedback.py`: serviço autônomo e transparente de registro de experiência, scoring adaptativo e governança de feedback humano.
+  - `storage/video_factory.db`: tabelas `visual_experience` e `task_feedback` criadas com migração idempotente e 7 índices analíticos.
+  - `scripts/rate_visual_task.py`: CLI ergonômico para listagem e avaliação de vídeos e cenas (`--list`, `--scene`, `--feedback`, `--score`, `--reason`, `--confirm-all`).
+  - `app/services/hybrid_visual.py` e `app/services/scene_material.py`: integração no pipeline visual com log de observabilidade (`base_score`, `adaptive_adjustment`, `adaptive_reason`, `final_score`).
+  - Saturação estrita na faixa `[-15.0, +15.0]` pontos mantendo a integridade semântica da seleção.
+  - Proteção de recência e repetição: cooldown de 7 dias e penalidade de -15 pontos para evitar fadiga visual.
+  - Bootstrap canônico da tarefa de Marte (`17386147-cb1b-4192-b827-251a1bbd411f`): 7 cenas registradas como UNREVIEWED, task avaliada com GOOD e nota 5 (`production_homologation=PASS`).
+- **Validação Local:** 13 testes PASS em 3.97s (`test/services/test_adaptive_visual_feedback.py`), lint limpo (`uv run ruff check` — 0 erros).
+- **Próximo Gate Seguro:**
+  - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
+
+
 
 

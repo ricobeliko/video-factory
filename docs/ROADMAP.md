@@ -1148,13 +1148,24 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Chamadas Pagas de IA: 0 (Zero billing, zero custo).
   - Falhas / Quedas no Pipeline: 0.
   - Relatórios de Auditoria: `storage/validation/v16_10/full_render_audit.json` e `full_render_audit.md`.
+## V16.11 — Adaptive Visual Feedback (Learning Loop)
+- **Status:** ✅ DEV_HOMOLOGATED / READY_FOR_ADAPTIVE_VISUAL_PRODUCTION_DEPLOY (06/10/2026)
+- **Priority:** P1
+- **Escopo e Implementação:**
+  - Aprendizado operacional incremental leve sem modelos pesados de ML e zero dependências pagas.
+  - Tabela persistente `visual_experience` em `storage/video_factory.db` com migração idempotente e 7 índices analíticos (`video_subject`, `provider`, `asset_id`, `search_query`, `human_feedback`, `task_id`, `created_at`).
+  - Auto-registro transparente acoplado ao fechamento da resolução de materiais de cena (`SceneMaterialSelection`), rastreando estratégias, notas, fallbacks e repetições com chave idempotente `task_id + scene_index + asset_id + strategy_selected`.
+  - Ranking adaptativo contextual integrado ao `HybridVisualDirector` com saturação rígida na faixa segura `[-15.0, +15.0]`:
+    - Bônus para feedback humano GOOD (+5 pts) e notas altas (score 5: +8 pts, score 4: +5 pts).
+    - Penalidades severas para histórico BAD (-10 pts) e nota 1 (-12 pts).
+    - Penalidade preventiva de repetição no mesmo vídeo ou histórico recente (-15 pts).
+    - Penalidade para queries com alta taxa de fallback (> 50%: -5 pts).
+    - Bônus de autoridade temático para provedores com taxa de sucesso > 85% no mesmo domínio (+3 pts).
+  - Fluxo de feedback humano granular e global: script CLI `scripts/rate_visual_task.py` e serviço `record_human_feedback` com proteção fail-closed (`confirm_all` obrigatório para alterar status individual de cenas).
+  - Bootstrap canônico da homologação de Marte V16.10 (`17386147-cb1b-4192-b827-251a1bbd411f`): 7 cenas migradas com status técnico PASS e cenas individuais mantidas como UNREVIEWED.
+  - Testes direcionados: 13 testes PASS em 3.97s (`test/services/test_adaptive_visual_feedback.py`).
 - **Próximo Gate Seguro:**
   - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
-
-## V16.11 — Audiovisual Feedback Learning
-- **Status:** 🔮 FUTURE
-- **Priority:** P3
-- Feedback loop estendido: métricas de retenção por tipo visual (stock vs IA gerada) alimentando as decisões do Hybrid Scene Director.
 
 ---
 

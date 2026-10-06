@@ -158,6 +158,10 @@ def resolve_scene_materials(
             merged_cfg["thematic_sources_enabled"] = True
         if hasattr(params, "thematic_score_threshold") and params.thematic_score_threshold is not None:
             merged_cfg["thematic_score_threshold"] = float(params.thematic_score_threshold)
+        if hasattr(params, "adaptive_learning_enabled") and params.adaptive_learning_enabled is not None:
+            merged_cfg["adaptive_learning_enabled"] = bool(params.adaptive_learning_enabled)
+        else:
+            merged_cfg["adaptive_learning_enabled"] = True
 
         director = hybrid_visual.build_hybrid_visual_director(merged_cfg)
 
@@ -385,6 +389,9 @@ def resolve_scene_materials(
                 candidate_duration=cand_dur,
                 candidate_identifier=cand_id,
                 fallback_history_count=fallback_history_count,
+                video_subject=params.video_subject or "",
+                current_task_asset_ids=list(used_asset_ids),
+                search_query=term_used,
             )
 
             final_source = gen_res.metadata.get("final_visual_source", "stock")
@@ -519,6 +526,41 @@ def resolve_scene_materials(
             f"asset_id={asset_id or 'unknown'} search_term='{term_used}' "
             f"score={resolved_score:.1f} fallback={fallback_used} path={saved_path}"
         )
+
+        # V16.11: Auto record visual experience
+        try:
+            from app.services import adaptive_visual_feedback as avf
+
+            intent_dict = intent.to_dict() if hasattr(intent, "to_dict") else {}
+            exp_rec = avf.VisualExperienceRecord(
+                task_id=tid_str,
+                video_subject=params.video_subject or "",
+                scene_index=scene_idx,
+                narration=scene.narration or "",
+                visual_intent=intent_dict.get("intent", ""),
+                search_query=term_used,
+                provider=selection.provider or "unknown",
+                provider_type=getattr(selection, "visual_source_type", "stock"),
+                asset_id=str(selection.asset_id or last_selected_asset_id),
+                source_url=str(selection.source_url or ""),
+                strategy_selected=getattr(selection, "strategy_selected", "") or "STOCK_HIGH_CONFIDENCE",
+                stock_score=float(getattr(selection, "stock_score", 0.0) or 0.0),
+                thematic_score=float(getattr(selection, "thematic_score", 0.0) or 0.0),
+                final_score=float(selection.match_score or 0.0),
+                license_status=getattr(selection, "license_status", None) or "ALLOWED",
+                still_motion_mode=getattr(selection, "still_motion_mode", "none") or "none",
+                fallback_used=bool(selection.fallback_used),
+                fallback_reason=getattr(selection, "fallback_reason", None),
+                asset_repeated=bool(cand_is_reused),
+                technical_success=True,
+                render_success=True,
+                human_feedback="UNREVIEWED",
+                human_score=None,
+                feedback_reason=None,
+            )
+            avf.record_visual_experience(exp_rec)
+        except Exception as _rec_err:
+            logger.debug(f"[SCENE_MATERIAL] Auto-record visual experience bypass: {_rec_err}")
 
     # Persiste materiais de cena, fontes de proveniência e resumo visual no script_data
     from app.services import hybrid_visual

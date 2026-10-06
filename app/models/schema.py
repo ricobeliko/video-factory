@@ -153,6 +153,7 @@ class VideoParams(BaseModel):
     comfyui_endpoint: Optional[str] = "http://127.0.0.1:8188"
     thematic_sources_enabled: bool = True
     thematic_score_threshold: float = 40.0
+    adaptive_learning_enabled: bool = True
     subtitle_position: Optional[str] = config.ui.get(
         "subtitle_position", "bottom"
     )  # top, bottom, center, custom, two_thirds_bottom

@@ -10,7 +10,7 @@ from app.models.schema import VideoParams
 from app.services import state as sm
 from app.services import task as tm
 from app.services.loomloom import LoomLoomConfirmedVideoRequest
-from app.utils.logging_utils import format_log_record
+from app.utils.logging_utils import format_log_record, log_scope_thread_id
 
 
 # WebUI 的配置保存在进程级全局字典中。原来的同步实现会在完整生成期间持有
@@ -82,7 +82,7 @@ def _run_generation(
                 level="DEBUG",
                 format=format_log_record,
                 colorize=False,
-                filter=lambda record: record["thread"].id == worker_thread_id,
+                filter=lambda record: log_scope_thread_id(record["thread"].id) == worker_thread_id,
             )
 
         # 完整任务仍使用原来的配置锁，防止另一个 WebUI 会话在生成中途修改

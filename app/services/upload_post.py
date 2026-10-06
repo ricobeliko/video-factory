@@ -5,6 +5,7 @@ Docs: https://docs.upload-post.com
 """
 import os
 from typing import Optional
+from uuid import uuid4
 
 import requests
 from loguru import logger
@@ -84,12 +85,25 @@ class UploadPostService:
         # Destino/perfil: external_profile_name do canal ou fallback legado self.username
         upload_user = (external_profile_name or "").strip() or self.username
 
+        client_request_id = str(uuid4())
+
+        def unconfirmed_response(message: str) -> dict:
+            return {
+                "success": False,
+                "request_id": client_request_id,
+                "error": (
+                    f"{message}; upload outcome is unconfirmed; "
+                    f"check request_id {client_request_id} before submitting again"
+                ),
+            }
+
         try:
             with open(video_path, 'rb') as video_file:
                 files = {'video': video_file}
 
                 data = [
                     ('user', upload_user),
+                    ('request_id', client_request_id),
                     ('title', title[:2200]),
                     ('privacy_level', privacy_level),
                 ]
@@ -101,6 +115,11 @@ class UploadPostService:
                     # multipart 表单使用小写布尔字符串，且不能依赖 LLM 元数据
                     # 是否存在；只要发布到 YouTube，就显式传递用户的受众声明。
                     data.append(('selfDeclaredMadeForKids', str(made_for_kids).lower()))
+                    # Privacy is an account/user setting, independent of optional
+                    # generated titles and descriptions. Preserve queued overrides.
+                    data.append(('privacyStatus', (youtube_extra or {}).get(
+                        "privacyStatus", self.youtube_privacy_status
+                    )))
                     logger.info(f"YouTube audience declaration: made_for_kids={made_for_kids}")
 
                 if youtube_extra and has_youtube:
@@ -110,7 +129,6 @@ class UploadPostService:
                         data.append(('youtube_description', youtube_extra["youtube_description"]))
                     for tag in youtube_extra.get("tags", []):
                         data.append(('tags[]', tag))
-                    data.append(('privacyStatus', youtube_extra.get("privacyStatus", "public")))
                     data.append(('containsSyntheticMedia', "true"))
 
                 headers = {'Authorization': f'Apikey {self.api_key}'}
@@ -121,21 +139,57 @@ class UploadPostService:
                     data=data,
                     files=files,
                     timeout=300,
+                    allow_redirects=False,
                 )
 
+                if 300 <= response.status_code < 400:
+                    logger.error(
+                        "Upload-Post upload returned an unexpected redirect: "
+                        f"status={response.status_code}"
+                    )
+                    return {
+                        "success": False,
+                        "error": "Upload-Post upload returned an unexpected redirect",
+                    }
+
                 response.raise_for_status()
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    logger.error("Upload-Post returned invalid JSON to upload")
+                    return unconfirmed_response("Upload-Post returned invalid JSON")
 
-                if result.get('success'):
-                    logger.info(f"✅ Video cross-posted successfully! Request ID: {result.get('request_id')}")
-                else:
-                    logger.warning(f"Cross-post failed: {result.get('message', 'Unknown error')}")
+            if not isinstance(result, dict) or not isinstance(
+                result.get("success"), bool
+            ):
+                logger.error("Upload-Post returned an invalid response to upload")
+                return unconfirmed_response("Upload-Post returned an invalid response")
 
-                return result
+            if result.get('success'):
+                logger.info(f"✅ Video cross-posted successfully! Request ID: {result.get('request_id')}")
+            else:
+                logger.warning(f"Cross-post failed: {result.get('error') or result.get('message') or 'Unknown error'}")
+
+            return result
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to cross-post video: {str(e)}")
-            return {"success": False, "error": str(e)}
+            uncertain_outcome = isinstance(
+                e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+            ) or (
+                e.response is not None and e.response.status_code >= 500
+            )
+            error = str(e)
+            if uncertain_outcome:
+                error += (
+                    "; upload outcome is unconfirmed; "
+                    f"check request_id {client_request_id} before submitting again"
+                )
+            return {
+                "success": False,
+                "request_id": client_request_id,
+                "error": error,
+            }
 
     def check_status(self, request_id: str) -> dict:
         """
@@ -160,7 +214,21 @@ class UploadPostService:
             )
 
             response.raise_for_status()
-            return response.json()
+            try:
+                result = response.json()
+            except ValueError:
+                logger.error("Upload-Post returned invalid JSON to status query")
+                return {
+                    "success": False,
+                    "error": "Upload-Post returned invalid status JSON",
+                }
+            if not isinstance(result, dict):
+                logger.error("Upload-Post returned an invalid response to status query")
+                return {
+                    "success": False,
+                    "error": "Upload-Post returned an invalid response",
+                }
+            return result
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to check status: {str(e)}")

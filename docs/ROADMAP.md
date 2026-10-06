@@ -12,9 +12,9 @@
 
 # Estado Atual Canônico — 06/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_SINGLE_PRODUCTION_DEPLOY`
-- **ACTIVE_PHASE** = `V16.10 — Single Full DEV Render Homologation`
-- **ACTIVE_BRANCH** = `feat/v16-final-pipeline-and-dev-render`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V1_3_8_SELECTIVE_PRODUCTION_DEPLOY`
+- **ACTIVE_PHASE** = `V16.12 — Upstream v1.3.8 Selective Backport`
+- **ACTIVE_BRANCH** = `feat/v16-12-upstream-v138-selective-backport`
 - **NEXT_GATE** = `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
@@ -44,6 +44,8 @@
 - **V16.8.2 Alternative Visual Sources Evaluation** = DEV_COMPLETE / EVALUATION_PASS (3/3 THEMATIC SOURCES APPROVED)
 - **V16.9 Final Hybrid Pipeline Foundation** = DEV_COMPLETE / CONSOLIDATED
 - **V16.10 Single Full DEV Render** = DEV_HOMOLOGATED / READY_FOR_PRODUCTION_DEPLOY
+- **V16.11 Adaptive Visual Feedback** = MERGED (PR #64, SHA `894aea6`)
+- **V16.12 Upstream v1.3.8 Selective Backport** = DEV_HOMOLOGATED / READY_FOR_V1_3_8_SELECTIVE_PRODUCTION_DEPLOY
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1164,6 +1166,39 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Fluxo de feedback humano granular e global: script CLI `scripts/rate_visual_task.py` e serviço `record_human_feedback` com proteção fail-closed (`confirm_all` obrigatório para alterar status individual de cenas).
   - Bootstrap canônico da homologação de Marte V16.10 (`17386147-cb1b-4192-b827-251a1bbd411f`): 7 cenas migradas com status técnico PASS e cenas individuais mantidas como UNREVIEWED.
   - Testes direcionados: 13 testes PASS em 3.97s (`test/services/test_adaptive_visual_feedback.py`).
+- **Próximo Gate Seguro:**
+  - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
+
+## V16.12 — Upstream v1.3.8 Selective Backport
+- **Status:** ✅ DEV_HOMOLOGATED / READY_FOR_V1_3_8_SELECTIVE_PRODUCTION_DEPLOY (06/10/2026)
+- **Priority:** P1
+- **Escopo e Auditoria da Release v1.3.8:**
+  - Backport cirúrgico e seletivo das melhorias da release upstream v1.3.8, preservando 100% da arquitetura proprietária (Thematic Sources NASA/Wikimedia, Visual Matching v2, Adaptive Visual Feedback, Scene-based rendering, Subtitle/Narration recovery, SQLite experience store).
+  - Tabela de Auditoria e Classificação:
+    | Feature / Componente | Arquivo Upstream | Classificação | Racional / Justificativa | Arquivo Local |
+    | :--- | :--- | :--- | :--- | :--- |
+    | FFmpeg Timeout & Heartbeat | `video.py` | ADAPT | Timeout explícito de 3600s com log de heartbeat a cada 30s; falha com `TimeoutError` sem fallback síncrono para MoviePy concat (evita travar host). | `app/services/video.py` |
+    | Atomic Video Render & Replace | `video.py` | ADAPT | Render grava em `.tmp` intermediário e promove com `os.replace` atômico; render falho não corrompe vídeo pré-existente válido. | `app/services/video.py` |
+    | Temp Clip Cleanup on Finally | `video.py` | ADOPT | Clips intermediários gerados em `combine_videos` são sempre deletados em bloco `finally`, mesmo em falhas de concat. | `app/services/video.py` |
+    | BT.709 Color Space Consistency | `video.py` | ADAPT | Filtro `-vf "colorspace=all=bt709:trc=bt709:primaries=bt709:format=yuv420p"` aplicado no stream copy, legendas ASS nativas e zoom rendering. | `app/services/video.py` |
+    | Stage Progress Reporting | `task.py`, `video.py` | ADAPT | 7 subestágios explícitos emitidos (`SCENE_RENDER_PREP`, `SCENE_RENDER_CLIPS`, `CONCAT`, `FINAL_RENDER_AUDIO`, `FINAL_RENDER_SUBTITLE`, `FINAL_RENDER_ENCODE`, `FINAL_RENDER`) com percentual real de cobertura. | `app/services/task.py`, `app/services/video.py` |
+    | Stock Streaming & 512MB Limit | `material.py` | ADOPT | Streaming em blocos de 1MB com teto estrito de 512MB, arquivo staged temporário, validação por probe e promote atômico via `os.replace`. | `app/services/material.py` |
+    | Video Cache Cleanup | `cache_manager.py` | ADAPT | Reconhecimento de `.vid-*.mp4` órfãos (>24h); verificação consistente de dispositivo, inode e mtime compatível com Windows e Linux para evitar race conditions com downloads ativos. | `app/services/cache_manager.py` |
+    | Concurrency Config Defaults | `config.py` | ADAPT | Suporte a concorrência configurável, mas com defaults estritos `= 1` (`material_concurrency = 1`, `video_clip_concurrency = 1`), mantendo comportamento serial em produção. | `app/config/config.py` |
+    | Upload-Post Redirect Rejection | `upload_post.py` | ADOPT | `allow_redirects=False` rejeitando status 3xx que possam corromper multipart upload. | `app/services/upload_post.py` |
+    | Upload-Post Client Request ID | `upload_post.py` | ADAPT | UUID4 `client_request_id` enviado em form-data para idempotência de publicação; retorno `unconfirmed_response` em timeout/500 preservando `external_profile_name` e YouTube `privacyStatus`. | `app/services/upload_post.py` |
+    | Thread Log Scoping | `logging_utils.py` | ADAPT | Vinculação de escopo de thread para redirecionamento transparente de logs de subprocessos/workers no Streamlit/WebUI. | `app/utils/logging_utils.py`, `app/services/webui_task.py` |
+    | Concurrency Defaults > 1 | `config.py` | SKIP | Upstream configurou concorrência padrão como 4; rejeitado para preservar estabilidade de host e evitar contenção de CPU/GPU. | `app/config/config.py` |
+    | Novos LLMs / VoxCPM / MuAPI | Vários | SKIP | Rejeitados por política: mantemos edge-tts / azure / gpt-sovits sem provedores pagos desnecessários. | N/A |
+    | Auto Publish Activation | `task.py` | SKIP | Rejeitado: Auto Publish permanece estritamente desativado em DEV e sob controle humano no PC forte. | N/A |
+- **Validação Local Controlada:**
+  - Script executado: `scripts/validate_v16_12_controlled_render.py`.
+  - Render success: `True`, timeout não disparado (`elapsed=50.48s` < 3600s).
+  - Resolução: `1080x1920` (9:16 portrait), duração 3.0s, tamanho: 511.977 bytes.
+  - BT.709 detectado: `yuv420p(tv, bt709, progressive)` validado via FFmpeg stream info.
+  - Subestágios capturados: `SCENE_RENDER_PREP`, `SCENE_RENDER_CLIPS`, `CONCAT`.
+  - Limpeza de temporários: 0 arquivos residuais em diretório de validação.
+  - Testes direcionados: 10 testes PASS em 2.70s (`test/services/test_v16_12_backport.py`), lint limpo (`uv run ruff check` — 0 erros).
 - **Próximo Gate Seguro:**
   - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
 

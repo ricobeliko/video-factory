@@ -607,4 +607,9 @@ ffmpeg_path = app.get("ffmpeg_path", "")
 if ffmpeg_path and os.path.isfile(ffmpeg_path):
     os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
 
+# Concurrency defaults: strictly serial by default
+app.setdefault("material_concurrency", 1)
+app.setdefault("video_clip_concurrency", 1)
+app.setdefault("ffmpeg_concat_timeout_seconds", 3600)
+
 logger.info(f"{project_name} v{project_version}")

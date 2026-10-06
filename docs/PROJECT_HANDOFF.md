@@ -1452,6 +1452,31 @@ Entregas V16.4.1A:
 - **Próximo Gate Seguro:**
   - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
 
+### V16.12 — Upstream v1.3.8 Selective Backport (Homologada em DEV)
+- **Status:** ✅ `DEV_HOMOLOGATED / READY_FOR_V1_3_8_SELECTIVE_PRODUCTION_DEPLOY` (06/10/2026)
+- **Branch:** `feat/v16-12-upstream-v138-selective-backport`
+- **Componentes e Arquitetura:**
+  - **FFmpeg Hardening:** Timeout configurável (`ffmpeg_concat_timeout_seconds = 3600`) com log periódico de heartbeat a cada 30s (`_stage_heartbeat`) e tratamento seguro de `TimeoutError` sem fallback síncrono para MoviePy concat (evita travar host de produção).
+  - **Render Final Atômico:** Renderização temporária em `.tmp` intermediário e substituição com `os.replace` atômico em `_write_videofile_with_codec_fallback`, `_render_final_stream_copy`, `_render_final_ffmpeg_ass` e `render_image_zoom_video` (vídeos válidos pré-existentes nunca são corrompidos por falhas parciais).
+  - **Limpeza Segura de Clipes:** Bloco `finally: delete_files(clip_files)` garantido em `combine_videos` mesmo em exceções de concatenação do FFmpeg.
+  - **Consistência de Cor BT.709:** Tagging e parâmetros consistentes (`colorspace=all=bt709:trc=bt709:primaries=bt709:format=yuv420p`) no stream copy, legendas ASS nativas e zoom rendering.
+  - **Progresso de Pipeline:** Emissão explícita de 7 subestágios estruturados (`SCENE_RENDER_PREP`, `SCENE_RENDER_CLIPS`, `CONCAT`, `FINAL_RENDER_AUDIO`, `FINAL_RENDER_SUBTITLE`, `FINAL_RENDER_ENCODE`, `FINAL_RENDER`) com cálculo de proporção coberta para callback de UI sem polling pesado.
+  - **Proteção de Download de Stock:** Download chunked em streaming (1MB), teto estrito de 512MB (`MAX_VIDEO_DOWNLOAD_BYTES`), gravação staged (`.{video_id}-*.mp4`), probe prévio com `VideoFileClip` e promote atômico via `os.replace`.
+  - **Limpeza de Cache Órfão:** Padrão `_VIDEO_CACHE_TEMP_FILE_PATTERN` identificando arquivos temporários `.vid-*.mp4` com mais de 24 horas; validação cruzada consistente de dispositivo, inode e mtime compatível com Windows e Linux para evitar race conditions com downloads em andamento.
+  - **Concorrência Segura:** Configuração suportada mas com defaults estritamente seriais (`material_concurrency = 1`, `video_clip_concurrency = 1`) para máxima estabilidade operacional em produção.
+  - **Robustez de Upload-Post:** Rejeição de redirecionamentos 3xx (`allow_redirects=False`) e propagação de UUID4 `client_request_id` em form-data para idempotência de publicação, com fallback `unconfirmed_response` em timeouts ou erros de servidor preservando metadados proprietários (`external_profile_name` e `privacyStatus`).
+  - **Escopo de Logs:** Vinculação de log por thread (`bind_log_scope`, `log_scope_thread_id`) assegurando rastreamento preciso em background workers.
+- **Validação Local Controlada:**
+  - Script: `scripts/validate_v16_12_controlled_render.py`
+  - Render success: `True`, timeout não disparado (`elapsed=50.48s`).
+  - Resolução: `1080x1920` (9:16 portrait), duração 3.0s, tamanho: 511.977 bytes.
+  - BT.709 verificado: `yuv420p(tv, bt709, progressive)` confirmado no stream de vídeo.
+  - Subestágios verificados: `SCENE_RENDER_PREP`, `SCENE_RENDER_CLIPS`, `CONCAT`.
+  - Limpeza de arquivos temporários: 0 arquivos residuais em diretório de validação.
+  - Testes direcionados: 10 testes PASS em 2.70s (`test/services/test_v16_12_backport.py`), lint limpo (`uv run ruff check` — 0 erros).
+- **Próximo Gate Seguro:**
+  - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
+
 
 
 

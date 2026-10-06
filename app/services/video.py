@@ -11,9 +11,9 @@ import threading
 import time
 from time import perf_counter
 import unicodedata
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from functools import lru_cache
-from typing import Any, List
+from typing import Any, Callable, List
 from loguru import logger
 import numpy as np
 from moviepy import (
@@ -43,7 +43,7 @@ from app.models.schema import (
 from app.services import bgm as bgm_service
 from app.services.media_quality import probe_media
 from app.services.utils import video_effects
-from app.utils import file_security, utils
+from app.utils import file_security, logging_utils, utils
 
 class SceneRenderError(RuntimeError):
     """Exceção levantada quando a renderização de uma cena falha criticamente."""
@@ -95,10 +95,23 @@ _MIN_MATERIAL_DIMENSION = 480
 # 丢弃，最终以 "no valid materials found" 整体失败。这里留一个很小的容差，
 # 既能放行仅仅因为取整而略低于阈值的素材，也仍然能挡住真正的低清素材。
 _MIN_DIMENSION_TOLERANCE = 10
+_CLIP_PROCESSING_CONCURRENCY = 1
+
+
+def _get_clip_processing_concurrency() -> int:
+    try:
+        concurrency = int(config.app.get("video_clip_concurrency", _CLIP_PROCESSING_CONCURRENCY))
+    except (TypeError, ValueError):
+        concurrency = _CLIP_PROCESSING_CONCURRENCY
+    return max(1, min(8, concurrency))
+
+
 _DEFAULT_VIDEO_CODEC = "libx264"
 # ffmpeg 串联片段期间没有阶段日志，`subprocess.run` 又阻塞到进程退出，耗时拼接在
 # 日志上表现为“无输出”。这里按间隔记录存活信息，便于区分编码中与已经卡死。
 _FFMPEG_CONCAT_HEARTBEAT_SECONDS = 30.0
+_STAGE_HEARTBEAT_SECONDS = 30.0
+_DEFAULT_FFMPEG_CONCAT_TIMEOUT_SECONDS = 3600
 _SUBTITLE_SPRING_DURATION_SECONDS = 0.18
 _MIN_SUBTITLE_SPRING_SCALE = 0.05
 _MAX_SUBTITLE_SPRING_SCALE = 1.35
@@ -111,6 +124,15 @@ _SUPPORTED_VIDEO_CODECS = (
     "h264_videotoolbox",
 )
 _runtime_disabled_video_codecs = set()
+# MoviePy pipes sRGB frames, and ffmpeg's default RGB→YUV matrix is BT.601 with no color tags,
+# while players and YouTube decode untagged HD as BT.709 and shift the colors. Convert with the
+# BT.709 matrix and tag the stream; setparams writes the tags the -color_* flags alone do not.
+# The pixel format stays the encoder's choice: MoviePy leaves odd-sized frames to libx264.
+_BT709_VIDEO_FILTER = (
+    "scale=out_color_matrix=bt709:out_range=tv,"
+    "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
+)
+_BT709_FFMPEG_PARAMS = ["-vf", _BT709_VIDEO_FILTER]
 
 
 def _get_subtitle_spring_scale(time_seconds: float, duration_seconds: float) -> float:
@@ -413,13 +435,49 @@ def _fallback_write_videofile(clip, output_file: str, failed_codec: str, reason:
     return _DEFAULT_VIDEO_CODEC
 
 
-def _write_videofile_with_codec_fallback(clip, output_file: str, codec: str, **kwargs):
+def _write_videofile_with_codec_fallback(
+    clip, output_file: str, codec: str, atomic_output: bool = False, **kwargs
+):
     """
     使用指定编码器写出视频，失败时自动用 libx264 重试一次。
 
     硬件编码器是否可用不仅取决于 FFmpeg，还取决于显卡、驱动和当前运行环境。
     生成任务不能因为高级编码器不可用而整体失败，所以这里把回退集中处理。
     """
+    kwargs.setdefault("ffmpeg_params", _BT709_FFMPEG_PARAMS)
+    if atomic_output:
+        # Final videos can be downloaded by path while they are being rendered.
+        # Keep both failed encodes and in-progress writes away from that path.
+        output_dir = os.path.dirname(os.path.abspath(output_file))
+        descriptor, temp_output = tempfile.mkstemp(
+            prefix=f".{os.path.basename(output_file)}.",
+            suffix=os.path.splitext(output_file)[1] or ".mp4",
+            dir=output_dir,
+        )
+        os.close(descriptor)
+        try:
+            os.unlink(temp_output)
+        except OSError:
+            pass
+        try:
+            used_codec = _write_videofile_with_codec_fallback(
+                clip, temp_output, codec, **kwargs
+            )
+            if not os.path.exists(temp_output) or os.path.getsize(temp_output) == 0:
+                raise RuntimeError("ffmpeg encode produced no output")
+            os.replace(temp_output, output_file)
+            return used_codec
+        finally:
+            try:
+                os.unlink(temp_output)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning(
+                    f"failed to remove temporary final video: {temp_output}, "
+                    f"error: {exc}"
+                )
+
     effective_codec = _get_effective_video_codec(codec)
     try:
         clip.write_videofile(output_file, codec=effective_codec, **kwargs)
@@ -463,6 +521,58 @@ def _describe_concat_output_progress(output_file: str) -> str:
     return f"output size: {size / (1024 * 1024):.2f} MB"
 
 
+@contextmanager
+def _stage_heartbeat(description: str):
+    """
+    在一个没有自身日志的耗时阶段期间，按间隔记录存活日志。
+
+    心跳线程绑定到进入该阶段的线程，日志才会出现在所属任务的 WebUI 面板。
+    阶段结束或抛出异常时停止并等待心跳线程退出，避免阶段已经结束后仍然
+    写出“still running”。
+    """
+    started_at = time.monotonic()
+    stop_event = threading.Event()
+
+    def log_heartbeat() -> None:
+        while not stop_event.wait(_STAGE_HEARTBEAT_SECONDS):
+            logger.info(
+                f"{description} still running: "
+                f"elapsed={time.monotonic() - started_at:.0f}s"
+            )
+
+    reporter = threading.Thread(
+        target=logging_utils.bind_log_scope(log_heartbeat), daemon=True
+    )
+    reporter.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        reporter.join(timeout=1)
+
+
+def _report_clip_progress(
+    progress_callback: Callable[[float], None] | None,
+    covered_duration: float,
+    required_duration: float,
+) -> None:
+    """把已覆盖的成片时长换算成 0~1 的比例并通知调用方。"""
+    if progress_callback is None:
+        return
+    fraction = 1.0
+    if required_duration > 0:
+        fraction = min(1.0, covered_duration / required_duration)
+    try:
+        progress_callback(fraction)
+    except Exception as exc:
+        # 进度只是展示信息。回调失败（例如状态后端暂时不可用）不能让已经
+        # 处理好的片段作废。
+        logger.warning(
+            "failed to report clip processing progress: "
+            f"error={type(exc).__name__}, detail={exc}"
+        )
+
+
 def _run_concat_with_heartbeat(command: list[str], output_file: str):
     """
     阻塞等待 ffmpeg 完成，期间按间隔记录存活日志。
@@ -481,12 +591,44 @@ def _run_concat_with_heartbeat(command: list[str], output_file: str):
                 f"{_describe_concat_output_progress(output_file)}"
             )
 
-    reporter = threading.Thread(target=log_heartbeat, daemon=True)
+    reporter = threading.Thread(
+        target=logging_utils.bind_log_scope(log_heartbeat), daemon=True
+    )
     reporter.start()
     try:
-        return subprocess.run(command, capture_output=True, text=True, check=False)
+        configured_timeout = config.app.get(
+            "ffmpeg_concat_timeout_seconds", _DEFAULT_FFMPEG_CONCAT_TIMEOUT_SECONDS
+        )
+        try:
+            timeout_seconds = float(configured_timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ffmpeg_concat_timeout_seconds must be positive") from exc
+        if (
+            isinstance(configured_timeout, bool)
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("ffmpeg_concat_timeout_seconds must be positive")
+
+        try:
+            # subprocess.run kills and waits for FFmpeg on timeout, so a stalled
+            # encoder cannot leave an orphaned child or a permanently active task.
+            return subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"ffmpeg concat exceeded {timeout_seconds:g} seconds"
+            ) from exc
     finally:
         stop_event.set()
+        reporter.join(timeout=1)
 
 
 def concat_video_clips_with_ffmpeg(
@@ -497,10 +639,28 @@ def concat_video_clips_with_ffmpeg(
     max_duration: float | None = None,
     allow_stream_copy: bool = False,
 ):
-    concat_list_file = os.path.join(output_dir, "ffmpeg-concat-list.txt")
-    with open(concat_list_file, "w", encoding="utf-8") as fp:
-        for clip_file in clip_files:
-            fp.write(f"file '{_format_ffmpeg_concat_path(clip_file)}'\n")
+    # Separate renders may share a directory. Each FFmpeg process must keep its
+    # own manifest until all codec attempts finish, without overwriting or
+    # deleting another render's list.
+    concat_list_file = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="ffmpeg-concat-",
+            suffix=".txt",
+            dir=output_dir,
+            delete=False,
+        ) as fp:
+            concat_list_file = fp.name
+            for clip_file in clip_files:
+                fp.write(f"file '{_format_ffmpeg_concat_path(clip_file)}'\n")
+    except Exception:
+        if concat_list_file:
+            delete_files(concat_list_file)
+        raise
+
+    staged_output = None
 
     def build_stream_copy_command() -> list[str]:
         command = [
@@ -517,7 +677,7 @@ def concat_video_clips_with_ffmpeg(
         ]
         if max_duration is not None and max_duration > 0:
             command.extend(["-t", f"{max_duration:.3f}"])
-        command.append(output_file)
+        command.append(staged_output)
         return command
 
     def validate_stream_copy_output(target_file: str) -> bool:
@@ -555,62 +715,70 @@ def concat_video_clips_with_ffmpeg(
             codec,
             "-threads",
             str(threads or 2),
+            "-vf",
+            _BT709_VIDEO_FILTER,
             "-pix_fmt",
             "yuv420p",
         ]
         if max_duration is not None and max_duration > 0:
             command.extend(["-t", f"{max_duration:.3f}"])
-        command.append(output_file)
+        command.append(staged_output)
         return command
 
     def run_concat(codec: str):
         command = build_command(codec)
         # 使用 ffmpeg 只做一次串联与编码，避免 MoviePy 逐段合并时反复重编码，
         # 从而降低画质劣化与颜色偏移风险。阻塞等待期间由心跳日志体现任务仍在运行。
-        result = _run_concat_with_heartbeat(command, output_file)
+        result = _run_concat_with_heartbeat(command, staged_output)
         if result.returncode != 0:
             error_message = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(error_message or "ffmpeg concat failed")
         return codec
 
     try:
+        descriptor, staged_output = tempfile.mkstemp(
+            prefix=".ffmpeg-concat-",
+            suffix=os.path.splitext(output_file)[1] or ".mp4",
+            dir=os.path.dirname(os.path.abspath(output_file)),
+        )
+        os.close(descriptor)
+
         if allow_stream_copy:
             try:
                 stream_copy_cmd = build_stream_copy_command()
-                res = _run_concat_with_heartbeat(stream_copy_cmd, output_file)
-                if res.returncode == 0 and validate_stream_copy_output(output_file):
+                res = _run_concat_with_heartbeat(stream_copy_cmd, staged_output)
+                if res.returncode == 0 and validate_stream_copy_output(staged_output):
                     logger.info("[SCENE_RENDER] CONCAT_MODE=STREAM_COPY")
+                    os.replace(staged_output, output_file)
                     return "copy"
                 err_msg = (res.stderr or res.stdout or "stream-copy output validation failed").strip()
                 logger.warning(
                     f"[SCENE_RENDER] CONCAT_MODE=TRANSCODE_FALLBACK (stream-copy failed: rc={res.returncode}, error={err_msg})"
                 )
-                if os.path.exists(output_file):
-                    try:
-                        os.remove(output_file)
-                    except OSError:
-                        pass
             except Exception as stream_exc:
                 logger.warning(
                     f"[SCENE_RENDER] CONCAT_MODE=TRANSCODE_FALLBACK (stream-copy exception: {stream_exc})"
                 )
-                if os.path.exists(output_file):
-                    try:
-                        os.remove(output_file)
-                    except OSError:
-                        pass
 
         effective_codec = _get_effective_video_codec()
         try:
-            return run_concat(effective_codec)
+            result_codec = run_concat(effective_codec)
+        except TimeoutError:
+            # A hung encoder is not evidence that another codec will work. Do
+            # not spend a second timeout period retrying the same input.
+            raise
         except Exception as exc:
             if effective_codec == _DEFAULT_VIDEO_CODEC:
                 raise
             result_codec = run_concat(_DEFAULT_VIDEO_CODEC)
             _disable_runtime_video_codec(effective_codec, str(exc))
-            return result_codec
+
+        if not os.path.exists(staged_output) or os.path.getsize(staged_output) == 0:
+            raise RuntimeError("ffmpeg concat produced no output")
+        os.replace(staged_output, output_file)
+        return result_codec
     finally:
-        delete_files(concat_list_file)
+        delete_files([concat_list_file, staged_output])
 
 
 def _sanitize_image_file(image_path: str) -> str:
@@ -826,7 +994,11 @@ def combine_videos(
     used_video_paths: List[str] | None = None,
     scene_clip_instructions: List[Any] | None = None,
     render_timings: dict[str, float] | None = None,
+    progress_callback: Callable[[float], None] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> str:
+    if stage_callback:
+        stage_callback("SCENE_RENDER_PREP")
     t_prep_start = perf_counter()
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -885,6 +1057,8 @@ def combine_videos(
             render_timings["SCENE_RENDER_PREP_SECONDS"] = scene_render_prep_seconds
 
         t_clips_start = perf_counter()
+        if stage_callback:
+            stage_callback("SCENE_RENDER_CLIPS")
         for idx, inst in enumerate(sorted_instructions):
             scene_idx = getattr(inst, "scene_index", inst.get("scene_index", idx + 1) if isinstance(inst, dict) else idx + 1)
             mat_path = getattr(inst, "material_path", inst.get("material_path", "") if isinstance(inst, dict) else "")
@@ -983,6 +1157,13 @@ def combine_videos(
                         )
                     )
                     video_duration += clip_duration_saved
+                    logger.info(
+                        f"processed scene clip {len(processed_clips)}: "
+                        f"{video_duration:.1f} of {required_video_duration:.1f}s covered"
+                    )
+                    _report_clip_progress(
+                        progress_callback, video_duration, required_video_duration
+                    )
                 finally:
                     close_clip(raw_clip)
             except Exception as e:
@@ -1064,6 +1245,8 @@ def combine_videos(
         logger.debug(f"total subclipped items: {len(subclipped_items)}")
 
         # Add downloaded clips over and over until the duration of the audio (max_duration) has been reached
+        if stage_callback:
+            stage_callback("SCENE_RENDER_CLIPS")
         for i, subclipped_item in enumerate(subclipped_items):
             if video_duration >= required_video_duration:
                 break
@@ -1157,6 +1340,13 @@ def combine_videos(
                     )
                 )
                 video_duration += clip_duration_saved
+                logger.info(
+                    f"processed clip {len(processed_clips)}: "
+                    f"{video_duration:.1f} of {required_video_duration:.1f}s covered"
+                )
+                _report_clip_progress(
+                    progress_callback, video_duration, required_video_duration
+                )
 
             except Exception as e:
                 logger.error(f"failed to process clip: {str(e)}")
@@ -1205,33 +1395,36 @@ def combine_videos(
 
     clip_files = [clip.file_path for clip in processed_clips]
     logger.info(f"concatenating {len(clip_files)} clips with ffmpeg")
+    if stage_callback:
+        stage_callback("CONCAT")
     t_concat_start = perf_counter()
-    concat_video_clips_with_ffmpeg(
-        clip_files=clip_files,
-        output_file=combined_video_path,
-        threads=threads,
-        output_dir=output_dir,
-        max_duration=audio_duration,
-        allow_stream_copy=bool(scene_clip_instructions),
-    )
-    concat_seconds = perf_counter() - t_concat_start
-    if scene_clip_instructions:
-        logger.info(f"[SCENE_RENDER][TIMING] CONCAT_SECONDS={concat_seconds:.3f}")
-        if render_timings is not None:
-            render_timings["CONCAT_SECONDS"] = concat_seconds
+    try:
+        concat_video_clips_with_ffmpeg(
+            clip_files=clip_files,
+            output_file=combined_video_path,
+            threads=threads,
+            output_dir=output_dir,
+            max_duration=audio_duration,
+            allow_stream_copy=bool(scene_clip_instructions),
+        )
+        concat_seconds = perf_counter() - t_concat_start
+        if scene_clip_instructions:
+            logger.info(f"[SCENE_RENDER][TIMING] CONCAT_SECONDS={concat_seconds:.3f}")
+            if render_timings is not None:
+                render_timings["CONCAT_SECONDS"] = concat_seconds
 
-    t_post_concat_start = perf_counter()
-    if used_video_paths is not None:
-        # Exclude safety-margin clips that FFmpeg trims entirely from the output.
-        elapsed = 0.0
-        for clip in processed_clips:
-            if elapsed >= audio_duration:
-                break
-            used_video_paths.append(clip.source_file_path)
-            elapsed += clip.duration
-    
-    # clean temp files
-    delete_files(clip_files)
+        t_post_concat_start = perf_counter()
+        if used_video_paths is not None:
+            # Exclude safety-margin clips that FFmpeg trims entirely from the output.
+            elapsed = 0.0
+            for clip in processed_clips:
+                if elapsed >= audio_duration:
+                    break
+                used_video_paths.append(clip.source_file_path)
+                elapsed += clip.duration
+    finally:
+        # clean temp files
+        delete_files(clip_files)
     scene_post_concat_seconds = perf_counter() - t_post_concat_start
     if scene_clip_instructions and render_timings is not None:
         render_timings["SCENE_RENDER_POST_CONCAT_SECONDS"] = scene_post_concat_seconds
@@ -1712,6 +1905,13 @@ def _render_final_stream_copy(
     """Muxing direto sem re-encode de vídeo quando não há legendas nem overlay."""
     ffmpeg_exe = utils.get_ffmpeg_binary()
     output_dir = os.path.dirname(os.path.abspath(output_file))
+    descriptor, staged_output = tempfile.mkstemp(
+        prefix=".ffmpeg-copy-",
+        suffix=os.path.splitext(output_file)[1] or ".mp4",
+        dir=output_dir,
+    )
+    os.close(descriptor)
+
     cmd = [
         ffmpeg_exe,
         "-y",
@@ -1721,17 +1921,26 @@ def _render_final_stream_copy(
         "-c:a", "copy",
         "-threads", str(threads),
         "-shortest",
-        os.path.abspath(output_file),
+        os.path.abspath(staged_output),
     ]
     try:
-        res = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
+        res = _run_concat_with_heartbeat(cmd, staged_output)
         if res.returncode != 0:
-            logger.warning(f"FFmpeg stream copy render failed (rc={res.returncode}): {res.stderr[-300:]}")
+            logger.warning(f"FFmpeg stream copy render failed (rc={res.returncode}): {(res.stderr or '')[-300:]}")
             return False
+        if not os.path.exists(staged_output) or os.path.getsize(staged_output) == 0:
+            return False
+        os.replace(staged_output, output_file)
         return True
     except Exception as e:
         logger.warning(f"FFmpeg stream copy render exception: {e}")
         return False
+    finally:
+        if os.path.exists(staged_output):
+            try:
+                os.unlink(staged_output)
+            except OSError:
+                pass
 
 
 def _render_final_ffmpeg_ass(
@@ -1748,29 +1957,47 @@ def _render_final_ffmpeg_ass(
     ass_rel = os.path.relpath(ass_path, output_dir).replace("\\", "/")
     fdir_escaped = utils.font_dir().replace(os.sep, "/").replace(":", r"\\:")
 
+    vf_filter = f"ass=filename='{ass_rel}':fontsdir={fdir_escaped},{_BT709_VIDEO_FILTER}"
+
+    descriptor, staged_output = tempfile.mkstemp(
+        prefix=".ffmpeg-ass-",
+        suffix=os.path.splitext(output_file)[1] or ".mp4",
+        dir=output_dir,
+    )
+    os.close(descriptor)
+
     cmd = [
         ffmpeg_exe,
         "-y",
         "-i", os.path.abspath(video_path),
         "-i", os.path.abspath(audio_path),
-        "-vf", f"ass=filename='{ass_rel}':fontsdir={fdir_escaped}",
+        "-vf", vf_filter,
         "-c:v", _get_configured_video_codec(),
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
         "-c:a", "copy",
         "-threads", str(threads),
         "-shortest",
-        os.path.abspath(output_file),
+        os.path.abspath(staged_output),
     ]
     try:
-        res = subprocess.run(cmd, cwd=output_dir, capture_output=True, text=True)
+        res = _run_concat_with_heartbeat(cmd, staged_output)
         if res.returncode != 0:
-            logger.warning(f"FFmpeg native ASS render failed (rc={res.returncode}): {res.stderr[-300:]}")
+            logger.warning(f"FFmpeg native ASS render failed (rc={res.returncode}): {(res.stderr or '')[-300:]}")
             return False
+        if not os.path.exists(staged_output) or os.path.getsize(staged_output) == 0:
+            return False
+        os.replace(staged_output, output_file)
         return True
     except Exception as e:
         logger.warning(f"FFmpeg native ASS render exception: {e}")
         return False
+    finally:
+        if os.path.exists(staged_output):
+            try:
+                os.unlink(staged_output)
+            except OSError:
+                pass
 
 
 def _validate_final_render_output(output_file: str) -> bool:
@@ -1912,6 +2139,7 @@ def generate_video(
     params: VideoParams,
     bgm_file_override: str | None = None,
     render_timings: dict[str, Any] | None = None,
+    stage_callback: Callable[[str], None] | None = None,
 ) -> bool:
     """
     合成最终视频，并返回本次背景音乐处理是否成功。
@@ -1978,6 +2206,8 @@ def generate_video(
     mode_select_seconds = perf_counter() - t_mode_start
 
     if can_native:
+        if stage_callback:
+            stage_callback("FINAL_RENDER_AUDIO")
         t_audio_start = perf_counter()
         t_audio_probe_start = perf_counter()
         bgm_enabled = bgm_service.should_use_bgm(
@@ -2044,6 +2274,8 @@ def generate_video(
         audio_seconds = perf_counter() - t_audio_start
 
         if audio_ok:
+            if stage_callback:
+                stage_callback("FINAL_RENDER_SUBTITLE")
             t_sub_start = perf_counter()
             has_subtitles = bool(
                 params.subtitle_enabled
@@ -2065,6 +2297,8 @@ def generate_video(
             subtitle_seconds = perf_counter() - t_sub_start
 
             if ass_ok:
+                if stage_callback:
+                    stage_callback("FINAL_RENDER_ENCODE")
                 t_encode_start = perf_counter()
                 if not has_subtitles:
                     copy_ok = _render_final_stream_copy(
@@ -2084,6 +2318,8 @@ def generate_video(
                     if is_valid:
                         native_rendered = True
                         final_render_mode = "FFMPEG_STREAM_COPY"
+                        if stage_callback:
+                            stage_callback("FINAL_RENDER")
                     post_encode_state_seconds = perf_counter() - t_state_start
 
                     t_notify_start = perf_counter()
@@ -2116,6 +2352,8 @@ def generate_video(
                     if is_valid:
                         native_rendered = True
                         final_render_mode = "FFMPEG_NATIVE"
+                        if stage_callback:
+                            stage_callback("FINAL_RENDER")
                     post_encode_state_seconds = perf_counter() - t_state_start
 
                     t_notify_start = perf_counter()
@@ -2373,6 +2611,8 @@ def generate_video(
     # MoviePy 的 CompositeAudioClip.close() 不会关闭子 AudioFileClip。这里用
     # ExitStack 显式持有所有原始文件 reader，确保成功、字幕异常、混音失败和
     # 视频写入失败等路径都能释放 FFmpeg 子进程，尤其避免 Windows 文件被占用。
+    if stage_callback:
+        stage_callback("FINAL_RENDER_AUDIO")
     with ExitStack() as clip_stack:
         source_video_clip = clip_stack.enter_context(
             _open_video_clip_quietly(video_path)
@@ -2409,6 +2649,8 @@ def generate_video(
 
         text_clips = []
         if subtitle_path and os.path.exists(subtitle_path):
+            if stage_callback:
+                stage_callback("FINAL_RENDER_SUBTITLE")
             sub = clip_stack.enter_context(
                 SubtitlesClip(
                     subtitles=subtitle_path,
@@ -2479,18 +2721,24 @@ def generate_video(
         # 显式沿用输入音频的采样率；如果取不到，再回退 MoviePy 默认的 44100Hz。
         # 这样可以减少不同环境，尤其 Docker 中再次重采样带来的音质波动。
         output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
-        _write_videofile_with_codec_fallback(
-            final_video_clip,
-            output_file=output_file,
-            codec=_get_configured_video_codec(),
-            audio_codec=audio_codec,
-            audio_fps=output_audio_fps,
-            audio_bitrate=audio_bitrate,
-            temp_audiofile_path=_get_temp_audio_dir(output_dir),
-            threads=params.n_threads or 2,
-            logger=None,
-            fps=fps,
-        )
+        if stage_callback:
+            stage_callback("FINAL_RENDER_ENCODE")
+        with _stage_heartbeat("final video render"):
+            _write_videofile_with_codec_fallback(
+                final_video_clip,
+                output_file=output_file,
+                codec=_get_configured_video_codec(),
+                atomic_output=True,
+                audio_codec=audio_codec,
+                audio_fps=output_audio_fps,
+                audio_bitrate=audio_bitrate,
+                temp_audiofile_path=_get_temp_audio_dir(output_dir),
+                threads=params.n_threads or 2,
+                logger=None,
+                fps=fps,
+            )
+        if stage_callback:
+            stage_callback("FINAL_RENDER")
         final_render_seconds = perf_counter() - t_final_start
         encode_seconds = perf_counter() - t_encode_start
         accounted = prep_seconds + mode_select_seconds + encode_seconds
@@ -2563,8 +2811,24 @@ def render_image_zoom_video(image_path: str, clip_duration: int = 5) -> str:
         try:
             # Output the video to a file.
             video_file = f"{image_path}.mp4"
-            final_clip.write_videofile(video_file, fps=30, logger=None)
-            return video_file
+            descriptor, temp_path = tempfile.mkstemp(
+                prefix=".zoom-",
+                suffix=".mp4",
+                dir=os.path.dirname(os.path.abspath(video_file)),
+            )
+            os.close(descriptor)
+            try:
+                final_clip.write_videofile(
+                    temp_path, fps=30, logger=None, ffmpeg_params=_BT709_FFMPEG_PARAMS
+                )
+                os.replace(temp_path, video_file)
+                return video_file
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
         finally:
             close_clip(final_clip)
     finally:

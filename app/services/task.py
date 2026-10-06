@@ -1079,6 +1079,21 @@ def generate_final_videos(
             }
             if allocate_batch_materials else {}
         )
+        def report_stage(stage_name: str):
+            logger.info(f"[STAGE_PROGRESS] task_id={task_id} video_index={index} stage={stage_name}")
+            try:
+                sm.state.patch_task(task_id, stage=stage_name)
+            except Exception as exc:
+                logger.warning(f"failed to patch task stage: {exc}")
+
+        def on_clip_progress(fraction: float):
+            combine_share = (50.0 / params.video_count) / 2.0
+            current_prog = _progress + (fraction * combine_share)
+            try:
+                sm.state.patch_task(task_id, progress=min(100, int(current_prog)))
+            except Exception:
+                pass
+
         t_combine_call_start = perf_counter()
         video.combine_videos(
             combined_video_path=combined_video_path,
@@ -1093,6 +1108,8 @@ def generate_final_videos(
             clip_speed=params.video_clip_speed,
             scene_clip_instructions=scene_clip_instructions,
             render_timings=scene_render_timings,
+            progress_callback=on_clip_progress,
+            stage_callback=report_stage,
             **batch_options,
         )
         t_combine_call_end = perf_counter()
@@ -1191,6 +1208,7 @@ def generate_final_videos(
             params=params,
             bgm_file_override=bgm_file_override,
             render_timings=scene_render_timings,
+            stage_callback=report_stage,
         )
         t_final_call_end = perf_counter()
         final_render_call_seconds = t_final_call_end - t_final_call_start

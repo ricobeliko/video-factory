@@ -79,15 +79,23 @@ class TestRealImageGateV16_8_1:
         assert "--api-key" in report.human_authorization_command
         assert report.human_visual_review_required is True
 
+    def test_default_model_is_gemini_3_1_flash_image(self):
+        """Garante que o modelo default seja gemini-3.1-flash-image (Nano Banana 2)."""
+        adapter = hybrid_visual.NanoBananaImageAdapter(mock_mode=True)
+        assert adapter.model == "gemini-3.1-flash-image"
+        assert hybrid_visual.DEFAULT_GEMINI_IMAGE_MODEL == "gemini-3.1-flash-image"
+        assert "gemini-3.1-flash-image" in hybrid_visual.SUPPORTED_GEMINI_IMAGE_MODELS
+        assert "gemini-3.1-flash-lite-image" in hybrid_visual.SUPPORTED_GEMINI_IMAGE_MODELS
+        assert "gemini-2.5-flash-image" in hybrid_visual.SUPPORTED_GEMINI_IMAGE_MODELS
+
     def test_official_gemini_endpoint_used(self):
-        """1. Garante que o endpoint oficial da Gemini API seja utilizado com x-goog-api-key."""
+        """1. Garante que o endpoint oficial REST interactions seja utilizado com x-goog-api-key."""
         adapter = hybrid_visual.NanoBananaImageAdapter(
             api_key="mock_secret_key_123",
-            model="gemini-2.0-flash-exp-image-generation",
+            model="gemini-3.1-flash-image",
             mock_mode=False,
         )
-        assert "generativelanguage.googleapis.com" in adapter.endpoint
-        assert "models/{model}:generateContent" in adapter.endpoint
+        assert adapter.endpoint == "https://generativelanguage.googleapis.com/v1beta/interactions"
 
         captured_requests = []
 
@@ -95,20 +103,10 @@ class TestRealImageGateV16_8_1:
             captured_requests.append(req)
             b64_img = _generate_valid_png_base64()
             mock_resp_json = {
-                "candidates": [
-                    {
-                        "content": {
-                            "parts": [
-                                {
-                                    "inlineData": {
-                                        "mimeType": "image/png",
-                                        "data": b64_img,
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                ]
+                "output_image": {
+                    "mime_type": "image/png",
+                    "data": b64_img,
+                }
             }
             resp_mock = MagicMock()
             resp_mock.read.return_value = json.dumps(mock_resp_json).encode("utf-8")
@@ -129,14 +127,14 @@ class TestRealImageGateV16_8_1:
         assert res.success is True
         assert len(captured_requests) == 1
         sent_req = captured_requests[0]
-        assert sent_req.full_url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent"
+        assert sent_req.full_url == "https://generativelanguage.googleapis.com/v1beta/interactions"
         assert sent_req.headers.get("X-goog-api-key") == "mock_secret_key_123"
 
     def test_official_gemini_payload_shape(self):
-        """2. Garante que o payload siga o formato oficial Gemini (contents, parts, generationConfig)."""
+        """2. Garante que o payload siga o schema oficial interactions (model, input, response_format com 9:16 e 1K)."""
         adapter = hybrid_visual.NanoBananaImageAdapter(
             api_key="mock_secret_key_123",
-            model="gemini-2.0-flash-exp-image-generation",
+            model="gemini-3.1-flash-image",
             mock_mode=False,
         )
         captured_data = []
@@ -146,7 +144,7 @@ class TestRealImageGateV16_8_1:
             b64_img = _generate_valid_png_base64()
             resp_mock = MagicMock()
             resp_mock.read.return_value = json.dumps({
-                "candidates": [{"content": {"parts": [{"inlineData": {"data": b64_img}}]}}]
+                "output_image": {"data": b64_img}
             }).encode("utf-8")
             resp_mock.__enter__.return_value = resp_mock
             return resp_mock
@@ -165,16 +163,17 @@ class TestRealImageGateV16_8_1:
 
         assert res.success is True
         payload = captured_data[0]
-        assert "contents" in payload
-        assert "parts" in payload["contents"][0]
-        text_content = payload["contents"][0]["parts"][0]["text"]
-        assert "Olympus Mons base cliffs" in text_content
-        assert "Aspect ratio: 9:16 vertical portrait." in text_content
-        assert "Negative prompt / avoid: blurry, cartoon" in text_content
-        assert payload["generationConfig"]["responseModalities"] == ["IMAGE"]
+        assert payload["model"] == "gemini-3.1-flash-image"
+        assert payload["input"] == "Olympus Mons base cliffs"
+        assert "response_format" in payload
+        assert payload["response_format"]["type"] == "image"
+        assert payload["response_format"]["aspect_ratio"] == "9:16"
+        assert payload["response_format"]["image_size"] == "1K"
+        assert "width" not in payload["response_format"]
+        assert "height" not in payload["response_format"]
 
     def test_inline_image_response_decoded_correctly(self, tmp_path):
-        """3. Garante decodificação correta de inlineData e extração de dimensões e métricas."""
+        """3. Garante decodificação correta de output_image base64 e extração de dimensões e métricas."""
         out_img = str(tmp_path / "decoded.png")
         adapter = hybrid_visual.NanoBananaImageAdapter(
             api_key="mock_key",
@@ -183,20 +182,10 @@ class TestRealImageGateV16_8_1:
 
         b64_img = _generate_valid_png_base64(1080, 1920)
         mock_response = {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [
-                            {
-                                "inlineData": {
-                                    "mimeType": "image/png",
-                                    "data": b64_img,
-                                }
-                            }
-                        ]
-                    }
-                }
-            ]
+            "output_image": {
+                "mime_type": "image/png",
+                "data": b64_img,
+            }
         }
 
         with patch("urllib.request.urlopen") as mock_url:

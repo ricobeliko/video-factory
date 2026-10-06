@@ -214,6 +214,7 @@ class VisualCapability(str, Enum):
 
 class HybridDecision(str, Enum):
     STOCK_HIGH_CONFIDENCE = "STOCK_HIGH_CONFIDENCE"
+    THEMATIC_SOURCE_PREFERRED = "THEMATIC_SOURCE_PREFERRED"
     GENERATED_IMAGE_PREFERRED = "GENERATED_IMAGE_PREFERRED"
     GENERATED_VIDEO_PREFERRED = "GENERATED_VIDEO_PREFERRED"
     FALLBACK_STOCK = "FALLBACK_STOCK"
@@ -1468,6 +1469,9 @@ class HybridVisualDirector:
         image_to_video_provider: str = "disabled",
         still_motion_enabled: bool = True,
         providers: Optional[Dict[str, VisualGenerationProvider]] = None,
+        thematic_sources_enabled: bool = False,
+        thematic_orchestrator: Optional[Any] = None,
+        thematic_score_threshold: float = 40.0,
     ):
         self.visual_generation_enabled = visual_generation_enabled
         self.generated_image_enabled = generated_image_enabled
@@ -1479,6 +1483,9 @@ class HybridVisualDirector:
         self.image_to_video_provider = image_to_video_provider
         self.still_motion_enabled = still_motion_enabled
         self.providers: Dict[str, VisualGenerationProvider] = providers or {}
+        self.thematic_sources_enabled = thematic_sources_enabled
+        self.thematic_orchestrator = thematic_orchestrator
+        self.thematic_score_threshold = thematic_score_threshold
 
     def register_provider(self, provider: VisualGenerationProvider) -> None:
         self.providers[provider.name] = provider
@@ -1562,6 +1569,11 @@ class HybridVisualDirector:
 
         if score >= effective_stock_threshold:
             return HybridDecision.STOCK_HIGH_CONFIDENCE
+
+        # V16.8.2: Se fontes temáticas estiverem ativas e o stock for fraco,
+        # a prioridade visual canônica elege fontes públicas confiáveis
+        if self.thematic_sources_enabled:
+            return HybridDecision.THEMATIC_SOURCE_PREFERRED
 
         if score >= effective_image_threshold:
             if self.generated_image_enabled:
@@ -1659,6 +1671,118 @@ class HybridVisualDirector:
                 stock_resolver_fallback=stock_asset_resolver,
                 metadata=meta,
             )
+
+        # Caso Thematic: Fonte Temática Confiável (V16.8.2)
+        if strategy == HybridDecision.THEMATIC_SOURCE_PREFERRED:
+            logger.info(
+                f"[HYBRID_DECISION] Scene {scene_index} ({imp_val}) -> THEMATIC_SOURCE_PREFERRED (score={score_val:.1f})"
+            )
+            from app.services.thematic_visual import ThematicVisualOrchestrator
+            thematic_orch = self.thematic_orchestrator or ThematicVisualOrchestrator()
+
+            q_topic = ""
+            if isinstance(visual_intent, dict):
+                q_topic = visual_intent.get("primary_subject") or visual_intent.get("subject") or ""
+            elif hasattr(visual_intent, "primary_subject"):
+                q_topic = getattr(visual_intent, "primary_subject", "")
+
+            search_query = q_topic or narration
+            top_asset, qg_res = thematic_orch.find_best_thematic_asset(
+                query=search_query,
+                topic=q_topic or narration,
+                narration=narration,
+                target_aspect_ratio=aspect_ratio,
+                min_score=self.thematic_score_threshold,
+            )
+
+            if top_asset and qg_res and qg_res.is_valid and top_asset.score > score_val:
+                logger.info(
+                    f"[HYBRID_DECISION] Thematic asset '{top_asset.asset_id}' accepted (score {top_asset.score:.1f} vs stock {score_val:.1f})"
+                )
+                local_asset_path = top_asset.local_path
+                if not local_asset_path or not os.path.exists(local_asset_path):
+                    target_file = f"storage/thematic_scene_{scene_index}_{top_asset.asset_id}.jpg"
+                    try:
+                        provider_obj = next((p for p in thematic_orch.providers if p.name == top_asset.provider_name), None)
+                        if provider_obj and top_asset.download_url:
+                            local_asset_path = provider_obj.fetch_asset(top_asset, target_file)
+                        else:
+                            local_asset_path = top_asset.download_url or target_file
+                    except Exception as f_err:
+                        logger.warning(f"[THEMATIC_FETCH_FAILED] Falha ao baixar ativo temático: {f_err}")
+                        local_asset_path = None
+
+                chosen_mode = select_still_motion_mode(scene_index, visual_intent, narration)
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "thematic_source",
+                    "final_visual_source": "thematic_source",
+                    "provider_type": "thematic",
+                    "provider_name": top_asset.provider_name,
+                    "source_authority": top_asset.score_breakdown.get("source_authority", 10.0),
+                    "source_url": top_asset.source_url,
+                    "source_title": top_asset.title,
+                    "license_status": top_asset.license_status.value,
+                    "license_name": top_asset.license_name,
+                    "thematic_score": top_asset.score,
+                    "stock_score": score_val,
+                    "selection_reason": f"THEMATIC_SOURCE_PREFERRED (thematic {top_asset.score:.1f} vs stock {score_val:.1f})",
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                    "generated_attempted": True,
+                    "generation_status": "success",
+                })
+
+                if self.still_motion_enabled and local_asset_path and os.path.exists(local_asset_path):
+                    motion = generate_still_motion_instructions(
+                        image_path=local_asset_path,
+                        duration_seconds=duration_seconds,
+                        aspect_ratio=aspect_ratio,
+                        mode=chosen_mode,
+                    )
+                    meta["still_motion_mode"] = chosen_mode.value
+                    meta["motion_mode"] = chosen_mode.value
+                    meta["motion_instructions"] = motion
+                    meta["visual_source_type"] = "image_motion"
+                    meta["final_visual_source"] = "image_motion"
+
+                return GenerationResult(
+                    scene_id=scene_index,
+                    success=True,
+                    output_path=local_asset_path,
+                    provider=top_asset.provider_name,
+                    model=top_asset.license_name,
+                    media_type="image",
+                    metadata=meta,
+                )
+
+            # Se busca temática falhar ou quality gate rejeitar
+            fb_reason = "THEMATIC_QUALITY_GATE_REJECTED" if (qg_res and not qg_res.is_valid) else "THEMATIC_SCORE_INSUFFICIENT_OR_NOT_FOUND"
+            logger.warning(f"[HYBRID_DECISION] Thematic source fallback: {fb_reason}.")
+
+            if not self.generated_image_enabled:
+                meta = dict(base_meta)
+                meta.update({
+                    "visual_source_type": "stock",
+                    "final_visual_source": "stock",
+                    "generation_status": "fallback",
+                    "generated_attempted": True,
+                    "fallback_used": True,
+                    "fallback_reason": fb_reason,
+                    "thematic_score": top_asset.score if top_asset else 0.0,
+                    "stock_score": score_val,
+                })
+                return self._execute_stock_fallback(
+                    request=GenerationRequest(
+                        scene_id=scene_index,
+                        prompt=narration,
+                        aspect_ratio=aspect_ratio,
+                        duration_seconds=duration_seconds,
+                    ),
+                    reason=fb_reason,
+                    stock_resolver_fallback=stock_asset_resolver,
+                    metadata=meta,
+                )
 
         # Caso 2: Geração de Imagem / Keyframe Contextual
         if strategy == HybridDecision.GENERATED_IMAGE_PREFERRED:

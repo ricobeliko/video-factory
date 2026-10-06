@@ -1,11 +1,11 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 05/10/2026
+## Estado Atual Canônico — 06/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_RETRY_REAL_NANO_BANANA_2_GATE`
-- **ACTIVE_PHASE** = `V16.8.1 — Real Generated Image Quality Gate`
-- **ACTIVE_BRANCH** = `fix/v16-8-1-nano-banana-2-gemini-3-1-flash-image`
-- **NEXT_GATE** = `HUMAN_RETRY_REAL_NANO_BANANA_2_GATE`
+- **PROJECT_STATUS** = `DEV_VALIDATED / THEMATIC_SOURCES_EVALUATED_PASS`
+- **ACTIVE_PHASE** = `V16.8.2 — Alternative Visual Sources Evaluation`
+- **ACTIVE_BRANCH** = `feat/v16-8-2-alternative-visual-sources`
+- **NEXT_GATE** = `V16.9 — Hybrid Visual Production Rollout`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -30,10 +30,10 @@
 - **V16.6 Hybrid Visual Generation Foundation** = MERGED (PR #55)
 - **V16.6.1 Open Source Video Benchmark Preparation** = DEV COMPLETE / CURRENT PC FORTE NOT RECOMMENDED FOR LOCAL VIDEO MODELS
 - **V16.6.2 Contextual Image-to-Video Foundation** = MERGED (PR #56, SHA `0264fb7daaf327e1677cc209cd20308a9af6c8ce`)
-
 - **V16.7 Hybrid Scene Director** = MERGED (PR #57, SHA `ae6738821516d3310493060654d4a8776bc74548`)
 - **V16.8 Controlled Hybrid Render Validation** = DEV_VALIDATED / STRUCTURAL_AND_PROXY_PASS (PR #58, SHA `fd205f24275a43ab67486e9261cd6b45cfbfd4d8`)
-- **V16.8.1 Real Generated Image Quality Gate** = DEV PREPARED / NOT_EXECUTED_REQUIRES_HUMAN_GATE
+- **V16.8.1 Real Generated Image Quality Gate** = REAL_GENERATIVE_PROVIDER_BLOCKED_BY_FREE_TIER_LIMIT / ARCHITECTURE_VALIDATED
+- **V16.8.2 Alternative Visual Sources Evaluation** = DEV_COMPLETE / EVALUATION_PASS (3/3 THEMATIC SOURCES APPROVED)
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1372,48 +1372,36 @@ Entregas V16.4.1A:
     - `preview_still_motion_scene_3.mp4` (preview H.264 vertical gerado com ffmpeg).
 - **Próximo Passo:** `V16.9_HYBRID_VISUAL_PRODUCTION_ROLLOUT`.
 
-### V16.8.1 — Real Generated Image Quality Gate (Fase Preparada em DEV)
-- **Status:** 📋 READY_FOR_HUMAN_AUTHORIZATION (GATE: `NOT_EXECUTED_REQUIRES_HUMAN_GATE`) (05/10/2026)
-- **Branch:** `fix/v16-8-1-nano-banana-2-gemini-3-1-flash-image`
-- **Validação:** 17 testes PASS em `test/services/test_real_image_gate.py`, 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
-- **Histórico & Atualização para Nano Banana 2 (Gemini 3.1 Flash Image):**
-  - Tentativa humana anterior expôs endpoint fictício e descontinuação da arquitetura legada Imagen 3.
-  - O pipeline foi integralmente atualizado para a interface REST oficial contemporânea do Google Gemini API:
-    1. Endpoint oficial: `POST https://generativelanguage.googleapis.com/v1beta/interactions`.
-    2. Modelo oficial canônico: `gemini-3.1-flash-image` (Nano Banana 2 / Gemini 3.1 Flash Image).
-    3. Modos opcionais: `gemini-3.1-flash-lite-image` (econômico) e `gemini-2.5-flash-image` (legado).
-    4. Modelos não recomendados/descontinuados removidos do caminho principal (`gemini-2.0-flash-exp-image-generation`, `imagen-3.0-generate-002`).
-    5. Schema oficial de payload:
-       ```json
-       {
-         "model": "gemini-3.1-flash-image",
-         "input": "<prompt>",
-         "response_format": {
-           "type": "image",
-           "aspect_ratio": "9:16",
-           "image_size": "1K"
-         }
-       }
-       ```
-    6. Autenticação via header `x-goog-api-key` suportando `GEMINI_API_KEY` (prioritária) e `NANO_BANANA_API_KEY` (legada).
-    7. Falso sucesso corrigido na CLI com exit codes estritos (PASS=0, PARTIAL=1, FAIL=1, NOT_EXECUTED=0).
-    8. Isolamento de runs em diretórios versionados (`runs/real_<ts>`) impedindo reaproveitamento de artefatos mock antigos.
-- **Objetivo Atual:**
-  - Validar com pouquíssimas gerações reais (estritamente 3 cenas HERO da task de Marte) se imagens contextuais reais superam o stock fraco:
-    - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
-    - Cena 4: Escala titânica da base do Monte Olimpo cobrindo o Paraná.
-    - Cena 7: Pôr do sol azul e poeira rarefeita de Marte.
-- **Métricas e Artefatos Preparados:**
-  - `AUTOMATED_PROXY_SCORE`: `94.1 / 100`.
-  - `HUMAN_VISUAL_REVIEW_REQUIRED`: `True`.
-  - Artefatos em `storage/validation/v16_8_1/`:
-    - `real_generation_report.json` e `real_generation_report.md`.
-    - Relatórios comparativos lado a lado: `scene_3_stock_vs_generated.md`, `scene_4_stock_vs_generated.md`, `scene_7_stock_vs_generated.md`.
-    - Previews still motion validados com ffmpeg: `scene_3_still_motion.mp4`, `scene_4_still_motion.mp4`, `scene_7_still_motion.mp4`.
-- **Comando para Nova Tentativa com Autorização Humana:**
-  ```bash
-  python scripts/run_v16_8_1_real_image_gate.py --task-id 17386147-cb1b-4192-b827-251a1bbd411f --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model gemini-3.1-flash-image --execute-real
-  ```
-- **Próximo Passo:** `HUMAN_RETRY_REAL_NANO_BANANA_2_GATE`.
+### V16.8.1 — Real Generated Image Quality Gate (Bloqueada por Limite Free Tier)
+- **Status:** ⚠️ `REAL_GENERATIVE_PROVIDER_BLOCKED_BY_FREE_TIER_LIMIT / ARCHITECTURE_VALIDATED` (06/10/2026)
+- **Resultado:** A tentativa real com chave oficial Google AI Studio foi bloqueada por cota externa (`HTTP 429 Free Tier limit = 0 requests/day`).
+- **Decisão Canônica:** Não ativar billing, não depender de provedores pagos. A esteira foi redirecionada para fontes públicas confiáveis na V16.8.2.
+
+### V16.8.2 — Alternative Visual Sources Evaluation (Concluída em DEV)
+- **Status:** ✅ `DEV_COMPLETE / EVALUATION_PASS (3/3 THEMATIC SOURCES APPROVED)` (06/10/2026)
+- **Branch:** `feat/v16-8-2-alternative-visual-sources`
+- **Validação Local:** 11 testes PASS em `test/services/test_thematic_visual.py`, 69 testes PASS no total de suítes híbridas e temáticas (`uv run pytest`), lint limpo (`uv run ruff check` — 0 erros).
+- **Provedores Implementados:**
+  1. `NASAImageLibraryProvider` (`nasa_image_library`, autoridade 15.0, Domínio Público NASA, zero chave).
+  2. `WikimediaCommonsProvider` (`wikimedia_commons`, autoridade 12.0, licenças abertas CC/Domínio Público, zero chave).
+- **Resultados na Task de Marte (`17386147-cb1b-4192-b827-251a1bbd411f`):**
+  - **Cena 3 (Monte Olimpo):** Stock baseline fraco `9354647` (28.0) -> Fonte Temática `wiki_98866197` (**82.78** pts, CC-BY) -> **APROVADO**.
+  - **Cena 4 (Escala titânica):** Stock com vaso de planta `8474871` (28.0) -> Mapa geológico autêntico `wiki_127759484` (**78.0** pts, Domínio Público) -> **APROVADO**.
+  - **Cena 7 (Pôr do sol azul marciano):** Stock terrestre `8474684` (22.0) -> Foto real do pôr do sol azul pelo Rover Perseverance Mastcam-Z `nasa_PIA24935` (**73.0** pts, Domínio Público NASA) -> **APROVADO**.
+- **Still-Motion Previews Gerados (H.264 9:16 vertical, 3.0s):**
+  - `storage/validation/v16_8_2/previews/scene_3_preview.mp4` (zoom_out)
+  - `storage/validation/v16_8_2/previews/scene_4_preview.mp4` (pan_left)
+  - `storage/validation/v16_8_2/previews/scene_7_preview.mp4` (pan_right)
+- **Artefatos e Relatórios:**
+  - `storage/validation/v16_8_2/thematic_sources_report.json`
+  - `storage/validation/v16_8_2/thematic_sources_report.md`
+  - `storage/validation/v16_8_2/scene_3_stock_vs_thematic.md`
+  - `storage/validation/v16_8_2/scene_4_stock_vs_thematic.md`
+  - `storage/validation/v16_8_2/scene_7_stock_vs_thematic.md`
+- **Auditoria de Provedores Generativos Gratuitos:**
+  - Cloudflare Workers AI: `REQUIRES_ACCOUNT` (10k neurons/dia, complexidade média).
+  - Hugging Face Inference Providers: `FREE_QUOTA_UNKNOWN` (cold-starts, erros 503 frequentes).
+- **Próximo Passo:** `V16.9 — Hybrid Visual Production Rollout` (Rollout seguro da seleção híbrida Stock + Thematic Sources para produção).
+
 
 

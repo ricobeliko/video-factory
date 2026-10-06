@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 import json
 import os
+import subprocess
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -755,6 +756,57 @@ def select_still_motion_mode(
         StillMotionMode.STATIC,
     ]
     return modes[(max(1, scene_index) - 1) % len(modes)]
+
+
+def render_still_motion_video(
+    image_path: str,
+    output_mp4_path: str,
+    duration_seconds: float = 4.0,
+    aspect_ratio: str = "9:16",
+    mode: Union[str, StillMotionMode] = StillMotionMode.ZOOM_IN,
+) -> Optional[str]:
+    """
+    Renderiza um clipe de vídeo MP4 animado (Ken Burns pan/zoom)
+    a partir de uma imagem estática usando FFmpeg (V16.9/V16.10).
+    Garante proporção 9:16 com safe crop e transições suaves.
+    """
+    if not image_path or not os.path.exists(image_path):
+        return None
+
+    try:
+        from app.utils import utils
+        ffmpeg_bin = utils.get_ffmpeg_binary()
+    except Exception:
+        ffmpeg_bin = "ffmpeg"
+
+    motion_inst = generate_still_motion_instructions(
+        image_path=image_path,
+        duration_seconds=duration_seconds,
+        aspect_ratio=aspect_ratio,
+        mode=mode,
+    )
+    os.makedirs(os.path.dirname(os.path.abspath(output_mp4_path)), exist_ok=True)
+    cmd = [
+        ffmpeg_bin, "-y", "-loop", "1", "-i", image_path,
+        "-vf", motion_inst["ffmpeg_filter"],
+        "-t", f"{duration_seconds:.3f}",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        output_mp4_path,
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if res.returncode == 0 and os.path.exists(output_mp4_path) and os.path.getsize(output_mp4_path) > 0:
+            logger.info(
+                f"[STILL_MOTION] Clipe renderizado com sucesso: {output_mp4_path} "
+                f"mode={mode} dur={duration_seconds:.2f}s ({os.path.getsize(output_mp4_path)} bytes)"
+            )
+            return output_mp4_path
+        else:
+            logger.warning(f"[STILL_MOTION] FFmpeg falhou ao renderizar still-motion: {res.stderr}")
+            return None
+    except Exception as exc:
+        logger.warning(f"[STILL_MOTION] Erro ao renderizar still-motion: {exc}")
+        return None
 
 
 # =============================================================================
@@ -1733,6 +1785,8 @@ class HybridVisualDirector:
                     "generation_status": "success",
                 })
 
+                final_output_path = local_asset_path
+                res_media_type = "image"
                 if self.still_motion_enabled and local_asset_path and os.path.exists(local_asset_path):
                     motion = generate_still_motion_instructions(
                         image_path=local_asset_path,
@@ -1746,13 +1800,27 @@ class HybridVisualDirector:
                     meta["visual_source_type"] = "image_motion"
                     meta["final_visual_source"] = "image_motion"
 
+                    # Se o arquivo for uma imagem estática, renderiza clipe animado still-motion 9:16 com FFmpeg
+                    motion_target = f"storage/thematic_scene_{scene_index}_{top_asset.asset_id}_motion.mp4"
+                    rendered_motion = render_still_motion_video(
+                        image_path=local_asset_path,
+                        output_mp4_path=motion_target,
+                        duration_seconds=duration_seconds,
+                        aspect_ratio=aspect_ratio,
+                        mode=chosen_mode,
+                    )
+                    if rendered_motion and os.path.exists(rendered_motion):
+                        final_output_path = rendered_motion
+                        res_media_type = "video"
+                        meta["motion_video_path"] = rendered_motion
+
                 return GenerationResult(
                     scene_id=scene_index,
                     success=True,
-                    output_path=local_asset_path,
+                    output_path=final_output_path,
                     provider=top_asset.provider_name,
                     model=top_asset.license_name,
-                    media_type="image",
+                    media_type=res_media_type,
                     metadata=meta,
                 )
 
@@ -1783,6 +1851,9 @@ class HybridVisualDirector:
                     stock_resolver_fallback=stock_asset_resolver,
                     metadata=meta,
                 )
+
+            # Se provedores generativos estiverem habilitados, avança para tentativa de imagem
+            strategy = HybridDecision.GENERATED_IMAGE_PREFERRED
 
         # Caso 2: Geração de Imagem / Keyframe Contextual
         if strategy == HybridDecision.GENERATED_IMAGE_PREFERRED:
@@ -2202,6 +2273,8 @@ def build_hybrid_visual_director(
     i2v_provider = str(cfg.get("image_to_video_provider", "disabled"))
     still_motion = bool(cfg.get("still_motion_enabled", True))
     comfyui_endpoint = str(cfg.get("comfyui_endpoint", "http://127.0.0.1:8188"))
+    thematic_enabled = bool(cfg.get("thematic_sources_enabled", True))
+    thematic_threshold = float(cfg.get("thematic_score_threshold", 40.0))
 
     director = HybridVisualDirector(
         visual_generation_enabled=enabled,
@@ -2213,6 +2286,8 @@ def build_hybrid_visual_director(
         preferred_image_provider=preferred_image,
         image_to_video_provider=i2v_provider,
         still_motion_enabled=still_motion,
+        thematic_sources_enabled=thematic_enabled,
+        thematic_score_threshold=thematic_threshold,
     )
 
     director.register_provider(StockVisualProvider())

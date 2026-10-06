@@ -12,10 +12,10 @@
 
 # Estado Atual Canônico — 06/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / THEMATIC_SOURCES_EVALUATED_PASS`
-- **ACTIVE_PHASE** = `V16.8.2 — Alternative Visual Sources Evaluation`
-- **ACTIVE_BRANCH** = `feat/v16-8-2-alternative-visual-sources`
-- **NEXT_GATE** = `V16.9 — Hybrid Visual Production Rollout`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_SINGLE_PRODUCTION_DEPLOY`
+- **ACTIVE_PHASE** = `V16.10 — Single Full DEV Render Homologation`
+- **ACTIVE_BRANCH** = `feat/v16-final-pipeline-and-dev-render`
+- **NEXT_GATE** = `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
 - **BLOCKED_BY** = `NONE`
 
@@ -42,6 +42,8 @@
 - **V16.8 Controlled Hybrid Render Validation** = DEV_VALIDATED / STRUCTURAL_AND_PROXY_PASS (PR #58, SHA `fd205f24275a43ab67486e9261cd6b45cfbfd4d8`)
 - **V16.8.1 Real Generated Image Quality Gate** = REAL_GENERATIVE_PROVIDER_BLOCKED_BY_FREE_TIER_LIMIT / ARCHITECTURE_VALIDATED
 - **V16.8.2 Alternative Visual Sources Evaluation** = DEV_COMPLETE / EVALUATION_PASS (3/3 THEMATIC SOURCES APPROVED)
+- **V16.9 Final Hybrid Pipeline Foundation** = DEV_COMPLETE / CONSOLIDATED
+- **V16.10 Single Full DEV Render** = DEV_HOMOLOGATED / READY_FOR_PRODUCTION_DEPLOY
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1117,17 +1119,39 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - **Hugging Face Inference Providers:** `FREE_QUOTA_UNKNOWN` (cold-starts, erros 503 frequentes, cota não garantida sem endpoint dedicado).
   - **Conclusão:** Provedores gratuitos generativos não oferecem estabilidade zero-config; fontes públicas confiáveis (NASA/Wikimedia) são a base sustentável e superior para a fábrica.
 - **Próximo Passo Esperado:**
-  - `V16.9 — Hybrid Visual Production Rollout` (Rollout da seleção híbrida Stock + Thematic Sources para produção).
+  - `V16.9 — Final Hybrid Pipeline Foundation` e `V16.10 — Single Full DEV Render Homologation`.
 
-## V16.9 — Hybrid Visual Production Rollout
-- **Status:** 🔮 NEXT (Apto após aprovação na V16.8.2)
-- **Priority:** P2
-- **Objetivo:**
-  - Definir a estratégia de rollout seguro em produção (PC Forte).
-  - Configuração opcional de credencial de geração (Nano Banana) com flag controlada por canal.
-  - Manter `visual_generation_enabled=False` como baseline padrão de produção até ativação explícita.
+## V16.9 — Final Hybrid Pipeline Foundation
+- **Status:** ✅ DEV_COMPLETE / CONSOLIDATED (06/10/2026)
+- **Priority:** P1
+- **Resultado:**
+  - Consolidação definitiva da hierarquia de seleção visual:
+    1. `STOCK_HIGH_CONFIDENCE` (Score >= 60.0 / aderência comprovada)
+    2. `THEMATIC_SOURCE_PREFERRED` (NASA Image Library / Wikimedia Commons)
+    3. `FREE_GENERATIVE_PROVIDER` (somente se gratuito, sem chave e disponível; desabilitado por padrão)
+    4. `STILL_MOTION` (movimento sutil determinístico Ken Burns 9:16 safe crop para imagens)
+    5. `FALLBACK_STOCK` (resiliência total sem quebras)
+  - Congelamento estrito de defaults de áudio e legenda:
+    - Legendas: `subtitle_position = bottom`, `font_size = 60`, `text_fore_color = #FFFFFF`, `stroke_color = #000000`, `stroke_width = 2.0`.
+    - Narração: `voice_name = pt-BR-AntonioNeural-Male`, `voice_rate = 1.0`.
 
-## V16.9 — Audiovisual Feedback Learning
+## V16.10 — Single Full DEV Render Homologation
+- **Status:** ✅ DEV_HOMOLOGATED / READY_FOR_PRODUCTION_DEPLOY (06/10/2026)
+- **Priority:** P1
+- **Execução Única Homologada em DEV:**
+  - Task ID Canônica: `17386147-cb1b-4192-b827-251a1bbd411f` (3 curiosidades surpreendentes sobre Marte).
+  - Vídeo Final: `storage/validation/v16_10/final_render_mars.mp4` (38.38 MB, 1080x1920, 46.70s, 30fps).
+  - Total de Cenas: 7 (4 stock alta confiança + 3 temáticas autênticas com still-motion 9:16).
+  - Cenas Críticas (Hero) Contextualizadas: 3/3 (Cena 3 Olympus Mons wiki_98866197 @ 82.8, Cena 4 Mapa Caldera wiki_127759484 @ 78.0, Cena 7 Blue Sunset NASA Mastcam-Z nasa_PIA24935 @ 73.0).
+  - Score Médio de Matching: 83.9/100 (contra baseline de stock fraco 28.0, 28.0, 22.0).
+  - Ativos Repetidos: 0.
+  - Chamadas Pagas de IA: 0 (Zero billing, zero custo).
+  - Falhas / Quedas no Pipeline: 0.
+  - Relatórios de Auditoria: `storage/validation/v16_10/full_render_audit.json` e `full_render_audit.md`.
+- **Próximo Gate Seguro:**
+  - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
+
+## V16.11 — Audiovisual Feedback Learning
 - **Status:** 🔮 FUTURE
 - **Priority:** P3
 - Feedback loop estendido: métricas de retenção por tipo visual (stock vs IA gerada) alimentando as decisões do Hybrid Scene Director.

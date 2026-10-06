@@ -45,11 +45,16 @@ from loguru import logger
 class ThematicLicenseStatus(str, Enum):
     """Classificação formal de compatibilidade de licença do ativo temático."""
     PUBLIC_DOMAIN = "PUBLIC_DOMAIN"
-    CC0 = "CC0"
-    CC_BY = "CC_BY"
-    CC_BY_SA = "CC_BY_SA"
-    OPEN_GOVERNMENT = "OPEN_GOVERNMENT"
-    LICENSE_REVIEW_REQUIRED = "LICENSE_REVIEW_REQUIRED"
+    COMPATIBLE_LICENSE = "COMPATIBLE_LICENSE"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    BLOCKED = "BLOCKED"
+
+    # Backward compatibility aliases
+    CC0 = "PUBLIC_DOMAIN"
+    CC_BY = "COMPATIBLE_LICENSE"
+    CC_BY_SA = "COMPATIBLE_LICENSE"
+    OPEN_GOVERNMENT = "COMPATIBLE_LICENSE"
+    LICENSE_REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
 class GenerativeProviderFeasibility(str, Enum):
@@ -73,7 +78,7 @@ class ThematicAsset:
     thumbnail_url: Optional[str] = None
     author: Optional[str] = None
     attribution: Optional[str] = None
-    license_status: ThematicLicenseStatus = ThematicLicenseStatus.LICENSE_REVIEW_REQUIRED
+    license_status: ThematicLicenseStatus = ThematicLicenseStatus.REVIEW_REQUIRED
     license_name: str = "Unknown"
     width: Optional[int] = None
     height: Optional[int] = None
@@ -83,8 +88,23 @@ class ThematicAsset:
     local_path: Optional[str] = None
     extra_metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def provider(self) -> str:
+        return self.provider_name
+
+    @property
+    def asset_url(self) -> str:
+        return self.download_url
+
+    @property
+    def semantic_score(self) -> float:
+        return self.score_breakdown.get("semantic_match", 0.0)
+
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
+        data["provider"] = self.provider_name
+        data["asset_url"] = self.download_url
+        data["semantic_score"] = self.semantic_score
         data["license_status"] = self.license_status.value
         return data
 
@@ -202,19 +222,23 @@ class ThematicVisualProvider(ABC):
     def metadata(self, asset: ThematicAsset) -> Dict[str, Any]:
         """Retorna metadados para auditoria e observabilidade de cena."""
         return {
+            "provider": asset.provider,
             "provider_name": self.name,
             "provider_type": self.provider_type,
             "asset_id": asset.asset_id,
             "title": asset.title,
+            "description": asset.description,
             "author": asset.author or "Unknown",
             "attribution": asset.attribution or "",
             "source_url": asset.source_url,
+            "asset_url": asset.asset_url,
             "license_status": asset.license_status.value,
             "license_name": asset.license_name,
             "width": asset.width,
             "height": asset.height,
             "orientation": asset.orientation,
             "thematic_score": asset.score,
+            "semantic_score": asset.semantic_score,
             "score_breakdown": asset.score_breakdown,
         }
 
@@ -226,11 +250,9 @@ class ThematicVisualProvider(ABC):
             "author": asset.author,
             "attribution": asset.attribution,
             "source_url": asset.source_url,
-            "requires_attribution": asset.license_status in (
-                ThematicLicenseStatus.CC_BY,
-                ThematicLicenseStatus.CC_BY_SA,
-            ),
-            "commercial_allowed": asset.license_status != ThematicLicenseStatus.LICENSE_REVIEW_REQUIRED,
+            "asset_url": asset.asset_url,
+            "requires_attribution": asset.license_status == ThematicLicenseStatus.COMPATIBLE_LICENSE,
+            "commercial_allowed": asset.license_status in (ThematicLicenseStatus.PUBLIC_DOMAIN, ThematicLicenseStatus.COMPATIBLE_LICENSE),
         }
 
 
@@ -380,16 +402,20 @@ class WikimediaCommonsProvider(ThematicVisualProvider):
         usage_terms = meta.get("UsageTerms", {}).get("value", "")
         combined = f"{lic_name} {usage_terms}".lower()
 
-        if "public domain" in combined or "pd" in combined or "cc0" in combined:
+        # 1. Restrições e bloqueios explícitos (Copyright / All Rights Reserved / NC / ND)
+        if any(b in combined for b in ("all rights reserved", "copyright", "fair use", "-nc", "-nd", "non-commercial", "no derivatives")):
+            return ThematicLicenseStatus.BLOCKED, lic_name or "Restricted / Blocked"
+
+        # 2. Domínio público
+        if any(pd in combined for pd in ("public domain", "pd", "cc0", "cc-zero")):
             return ThematicLicenseStatus.PUBLIC_DOMAIN, lic_name or "Public domain"
-        elif "cc by-sa" in combined or "cc-by-sa" in combined:
-            return ThematicLicenseStatus.CC_BY_SA, lic_name or "Creative Commons Attribution-ShareAlike"
-        elif "cc by" in combined or "cc-by" in combined:
-            return ThematicLicenseStatus.CC_BY, lic_name or "Creative Commons Attribution"
-        elif "open government" in combined:
-            return ThematicLicenseStatus.OPEN_GOVERNMENT, lic_name or "Open Government"
-        else:
-            return ThematicLicenseStatus.LICENSE_REVIEW_REQUIRED, lic_name or "Uncertain / Review Required"
+
+        # 3. Licenças compatíveis (CC-BY, CC-BY-SA, Open Government, Free Art, FAL, GFDL)
+        if any(comp in combined for comp in ("cc by", "cc-by", "cc-by-sa", "cc by-sa", "open government", "free art", "fal", "gfdl")):
+            return ThematicLicenseStatus.COMPATIBLE_LICENSE, lic_name or "Compatible License"
+
+        # 4. Incerteza / revisão necessária
+        return ThematicLicenseStatus.REVIEW_REQUIRED, lic_name or "Uncertain / Review Required"
 
     def search(
         self,
@@ -547,15 +573,14 @@ class ThematicScoringEngine:
         res_score = self._compute_resolution_score(asset.width, asset.height)
 
         # 5. License Confidence (0–10)
-        if asset.license_status in (ThematicLicenseStatus.PUBLIC_DOMAIN, ThematicLicenseStatus.CC0):
+        if asset.license_status == ThematicLicenseStatus.PUBLIC_DOMAIN:
             lic_score = 10.0
-        elif asset.license_status in (ThematicLicenseStatus.CC_BY, ThematicLicenseStatus.CC_BY_SA):
-            lic_score = 8.0
-        elif asset.license_status == ThematicLicenseStatus.OPEN_GOVERNMENT:
-            lic_score = 7.0
-        else:
-            # LICENSE_REVIEW_REQUIRED
+        elif asset.license_status == ThematicLicenseStatus.COMPATIBLE_LICENSE:
+            lic_score = 8.5
+        elif asset.license_status == ThematicLicenseStatus.REVIEW_REQUIRED:
             lic_score = 0.0
+        else:  # BLOCKED
+            lic_score = -50.0
 
         # 6. Repetition Penalty
         rep_penalty = -25.0 if is_reused else 0.0
@@ -617,16 +642,30 @@ class ThematicScoringEngine:
         """
         Quality Gate estrito para aceitação automática do ativo temático.
         Rejeita se:
-        - Licença exigir revisão manual (LICENSE_REVIEW_REQUIRED)
+        - Licença for REVIEW_REQUIRED ou BLOCKED (somente PUBLIC_DOMAIN e COMPATIBLE_LICENSE permitidos)
         - Confiança de licença for zero
         - Resolução mínima for inferior ao threshold
         - Score total for insuficiente
         """
-        if asset.license_status == ThematicLicenseStatus.LICENSE_REVIEW_REQUIRED:
+        if asset.license_status == ThematicLicenseStatus.REVIEW_REQUIRED:
             return ThematicQualityGateResult(
                 is_valid=False,
                 reason="UNCERTAIN_LICENSE_REVIEW_REQUIRED",
-                details={"license_name": asset.license_name},
+                details={"license_name": asset.license_name, "license_status": asset.license_status.value},
+            )
+
+        if asset.license_status == ThematicLicenseStatus.BLOCKED:
+            return ThematicQualityGateResult(
+                is_valid=False,
+                reason="BLOCKED_RESTRICTED_LICENSE",
+                details={"license_name": asset.license_name, "license_status": asset.license_status.value},
+            )
+
+        if asset.license_status not in (ThematicLicenseStatus.PUBLIC_DOMAIN, ThematicLicenseStatus.COMPATIBLE_LICENSE):
+            return ThematicQualityGateResult(
+                is_valid=False,
+                reason=f"UNAUTHORIZED_LICENSE_STATUS_{asset.license_status.value}",
+                details={"license_name": asset.license_name, "license_status": asset.license_status.value},
             )
 
         if asset.score < self.min_acceptable_score:

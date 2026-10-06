@@ -1524,6 +1524,8 @@ class HybridVisualDirector:
         thematic_sources_enabled: bool = False,
         thematic_orchestrator: Optional[Any] = None,
         thematic_score_threshold: float = 40.0,
+        adaptive_learning_enabled: bool = True,
+        adaptive_db_path: Optional[str] = None,
     ):
         self.visual_generation_enabled = visual_generation_enabled
         self.generated_image_enabled = generated_image_enabled
@@ -1538,6 +1540,8 @@ class HybridVisualDirector:
         self.thematic_sources_enabled = thematic_sources_enabled
         self.thematic_orchestrator = thematic_orchestrator
         self.thematic_score_threshold = thematic_score_threshold
+        self.adaptive_learning_enabled = adaptive_learning_enabled
+        self.adaptive_db_path = adaptive_db_path
 
     def register_provider(self, provider: VisualGenerationProvider) -> None:
         self.providers[provider.name] = provider
@@ -1656,6 +1660,9 @@ class HybridVisualDirector:
         candidate_duration: Optional[float] = None,
         candidate_identifier: Optional[str] = None,
         fallback_history_count: int = 0,
+        video_subject: str = "",
+        current_task_asset_ids: Optional[List[str]] = None,
+        search_query: str = "",
     ) -> GenerationResult:
         """
         Resolve o ativo visual da cena aplicando a política contextual híbrida (V16.7).
@@ -1678,6 +1685,26 @@ class HybridVisualDirector:
         )
         score_val = float(stock_match_score) if stock_match_score is not None else 0.0
 
+        # V16.11: Ajuste adaptativo do score de stock se memória habilitada
+        adaptive_adj = 0.0
+        adaptive_reason = "neutral"
+        if getattr(self, "adaptive_learning_enabled", False):
+            try:
+                from app.services import adaptive_visual_feedback as avf
+                res_adj = avf.compute_adaptive_adjustment(
+                    asset_id=str(candidate_identifier or ""),
+                    provider="pexels",
+                    search_query=search_query or narration,
+                    video_subject=video_subject,
+                    current_task_asset_ids=current_task_asset_ids,
+                    base_score=score_val,
+                    db_path=getattr(self, "adaptive_db_path", None),
+                )
+                adaptive_adj = res_adj.adaptive_adjustment
+                adaptive_reason = res_adj.adaptive_reason
+            except Exception as a_err:
+                logger.debug(f"[HYBRID_VISUAL] Adaptive adjustment lookup bypass: {a_err}")
+
         strategy = self.determine_scene_strategy(
             stock_match_score=stock_match_score,
             visual_intent=visual_intent,
@@ -1697,6 +1724,10 @@ class HybridVisualDirector:
             "stock_candidate": candidate_identifier or "",
             "decision": strategy.value,
             "stock_match_score": score_val,
+            "base_score": round(score_val, 2),
+            "adaptive_adjustment": round(adaptive_adj, 2),
+            "adaptive_reason": adaptive_reason,
+            "final_score": round(max(0.0, min(100.0, score_val + adaptive_adj)), 2),
         }
 
         # Caso 1: Stock de alta confiança ou geração global desabilitada
@@ -1764,6 +1795,25 @@ class HybridVisualDirector:
                         logger.warning(f"[THEMATIC_FETCH_FAILED] Falha ao baixar ativo temático: {f_err}")
                         local_asset_path = None
 
+                thematic_adj = 0.0
+                thematic_reason = "neutral"
+                if getattr(self, "adaptive_learning_enabled", False) and top_asset:
+                    try:
+                        from app.services import adaptive_visual_feedback as avf
+                        top_res = avf.compute_adaptive_adjustment(
+                            asset_id=top_asset.asset_id,
+                            provider=top_asset.provider_name,
+                            search_query=search_query or narration,
+                            video_subject=video_subject,
+                            current_task_asset_ids=current_task_asset_ids,
+                            base_score=top_asset.score,
+                            db_path=getattr(self, "adaptive_db_path", None),
+                        )
+                        thematic_adj = top_res.adaptive_adjustment
+                        thematic_reason = top_res.adaptive_reason
+                    except Exception as a_err:
+                        logger.debug(f"[HYBRID_VISUAL] Thematic adaptive adjustment lookup bypass: {a_err}")
+
                 chosen_mode = select_still_motion_mode(scene_index, visual_intent, narration)
                 meta = dict(base_meta)
                 meta.update({
@@ -1778,6 +1828,10 @@ class HybridVisualDirector:
                     "license_name": top_asset.license_name,
                     "thematic_score": top_asset.score,
                     "stock_score": score_val,
+                    "base_score": round(top_asset.score, 2),
+                    "adaptive_adjustment": round(thematic_adj, 2),
+                    "adaptive_reason": thematic_reason,
+                    "final_score": round(max(0.0, min(100.0, top_asset.score + thematic_adj)), 2),
                     "selection_reason": f"THEMATIC_SOURCE_PREFERRED (thematic {top_asset.score:.1f} vs stock {score_val:.1f})",
                     "fallback_used": False,
                     "fallback_reason": None,
@@ -2275,6 +2329,8 @@ def build_hybrid_visual_director(
     comfyui_endpoint = str(cfg.get("comfyui_endpoint", "http://127.0.0.1:8188"))
     thematic_enabled = bool(cfg.get("thematic_sources_enabled", True))
     thematic_threshold = float(cfg.get("thematic_score_threshold", 40.0))
+    adaptive_enabled = bool(cfg.get("adaptive_learning_enabled", True))
+    adaptive_db = cfg.get("adaptive_db_path")
 
     director = HybridVisualDirector(
         visual_generation_enabled=enabled,
@@ -2288,6 +2344,8 @@ def build_hybrid_visual_director(
         still_motion_enabled=still_motion,
         thematic_sources_enabled=thematic_enabled,
         thematic_score_threshold=thematic_threshold,
+        adaptive_learning_enabled=adaptive_enabled,
+        adaptive_db_path=adaptive_db,
     )
 
     director.register_provider(StockVisualProvider())

@@ -824,27 +824,29 @@ class StockVisualProvider(VisualGenerationProvider):
 
 
 # =============================================================================
-# Nano Banana / Gemini Adapter (Configurable Keyframe Image Generator)
+# Nano Banana 2 / Gemini 3.1 Flash Image Adapter (Official REST Interactions)
 # =============================================================================
 
-DEFAULT_GEMINI_ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp-image-generation"
+DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
+DEFAULT_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
 SUPPORTED_GEMINI_IMAGE_MODELS = [
-    "gemini-2.0-flash-exp-image-generation",
-    "gemini-2.0-flash-exp",
-    "imagen-3.0-generate-002",
+    "gemini-3.1-flash-image",        # Nano Banana 2 / Gemini 3.1 Flash Image (Default Canônico)
+    "gemini-3.1-flash-lite-image",   # Modo econômico futuro
+    "gemini-2.5-flash-image",        # Compatibilidade legada opcional
 ]
 
 
 class NanoBananaImageAdapter(VisualGenerationProvider):
     """
-    Adapter para o gerador de imagem Nano Banana / Gemini (Fases V16.6 / V16.7 / V16.8.1).
+    Adapter para o gerador de imagem Nano Banana 2 / Gemini 3.1 Flash Image (Fases V16.6 / V16.7 / V16.8.1).
 
     Contrato Operacional:
     - Provider opcional de imagem para keyframes e ilustrações conceituais de cena.
     - Utiliza a API oficial Gemini (Google AI Studio) via endpoint:
-      https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-    - Modelo oficial configurável (default: gemini-2.0-flash-exp-image-generation).
+      POST https://generativelanguage.googleapis.com/v1beta/interactions
+    - Modelo canônico oficial: gemini-3.1-flash-image (Nano Banana 2).
+    - Suporta modo econômico (gemini-3.1-flash-lite-image) e compatibilidade legada (gemini-2.5-flash-image).
+    - Payload nativo: model, input, response_format com aspect_ratio 9:16 e image_size 1K.
     - Autenticação via header x-goog-api-key suportando GEMINI_API_KEY e NANO_BANANA_API_KEY.
     - Em ambiente DEV: modo mock determinístico para testes sem chamadas externas.
     - Se a chave de API não estiver configurada, is_available() retorna False e
@@ -873,8 +875,8 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
         )
         self.endpoint = (
             endpoint
-            or os.getenv("GEMINI_ENDPOINT_TEMPLATE", "")
-            or DEFAULT_GEMINI_ENDPOINT_TEMPLATE
+            or os.getenv("GEMINI_ENDPOINT", "")
+            or DEFAULT_GEMINI_ENDPOINT
         )
         self.timeout_seconds = timeout_seconds
         self.mock_mode = mock_mode
@@ -958,36 +960,46 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
         # Chamada real para a API oficial do Gemini (Google AI Studio)
         if "{model}" in self.endpoint:
             url = self.endpoint.format(model=self.model)
-        elif ":generateContent" in self.endpoint or ":predict" in self.endpoint:
-            url = self.endpoint
         else:
-            url = f"{self.endpoint.rstrip('/')}/models/{self.model}:generateContent"
+            url = self.endpoint
 
         headers = {
             "x-goog-api-key": self.api_key,
             "Content-Type": "application/json",
-            "User-Agent": "MoneyPrinterTurbo-GeminiImageAdapter/1.0",
+            "User-Agent": "MoneyPrinterTurbo-GeminiImageAdapter/2.0",
         }
 
-        # Constrói prompt com diretrizes de aspect ratio
-        prompt_text = request.prompt
-        if request.aspect_ratio:
-            prompt_text = f"{prompt_text}\nAspect ratio: {request.aspect_ratio} vertical portrait."
-        if request.negative_prompt:
-            prompt_text = f"{prompt_text}\nNegative prompt / avoid: {request.negative_prompt}"
-
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt_text}
-                    ]
+        # Payload da interface REST oficial: interactions
+        if ":generateContent" in url:
+            # Compatibilidade legada com endpoints generateContent
+            prompt_text = request.prompt
+            if request.aspect_ratio:
+                prompt_text = f"{prompt_text}\nAspect ratio: {request.aspect_ratio} vertical portrait."
+            if request.negative_prompt:
+                prompt_text = f"{prompt_text}\nNegative prompt / avoid: {request.negative_prompt}"
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt_text}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "responseModalities": ["IMAGE"]
                 }
-            ],
-            "generationConfig": {
-                "responseModalities": ["IMAGE"]
             }
-        }
+        else:
+            # Schema oficial da API interactions para image generation
+            payload = {
+                "model": self.model,
+                "input": request.prompt,
+                "response_format": {
+                    "type": "image",
+                    "aspect_ratio": request.aspect_ratio or "9:16",
+                    "image_size": "1K",
+                },
+            }
 
         req = urllib.request.Request(
             url,
@@ -1007,8 +1019,31 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
 
             img_b64 = None
 
-            # Parsing 1: candidates[].content.parts[].inlineData (formato oficial Gemini generateContent)
-            if "candidates" in data and len(data["candidates"]) > 0:
+            # Parsing 1: output_image (API interactions oficial)
+            if "output_image" in data:
+                out_img = data["output_image"]
+                if isinstance(out_img, dict):
+                    img_b64 = out_img.get("data") or out_img.get("b64_json") or out_img.get("bytesBase64Encoded")
+                elif isinstance(out_img, str):
+                    img_b64 = out_img
+
+            # Parsing 2: outputs[] ou output (API interactions variantes)
+            if not img_b64 and "outputs" in data and len(data["outputs"]) > 0:
+                first_out = data["outputs"][0]
+                if isinstance(first_out, dict):
+                    img_b64 = first_out.get("image") or first_out.get("data") or first_out.get("b64_json")
+                elif isinstance(first_out, str):
+                    img_b64 = first_out
+
+            if not img_b64 and "output" in data:
+                out_val = data["output"]
+                if isinstance(out_val, dict):
+                    img_b64 = out_val.get("image") or out_val.get("data") or out_val.get("b64_json")
+                elif isinstance(out_val, str):
+                    img_b64 = out_val
+
+            # Parsing 3: candidates[].content.parts[].inlineData (formato Gemini generateContent)
+            if not img_b64 and "candidates" in data and len(data["candidates"]) > 0:
                 first_cand = data["candidates"][0]
                 parts = first_cand.get("content", {}).get("parts", [])
                 for p in parts:
@@ -1020,12 +1055,12 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                         img_b64 = p["image"]
                         break
 
-            # Parsing 2: predictions[] (formato Imagen / Vertex / AI Studio predict)
+            # Parsing 4: predictions[] (formato predict)
             if not img_b64 and "predictions" in data and len(data["predictions"]) > 0:
                 pred = data["predictions"][0]
                 img_b64 = pred.get("bytesBase64Encoded") or pred.get("image") or pred.get("b64_json")
 
-            # Parsing 3: data[] ou image direta
+            # Parsing 5: data[] ou image direta
             if not img_b64 and "data" in data and len(data["data"]) > 0:
                 first = data["data"][0]
                 img_b64 = first.get("b64_json") or first.get("image")
@@ -1035,6 +1070,7 @@ class NanoBananaImageAdapter(VisualGenerationProvider):
                             f_out.write(img_resp.read())
             elif not img_b64 and "image" in data:
                 img_b64 = data["image"]
+
 
             if img_b64:
                 import base64

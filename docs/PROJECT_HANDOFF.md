@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 05/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_HUMAN_RETRY_REAL_NANO_BANANA_2_GATE`
 - **ACTIVE_PHASE** = `V16.8.1 — Real Generated Image Quality Gate`
-- **ACTIVE_BRANCH** = `fix/v16-8-1-real-image-gate-gemini-endpoint`
-- **NEXT_GATE** = `HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`
+- **ACTIVE_BRANCH** = `fix/v16-8-1-nano-banana-2-gemini-3-1-flash-image`
+- **NEXT_GATE** = `HUMAN_RETRY_REAL_NANO_BANANA_2_GATE`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -1374,18 +1374,30 @@ Entregas V16.4.1A:
 
 ### V16.8.1 — Real Generated Image Quality Gate (Fase Preparada em DEV)
 - **Status:** 📋 READY_FOR_HUMAN_AUTHORIZATION (GATE: `NOT_EXECUTED_REQUIRES_HUMAN_GATE`) (05/10/2026)
-- **Branch:** `fix/v16-8-1-real-image-gate-gemini-endpoint`
-- **Validação:** 16 testes PASS em `test/services/test_real_image_gate.py`, 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
-- **Histórico da Tentativa Real Anterior & Correção:**
-  - Tentativa humana anterior expôs falha de DNS (`[Errno 11001] getaddrinfo failed`) porque o adaptador apontava para endpoint fictício `api.nanobanana.ai`.
-  - A CLI apresentava bug de falso sucesso e reutilizava silenciosamente keyframes mock antigos em caso de falha.
-  - Correção concluída:
-    1. Migrado para a API oficial Gemini do Google AI Studio (`generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`).
-    2. Modelo oficial configurável (default: `gemini-2.0-flash-exp-image-generation`, compatível com `imagen-3.0-generate-002` e `gemini-2.0-flash-exp`).
-    3. Autenticação oficial via header `x-goog-api-key` suportando `GEMINI_API_KEY` e `NANO_BANANA_API_KEY`.
-    4. Payload e parsing de `inlineData` (base64) nativos do Gemini.
-    5. Falso sucesso corrigido na CLI com exit codes estritos (PASS=0, PARTIAL=1, FAIL=1, NOT_EXECUTED=0).
-    6. Isolamento por run em diretório versionado (`runs/real_<ts>`) impedindo reaproveitamento de artefatos mock antigos.
+- **Branch:** `fix/v16-8-1-nano-banana-2-gemini-3-1-flash-image`
+- **Validação:** 17 testes PASS em `test/services/test_real_image_gate.py`, 7 testes PASS em `test/services/test_hybrid_validation.py`, 34 testes PASS em `test/services/test_hybrid_visual_generation.py`, ruff 0 erros nos arquivos alterados.
+- **Histórico & Atualização para Nano Banana 2 (Gemini 3.1 Flash Image):**
+  - Tentativa humana anterior expôs endpoint fictício e descontinuação da arquitetura legada Imagen 3.
+  - O pipeline foi integralmente atualizado para a interface REST oficial contemporânea do Google Gemini API:
+    1. Endpoint oficial: `POST https://generativelanguage.googleapis.com/v1beta/interactions`.
+    2. Modelo oficial canônico: `gemini-3.1-flash-image` (Nano Banana 2 / Gemini 3.1 Flash Image).
+    3. Modos opcionais: `gemini-3.1-flash-lite-image` (econômico) e `gemini-2.5-flash-image` (legado).
+    4. Modelos não recomendados/descontinuados removidos do caminho principal (`gemini-2.0-flash-exp-image-generation`, `imagen-3.0-generate-002`).
+    5. Schema oficial de payload:
+       ```json
+       {
+         "model": "gemini-3.1-flash-image",
+         "input": "<prompt>",
+         "response_format": {
+           "type": "image",
+           "aspect_ratio": "9:16",
+           "image_size": "1K"
+         }
+       }
+       ```
+    6. Autenticação via header `x-goog-api-key` suportando `GEMINI_API_KEY` (prioritária) e `NANO_BANANA_API_KEY` (legada).
+    7. Falso sucesso corrigido na CLI com exit codes estritos (PASS=0, PARTIAL=1, FAIL=1, NOT_EXECUTED=0).
+    8. Isolamento de runs em diretórios versionados (`runs/real_<ts>`) impedindo reaproveitamento de artefatos mock antigos.
 - **Objetivo Atual:**
   - Validar com pouquíssimas gerações reais (estritamente 3 cenas HERO da task de Marte) se imagens contextuais reais superam o stock fraco:
     - Cena 3: Monte Olimpo (maior vulcão do sistema solar).
@@ -1400,7 +1412,8 @@ Entregas V16.4.1A:
     - Previews still motion validados com ffmpeg: `scene_3_still_motion.mp4`, `scene_4_still_motion.mp4`, `scene_7_still_motion.mp4`.
 - **Comando para Nova Tentativa com Autorização Humana:**
   ```bash
-  python scripts/run_v16_8_1_real_image_gate.py --task-id 17386147-cb1b-4192-b827-251a1bbd411f --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model gemini-2.0-flash-exp-image-generation --execute-real
+  python scripts/run_v16_8_1_real_image_gate.py --task-id 17386147-cb1b-4192-b827-251a1bbd411f --api-key <SUA_CHAVE_GEMINI_AI_STUDIO> --model gemini-3.1-flash-image --execute-real
   ```
-- **Próximo Passo:** `HUMAN_RETRY_REAL_GEMINI_IMAGE_GATE`.
+- **Próximo Passo:** `HUMAN_RETRY_REAL_NANO_BANANA_2_GATE`.
+
 

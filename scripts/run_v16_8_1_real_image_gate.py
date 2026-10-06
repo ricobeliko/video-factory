@@ -16,7 +16,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from app.services import real_image_gate
+from app.services import real_image_gate  # noqa: E402
 
 
 def main() -> int:
@@ -37,7 +37,7 @@ def main() -> int:
         "--model",
         type=str,
         default=None,
-        help="Modelo oficial Gemini de imagem (default: gemini-2.0-flash-exp-image-generation)",
+        help="Modelo oficial Gemini de imagem (default: gemini-3.1-flash-image)",
     )
     parser.add_argument(
         "--execute-real",

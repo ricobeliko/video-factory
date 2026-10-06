@@ -13,7 +13,7 @@ from time import perf_counter
 import unicodedata
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
-from typing import Any, List, Optional
+from typing import Any, List
 from loguru import logger
 import numpy as np
 from moviepy import (
@@ -641,22 +641,15 @@ def _open_image_clip_with_fallback(image_path: str):
         return ImageClip(sanitized_path), sanitized_path
 
 
-def _open_video_clip_quietly(video_path: str, audio: bool = False) -> VideoFileClip:
+def _open_video_clip_quietly(video_path: str, audio: bool = False):
     """
-    安静地打开视频文件，避免 MoviePy 2.1.x 把 ffmpeg 探测信息直接打印到 stdout。
-
-    背景：
-    当前依赖版本的 `FFMPEG_VideoReader` 内部存在 `print(self.infos)` 和
-    `print(ffmpeg command)`，读取无音轨的中间视频时会输出
-    `audio_found: False`。这只是输入素材 metadata，不代表最终成片没有音频，
-    但会误导 WebUI/终端用户以为生成失败。
-
-    实现：
-    1. 只在打开 VideoFileClip 的短窗口内重定向 stdout；
-    2. 默认 `audio=False`，因为项目视频素材阶段不需要保留素材原声，
-       最终音频会在 `generate_video()` 阶段统一挂载；
-    3. 如果依赖库确实输出了内容，降级为 debug 日志，便于必要时排查。
+    Abre o arquivo de mídia de forma silenciosa para o MoviePy.
+    Suporta imagens estáticas (.jpg, .png, etc.) convertendo-as em ImageClip com segurança.
     """
+    ext = os.path.splitext(video_path)[1].lower()
+    if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+        return ImageClip(video_path)
+
     captured_stdout = io.StringIO()
     with redirect_stdout(captured_stdout):
         clip = VideoFileClip(video_path, audio=audio)
@@ -913,14 +906,16 @@ def combine_videos(
             try:
                 raw_clip = _open_video_clip_quietly(mat_path)
                 try:
+                    needed_source_dur = scene_target_duration * normalized_clip_speed
+                    if isinstance(raw_clip, ImageClip) or raw_clip.duration is None:
+                        raw_clip = raw_clip.with_duration(needed_source_dur)
+
                     source_dur = raw_clip.duration
-                    if source_dur <= 0:
+                    if source_dur is None or source_dur <= 0:
                         raise SceneRenderError(
                             f"SCENE_RENDER_FAILURE: source clip duration <= 0 for scene {scene_idx}",
                             reason_code="SCENE_RENDER_FAILURE",
                         )
-
-                    needed_source_dur = scene_target_duration * normalized_clip_speed
 
                     if source_dur >= needed_source_dur:
                         clip = raw_clip.subclipped(0, needed_source_dur)

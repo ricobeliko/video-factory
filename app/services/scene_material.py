@@ -152,6 +152,12 @@ def resolve_scene_materials(
             merged_cfg["preferred_image_provider"] = str(params.preferred_image_provider)
         if hasattr(params, "still_motion_enabled") and params.still_motion_enabled is not None:
             merged_cfg["still_motion_enabled"] = bool(params.still_motion_enabled)
+        if hasattr(params, "thematic_sources_enabled") and params.thematic_sources_enabled is not None:
+            merged_cfg["thematic_sources_enabled"] = bool(params.thematic_sources_enabled)
+        else:
+            merged_cfg["thematic_sources_enabled"] = True
+        if hasattr(params, "thematic_score_threshold") and params.thematic_score_threshold is not None:
+            merged_cfg["thematic_score_threshold"] = float(params.thematic_score_threshold)
 
         director = hybrid_visual.build_hybrid_visual_director(merged_cfg)
 
@@ -386,16 +392,18 @@ def resolve_scene_materials(
                 fallback_history_count += 1
 
             if (
-                final_source in ("image_motion", "generated_image", "generated_video")
+                final_source in ("image_motion", "thematic_source", "generated_image", "generated_video")
                 and gen_res.output_path
                 and os.path.exists(gen_res.output_path)
             ):
                 saved_path = gen_res.output_path
                 prov_record = {
                     "source": gen_res.provider,
-                    "asset_id": f"ai_gen_{scene_idx}",
+                    "asset_id": gen_res.metadata.get("source_url") or f"{gen_res.provider}_{scene_idx}",
                     "media_type": gen_res.media_type,
-                    "model": gen_res.model,
+                    "model": gen_res.model or "thematic",
+                    "license_status": gen_res.metadata.get("license_status"),
+                    "license_name": gen_res.metadata.get("license_name"),
                     "prompt": gen_res.metadata.get("generation_prompt"),
                 }
                 material_sources_records.append(prov_record)
@@ -424,15 +432,15 @@ def resolve_scene_materials(
                 scene_index=scene_idx,
                 material_path=saved_path,
                 provider=gen_res.provider if final_source != "stock" else (resolved_item.provider or source),
-                asset_id=asset_id or None if final_source == "stock" else f"gen_{scene_idx}",
-                source_url=source_url or None,
+                asset_id=asset_id or None if final_source == "stock" else (gen_res.metadata.get("source_url") or f"{gen_res.provider}_{scene_idx}"),
+                source_url=gen_res.metadata.get("source_url") or (source_url or None),
                 search_term_used=term_used,
                 fallback_used=bool(fallback_used or gen_res.metadata.get("fallback_used", False)),
                 duration=float(resolved_item.duration or 0.0) if final_source == "stock" else float(scene.duration_hint or min_clip_dur),
                 provenance=prov_record,
                 visual_intent=intent.to_dict(),
-                match_score=resolved_score,
-                selection_reason=resolved_reason,
+                match_score=float(gen_res.metadata.get("thematic_score", resolved_score)) if final_source in ("thematic_source", "image_motion") else resolved_score,
+                selection_reason=gen_res.metadata.get("selection_reason") or resolved_reason,
                 queries_tried=queries_tried,
                 fallback_tier=chosen_tier,
                 media_type=gen_res.media_type,

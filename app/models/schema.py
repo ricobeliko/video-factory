@@ -151,6 +151,8 @@ class VideoParams(BaseModel):
     image_to_video_provider: Optional[str] = "disabled"
     still_motion_enabled: bool = True
     comfyui_endpoint: Optional[str] = "http://127.0.0.1:8188"
+    thematic_sources_enabled: bool = True
+    thematic_score_threshold: float = 40.0
     subtitle_position: Optional[str] = config.ui.get(
         "subtitle_position", "bottom"
     )  # top, bottom, center, custom, two_thirds_bottom
@@ -168,7 +170,7 @@ class VideoParams(BaseModel):
 
     font_size: int = 60
     stroke_color: Optional[str] = "#000000"
-    stroke_width: float = 1.5
+    stroke_width: float = 2.0
     n_threads: Optional[int] = 2
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
@@ -248,7 +250,7 @@ class SubtitleRequest(BaseModel):
     rounded_subtitle_background: bool = False
     font_size: int = 60
     stroke_color: Optional[str] = "#000000"
-    stroke_width: float = 1.5
+    stroke_width: float = 2.0
     video_source: Optional[str] = "local"
     subtitle_enabled: Optional[str] = "true"
 

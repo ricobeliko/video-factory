@@ -2,10 +2,10 @@
 
 ## Estado Atual Canônico — 06/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / THEMATIC_SOURCES_EVALUATED_PASS`
-- **ACTIVE_PHASE** = `V16.8.2 — Alternative Visual Sources Evaluation`
-- **ACTIVE_BRANCH** = `feat/v16-8-2-alternative-visual-sources`
-- **NEXT_GATE** = `V16.9 — Hybrid Visual Production Rollout`
+- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_SINGLE_PRODUCTION_DEPLOY`
+- **ACTIVE_PHASE** = `V16.10 — Single Full DEV Render Homologation`
+- **ACTIVE_BRANCH** = `feat/v16-final-pipeline-and-dev-render`
+- **NEXT_GATE** = `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -34,6 +34,8 @@
 - **V16.8 Controlled Hybrid Render Validation** = DEV_VALIDATED / STRUCTURAL_AND_PROXY_PASS (PR #58, SHA `fd205f24275a43ab67486e9261cd6b45cfbfd4d8`)
 - **V16.8.1 Real Generated Image Quality Gate** = REAL_GENERATIVE_PROVIDER_BLOCKED_BY_FREE_TIER_LIMIT / ARCHITECTURE_VALIDATED
 - **V16.8.2 Alternative Visual Sources Evaluation** = DEV_COMPLETE / EVALUATION_PASS (3/3 THEMATIC SOURCES APPROVED)
+- **V16.9 Final Hybrid Pipeline Foundation** = DEV_COMPLETE / CONSOLIDATED
+- **V16.10 Single Full DEV Render** = DEV_HOMOLOGATED / READY_FOR_PRODUCTION_DEPLOY
 - **V12-E Autonomous Production** = PRODUCTION HOMOLOGATED
 - **V12-F.1 Analytics Auto Collection** = PRODUCTION HOMOLOGATED
 - **V12-F.2 Closed Feedback Loop** = IMPLEMENTED / ACTIVE / PRODUCTION HOMOLOGATED
@@ -1401,7 +1403,39 @@ Entregas V16.4.1A:
 - **Auditoria de Provedores Generativos Gratuitos:**
   - Cloudflare Workers AI: `REQUIRES_ACCOUNT` (10k neurons/dia, complexidade média).
   - Hugging Face Inference Providers: `FREE_QUOTA_UNKNOWN` (cold-starts, erros 503 frequentes).
-- **Próximo Passo:** `V16.9 — Hybrid Visual Production Rollout` (Rollout seguro da seleção híbrida Stock + Thematic Sources para produção).
+- **Próximo Passo:** `V16.9 — Final Hybrid Pipeline Foundation` e `V16.10 — Single Full DEV Render Homologation`.
+
+### V16.9 — Final Hybrid Pipeline Foundation (Concluída em DEV)
+- **Status:** ✅ `DEV_COMPLETE / CONSOLIDATED` (06/10/2026)
+- **Hierarquia Visual Definitiva:**
+  1. `STOCK_HIGH_CONFIDENCE` (Score >= 60.0)
+  2. `THEMATIC_SOURCE_PREFERRED` (NASA Image Library / Wikimedia Commons)
+  3. `FREE_GENERATIVE_PROVIDER` (somente se gratuito, sem chave e disponível; desligado por padrão)
+  4. `STILL_MOTION` (Ken Burns suave 9:16 safe crop para imagens)
+  5. `FALLBACK_STOCK` (resiliência total sem quebras)
+- **Invariantes Congeladas:**
+  - Legendas: `subtitle_position = bottom`, `font_size = 60`, `text_fore_color = #FFFFFF`, `stroke_color = #000000`, `stroke_width = 2.0`.
+  - Narração: `voice_name = pt-BR-AntonioNeural-Male`, `voice_rate = 1.0`.
+
+### V16.10 — Single Full DEV Render Homologation (Homologada em DEV)
+- **Status:** ✅ `DEV_HOMOLOGATED / READY_FOR_PRODUCTION_DEPLOY` (06/10/2026)
+- **Branch:** `feat/v16-final-pipeline-and-dev-render`
+- **Validação com Exatamente 1 Render Completo na Task Canônica de Marte (`17386147-cb1b-4192-b827-251a1bbd411f`):**
+  - **Vídeo Final:** `storage/validation/v16_10/final_render_mars.mp4` (38.38 MB, 1080x1920, 46.70s, 30fps).
+  - **Total de Cenas:** 7 (4 stock alta confiança + 3 temáticas autênticas com still-motion 9:16).
+  - **Cenas Críticas (Hero) Contextualizadas:** 3/3:
+    - Cena 3 (Monte Olimpo): `wiki_98866197` (score 82.8, CC-BY 2.0) com still-motion `zoom_out`.
+    - Cena 4 (Escala titânica caldera): `wiki_127759484` (score 78.0, Domínio Público) com still-motion `pan_left`.
+    - Cena 7 (Pôr do sol azul marciano): `nasa_PIA24935` (score 73.0, Domínio Público NASA) com still-motion `zoom_in`.
+  - **Score Médio de Matching:** 83.9/100 (superando com folga o baseline fraco 28.0, 28.0, 22.0).
+  - **Ativos Repetidos:** 0.
+  - **Chamadas Pagas de IA:** 0 (Zero billing, zero custo).
+  - **Falhas / Quebras:** 0 (Execução 100% autônoma e resiliente).
+  - **Relatórios de Auditoria:**
+    - `storage/validation/v16_10/full_render_audit.json`
+    - `storage/validation/v16_10/full_render_audit.md`
+- **Próximo Passo / Gate Seguro:**
+  - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
 
 
 

@@ -12,12 +12,13 @@
 
 # Estado Atual Canônico — 07/10/2026
 
-- **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
-- **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
+- **CURRENT_PHASE** = `V1.4B_LOCAL_BRAIN_FACT_GUARD`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4A_CONCLUDED / V1.4B_IMPLEMENTED`
+- **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
+- **NEXT_GATE** = `LOCAL_AI_SHADOW_OR_INTEGRATION_GATE`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
+- **LOCAL_AI_VIABLE** = `YES`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **BLOCKED_BY** = `NONE`
 
@@ -26,11 +27,13 @@
 
 ## Status Consolidado por Componente
 
-- **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
+- **Local AI Track (V1.4A/V1.4B)** = ACTIVE (CURRENT_FOCUS)
+- **V1.4A Local AI Lab & Benchmark** = CONCLUÍDA / VIABILIDADE CONFIRMADA (LOCAL_AI_VIABLE = YES; PC Forte RX 580: Qwen3-4B ~21 tok/s, Qwen3-8B ~16.4 tok/s; DEV CPU: Qwen3-0.6B/1.7B/2.5-1.5B ~7-12 tok/s. Constatação: LLM factual grounding is NOT trusted without FactGuard)
+- **V1.4B Local Brain + FactPack + FactGuard** = CONCLUÍDA / HOMOLOGADA (LocalAIProvider compatível com OpenAI, FactPack atômico com validação de unicidade, Grounded Content com rastreio de fatos, FactGuard auditor fail-closed com max 1 rewrite, LocalAIRouter FAST vs QUALITY, 11/11 testes unitários aprovados)
+- **Google Flow / External Video Quality Track** = CONCLUÍDA NO ESCOPO ATUAL (V1.1, V1.2, V1.3 homologadas com 6 cenas Flow por Short e Coverr como stock filler)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
 - **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia` com 4 clipes Flow + fallback Coverr; novo padrão estabelecido para 6 cenas Flow por Short)
-- **V1.4 Flow Automation Evaluation** = ACTIVE (CURRENT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)

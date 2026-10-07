@@ -2,13 +2,29 @@
 
 ## Estado Atual Canônico — 07/10/2026
 
-- **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
-- **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
+- **CURRENT_PHASE** = `V1.4B_LOCAL_BRAIN_FACT_GUARD`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4A_CONCLUDED / V1.4B_IMPLEMENTED`
+- **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
+- **NEXT_GATE** = `LOCAL_AI_SHADOW_OR_INTEGRATION_GATE`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
+- **LOCAL_AI_VIABLE** = `YES`
 - **BLOCKED_BY** = `NONE`
+
+### Destaque da Frente de IA Local (Local Brain + FactPack + FactGuard):
+- **V1.4A_LOCAL_AI_LAB** = CONCLUÍDA / VIABILIDADE COMPROVADA (LOCAL_AI_VIABLE = YES)
+  - Benchmarks Reais:
+    - PC Forte RX 580 (Vulkan / llama.cpp): Qwen3-4B Q4_K_M ~21 tok/s (prompt ~189 tok/s); Qwen3-8B Q4_K_M ~16.4 tok/s (prompt ~96.7 tok/s).
+    - DEV CPU (Core i7-4790 AVX2): Qwen3-0.6B Q8_0 (~9 tok/s), Qwen3-1.7B Q8_0 (~6.4-7 tok/s), Qwen2.5-1.5B Q4_K_M (~11.9 tok/s).
+  - Constatação Arquitetural Mandatória: `LLM factual grounding is NOT trusted without FactGuard.` O modelo local NÃO é tratado como autoridade factual; o pipeline separa estritamente `PESQUISA -> FACT PACK -> LOCAL LLM -> FACT GUARD -> CONTEÚDO APROVADO`.
+- **V1.4B_LOCAL_BRAIN_FACT_GUARD** = CONCLUÍDA / HOMOLOGADA
+  - `LocalAIProvider`: HTTP client enxuto padrão `urllib`, compatível com OpenAI (`/v1/chat/completions`), restrição a localhost, timeouts explícitos e erros tipados controlados.
+  - `FactPack`: Estruturas Pydantic para fatos atômicos com validação de unicidade de IDs e formatação estruturada de prompts.
+  - `GroundedContent`: Geração de roteiros, ganchos e cenas com rastreabilidade de IDs de fatos utilizados.
+  - `FactGuard`: Auditor pós-geração com modelo crítico (`temperature=0.0`), fail-closed e política estrita de no máximo 1 tentativa de reescrita.
+  - `LocalAIRouter`: Roteador enxuto diferenciando papéis `FAST` (metadados, classificação, tags) e `QUALITY` (roteiro, crítica, planejamento de cenas).
+  - Padrão Seguro: `LOCAL_AI_ENABLED = false` por padrão (modo shadow/lab, sem afetar produção).
+  - Suíte de Testes: 11/11 testes unitários aprovados (`test/services/test_local_ai.py`).
 
 ### Destaque da Frente Google Flow / Qualidade Visual:
 - **V1.3_AGENT_DIRECTOR** = CONCLUÍDA
@@ -19,29 +35,17 @@
 - **V1.2_MANUAL_FLOW_OPTIMIZATION** = CONCLUÍDA
 - **Runner Padronizado:** `scripts/flow_workflow.py`
 - **Validação Direcionada:** 4 PASS (`test/services/test_flow_workflow.py`)
-- **Fricções Eliminadas:**
-  - Preparação automatizada de prompts visuais para Google Flow (9:16 portrait em `prompts_for_flow.md`).
-  - Divisão de cenas temporizada e alinhamento com narração via `scene_planner`.
-  - Padronização de estrutura de diretório e nomenclatura (`manifest.json`, `clips/flow_scene_XX.mp4`).
-  - Ingestão simplificada e montagem em comando único (`render` com suporte a `--dry-run` e fallback contextual via Coverr).
-  - Suporte resiliente a credenciais de ambiente e registro de usuário sem expor segredos.
 - **V1.1_FIRST_REAL_VIDEO** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
 - **QUALITY_BASELINE** = APROVADA
 - **PUBLICÁVEL** = SIM
 - **DURATION** = 90.50s
-- **Próxima Fase:** `V1.4_FLOW_AUTOMATION_EVALUATION`
-  - Avaliação de viabilidade de automação e integração de API do Google Flow.
-- **Visão Futura:**
-  - `FUTURE_MULTI_CHANNEL_MULTI_NICHE = planned` (uma única Video Factory atendendo múltiplos canais/nichos, sem forks por canal).
-  - `FUTURE_LONG_FORM_VIDEO = planned`
-  - `FUTURE_FLOW_API_AUTOMATION = evaluate_later`
-  - `FUTURE_LOCAL_VIDEO_AI = evaluate_after_hardware_upgrade`
 
 > [!IMPORTANT]
 > **Precedência Canônica:** Esta seção reflete o estado consolidado e auditado da fábrica de vídeos em produção no PC forte (`C:\Projetos\MoneyPrinterTurbo`). Ela prevalece formalmente sobre quaisquer menções ou snapshots históricos contidos nas seções inferiores deste documento.
 
 ### Status Consolidado dos Componentes:
-- **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
+- **Local AI Track (V1.4A/V1.4B)** = ACTIVE (CURRENT_FOCUS)
+- **Google Flow / External Video Quality Track** = CONCLUÍDA NO ESCOPO ATUAL (V1.1, V1.2, V1.3 homologadas com 6 cenas Flow por Short e Coverr como stock filler)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
 - **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia`; padrão de 6 cenas Flow por Short estabelecido)

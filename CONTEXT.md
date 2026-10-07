@@ -44,16 +44,24 @@ Todas as tarefas desta frente devem seguir rigorosamente os seguintes princípio
 
 ---
 
-## 4. Separação Estrita de Ambientes
+## 4. Separação Estrita de Ambientes: DEV-FIRST / PRODUCTION-LAST
 
-O projeto opera em dois ambientes físicos totalmente distintos. **NUNCA misturar os ambientes:**
+O projeto opera sob a regra mandatória **DEV-FIRST / PRODUCTION-LAST** em dois ambientes físicos totalmente distintos. **NUNCA misturar os dois ambientes:**
 
 | Ambiente | Host / Máquina | Diretório Raiz | Função |
 | :--- | :--- | :--- | :--- |
-| **DEV** | Notebook (Desenvolvimento) | `D:\Projetos\MoneyPrinterTurbo` | Desenvolvimento, criação de scripts, validações locais e testes pontuais. |
-| **PRODUÇÃO** | PC Forte (Produção) | `C:\Projetos\MoneyPrinterTurbo` | Execução autônoma, render oficial, agendador (`Scheduler`) e publicação ativa. |
+| **DEV** | Notebook (Desenvolvimento) | `D:\Projetos\MoneyPrinterTurbo` | Todo desenvolvimento, criação de scripts, validações locais, experimentação e testes pontuais. |
+| **PRODUÇÃO** | PC Forte (Produção) | `C:\Projetos\MoneyPrinterTurbo` | Ambiente de produção: execução autônoma, render oficial, agendador (`Scheduler`) e publicação ativa. |
 
-*Regra:* Nunca executar comandos apontando para caminhos do outro ambiente.
+### Regras Mandatórias de Operação:
+1. **Todo desenvolvimento ocorre no NOTEBOOK:** `D:\Projetos\MoneyPrinterTurbo`.
+2. **O PC FORTE é ambiente de produção:** `C:\Projetos\MoneyPrinterTurbo`.
+3. **Sem experimentação no PC Forte:** Não implementar, experimentar ou fazer investigação exploratória no PC Forte quando isso puder ser feito no notebook.
+4. **Critérios estritos de promoção:** Só levar alterações ao PC Forte quando:
+   - A implementação estiver pronta e validada no notebook; ou
+   - Houver um teste que dependa especificamente do ambiente de produção.
+5. **Sem sincronizações parciais:** Não sincronizar mudanças parciais apenas para testar hipóteses.
+6. **Isolamento absoluto:** Sempre preservar a regra: nunca misturar os dois ambientes.
 
 ---
 

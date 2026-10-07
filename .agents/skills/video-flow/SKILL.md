@@ -68,12 +68,17 @@ Esta skill orienta o agente e o operador no fluxo híbrido de produção de víd
 
 ---
 
-## 5. Salvaguardas e Limites Rígidos
+## 5. Salvaguardas e Limites Rígidos: DEV-FIRST / PRODUCTION-LAST
 
-- **Separação de Ambientes:**
-  - DEV / Notebook: `D:\Projetos\MoneyPrinterTurbo`
-  - PRODUÇÃO / PC Forte: `C:\Projetos\MoneyPrinterTurbo`
-  - **Nunca misturar ambientes.**
+- **Regra Operacional Obrigatória (DEV-FIRST / PRODUCTION-LAST):**
+  - **DEV / Notebook (`D:\Projetos\MoneyPrinterTurbo`):** Todo desenvolvimento ocorre aqui.
+  - **PRODUÇÃO / PC Forte (`C:\Projetos\MoneyPrinterTurbo`):** Ambiente estrito de produção.
+  - Não implementar, experimentar ou fazer investigação exploratória no PC Forte quando isso puder ser feito no notebook.
+  - Só levar alterações ao PC Forte quando:
+    1. A implementação estiver pronta e validada no notebook; ou
+    2. Houver um teste que dependa especificamente do ambiente de produção.
+  - Não sincronizar mudanças parciais apenas para testar hipóteses.
+  - Sempre preservar a regra: **nunca misturar os dois ambientes.**
 - **MuseTalk Local:**
   - POC concluída com RX580 + DirectML. Fica estritamente **congelado** como laboratório/fallback futuro. Não alterar nem executar nesta frente.
 - **Provedores Descartados:**

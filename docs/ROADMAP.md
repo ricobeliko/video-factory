@@ -1230,10 +1230,14 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
 - **Se funcionou, considerar concluído:** Evitar refinamento infinito sobre o que já atingiu o objetivo.
 - **Priorizar solução pronta:** Focar no resultado prático e entrega rápida de vídeo real.
 
-## Isolamento Rígido de Ambientes
-- **DEV / Notebook:** `D:\Projetos\MoneyPrinterTurbo`
-- **PRODUÇÃO / PC Forte:** `C:\Projetos\MoneyPrinterTurbo`
-- **Regra de Ouro:** NUNCA misturar os ambientes. Toda exploração, preparação e testes ocorrem primeiro em DEV.
+## Isolamento Rígido de Ambientes (DEV-FIRST / PRODUCTION-LAST)
+- **DEV / Notebook (`D:\Projetos\MoneyPrinterTurbo`):** Todo desenvolvimento, experimentação, criação de scripts e validações locais ocorrem aqui.
+- **PRODUÇÃO / PC Forte (`C:\Projetos\MoneyPrinterTurbo`):** Ambiente estrito de produção.
+- **Diretrizes Operacionais Mandatórias:**
+  - Não implementar, experimentar ou fazer investigação exploratória no PC Forte quando isso puder ser feito no notebook.
+  - Só levar alterações ao PC Forte quando: (1) a implementação estiver pronta e validada no notebook; ou (2) houver um teste que dependa especificamente do ambiente de produção.
+  - Não sincronizar mudanças parciais apenas para testar hipóteses.
+  - Sempre preservar a regra: nunca misturar os dois ambientes.
 
 ## Fronteiras e Escopo de Modelos
 - **Google Flow API:** **NÃO integrar neste momento.** Produzir primeiro vídeos reais manualmente no Google Flow para entender e lapidar o workflow antes de qualquer tentativa de automação.

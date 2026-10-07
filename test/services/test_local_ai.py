@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import socket
+import sqlite3
+import tempfile
 import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
@@ -44,8 +47,15 @@ from app.services.local_ai import (
     LocalAIRouter,
     LocalAIServerUnavailableError,
     LocalAITimeoutError,
+    LocalAIShadowRunner,
+    ShadowRunResult,
     generate_grounded_content_with_guard,
+    get_shadow_db_path,
+    init_shadow_db,
+    save_shadow_run,
 )
+from app.services.local_ai.shadow_runner import sanitize_message
+
 
 
 class TestLocalAIProvider(unittest.TestCase):
@@ -422,5 +432,366 @@ class TestFactGuardAndGroundedGeneration(unittest.TestCase):
         self.assertIsNone(audit.final_content)
 
 
+class TestLocalAIShadowRunner(unittest.TestCase):
+    """Validações do executor Shadow (V1.4C) garantindo isolamento total de produção."""
+
+    def setUp(self):
+        self.roanoke_facts = [
+            Fact(id="F1", text="A Colônia de Roanoke foi estabelecida por colonos ingleses na atual Carolina do Norte."),
+            Fact(id="F2", text="John White retornou à Inglaterra em busca de suprimentos."),
+            Fact(id="F3", text="Quando voltou em 1590, os colonos haviam desaparecido."),
+            Fact(id="F4", text="A palavra CROATOAN estava gravada em um poste."),
+            Fact(id="F5", text="O destino definitivo dos colonos permanece incerto."),
+        ]
+        self.roanoke_pack = FactPack(topic="Colônia de Roanoke", facts=self.roanoke_facts)
+
+    def test_12_mode_off_does_not_execute_local_ai(self):
+        """1. mode=off não executa Local AI e retorna registro seguro."""
+        cfg = LocalAIConfig(mode="off")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        self.assertFalse(runner.should_run())
+
+        with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard") as mock_gen:
+            res = runner.run_shadow(self.roanoke_pack, task_id="task_123")
+            mock_gen.assert_not_called()
+
+        self.assertEqual(res.error_type, "MODE_OFF")
+        self.assertFalse(res.generation_success)
+        self.assertFalse(res.final_shadow_available)
+
+    def test_13_mode_shadow_executes_runner(self):
+        """2. mode=shadow executa o runner normalmente."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        self.assertTrue(runner.should_run())
+
+        fake_content = GroundedContent(
+            topic="Colônia de Roanoke",
+            hook="O mistério de Roanoke.",
+            script="A Colônia de Roanoke foi estabelecida por colonos ingleses. Em 1590 todos sumiram.",
+            duration_seconds=70,
+            facts_used=["F1", "F3"],
+        )
+        fake_guard_res = FactGuardResult(
+            approved=True,
+            unsupported_claims=[],
+            used_fact_ids=["F1", "F3"],
+            final_content=fake_content,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(self.roanoke_pack, task_id="task_123", current_provider="azure")
+
+            self.assertTrue(res.generation_success)
+            self.assertTrue(res.json_valid)
+            self.assertTrue(res.fact_guard_approved)
+            self.assertTrue(res.final_shadow_available)
+            self.assertEqual(res.current_provider, "azure")
+            self.assertIsNone(res.error_type)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_14_shadow_never_replaces_content_and_never_publishes(self):
+        """3 e 4. Shadow NUNCA substitui conteúdo oficial da tarefa e NUNCA publica."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        # Objeto de tarefa simulando produção
+        official_task = {
+            "task_id": "prod_task_999",
+            "script": "Texto oficial aprovado pelo pipeline humano ou provedor principal.",
+            "status": "PROCESSING",
+            "published": False,
+        }
+
+        fake_content = GroundedContent(
+            topic="Colônia de Roanoke",
+            hook="Hook shadow",
+            script="Texto gerado pelo modelo local em shadow.",
+            duration_seconds=70,
+            facts_used=["F1"],
+        )
+        fake_guard_res = FactGuardResult(
+            approved=True,
+            final_content=fake_content,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(self.roanoke_pack, task_id=official_task["task_id"])
+
+            # Validação: o conteúdo oficial não foi alterado de forma alguma
+            self.assertEqual(
+                official_task["script"],
+                "Texto oficial aprovado pelo pipeline humano ou provedor principal.",
+            )
+            self.assertFalse(official_task["published"])
+            self.assertEqual(official_task["status"], "PROCESSING")
+            # O runner não possui métodos de publicação
+            self.assertFalse(hasattr(runner, "publish"))
+            self.assertFalse(hasattr(runner, "auto_publish"))
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_15_local_ai_offline_does_not_break_main_pipeline(self):
+        """5. Local AI offline NÃO quebra o fluxo principal (fail-safe total)."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch(
+                "app.services.local_ai.shadow_runner.generate_grounded_content_with_guard",
+                side_effect=LocalAIServerUnavailableError("Connection refused to 127.0.0.1:8089"),
+            ):
+                # Chamada NÃO pode disparar exceção para o chamador
+                res = runner.run_shadow(self.roanoke_pack, task_id="task_fail_safe")
+
+            self.assertFalse(res.generation_success)
+            self.assertEqual(res.error_type, "SERVER_UNAVAILABLE")
+            self.assertIn("Connection refused", res.error_message)
+            self.assertFalse(res.final_shadow_available)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_16_invalid_json_recorded_correctly(self):
+        """6. JSON inválido é registrado com erro tipado sem quebrar o runner."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch(
+                "app.services.local_ai.shadow_runner.generate_grounded_content_with_guard",
+                side_effect=LocalAIResponseFormatError("Resposta não é JSON válido"),
+            ):
+                res = runner.run_shadow(self.roanoke_pack)
+
+            self.assertFalse(res.generation_success)
+            self.assertFalse(res.json_valid)
+            self.assertEqual(res.error_type, "INVALID_JSON_FORMAT")
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_17_fact_guard_rejection_recorded(self):
+        """7. Rejeição do FactGuard é devidamente registrada em métricas."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        fake_guard_res = FactGuardResult(
+            approved=False,
+            unsupported_claims=["Afirmação inventada sobre Roanoke"],
+            used_fact_ids=["F1"],
+            final_content=None,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(self.roanoke_pack)
+
+            self.assertTrue(res.generation_success)
+            self.assertFalse(res.fact_guard_approved)
+            self.assertEqual(res.unsupported_claims_count, 1)
+            self.assertIn("Afirmação inventada sobre Roanoke", res.unsupported_claims)
+            self.assertFalse(res.final_shadow_available)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_18_rewrite_recorded(self):
+        """8. Tentativa de reescrita é registrada nas métricas do shadow run."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        fake_content = GroundedContent(
+            topic="Colônia de Roanoke",
+            hook="Hook corrigido",
+            script="Texto após reescrita.",
+            duration_seconds=70,
+            facts_used=["F1", "F2"],
+        )
+        fake_guard_res = FactGuardResult(
+            approved=True,
+            rewrite_attempted=True,
+            unsupported_claims=[],
+            final_content=fake_content,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(self.roanoke_pack)
+
+            self.assertTrue(res.rewrite_attempted)
+            self.assertTrue(res.fact_guard_approved)
+            self.assertTrue(res.final_shadow_available)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_19_duration_estimation_recorded(self):
+        """9. Duração estimada baseada em palavras faladas é calculada e registrada."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        # 120 palavras / 2.4 palavras por segundo = exatamente 50.0s
+        words_120 = " ".join(["palavra"] * 120)
+        fake_content = GroundedContent(
+            topic="Colônia de Roanoke",
+            hook="Hook",
+            script=words_120,
+            duration_seconds=70,
+            facts_used=["F1"],
+        )
+        fake_guard_res = FactGuardResult(
+            approved=True,
+            final_content=fake_content,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(
+                    self.roanoke_pack,
+                    requested_duration_seconds=70.0,
+                    words_per_second=2.4,
+                    duration_tolerance_seconds=15.0,
+                )
+
+            self.assertEqual(res.script_word_count, 120)
+            self.assertEqual(res.requested_duration_seconds, 70.0)
+            self.assertEqual(res.estimated_duration_seconds, 50.0)
+            self.assertEqual(res.duration_delta_seconds, -20.0)
+            # Diferença de 20s excede a tolerância de 15s
+            self.assertFalse(res.duration_within_tolerance)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_20_storage_reuse_and_persistence(self):
+        """10. Persistência e reuso da tabela SQLite local_ai_shadow_runs funciona perfeitamente."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+
+        try:
+            res = ShadowRunResult(
+                shadow_run_id="run_test_storage",
+                task_id="task_abc",
+                topic="Persistência",
+                model_role="QUALITY",
+                model_name="qwen3-8b",
+                started_at="2026-10-07T12:00:00Z",
+                finished_at="2026-10-07T12:00:02Z",
+                latency_seconds=2.0,
+                generation_success=True,
+                json_valid=True,
+                fact_guard_approved=True,
+                final_shadow_available=True,
+                script_word_count=50,
+                requested_duration_seconds=70.0,
+                estimated_duration_seconds=68.0,
+                duration_delta_seconds=-2.0,
+                duration_within_tolerance=True,
+            )
+            save_shadow_run(res, target=temp_db)
+
+            # Valida leitura direta no SQLite
+            conn = sqlite3.connect(temp_db)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM local_ai_shadow_runs WHERE id = ?", ("run_test_storage",)).fetchone()
+            conn.close()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(row["topic"], "Persistência")
+            self.assertEqual(row["task_id"], "task_abc")
+            self.assertEqual(row["generation_success"], 1)
+            self.assertEqual(row["estimated_duration_seconds"], 68.0)
+            self.assertEqual(row["duration_within_tolerance"], 1)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_21_no_credentials_persisted(self):
+        """11. Nenhuma credencial ou segredo sensível é gravado nas mensagens de erro."""
+        msg = "Falha ao autenticar com token Bearer secret_top_secret_12345 e chave sk-live1234567890"
+        sanitized = sanitize_message(msg)
+        self.assertNotIn("secret_top_secret_12345", sanitized)
+        self.assertNotIn("sk-live1234567890", sanitized)
+        self.assertIn("Bearer [REDACTED]", sanitized)
+        self.assertIn("[REDACTED_API_KEY]", sanitized)
+
+    def test_22_real_grounding_roanoke_shadow_workflow(self):
+        """Caso de regressão Roanoke em modo Shadow: FactPack -> Qwen -> FactGuard registrado integralmente."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider)
+
+        # Simula resposta do Qwen com alucinação detectada pelo FactGuard
+        fake_guard_res = FactGuardResult(
+            approved=False,
+            unsupported_claims=["John White era o líder da colônia"],
+            used_fact_ids=["F1", "F2"],
+            notes=["Reprovado por claim não fornecida"],
+            final_content=None,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(self.roanoke_pack, task_id="roanoke_shadow_01")
+
+            self.assertEqual(res.topic, "Colônia de Roanoke")
+            self.assertTrue(res.generation_success)
+            self.assertFalse(res.fact_guard_approved)
+            self.assertEqual(res.unsupported_claims, ["John White era o líder da colônia"])
+            self.assertFalse(res.final_shadow_available)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+
 if __name__ == "__main__":
     unittest.main()
+

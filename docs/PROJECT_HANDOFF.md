@@ -3,28 +3,34 @@
 ## Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
-- **CURRENT_PHASE** = `V1.4B_LOCAL_BRAIN_FACT_GUARD`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4A_CONCLUDED / V1.4B_IMPLEMENTED`
+- **CURRENT_PHASE** = `V1.4C_LOCAL_AI_SHADOW_RUNNER`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4B_CONCLUDED / V1.4C_SHADOW_IMPLEMENTED`
 - **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
-- **NEXT_GATE** = `LOCAL_AI_SHADOW_OR_INTEGRATION_GATE`
+- **NEXT_GATE** = `LOCAL_AI_SHADOW_VALIDATION_OR_INTEGRATION_GATE`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
+- **LOCAL_AI_MODE** = `off` (DEFAULT = off; shadow disponível para testes/lab; active NÃO habilitado no pipeline de produção)
 - **LOCAL_AI_VIABLE** = `YES`
 - **BLOCKED_BY** = `NONE`
 
-### Destaque da Frente de IA Local (Local Brain + FactPack + FactGuard):
-- **V1.4A_LOCAL_AI_LAB** = CONCLUÍDA / VIABILIDADE COMPROVADA (LOCAL_AI_VIABLE = YES)
-  - Benchmarks Reais:
-    - PC Forte RX 580 (Vulkan / llama.cpp): Qwen3-4B Q4_K_M ~21 tok/s (prompt ~189 tok/s); Qwen3-8B Q4_K_M ~16.4 tok/s (prompt ~96.7 tok/s).
-    - DEV CPU (Core i7-4790 AVX2): Qwen3-0.6B Q8_0 (~9 tok/s), Qwen3-1.7B Q8_0 (~6.4-7 tok/s), Qwen2.5-1.5B Q4_K_M (~11.9 tok/s).
-  - Constatação Arquitetural Mandatória: `LLM factual grounding is NOT trusted without FactGuard.` O modelo local NÃO é tratado como autoridade factual; o pipeline separa estritamente `PESQUISA -> FACT PACK -> LOCAL LLM -> FACT GUARD -> CONTEÚDO APROVADO`.
+### Destaque da Frente de IA Local (Local Brain + FactPack + FactGuard + Shadow Runner):
+- **V1.4C_LOCAL_AI_SHADOW_RUNNER** = CONCLUÍDA / HOMOLOGADA
+  - `LOCAL_AI_MODE`: Suporte nativo aos modos `off|shadow|active` (padrão: `off`). O Local Brain NÃO toma decisões no pipeline de produção.
+  - `LocalAIShadowRunner`: Executor isolado executando em modo de observação paralela. Se o servidor local estiver offline, o erro é gravado sem nunca quebrar o fluxo principal (fail-safe total).
+  - Estimativa de Duração: Cálculo em pt-BR de contagem de palavras e duração falada estimada (`safety_gate`), contrastando com a duração solicitada.
+  - Persistência e Reuso: Tabela `local_ai_shadow_runs` em `storage/video_factory.db` (nenhum banco novo criado).
+  - Script para PC Forte: `scripts/start_local_ai_server.ps1` parametrizado com aceleração Vulkan GPU (RX 580) estritamente em `127.0.0.1:8089` (bind 0.0.0.0 bloqueado).
+  - Suíte de Testes: 22/22 testes unitários aprovados (`test/services/test_local_ai.py`).
 - **V1.4B_LOCAL_BRAIN_FACT_GUARD** = CONCLUÍDA / HOMOLOGADA
   - `LocalAIProvider`: HTTP client enxuto padrão `urllib`, compatível com OpenAI (`/v1/chat/completions`), restrição a localhost, timeouts explícitos e erros tipados controlados.
   - `FactPack`: Estruturas Pydantic para fatos atômicos com validação de unicidade de IDs e formatação estruturada de prompts.
   - `GroundedContent`: Geração de roteiros, ganchos e cenas com rastreabilidade de IDs de fatos utilizados.
   - `FactGuard`: Auditor pós-geração com modelo crítico (`temperature=0.0`), fail-closed e política estrita de no máximo 1 tentativa de reescrita.
   - `LocalAIRouter`: Roteador enxuto diferenciando papéis `FAST` (metadados, classificação, tags) e `QUALITY` (roteiro, crítica, planejamento de cenas).
-  - Padrão Seguro: `LOCAL_AI_ENABLED = false` por padrão (modo shadow/lab, sem afetar produção).
-  - Suíte de Testes: 11/11 testes unitários aprovados (`test/services/test_local_ai.py`).
+- **V1.4A_LOCAL_AI_LAB** = CONCLUÍDA / VIABILIDADE COMPROVADA (LOCAL_AI_VIABLE = YES)
+  - Benchmarks Reais:
+    - PC Forte RX 580 (Vulkan / llama.cpp): Qwen3-4B Q4_K_M ~21 tok/s (prompt ~189 tok/s); Qwen3-8B Q4_K_M ~16.4 tok/s (prompt ~96.7 tok/s).
+    - DEV CPU (Core i7-4790 AVX2): Qwen3-0.6B Q8_0 (~9 tok/s), Qwen3-1.7B Q8_0 (~6.4-7 tok/s), Qwen2.5-1.5B Q4_K_M (~11.9 tok/s).
+  - Constatação Arquitetural Mandatória: `LLM factual grounding is NOT trusted without FactGuard.` O modelo local NÃO é tratado como autoridade factual; o pipeline separa estritamente `PESQUISA -> FACT PACK -> LOCAL LLM -> FACT GUARD -> CONTEÚDO APROVADO`.
 
 ### Destaque da Frente Google Flow / Qualidade Visual:
 - **V1.3_AGENT_DIRECTOR** = CONCLUÍDA

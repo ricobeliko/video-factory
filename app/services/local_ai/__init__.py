@@ -22,6 +22,13 @@ from app.services.local_ai.fact_guard import (
     GroundedScene,
     generate_grounded_content_with_guard,
 )
+from app.services.local_ai.shadow_runner import (
+    LocalAIShadowRunner,
+    ShadowRunResult,
+    get_shadow_db_path,
+    init_shadow_db,
+    save_shadow_run,
+)
 
 __all__ = [
     "LocalAIConfig",
@@ -40,4 +47,10 @@ __all__ = [
     "GroundedContent",
     "GroundedScene",
     "generate_grounded_content_with_guard",
+    "LocalAIShadowRunner",
+    "ShadowRunResult",
+    "get_shadow_db_path",
+    "init_shadow_db",
+    "save_shadow_run",
 ]
+

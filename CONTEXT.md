@@ -8,39 +8,38 @@
 ## 1. Estado Atual Canônico
 
 - **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
-- **CURRENT_PHASE** = `V1.4B_LOCAL_BRAIN_FACT_GUARD`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4A_CONCLUDED / V1.4B_IMPLEMENTED`
+- **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
+- **CURRENT_PHASE** = `V1.4C_LOCAL_AI_SHADOW_RUNNER`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4B_CONCLUDED / V1.4C_SHADOW_IMPLEMENTED`
 - **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
-- **NEXT_GATE** = `LOCAL_AI_SHADOW_OR_INTEGRATION_GATE`
+- **NEXT_GATE** = `LOCAL_AI_SHADOW_VALIDATION_OR_INTEGRATION_GATE`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
+- **LOCAL_AI_MODE** = `off` (DEFAULT = off; shadow disponível para testes/lab; active NÃO habilitado)
 - **LOCAL_AI_VIABLE** = `YES`
 - **BLOCKED_BY** = `NONE`
 
-### Validação Concluída da V1.4A (Local AI Lab & Benchmark):
-- **V1.4A_LOCAL_AI_LAB** = CONCLUÍDA
-- **LOCAL_AI_VIABLE** = YES
-- **Resultados de Inferência Real:**
-  - **PC Forte (RX 580 2048SP 8GB VRAM / Vulkan / llama.cpp):**
-    - Qwen3-4B Q4_K_M: prompt processing ~189 tok/s, generation ~21 tok/s (100% JSON).
-    - Qwen3-8B Q4_K_M: prompt processing ~96.7 tok/s, generation ~16.4 tok/s (100% JSON).
-  - **DEV Notebook (Core i7-4790 AVX2 CPU / llama.cpp b11476):**
-    - Qwen3-0.6B Q8_0: generation ~9 tok/s (100% JSON).
-    - Qwen3-1.7B Q8_0: generation ~6.4-7 tok/s (100% JSON).
-    - Qwen2.5-1.5B Q4_K_M: generation ~11.9 tok/s (100% JSON).
-- **Constatação Arquitetural Crítica:**
-  - `LLM factual grounding is NOT trusted without FactGuard.`
-  - LLMs locais podem acrescentar fatos externos/inventados mesmo quando instruídos a usar apenas a entrada.
-  - A arquitetura separa estritamente: `PESQUISA/FONTES -> FACT PACK -> LOCAL LLM -> FACT GUARD -> CONTEÚDO APROVADO`.
+> [!WARNING]
+> **ESTADO DE PRODUÇÃO:** O LOCAL AI ainda **NÃO ESTÁ ATIVO** no pipeline de produção. O modo padrão é `off`. Em modo `shadow`, o Local Brain apenas observa e persiste métricas analíticas no SQLite sem alterar decisões operacionais, sem substituir roteiros oficiais e sem publicar vídeos.
 
-### Implementação da V1.4B (Local Brain + FactPack + FactGuard):
-- **V1.4B_LOCAL_BRAIN_FACT_GUARD** = IMPLEMENTADA & TESTADA (11/11 tests pass)
+### Implementação da V1.4C (Local AI Shadow Runner):
+- **V1.4C_LOCAL_AI_SHADOW_RUNNER** = IMPLEMENTADA & TESTADA (22/22 tests pass)
+- **Componentes Entregues:**
+  - `LOCAL_AI_MODE`: Suporte nativo a modos `off|shadow|active` (padrão: `off`).
+  - `LocalAIShadowRunner`: Executor isolado que roda o Local Brain (Qwen3-8B + FactGuard) em paralelo sem efeitos colaterais.
+  - Zero Impacto em Produção: Se o servidor local estiver offline, o erro é capturado e persistido na auditoria, mantendo o pipeline principal 100% intacto (fail-safe total).
+  - Estimativa de Duração: Medição de palavras faladas em pt-BR (`count_spoken_words`, `estimate_duration_seconds`) comparando duração declarada vs estimada.
+  - Persistência e Reuso: Tabela `local_ai_shadow_runs` criada idempotentemente em `storage/video_factory.db` (nenhum banco novo criado).
+  - Higienização: Bloqueio estrito de gravação de tokens, chaves ou senhas em mensagens de erro (`sanitize_message`).
+  - Script para PC Forte: `scripts/start_local_ai_server.ps1` portável com aceleração Vulkan GPU (RX 580) estritamente em `127.0.0.1:8089` (bind 0.0.0.0 terminantemente bloqueado).
+
+### Validação Concluída da V1.4B (Local Brain + FactPack + FactGuard):
+- **V1.4B_LOCAL_BRAIN_FACT_GUARD** = CONCLUÍDA
 - **Componentes Entregues:**
   - `LocalAIProvider`: HTTP client leve (urllib, zero dependências externas), compatível com OpenAI (`/v1/chat/completions`), localhost restrito por padrão, fail-closed e timeouts explícitos.
   - `FactPack`: Modelo de fatos canônicos atômicos com validação de IDs únicos e formatação para prompt.
   - `GroundedContent`: Geração de roteiro, hooks e cenas com rastreabilidade de IDs de fatos.
   - `FactGuard`: Auditor pós-geração com modelo crítico (`temperature=0.0`), tolerância zero a afirmações inventadas (`unsupported_claims`), com política estrita de fail-closed e no máximo 1 tentativa de reescrita.
   - `LocalAIRouter`: Roteamento mínimo desacoplado entre papéis `FAST` (metadata, classificação, tags) e `QUALITY` (roteiro, crítica, planejamento de cenas).
-  - `LOCAL_AI_ENABLED = false` por padrão (shadow/lab mode, preservando integralmente produção).
 
 ### Validação Concluída da V1.3 (Agente Diretor & Multi-Nicho):
 - **V1.3_AGENT_DIRECTOR** = CONCLUÍDA

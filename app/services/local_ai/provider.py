@@ -54,16 +54,39 @@ class LocalAIConfig:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         timeout_seconds: Optional[float] = None,
+        mode: Optional[str] = None,
     ):
-        # 1. enabled (padrão estrito: False para não afetar produção)
+        # 1. mode: "off" | "shadow" | "active" (padrão estrito: "off")
+        raw_mode = (
+            mode
+            or config.app.get("local_ai_mode")
+            or os.getenv("LOCAL_AI_MODE")
+        )
+        if raw_mode:
+            self.mode = str(raw_mode).strip().lower()
+            if self.mode not in ("off", "shadow", "active"):
+                logger.warning(f"[LocalAI] Modo desconhecido '{self.mode}', adotando 'off'.")
+                self.mode = "off"
+        elif enabled is True or (
+            enabled is None
+            and (
+                config.app.get("local_ai_enabled") is True
+                or os.getenv("LOCAL_AI_ENABLED", "false").lower() in ("true", "1", "yes")
+            )
+        ):
+            self.mode = "shadow"
+        else:
+            self.mode = "off"
+
+        # enabled sincronizado com o modo
         if enabled is not None:
             self.enabled = bool(enabled)
+            if self.enabled and self.mode == "off":
+                self.mode = "shadow"
+            elif not self.enabled and self.mode != "off":
+                self.mode = "off"
         else:
-            cfg_val = config.app.get("local_ai_enabled")
-            if cfg_val is not None:
-                self.enabled = bool(cfg_val)
-            else:
-                self.enabled = os.getenv("LOCAL_AI_ENABLED", "false").lower() in ("true", "1", "yes")
+            self.enabled = (self.mode in ("shadow", "active"))
 
         # 2. base_url (padrão: http://127.0.0.1:8089/v1)
         if base_url:
@@ -103,6 +126,18 @@ class LocalAIConfig:
             logger.warning(
                 f"[LocalAI] Atenção: base_url aponta para host não-localhost: '{hostname}'."
             )
+
+    def is_off(self) -> bool:
+        """Indica se a IA local está desativada."""
+        return self.mode == "off"
+
+    def is_shadow(self) -> bool:
+        """Indica se a IA local está operando em modo shadow (observação sem efeito de produção)."""
+        return self.mode == "shadow"
+
+    def is_active(self) -> bool:
+        """Indica se a IA local está ativa (não habilitado nesta fase)."""
+        return self.mode == "active"
 
 
 class LocalAIResponse:

@@ -13,11 +13,12 @@
 # Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
-- **CURRENT_PHASE** = `V1.4B_LOCAL_BRAIN_FACT_GUARD`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4A_CONCLUDED / V1.4B_IMPLEMENTED`
+- **CURRENT_PHASE** = `V1.4C_LOCAL_AI_SHADOW_RUNNER`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4B_CONCLUDED / V1.4C_SHADOW_IMPLEMENTED`
 - **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
-- **NEXT_GATE** = `LOCAL_AI_SHADOW_OR_INTEGRATION_GATE`
+- **NEXT_GATE** = `LOCAL_AI_SHADOW_VALIDATION_OR_INTEGRATION_GATE`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
+- **LOCAL_AI_MODE** = `off` (DEFAULT = off; shadow disponível para testes/lab; active NÃO habilitado no pipeline de produção)
 - **LOCAL_AI_VIABLE** = `YES`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **BLOCKED_BY** = `NONE`
@@ -27,9 +28,10 @@
 
 ## Status Consolidado por Componente
 
-- **Local AI Track (V1.4A/V1.4B)** = ACTIVE (CURRENT_FOCUS)
+- **Local AI Track (V1.4A/V1.4B/V1.4C)** = ACTIVE (CURRENT_FOCUS)
 - **V1.4A Local AI Lab & Benchmark** = CONCLUÍDA / VIABILIDADE CONFIRMADA (LOCAL_AI_VIABLE = YES; PC Forte RX 580: Qwen3-4B ~21 tok/s, Qwen3-8B ~16.4 tok/s; DEV CPU: Qwen3-0.6B/1.7B/2.5-1.5B ~7-12 tok/s. Constatação: LLM factual grounding is NOT trusted without FactGuard)
 - **V1.4B Local Brain + FactPack + FactGuard** = CONCLUÍDA / HOMOLOGADA (LocalAIProvider compatível com OpenAI, FactPack atômico com validação de unicidade, Grounded Content com rastreio de fatos, FactGuard auditor fail-closed com max 1 rewrite, LocalAIRouter FAST vs QUALITY, 11/11 testes unitários aprovados)
+- **V1.4C Local AI Shadow Runner** = CONCLUÍDA / HOMOLOGADA (Modo shadow não invasivo, LocalAIShadowRunner fail-safe sem tocar produção, estimativa de duração falada pt-BR, persistência SQLite na tabela local_ai_shadow_runs em video_factory.db, script start_local_ai_server.ps1 para PC Forte com Vulkan, 22/22 testes unitários aprovados)
 - **Google Flow / External Video Quality Track** = CONCLUÍDA NO ESCOPO ATUAL (V1.1, V1.2, V1.3 homologadas com 6 cenas Flow por Short e Coverr como stock filler)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)

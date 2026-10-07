@@ -202,8 +202,27 @@ def _get_tls_verify() -> bool:
     return bool(tls_verify)
 
 
+def _resolve_env_var_fallback(env_var: str) -> Optional[str]:
+    val = os.environ.get(env_var)
+    if not val:
+        import sys
+        if sys.platform == "win32":
+            try:
+                import winreg
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as k:
+                    val, _ = winreg.QueryValueEx(k, env_var)
+            except OSError:
+                pass
+    return val
+
+
 def get_api_key(cfg_key: str):
     api_keys = config.app.get(cfg_key)
+    if not api_keys:
+        legacy_singular = cfg_key[:-1] if cfg_key.endswith("s") else cfg_key
+        env_var = legacy_singular.upper()
+        api_keys = config.app.get(legacy_singular) or _resolve_env_var_fallback(env_var)
+
     if not api_keys:
         raise ValueError(
             f"\n\n##### {cfg_key} is not set #####\n\n"
@@ -242,11 +261,12 @@ def has_material_api_keys(provider: str) -> bool:
     if raw is None or raw == "" or raw == []:
         raw = config.app.get(legacy_singular)
     if raw is None or raw == "" or raw == []:
-        raw = os.environ.get(env_var)
+        raw = _resolve_env_var_fallback(env_var)
 
     if isinstance(raw, (list, tuple)):
         return any(bool(k and str(k).strip()) for k in raw)
     return bool(raw and str(raw).strip())
+
 
 
 def _redact_secret(message: str, secret: str) -> str:

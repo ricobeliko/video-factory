@@ -8,11 +8,19 @@
 ## 1. Estado Atual Canônico
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.3_AGENT_DIRECTOR`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.2_CONCLUDED`
+- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `AGENT_DIRECTOR_OR_NEXT_REAL_VIDEO`
+- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **BLOCKED_BY** = `NONE`
+
+### Validação Concluída da V1.3 (Agente Diretor & Multi-Nicho):
+- **V1.3_AGENT_DIRECTOR** = CONCLUÍDA
+- **VÍDEO REAL PRODUZIDO** = `storage/manual_media/terra_parou_5s/final/terra_parou_5s_final.mp4` (69s, 25.28 MB)
+- **NICHO VALIDADO** = `curiosidades_ciencia` (multi-nicho comprovado)
+- **COMPOSIÇÃO HÍBRIDA** = 4 clipes Google Flow Premium preservados + 4 cenas stock filler resolvidas contextualmente via Coverr.
+- **NOVO PADRÃO VISUAL DEFINIDO** = `DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6` (6 cenas Flow por Short para produções futuras, com seleção distribuída de maior impacto visual; demais cenas via Coverr).
 
 ### Validação Concluída da V1.2 (Otimização do Fluxo Manual):
 - **V1.2_FLOW_OPTIMIZATION** = CONCLUÍDA
@@ -97,7 +105,7 @@ O projeto opera sob a regra mandatória **DEV-FIRST / PRODUCTION-LAST** em dois 
 ## 6. Roadmap da Nova Frente
  
 ```text
-V1.1 (Concluída) ──> V1.2 (Concluída) ──> V1.3 (Atual: Agente Diretor) ──> V1.4 (Automação API) ──> Futuro
+V1.1 (Concluída) ──> V1.2 (Concluída) ──> V1.3 (Concluída) ──> V1.4 (Atual: Avaliação Automação) ──> Futuro
 ```
 
 - **V1.1 — Primeiro Vídeo REAL (CONCLUÍDA):**
@@ -111,10 +119,12 @@ V1.1 (Concluída) ──> V1.2 (Concluída) ──> V1.3 (Atual: Agente Diretor)
   - Organização de arquivos em `manifest.json` e `clips/flow_scene_XX.mp4`.
   - Ingestão em comando único com `--dry-run` e fallback híbrido para estoque stock.
   - Testes: 3 PASS em `test/services/test_flow_workflow.py`.
-- **V1.3 — Agente Assistente de Cenas & Prompts (CURRENT_PHASE):**
-  - Agente prepara a divisão de cenas, prompts visuais e manifesto de mídia estruturado.
-- **V1.4 — Avaliação de API & Automação:**
-  - Avaliar viabilidade de automação e integração de API somente após múltiplos vídeos reais bem-sucedidos.
+- **V1.3 — Agente Assistente de Cenas & Prompts (CONCLUÍDA):**
+  - Agente atuando como diretor na divisão de cenas, prompts e manifesto estruturado no nicho `curiosidades_ciencia`.
+  - Render real validado: `terra_parou_5s_final.mp4` (69s).
+  - Padrão visual consolidado: 6 cenas Flow por Short (`DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6`) com seleção distribuída; stock filler contextual via Coverr.
+- **V1.4 — Avaliação de API & Automação (CURRENT_PHASE):**
+  - Avaliar viabilidade de automação e integração de API do Google Flow.
 
 ### Visão e Diretrizes Futuras:
 - **FUTURE_MULTI_CHANNEL_MULTI_NICHE** = planned

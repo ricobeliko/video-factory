@@ -3,28 +3,34 @@
 ## Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.3_AGENT_DIRECTOR`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.2_CONCLUDED`
+- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `AGENT_DIRECTOR_OR_NEXT_REAL_VIDEO`
+- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **BLOCKED_BY** = `NONE`
 
 ### Destaque da Frente Google Flow / Qualidade Visual:
+- **V1.3_AGENT_DIRECTOR** = CONCLUÍDA
+  - Vídeo real validado: `storage/manual_media/terra_parou_5s/final/terra_parou_5s_final.mp4` (69s, 25.28 MB).
+  - Nicho `curiosidades_ciencia` validado com sucesso (expansão multi-nicho).
+  - 4 clipes Google Flow Premium preservados + 4 cenas stock filler resolvidas contextualmente via Coverr.
+  - Novo padrão visual estabelecido: `DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6` (6 cenas Flow por Short para produções futuras).
 - **V1.2_MANUAL_FLOW_OPTIMIZATION** = CONCLUÍDA
 - **Runner Padronizado:** `scripts/flow_workflow.py`
-- **Validação Direcionada:** 3 PASS (`test/services/test_flow_workflow.py` in 0.07s)
+- **Validação Direcionada:** 4 PASS (`test/services/test_flow_workflow.py`)
 - **Fricções Eliminadas:**
   - Preparação automatizada de prompts visuais para Google Flow (9:16 portrait em `prompts_for_flow.md`).
   - Divisão de cenas temporizada e alinhamento com narração via `scene_planner`.
   - Padronização de estrutura de diretório e nomenclatura (`manifest.json`, `clips/flow_scene_XX.mp4`).
-  - Ingestão simplificada e montagem em comando único (`render` com suporte a `--dry-run` e fallback híbrido automático para estoque stock da Video Factory).
-  - Zero alteração no core da aplicação.
+  - Ingestão simplificada e montagem em comando único (`render` com suporte a `--dry-run` e fallback contextual via Coverr).
+  - Suporte resiliente a credenciais de ambiente e registro de usuário sem expor segredos.
 - **V1.1_FIRST_REAL_VIDEO** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
 - **QUALITY_BASELINE** = APROVADA
 - **PUBLICÁVEL** = SIM
 - **DURATION** = 90.50s
-- **Próxima Fase:** `V1.3_AGENT_DIRECTOR`
-  - Agente assume a assistência direta na formulação de prompts e divisão narrativa para o operador.
+- **Próxima Fase:** `V1.4_FLOW_AUTOMATION_EVALUATION`
+  - Avaliação de viabilidade de automação e integração de API do Google Flow.
 - **Visão Futura:**
   - `FUTURE_MULTI_CHANNEL_MULTI_NICHE = planned` (uma única Video Factory atendendo múltiplos canais/nichos, sem forks por canal).
   - `FUTURE_LONG_FORM_VIDEO = planned`
@@ -38,7 +44,8 @@
 - **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
-- **V1.3 Agent Director Assistance** = ACTIVE (CURRENT_PHASE)
+- **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia`; padrão de 6 cenas Flow por Short estabelecido)
+- **V1.4 Flow Automation Evaluation** = ACTIVE (CURRENT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)

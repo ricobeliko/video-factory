@@ -17,10 +17,12 @@ import tempfile
 import unittest
 
 from scripts.flow_workflow import (
+    DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
     build_flow_prompt,
     get_project_status,
     prepare_project,
     render_project,
+    select_default_flow_scenes,
 )
 
 
@@ -132,6 +134,54 @@ class TestFlowWorkflow(unittest.TestCase):
         self.assertGreater(render_res["estimated_duration"], 0.0)
         self.assertEqual(len(render_res["instructions"]), status_after["total_scenes"])
 
+    def test_select_default_flow_scenes_and_backward_compatibility(self):
+        self.assertEqual(DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, 6)
+
+        # Simula 8 cenas
+        class MockScene:
+            def __init__(self, idx, dur):
+                self.scene_index = idx
+                self.duration_hint = dur
+
+        mock_8_scenes = [MockScene(i, 8.0) for i in range(1, 9)]
+        selected_6 = select_default_flow_scenes(mock_8_scenes, target_count=6)
+
+        # Deve selecionar exatamente 6 cenas
+        self.assertEqual(len(selected_6), 6)
+        # Sempre inclui Cena 1 (Hook) e Cena 8 (Fechamento)
+        self.assertIn(1, selected_6)
+        self.assertIn(8, selected_6)
+
+        # Preparação com seleção automática padrão (6 cenas)
+        long_script = " ".join([f"Frase explicativa detalhada para a cena número {i} do teste." for i in range(1, 9)])
+        res_default = prepare_project(
+            script_text=long_script,
+            project_name="default_6_scenes_test",
+            base_dir=self.test_dir,
+            target_scene_duration=5.0,
+        )
+        with open(res_default["manifest_path"], "r", encoding="utf-8") as f:
+            manifest_default = json.load(f)
+
+        self.assertGreaterEqual(manifest_default["total_scenes"], 6)
+        self.assertEqual(len(manifest_default["flow_scenes"]), 6)
+
+        # Compatibilidade com projetos que passam explicitamente 4 cenas
+        res_compat_4 = prepare_project(
+            script_text=long_script,
+            project_name="compat_4_scenes_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1, 4, 5, 7],
+            target_scene_duration=5.0,
+        )
+        with open(res_compat_4["manifest_path"], "r", encoding="utf-8") as f:
+            manifest_compat = json.load(f)
+
+        self.assertEqual(manifest_compat["flow_scenes"], [1, 4, 5, 7])
+        flow_flags = [s["is_flow_premium"] for s in manifest_compat["scenes"] if s["scene_index"] in [1, 4, 5, 7]]
+        self.assertTrue(all(flow_flags))
+
 
 if __name__ == "__main__":
     unittest.main()
+

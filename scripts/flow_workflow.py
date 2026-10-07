@@ -24,6 +24,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from app.config import config  # noqa: E402
 from app.models import const  # noqa: E402
 from app.models.schema import (  # noqa: E402
     SceneClipInstruction,
@@ -93,6 +94,51 @@ def build_flow_prompt(
     }
 
 
+DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6
+
+
+def select_default_flow_scenes(
+    scenes: List[Any],
+    target_count: int = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
+) -> List[int]:
+    """
+    Seleciona as cenas de maior impacto visual/narrativo distribuídas ao longo do Short.
+    Prioriza:
+    1. Cena 1 (Hook inicial indispensável).
+    2. Fechamento/resolução (última cena).
+    3. Cenas intermediárias uniformemente espaçadas para evitar blocos contíguos de stock.
+    4. Cenas com maior duração/relevância visual.
+    """
+    total = len(scenes)
+    if total <= target_count:
+        return [s.scene_index for s in scenes]
+
+    indices = [s.scene_index for s in scenes]
+    chosen = {indices[0], indices[-1]}
+    remaining_needed = target_count - len(chosen)
+
+    if remaining_needed > 0:
+        candidates = indices[1:-1]
+        step = (len(candidates) - 1) / (remaining_needed - 1) if remaining_needed > 1 else len(candidates) / 2
+        for i in range(remaining_needed):
+            idx = int(round(i * step))
+            idx = max(0, min(len(candidates) - 1, idx))
+            chosen.add(candidates[idx])
+
+        if len(chosen) < target_count:
+            duration_sorted = sorted(
+                [s for s in scenes if s.scene_index not in chosen],
+                key=lambda s: getattr(s, "duration_hint", 0.0),
+                reverse=True,
+            )
+            for s in duration_sorted:
+                chosen.add(s.scene_index)
+                if len(chosen) == target_count:
+                    break
+
+    return sorted(list(chosen))
+
+
 def prepare_project(
     script_text: str,
     project_name: str,
@@ -100,6 +146,10 @@ def prepare_project(
     target_scene_duration: float = 8.0,
     voice_name: str = "pt-BR-AntonioNeural-Male",
     base_dir: Optional[str] = None,
+    flow_scenes: Optional[List[int]] = None,
+    custom_prompts: Optional[Dict[int, str]] = None,
+    niche: str = "",
+    target_flow_scenes: int = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
 ) -> Dict[str, Any]:
     """
     Passo 1 & 2: Divide o roteiro em cenas temporizadas e gera prompts para o Flow.
@@ -124,63 +174,93 @@ def prepare_project(
         task_id=f"flow_prep_{safe_project_name}",
     )
 
+    if flow_scenes is not None:
+        flow_indices = set(flow_scenes)
+    else:
+        flow_indices = set(select_default_flow_scenes(scene_plan.scenes, target_count=target_flow_scenes))
+    custom_map = custom_prompts or {}
+
     scenes_data = []
     prompts_md_lines = [
         f"# Prompts Google Flow — Projeto: {safe_project_name}",
         f"**Assunto:** {video_subject or 'Geral'}",
+        f"**Nicho:** {niche or 'Geral'}",
         f"**Total de Cenas:** {scene_plan.total_scenes}",
+        f"**Cenas Flow Premium (a gerar):** {sorted(list(flow_indices))}",
         f"**Voz Recomendada:** {voice_name}",
         "",
         "---",
         "",
         "## Como Usar:",
         "1. Abra o **Google Flow / Veo / Nano Banana** no navegador.",
-        "2. Para cada cena abaixo, copie o **Prompt para o Flow** e gere o clipe em formato vertical (9:16).",
-        f"3. Baixe o vídeo gerado e salve diretamente na pasta: `storage/manual_media/{safe_project_name}/clips/`",
-        "4. Utilize o nome do arquivo indicado em **Arquivo Esperado** (ex: `flow_scene_01.mp4`).",
+        "2. Gere clipes APENAS para as cenas marcadas com **[FLOW PREMIUM]** abaixo (formato vertical 9:16).",
+        f"3. Baixe os vídeos e salve na pasta: `storage/manual_media/{safe_project_name}/clips/`.",
+        "4. As demais cenas serão preenchidas automaticamente pela Video Factory com materiais de estoque.",
         "",
         "---",
         "",
     ]
 
     for scene in scene_plan.scenes:
-        clip_filename = f"flow_scene_{scene.scene_index:02d}.mp4"
-        prompt_info = build_flow_prompt(
-            narration=scene.narration,
-            subject=video_subject,
-            visual_intent=scene.visual_intent or "cinematic stock",
-        )
+        s_idx = scene.scene_index
+        is_flow = s_idx in flow_indices
+        clip_filename = f"flow_scene_{s_idx:02d}.mp4"
+
+        if is_flow and s_idx in custom_map:
+            prompt_en = custom_map[s_idx]
+            prompt_pt = f"Cena {s_idx} personalizada para {video_subject}."
+            visual_intent = "custom visual"
+        else:
+            prompt_info = build_flow_prompt(
+                narration=scene.narration,
+                subject=video_subject,
+                visual_intent=scene.visual_intent or "cinematic stock",
+            )
+            prompt_en = prompt_info["prompt_en"]
+            prompt_pt = prompt_info["prompt_pt"]
+            visual_intent = prompt_info["visual_intent"]
 
         scene_dict = {
-            "scene_index": scene.scene_index,
+            "scene_index": s_idx,
             "narration": scene.narration,
             "duration_hint": scene.duration_hint,
             "expected_clip": clip_filename,
-            "prompt_en": prompt_info["prompt_en"],
-            "prompt_pt": prompt_info["prompt_pt"],
-            "visual_intent": prompt_info["visual_intent"],
+            "is_flow_premium": is_flow,
+            "prompt_en": prompt_en,
+            "prompt_pt": prompt_pt,
+            "visual_intent": visual_intent,
             "search_terms": scene.search_terms,
         }
         scenes_data.append(scene_dict)
 
-        prompts_md_lines.extend([
-            f"### Cena {scene.scene_index:02d} (Estimativa: ~{scene.duration_hint:.1f}s)",
-            f"- **Arquivo Esperado:** `{clip_filename}`",
-            f"- **Narração (pt-BR):** \"{scene.narration}\"",
-            f"- **Prompt para o Flow (copiar e colar):**",
-            "```text",
-            prompt_info["prompt_en"],
-            "```",
-            "",
-        ])
+        if is_flow:
+            prompts_md_lines.extend([
+                f"### Cena {s_idx:02d} — [FLOW PREMIUM] (Estimativa: ~{scene.duration_hint:.1f}s)",
+                f"- **Arquivo Esperado:** `{clip_filename}`",
+                f"- **Narração (pt-BR):** \"{scene.narration}\"",
+                f"- **Prompt para o Flow (copiar e colar):**",
+                "```text",
+                prompt_en,
+                "```",
+                "",
+            ])
+        else:
+            prompts_md_lines.extend([
+                f"### Cena {s_idx:02d} — [STOCK FILLER] (Estimativa: ~{scene.duration_hint:.1f}s)",
+                f"- **Narração (pt-BR):** \"{scene.narration}\"",
+                "- **Status:** Preenchimento automático com materiais de estoque da Video Factory.",
+                "",
+            ])
 
     manifest_data = {
         "project_name": safe_project_name,
         "video_subject": video_subject,
+        "niche": niche,
         "script_text": script_text.strip(),
         "voice_name": voice_name,
         "target_scene_duration": target_scene_duration,
         "total_scenes": len(scenes_data),
+        "flow_scenes": sorted(list(flow_indices)),
         "scenes": scenes_data,
     }
 
@@ -199,6 +279,7 @@ def prepare_project(
         "prompts_md_path": prompts_md_path,
         "clips_dir": clips_dir,
         "total_scenes": len(scenes_data),
+        "flow_scenes_count": len(flow_indices),
     }
 
 
@@ -273,6 +354,7 @@ def render_project(
     dry_run: bool = False,
     task_id: Optional[str] = None,
     output_dir: Optional[str] = None,
+    stock_source: str = "coverr",
 ) -> Dict[str, Any]:
     """
     Passo 4: Ingestão simplificada e montagem pela Video Factory.
@@ -321,24 +403,73 @@ def render_project(
     for sc in manifest["scenes"]:
         s_idx = sc["scene_index"]
         expected_clip = sc["expected_clip"]
+        is_flow = sc.get("is_flow_premium", True)
         flow_clip_path = os.path.join(clips_dir, expected_clip)
 
-        if os.path.exists(flow_clip_path) and os.path.getsize(flow_clip_path) > 0:
+        if is_flow:
+            if not os.path.exists(flow_clip_path) or os.path.getsize(flow_clip_path) == 0:
+                raise FileNotFoundError(
+                    f"Cena {s_idx} [FLOW PREMIUM]: clipe obrigatório não encontrado ({expected_clip}). "
+                    f"Cenas premium do Google Flow não podem ser substituídas por stock."
+                )
             mat_path = flow_clip_path
             provider = "google_flow"
             source_type = "flow"
         else:
-            # Fallback híbrido de stock
-            filler = _find_stock_filler_clip(s_idx)
-            if filler:
-                mat_path = filler
-                provider = "pexels"
+            # Cenas STOCK FILLER:
+            # 1. Tentar material local/cache existente (na pasta clips/ ou nos caches)
+            if os.path.exists(flow_clip_path) and os.path.getsize(flow_clip_path) > 0:
+                mat_path = flow_clip_path
+                provider = "local_clip"
                 source_type = "stock"
             else:
-                raise FileNotFoundError(
-                    f"Cena {s_idx}: clipe Flow não encontrado ({expected_clip}) "
-                    f"e nenhum clipe de cache disponível para fallback."
-                )
+                filler = _find_stock_filler_clip(s_idx)
+                if filler and os.path.exists(filler) and os.path.getsize(filler) > 0:
+                    mat_path = filler
+                    provider = "local_cache"
+                    source_type = "stock"
+                else:
+                    # 2. Reutilizar o resolver nativo de materiais da Video Factory (scene_material)
+                    from app.services import material, scene_material
+
+                    effective_stock = (
+                        stock_source
+                        or manifest.get("stock_source")
+                        or config.app.get("video_source", "coverr")
+                        or "coverr"
+                    )
+                    if not material.has_material_api_keys(effective_stock):
+                        raise RuntimeError(
+                            f"Cena {s_idx} [STOCK FILLER]: Nenhuma credencial configurada para o provider de stock '{effective_stock}' "
+                            f"({effective_stock}_api_keys está vazio em config.toml e {effective_stock.upper()}_API_KEY não definido). "
+                            f"Configure uma chave válida para buscar e baixar materiais de estoque contextuais."
+                        )
+
+                    single_scene_plan = ScenePlan(
+                        total_scenes=1,
+                        scenes=[
+                            ScenePlanItem(
+                                scene_index=s_idx,
+                                narration=sc["narration"],
+                                duration_hint=float(sc.get("duration_hint", 8.0)),
+                                search_terms=sc.get("search_terms", []),
+                                visual_intent=sc.get("visual_intent", "cinematic"),
+                            )
+                        ],
+                    )
+                    scene_params = params.model_copy(update={"video_source": effective_stock})
+                    resolved_selections = scene_material.resolve_scene_materials(
+                        task_id=effective_task_id,
+                        scene_plan=single_scene_plan,
+                        params=scene_params,
+                        audio_duration=float(sc.get("duration_hint", 8.0)),
+                        strict=True,
+                    )
+                    if not resolved_selections or not resolved_selections[0].material_path:
+                        raise RuntimeError(f"Falha ao resolver material de estoque para a cena {s_idx}")
+                    mat_path = resolved_selections[0].material_path
+                    provider = resolved_selections[0].provider
+                    source_type = "stock"
 
         scene_plan_items.append(
             ScenePlanItem(
@@ -486,6 +617,14 @@ def main():
     prepare_p.add_argument("--script", help="Texto integral do roteiro")
     prepare_p.add_argument("--script-file", help="Caminho para arquivo .txt contendo o roteiro")
     prepare_p.add_argument("--subject", default="", help="Assunto ou tema do vídeo")
+    prepare_p.add_argument("--niche", default="", help="Nicho de conteúdo do perfil (ex: curiosidades_ciencia)")
+    prepare_p.add_argument("--flow-scenes", default="", help="Índices das cenas Flow separadas por vírgula (ex: 1,4,5,7)")
+    prepare_p.add_argument(
+        "--flow-count",
+        type=int,
+        default=DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
+        help=f"Quantidade padrão de cenas Flow Premium a selecionar (padrão: {DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT})",
+    )
     prepare_p.add_argument("--target-duration", type=float, default=8.0, help="Duração alvo de cada cena")
     prepare_p.add_argument("--voice", default="pt-BR-AntonioNeural-Male", help="Voz TTS neural")
 
@@ -498,6 +637,7 @@ def main():
     render_p.add_argument("project_dir", help="Diretório do projeto")
     render_p.add_argument("--dry-run", action="store_true", help="Valida pipeline e instruções sem renderizar")
     render_p.add_argument("--output-dir", help="Diretório de saída customizado")
+    render_p.add_argument("--stock-source", default="coverr", help="Provedor de estoque para cenas filler (padrão: coverr)")
 
     args = parser.parse_args()
 
@@ -511,12 +651,19 @@ def main():
             print("Erro: Forneça --script ou --script-file com o texto do roteiro.")
             sys.exit(1)
 
+        flow_sc_list = None
+        if args.flow_scenes:
+            flow_sc_list = [int(x.strip()) for x in args.flow_scenes.split(",") if x.strip().isdigit()]
+
         result = prepare_project(
             script_text=script_content,
             project_name=args.project,
             video_subject=args.subject,
             target_scene_duration=args.target_duration,
             voice_name=args.voice,
+            flow_scenes=flow_sc_list,
+            niche=args.niche,
+            target_flow_scenes=args.flow_count,
         )
         print("\n" + "=" * 60)
         print("PROJETO FLOW PREPARADO COM SUCESSO!")
@@ -550,6 +697,7 @@ def main():
             project_dir=args.project_dir,
             dry_run=args.dry_run,
             output_dir=args.output_dir,
+            stock_source=args.stock_source,
         )
         print("\n" + "=" * 60)
         if args.dry_run:

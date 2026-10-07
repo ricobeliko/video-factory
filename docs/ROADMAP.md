@@ -1209,9 +1209,9 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
 
 # Nova Frente: Qualidade Visual Externa (Google Flow / Google AI Pro / Nano Banana)
 
-**Status:** ✅ INITIATED / ACTIVE (07/10/2026)
+**Status:** ✅ ACTIVE (07/10/2026)
 **CURRENT_FOCUS:** `VIDEO_QUALITY_GOOGLE_FLOW`
-**CURRENT_PHASE:** `V1.1_FIRST_REAL_VIDEO`
+**CURRENT_PHASE:** `V1.2_MANUAL_FLOW_OPTIMIZATION`
 
 ## Objetivo da Frente
 Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **Google AI Pro / Google Flow / Nano Banana** como geração externa de clipes, mantendo a **Video Factory (MoneyPrinterTurbo)** como o motor central responsável por:
@@ -1248,18 +1248,28 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
 
 ## Roadmap da Nova Frente
 
-### V1.1 — Produzir Primeiro Vídeo Real (CURRENT_PHASE)
+### V1.1 — Produzir Primeiro Vídeo Real
 - **Objetivo:** Produzir o primeiro vídeo REAL de ponta a ponta combinando o melhor dos dois mundos:
-  1. Usar roteiro e narração já existentes gerados pela Video Factory.
-  2. Gerar manualmente os clipes visuais no Google Flow (Nano Banana / Google AI Pro) com qualidade cinematográfica.
-  3. Utilizar a Video Factory para a montagem final dos clipes, sincronização de áudio, geração de legendas ASS, adição de música e empacotamento para publicação.
-- **Critério de Aceite:** Exatamente 1 vídeo real produzido, montado e visualmente consistente.
-- **Status:** `IN PROGRESS`
+  1. Roteiro e narração integral já existentes gerados pela Video Factory (~90s com voz Antônio Neural).
+  2. 4 clipes de alta fidelidade gerados no Google Flow utilizados como cenas premium nos momentos narrativos correspondentes (`flow_01_dallas.mp4`, `flow_02_parkland.mp4`, `flow_03_nuclear_briefcase.mp4`, `flow_04_cold_war.mp4`).
+  3. Preenchimento do restante do vídeo com clipes locais/stock já existentes da Video Factory, sem repetição de clipes Flow e sem esticamento artificial.
+  4. Video Factory responsável por montagem, descarte do áudio dos clipes Flow, legendas ASS nativas, trilha sonora e render 1080x1920 (9:16).
+- **Critério de Aceite:** Duração >= 60s, meta 75–90s, narração completa, legendas corretas e qualidade visual consistente.
+- **Status:** ✅ CONCLUÍDA / APROVADA
+  - **Runner final:** `scripts/run_v1_1_flow_jfk_video.py`
+  - **Commit funcional de referência:** `65ff981`
+  - **Duração final obtida:** 90.50s (tamanho 30.08 MB, 1080x1920, áudio íntegro).
+  - **Resultado:** `QUALITY_BASELINE = APROVADA`, `PUBLICÁVEL = SIM`.
+  - **Core da aplicação:** 100% preservado sem nenhuma modificação.
 
-### V1.2 — Otimizar Passos Manuais com Fricção Real
-- **Objetivo:** Otimizar exclusivamente os passos manuais que efetivamente causarem atrito ou retrabalho durante a execução do V1.1.
-- **Critério:** Não antecipar otimizações teóricas. Agir apenas mediante evidência empírica de gargalo.
-- **Status:** `PLANNED`
+### V1.2 — Otimizar Passos Manuais com Fricção Real (CURRENT_PHASE)
+- **Objetivo:** Reduzir exclusivamente os passos manuais que efetivamente causarem atrito ou retrabalho durante a operação prática da frente:
+  - Preparação e estruturação de prompts visuais para o Google Flow;
+  - Divisão de cenas temporizada e alinhamento com a narração;
+  - Organização e nomenclatura padronizada dos clipes baixados;
+  - Ingestão simplificada dos clipes pela Video Factory no pipeline de renderização.
+- **Regra Rígida:** **NÃO integrar API do Google Flow ainda.** Manter fluxo operacional manual até validação de múltiplos vídeos reais.
+- **Status:** `IN PROGRESS / ACTIVE`
 
 ### V1.3 — Assistência do Agente (Cenas, Prompts e Manifesto)
 - **Objetivo:** Agente assume o papel de diretor assistente:
@@ -1273,10 +1283,18 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
 - **Critério:** Decisão baseada em volume real, estabilidade do workflow e custo-benefício.
 - **Status:** `FUTURE / CONDITIONAL`
 
-### Futuro — Hardware e Geração Local
-- Aquisição de hardware dedicado de alta performance para eventual retorno de modelos generativos locais.
-- MuseTalk (DirectML) preservado como base laboratorial para quando houver GPU adequada.
-- **Status:** `FROZEN_LAB / BACKLOG`
+---
+
+## Visão e Diretrizes Futuras (Planned / Backlog)
+
+- **FUTURE_MULTI_CHANNEL_MULTI_NICHE = planned:**
+  - **Arquitetura Mandatória:** Uma ÚNICA Video Factory atendendo múltiplos canais, perfis e nichos, sem criar aplicações separadas para cada canal.
+- **FUTURE_LONG_FORM_VIDEO = planned:**
+  - Suporte à produção de vídeos longos horizontais (16:9) utilizando a mesma esteira de qualidade visual híbrida.
+- **FUTURE_FLOW_API_AUTOMATION = evaluate_later:**
+  - Avaliação de conectores e APIs oficiais após consolidação do processo manual.
+- **FUTURE_LOCAL_VIDEO_AI = evaluate_after_hardware_upgrade:**
+  - Avaliação de geração local de vídeo após futuro upgrade de hardware e GPU dedicada (mantendo MuseTalk DirectML como laboratório congelado).
 
 ---
 

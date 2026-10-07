@@ -3,18 +3,41 @@
 ## Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.1_FIRST_REAL_VIDEO`
-- **PROJECT_STATUS** = `ACTIVE_DEV / NEW_TRACK_INITIALIZED`
+- **CURRENT_PHASE** = `V1.2_MANUAL_FLOW_OPTIMIZATION`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.1_CONCLUDED`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `PRODUCE_FIRST_REAL_VIDEO_WORKFLOW`
+- **NEXT_GATE** = `OPTIMIZE_MANUAL_WORKFLOW_FRICTION`
 - **BLOCKED_BY** = `NONE`
+
+### Destaque da Frente Google Flow / Qualidade Visual:
+- **V1.1_FIRST_REAL_VIDEO** = CONCLUÍDA
+- **QUALITY_BASELINE** = APROVADA
+- **PUBLICÁVEL** = SIM
+- **DURATION** = 90.50s
+- **V1.1 runner final** = `scripts/run_v1_1_flow_jfk_video.py`
+- **Último commit funcional** = `65ff981`
+- **Resultados Validados:**
+  - 4 clipes gerados no Google Flow utilizados como cenas premium nos momentos narrativos adequados.
+  - Video Factory aceita vídeos locais nativamente (`storage/local_videos/`).
+  - Áudio dos clipes Flow descartado; narração original integral (~90s com voz Antônio Neural) e legendas ASS nativas preservadas.
+  - Formato final 1080x1920 (9:16); vídeo de 90.50s assistido e aprovado para publicação.
+  - Não foi necessário alterar o core da aplicação.
+- **Próxima Fase:** `V1.2_MANUAL_FLOW_OPTIMIZATION`
+  - Objetivo: Reduzir trabalho manual incômodo (prompts, divisão de cenas, organização/nomenclatura de clipes e ingestão).
+  - Regra: **NÃO integrar API do Google Flow ainda.**
+- **Visão Futura:**
+  - `FUTURE_MULTI_CHANNEL_MULTI_NICHE = planned` (uma única Video Factory atendendo múltiplos canais/nichos, sem forks por canal).
+  - `FUTURE_LONG_FORM_VIDEO = planned`
+  - `FUTURE_FLOW_API_AUTOMATION = evaluate_later`
+  - `FUTURE_LOCAL_VIDEO_AI = evaluate_after_hardware_upgrade`
 
 > [!IMPORTANT]
 > **Precedência Canônica:** Esta seção reflete o estado consolidado e auditado da fábrica de vídeos em produção no PC forte (`C:\Projetos\MoneyPrinterTurbo`). Ela prevalece formalmente sobre quaisquer menções ou snapshots históricos contidos nas seções inferiores deste documento.
 
 ### Status Consolidado dos Componentes:
-- **Google Flow / External Video Quality Track** = INITIATED (CURRENT_FOCUS)
-- **V1.1 First Real Video Workflow** = IN PROGRESS (CURRENT_PHASE)
+- **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
+- **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
+- **V1.2 Manual Flow Optimization** = IN PROGRESS / ACTIVE (CURRENT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)

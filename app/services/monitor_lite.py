@@ -91,22 +91,13 @@ def get_local_ai_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         "description": "Nenhuma execução shadow registrada.",
     }
 
-    # 3. Consulta à tabela local_ai_shadow_runs
-    candidate_dbs = []
-    if db_path:
-        candidate_dbs.append(db_path)
-    primary_db = scheduler.get_db_path(db_path)
-    candidate_dbs.append(primary_db)
-    # Tenta também o DB de homologação isolado se o principal não tiver corridas
-    homolog_db = os.path.join(os.path.dirname(os.path.abspath(primary_db)), "shadow_homologation.db")
-    candidate_dbs.append(homolog_db)
-
+    # 3. Consulta estritamente ao banco operacional resolvido (sem fallback para homologação/laboratório)
+    target_db = scheduler.get_db_path(db_path)
+    abs_target_db = os.path.abspath(target_db)
     found_row = None
-    for cand in candidate_dbs:
-        if not os.path.isfile(cand):
-            continue
+    if os.path.isfile(abs_target_db):
         try:
-            conn = sqlite3.connect(f"file:{os.path.abspath(cand)}?mode=ro", uri=True, timeout=3.0)
+            conn = sqlite3.connect(f"file:{abs_target_db}?mode=ro", uri=True, timeout=3.0)
             conn.row_factory = sqlite3.Row
             has_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_ai_shadow_runs';"
@@ -125,11 +116,9 @@ def get_local_ai_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
                 ).fetchone()
                 if row:
                     found_row = row
-                    conn.close()
-                    break
             conn.close()
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.debug(f"[MonitorLite] Falha ao consultar local_ai_shadow_runs no DB operacional: {exc}")
 
     if found_row:
         last_run_info["has_data"] = True
@@ -365,7 +354,18 @@ def get_monitor_lite_summary(
     now_iso = now_dt.isoformat()
     today_midnight = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
-    # 1. Obter snapshot da observabilidade V15 (reuso integral)
+    # 1. Checagem de disponibilidade do banco de dados operacional
+    target_db = scheduler.get_db_path(db_path)
+    abs_db = os.path.abspath(target_db)
+    db_available = False
+    if os.path.isfile(abs_db):
+        test_ro = _get_ro_connection(db_path)
+        if test_ro is not None:
+            test_ro.close()
+            db_available = True
+
+    # 2. Obter snapshot da observabilidade V15 (reuso integral)
+    obs_available = True
     try:
         obs_snapshot = production_observability.get_production_observability_snapshot(
             db_path=db_path,
@@ -373,6 +373,7 @@ def get_monitor_lite_summary(
         )
     except Exception as exc:
         logger.warning(f"[MonitorLite] Falha ao carregar observabilidade V15: {exc}")
+        obs_available = False
         obs_snapshot = {
             "generated_at": now_iso,
             "profiles": {},
@@ -384,24 +385,38 @@ def get_monitor_lite_summary(
     profiles = obs_snapshot.get("profiles", {})
     raw_warnings = raw_global.get("warnings", [])
 
-    # 2. Avaliação de Saúde do Sistema
+    if any("OBSERVABILITY_UNAVAILABLE" in str(w) for w in raw_warnings) or worker_st.get("status") == "unavailable":
+        obs_available = False
+    if not db_available:
+        obs_available = False
+
+    # 3. Avaliação Estrita de Saúde do Sistema
     is_primary = bool(worker_st.get("is_primary", True))
     factory_state = str(worker_st.get("factory_state", "RUNNING")).upper()
-    has_crit_warnings = any("COPYRIGHT_BLOCKED" in w or "FAILURES" in w for w in raw_warnings)
+    has_crit_warnings = any("COPYRIGHT_BLOCKED" in str(w) or "FAILURES" in str(w) for w in raw_warnings)
 
     if factory_state in ("STOPPED", "FAILED"):
         sys_status = "OFFLINE"
         sys_badge = "⚪ OFFLINE"
+        role_label = "Fábrica offline / parada"
+        sys_text = "Fábrica parada"
+    elif (not db_available) or (not obs_available):
+        sys_status = "DEGRADED"
+        sys_badge = "🟡 ATENÇÃO"
+        role_label = "Dados operacionais indisponíveis"
+        sys_text = "Dados operacionais indisponíveis"
     elif has_crit_warnings or factory_state == "PAUSED":
         sys_status = "DEGRADED"
         sys_badge = "🟡 ATENÇÃO"
+        role_label = "Instância Primária (Master)" if is_primary else "Visualização Secundária (View Only)"
+        sys_text = "Atenção operacional"
     else:
         sys_status = "ONLINE"
         sys_badge = "🟢 ONLINE"
+        role_label = "Instância Primária (Master)" if is_primary else "Visualização Secundária (View Only)"
+        sys_text = "Operação normal"
 
-    role_label = "Instância Primária (Master)" if is_primary else "Visualização Secundária (View Only)"
-
-    # 3. Métricas de Hoje (Produzidos, Publicados, Fila, Alertas)
+    # 4. Métricas de Hoje (Produzidos, Publicados, Fila, Alertas)
     # Aprovados últimas 24h em todos os canais
     cost_global = raw_global.get("cost_guard", {})
     produced_today = int(cost_global.get("global_approved_24h", 0))
@@ -603,10 +618,11 @@ def get_monitor_lite_summary(
         "system": {
             "status": sys_status,
             "badge": sys_badge,
+            "text": sys_text,
             "factory_state": factory_state,
             "is_primary": is_primary,
             "role_label": role_label,
-            "db_healthy": (conn is not None or not db_path),
+            "db_healthy": db_available,
             "scheduler_enabled": bool(worker_st.get("scheduler_enabled", False)),
             "auto_publish_enabled": bool(worker_st.get("auto_publish_enabled", False)),
         },

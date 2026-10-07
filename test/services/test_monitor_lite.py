@@ -73,7 +73,7 @@ class TestMonitorLite(unittest.TestCase):
             pass
 
     def test_01_summary_without_populated_db(self):
-        """1. Monitor Lite agrega dados e executa sem falhas com banco vazio (fail-soft total)."""
+        """1. Monitor Lite com banco inexistente retorna DEGRADED e não ONLINE (fail-soft total)."""
         empty_db = os.path.join(self.tmp_dir.name, "empty_non_existent.db")
         summary = get_monitor_lite_summary(db_path=empty_db)
 
@@ -87,14 +87,40 @@ class TestMonitorLite(unittest.TestCase):
         self.assertIn("alerts", summary)
         self.assertIn("recent_tasks", summary)
 
-        # Sem quebra, com valores seguros
+        # Sem quebra, com semântica estrita: banco ausente = DEGRADED (nunca ONLINE)
+        self.assertEqual(summary["system"]["status"], "DEGRADED")
+        self.assertEqual(summary["system"]["badge"], "🟡 ATENÇÃO")
+        self.assertFalse(summary["system"]["db_healthy"])
+        self.assertEqual(summary["system"]["text"], "Dados operacionais indisponíveis")
+
+        # Métricas limpas sem crashes
         self.assertEqual(summary["today"]["produced_count"], 0)
         self.assertEqual(summary["today"]["published_count"], 0)
         self.assertEqual(summary["today"]["queue_count"], 0)
         self.assertFalse(summary["current_production"]["is_active"])
 
-    def test_02_absence_of_local_ai_does_not_break(self):
-        """2. Ausência de tabela ou dados de Local AI não quebra o Monitor Lite."""
+    def test_02_absence_of_local_ai_does_not_break_and_ignores_homologation_db(self):
+        """2. Ausência de Local AI no DB operacional exibe SEM DADOS e ignora shadow_homologation.db."""
+        # Cria um shadow_homologation.db no mesmo diretório simulando corrida de laboratório
+        homolog_db = os.path.join(self.tmp_dir.name, "shadow_homologation.db")
+        init_shadow_db(homolog_db)
+        lab_run = ShadowRunResult(
+            shadow_run_id="lab_test_01",
+            task_id="task_lab",
+            topic="Caso de Laboratório",
+            model_role="QUALITY",
+            model_name="qwen3-8b",
+            started_at="2026-10-07T12:00:00Z",
+            finished_at="2026-10-07T12:00:01Z",
+            latency_seconds=10.0,
+            generation_success=True,
+            json_valid=True,
+            fact_guard_approved=True,
+            final_shadow_available=True,
+        )
+        save_shadow_run(lab_run, target=homolog_db)
+
+        # Chama o resumo para o banco operacional test_db (que está sem corridas)
         summary = get_monitor_lite_summary(db_path=self.test_db)
         lai = summary["local_ai"]
 
@@ -102,7 +128,8 @@ class TestMonitorLite(unittest.TestCase):
         self.assertIn("configured_mode", lai)
         self.assertIn("server_status", lai)
         self.assertIn("last_run", lai)
-        # Como o banco de shadow está vazio:
+        # O banco operacional NÃO deve ter puxado a corrida de shadow_homologation.db
+        self.assertFalse(lai["last_run"]["has_data"])
         self.assertIn(lai["last_run"]["status"], ("SEM DADOS", "OFF"))
         self.assertEqual(lai["last_run"]["fact_guard_status"], "NÃO EXECUTADO")
 
@@ -198,15 +225,31 @@ class TestMonitorLite(unittest.TestCase):
         self.assertIn("Histórias e Mistérios", ch_mystery["name"])
 
     def test_07_fail_soft_on_missing_or_corrupt_data(self):
-        """7. Resiliência fail-soft total com parâmetros ausentes ou caminhos corrompidos."""
-        # Chamada com None e com string inválida
-        summary1 = get_monitor_lite_summary(db_path=None)
-        self.assertIsInstance(summary1, dict)
+        """7. Resiliência fail-soft: caminho inválido/ausente resulta em DEGRADED, nunca ONLINE."""
+        # 1. Caminho inválido/inexistente DEVE ser DEGRADED com semântica de dados indisponíveis
+        missing_db = os.path.join(self.tmp_dir.name, "strictly_missing.db")
+        summary_invalid = get_monitor_lite_summary(db_path=missing_db)
+        self.assertIsInstance(summary_invalid, dict)
+        self.assertEqual(summary_invalid["system"]["status"], "DEGRADED")
+        self.assertEqual(summary_invalid["system"]["badge"], "🟡 ATENÇÃO")
+        self.assertFalse(summary_invalid["system"]["db_healthy"])
+        self.assertEqual(summary_invalid["system"]["text"], "Dados operacionais indisponíveis")
+        self.assertIn("channels", summary_invalid)
 
-        summary2 = get_monitor_lite_summary(db_path="/caminho/invalido/para/banco.db")
-        self.assertIsInstance(summary2, dict)
-        self.assertEqual(summary2["system"]["status"], "ONLINE")
-        self.assertIn("channels", summary2)
+        # 2. Banco saudável e acessível DEVE ser ONLINE
+        summary_healthy = get_monitor_lite_summary(db_path=self.test_db)
+        self.assertIsInstance(summary_healthy, dict)
+        self.assertEqual(summary_healthy["system"]["status"], "ONLINE")
+        self.assertEqual(summary_healthy["system"]["badge"], "🟢 ONLINE")
+        self.assertTrue(summary_healthy["system"]["db_healthy"])
+        self.assertEqual(summary_healthy["system"]["text"], "Operação normal")
+
+        # 3. Estado STOPPED DEVE ser OFFLINE
+        with patch("app.services.operator_console.get_factory_state", return_value="STOPPED"):
+            summary_stopped = get_monitor_lite_summary(db_path=self.test_db)
+            self.assertEqual(summary_stopped["system"]["status"], "OFFLINE")
+            self.assertEqual(summary_stopped["system"]["badge"], "⚪ OFFLINE")
+            self.assertEqual(summary_stopped["system"]["text"], "Fábrica parada")
 
     def test_08_streamlit_render_function_executes_safely(self):
         """8. render_monitor_lite() executa sem disparar exceções não tratadas no Streamlit."""

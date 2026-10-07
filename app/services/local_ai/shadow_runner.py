@@ -417,7 +417,7 @@ class LocalAIShadowRunner:
         )
         if not sufficiency.sufficient:
             logger.warning(
-                f"[LocalAIShadow] FactPack insuficiente para {requested_duration_seconds:.1f}s: {sufficiency.reason}"
+                f"[LocalAIShadow] {sufficiency.reason}"
             )
             finished_at = datetime.now(timezone.utc).isoformat()
             dt = time.time() - t0

@@ -167,6 +167,7 @@ def run_homologation(
     db_path: Optional[str] = None,
     case_filter: Optional[int] = None,
     tolerance_seconds: float = 15.0,
+    duration: Optional[float] = None,
 ) -> Tuple[List[ShadowRunResult], str]:
     """Executa a bateria de 10 testes shadow contra o servidor local real."""
     storage_db = db_path or os.path.join(utils.storage_dir(create=True), "shadow_homologation.db")
@@ -178,6 +179,8 @@ def run_homologation(
     print(f"Timeout por Chamada:{timeout}s (HTTP per-call timeout)")
     print(f"Database Isolado:   {storage_db}")
     print(f"Tolerância Duração: ±{tolerance_seconds}s")
+    if case_filter is not None and duration is not None:
+        print(f"Duração Override:   {duration:.1f}s (para Caso {case_filter})")
     print("=" * 70 + "\n")
 
     # Configuração em modo shadow estrito
@@ -211,6 +214,8 @@ def run_homologation(
         cat = c["category"]
         top = c["topic"]
         req_dur = c["requested_duration"]
+        if case_filter is not None and duration is not None and cid == case_filter:
+            req_dur = float(duration)
         pack = FactPack(topic=top, facts=c["facts"])
 
         print(f"[{cid:02d}/10] Executando Caso: {top} ({cat.upper()})...")
@@ -225,20 +230,28 @@ def run_homologation(
 
         if res.error_type == "FACT_PACK_INSUFFICIENT":
             status_flag = "FACT_PACK_INSUFFICIENT"
+            json_str = "N/A"
+            fg_str = "NÃO EXECUTADO"
         elif res.fact_guard_approved:
             status_flag = "PASS"
+            json_str = "SIM"
+            fg_str = "APROVADO"
         elif res.generation_success:
             status_flag = "FAIL_CLOSED"
+            json_str = "SIM" if res.json_valid else "NÃO"
+            fg_str = "REPROVADO"
         else:
             status_flag = "ERROR"
+            json_str = "SIM" if res.json_valid else "NÃO"
+            fg_str = "NÃO EXECUTADO" if not res.generation_success else "REPROVADO"
 
         dur_flag = "OK" if res.duration_within_tolerance else "DELTA"
         print(
             f"       -> Status: {status_flag} | Latência Total: {res.latency_seconds:.1f}s "
             f"(Gen: {res.generation_latency_seconds:.1f}s, FG: {res.fact_guard_latency_seconds:.1f}s, Rew: {res.rewrite_latency_seconds:.1f}s) | "
             f"Tokens: P={res.prompt_tokens_total} C={res.completion_tokens_total} T={res.total_tokens_total} (Calls: {res.total_llm_calls}) | "
-            f"JSON: {'SIM' if res.json_valid else 'NÃO'} | "
-            f"FactGuard: {'APROVADO' if res.fact_guard_approved else 'REPROVADO'} | "
+            f"JSON: {json_str} | "
+            f"FactGuard: {fg_str} | "
             f"Claims Não Suportadas: {res.unsupported_claims_count} | "
             f"Duração: {res.estimated_duration_seconds:.1f}s/{res.requested_duration_seconds:.1f}s "
             f"(Palavras: {res.script_word_count}/{res.target_word_count}, {dur_flag})"
@@ -328,6 +341,7 @@ def main():
     parser.add_argument("--db-path", type=str, default=None, help="Caminho do SQLite isolado para homologação")
     parser.add_argument("--case", type=int, default=None, help="Executar apenas caso específico (1 a 10)")
     parser.add_argument("--tolerance", type=float, default=15.0, help="Tolerância de duração estimada em segundos (±)")
+    parser.add_argument("--duration", type=float, default=None, help="Sobrescrever requested_duration do caso selecionado (--case N)")
     args = parser.parse_args()
 
     results, verdict = run_homologation(
@@ -337,6 +351,7 @@ def main():
         db_path=args.db_path,
         case_filter=args.case,
         tolerance_seconds=args.tolerance,
+        duration=args.duration,
     )
 
     # Retorna 0 para PASS e REVIEW, ou se SINGLE_CASE tiver sido aprovado

@@ -1164,7 +1164,93 @@ class TestLocalAIShadowRunner(unittest.TestCase):
         self.assertFalse(res.generation_success)
         self.assertFalse(res.final_shadow_available)
 
+    def test_37_duration_override_in_homologation_harness(self):
+        """V1.4D.2: --duration sobrescreve requested_duration do caso selecionado (--case N)."""
+        from scripts.run_local_ai_shadow_homologation import run_homologation
+
+        mock_run_res = ShadowRunResult(
+            shadow_run_id="test_dur_override",
+            task_id="homolog_case_06",
+            topic="Colônia de Roanoke",
+            model_role="QUALITY",
+            model_name="qwen3-8b",
+            started_at="2026-10-07T12:00:00Z",
+            finished_at="2026-10-07T12:00:05Z",
+            latency_seconds=5.0,
+            generation_success=True,
+            json_valid=True,
+            fact_guard_approved=True,
+            final_shadow_available=True,
+            script_word_count=108,
+            requested_duration_seconds=45.0,
+            estimated_duration_seconds=45.0,
+            duration_delta_seconds=0.0,
+            duration_within_tolerance=True,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        try:
+            with patch("app.services.local_ai.shadow_runner.LocalAIShadowRunner.run_shadow", return_value=mock_run_res) as mock_run:
+                results, verdict = run_homologation(case_filter=6, duration=45.0, db_path=temp_db)
+                self.assertEqual(mock_run.call_count, 1)
+                call_kwargs = mock_run.call_args[1]
+                self.assertEqual(call_kwargs["requested_duration_seconds"], 45.0)
+
+            # Sem override, mantém duração padrão (70.0s para o caso 6)
+            with patch("app.services.local_ai.shadow_runner.LocalAIShadowRunner.run_shadow", return_value=mock_run_res) as mock_run:
+                results, verdict = run_homologation(case_filter=6, duration=None, db_path=temp_db)
+                self.assertEqual(mock_run.call_count, 1)
+                call_kwargs = mock_run.call_args[1]
+                self.assertEqual(call_kwargs["requested_duration_seconds"], 70.0)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_38_fact_pack_insufficient_output_formatting(self):
+        """V1.4D.2: FACT_PACK_INSUFFICIENT exibe JSON: N/A e FactGuard: NÃO EXECUTADO sem duplicação de string."""
+        from scripts.run_local_ai_shadow_homologation import run_homologation
+
+        mock_insufficient_res = ShadowRunResult(
+            shadow_run_id="test_insufficient_format",
+            task_id="homolog_case_06",
+            topic="Colônia de Roanoke",
+            model_role="QUALITY",
+            model_name="qwen3-8b",
+            started_at="2026-10-07T12:00:00Z",
+            finished_at="2026-10-07T12:00:01Z",
+            latency_seconds=0.1,
+            generation_success=False,
+            json_valid=False,
+            fact_guard_approved=False,
+            final_shadow_available=False,
+            error_type="FACT_PACK_INSUFFICIENT",
+            error_message="contém 46 palavras em 5 fatos",
+            script_word_count=0,
+            requested_duration_seconds=70.0,
+            estimated_duration_seconds=0.0,
+            duration_delta_seconds=-70.0,
+            duration_within_tolerance=False,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        try:
+            with patch("app.services.local_ai.shadow_runner.LocalAIShadowRunner.run_shadow", return_value=mock_insufficient_res), \
+                 patch("sys.stdout", new=io.StringIO()) as fake_out:
+                results, verdict = run_homologation(case_filter=6, db_path=temp_db)
+                output = fake_out.getvalue()
+
+            self.assertIn("JSON: N/A", output)
+            self.assertIn("FactGuard: NÃO EXECUTADO", output)
+            self.assertNotIn("JSON: NÃO", output)
+            self.assertNotIn("FactGuard: REPROVADO", output)
+            # Verifica que não há duplicação na string
+            self.assertNotIn("FactPack insuficiente para 70.0s: FactPack insuficiente", output)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -348,7 +348,7 @@ def generate_grounded_content_with_guard(
         )
         if not sufficiency.sufficient:
             logger.warning(
-                f"[FactGuard] FactPack insuficiente para {target_duration_seconds}s: {sufficiency.reason}"
+                f"[FactGuard] {sufficiency.reason}"
             )
             return FactGuardResult(
                 approved=False,

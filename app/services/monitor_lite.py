@@ -16,6 +16,7 @@ PRINCÍPIOS ARQUITETURAIS:
 from __future__ import annotations
 
 import os
+import platform
 import socket
 import sqlite3
 from datetime import datetime, timezone
@@ -31,6 +32,69 @@ from app.services import (
     scheduler,
 )
 from app.services.local_ai import LocalAIConfig, get_shadow_db_path
+
+
+def detect_environment() -> Dict[str, Any]:
+    """
+    Detecta de forma simples e segura o ambiente de execução: 'DEV' ou 'PRODUÇÃO'.
+    - Variável de ambiente explícita (VIDEO_FACTORY_ENV, APP_ENV, ENVIRONMENT)
+    - Hostname conhecido do notebook de desenvolvimento DEV (ex: DESKTOP-MU3HR6J)
+    - Branch git atual (se diferente de 'main', indica DEV)
+    """
+    env_var = (
+        os.getenv("VIDEO_FACTORY_ENV")
+        or os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or ""
+    ).strip().upper()
+
+    if env_var in ("PROD", "PRODUCTION", "PRODUÇÃO"):
+        return {
+            "name": "PRODUÇÃO",
+            "badge": "PRODUÇÃO",
+            "is_dev": False,
+        }
+    if env_var in ("DEV", "DEVELOPMENT"):
+        return {
+            "name": "DEV",
+            "badge": "DEV",
+            "is_dev": True,
+        }
+
+    current_host = (platform.node() or socket.gethostname() or os.getenv("COMPUTERNAME") or "").upper()
+    if "DESKTOP-MU3HR6J" in current_host or "NOTEBOOK" in current_host or "DEV" in current_host:
+        return {
+            "name": "DEV",
+            "badge": "DEV",
+            "is_dev": True,
+        }
+    if "PC-FORTE" in current_host or "PROD" in current_host:
+        return {
+            "name": "PRODUÇÃO",
+            "badge": "PRODUÇÃO",
+            "is_dev": False,
+        }
+
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        head_file = os.path.join(base_dir, ".git", "HEAD")
+        if os.path.isfile(head_file):
+            with open(head_file, "r", encoding="utf-8") as f:
+                ref_line = f.read().strip()
+                if "ref: refs/heads/main" not in ref_line:
+                    return {
+                        "name": "DEV",
+                        "badge": "DEV",
+                        "is_dev": True,
+                    }
+    except Exception:
+        pass
+
+    return {
+        "name": "PRODUÇÃO",
+        "badge": "PRODUÇÃO",
+        "is_dev": False,
+    }
 
 
 def _get_ro_connection(db_path: Optional[str] = None) -> Optional[sqlite3.Connection]:
@@ -613,12 +677,17 @@ def get_monitor_lite_summary(
     # 9. Últimas Tarefas
     recent_tasks = get_recent_tasks_summary(db_path=db_path, limit=8)
 
+    env_info = detect_environment()
+
     return {
         "generated_at": now_iso,
         "system": {
             "status": sys_status,
             "badge": sys_badge,
             "text": sys_text,
+            "environment": env_info["name"],
+            "environment_badge": env_info["badge"],
+            "is_dev": env_info["is_dev"],
             "factory_state": factory_state,
             "is_primary": is_primary,
             "role_label": role_label,

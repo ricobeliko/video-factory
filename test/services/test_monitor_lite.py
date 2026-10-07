@@ -31,6 +31,7 @@ from app.services.local_ai import init_shadow_db, save_shadow_run, ShadowRunResu
 from app.services.monitor_lite import (
     _get_ro_connection,
     check_local_ai_server,
+    detect_environment,
     format_actionable_alerts,
     get_local_ai_summary,
     get_monitor_lite_summary,
@@ -273,6 +274,25 @@ class TestMonitorLite(unittest.TestCase):
              patch("streamlit.json"):
             # Não pode lançar nenhuma exceção
             render_monitor_lite(db_path=self.test_db)
+
+    def test_09_environment_detection_and_badges(self):
+        """9. Identificação de ambiente (DEV vs PRODUÇÃO) opera de forma segura e determinística."""
+        # Teste com variável explícita DEV
+        with patch.dict(os.environ, {"VIDEO_FACTORY_ENV": "DEV"}):
+            env_dev = detect_environment()
+            self.assertEqual(env_dev["name"], "DEV")
+            self.assertTrue(env_dev["is_dev"])
+
+        # Teste com variável explícita PRODUÇÃO
+        with patch.dict(os.environ, {"VIDEO_FACTORY_ENV": "PROD"}):
+            env_prod = detect_environment()
+            self.assertEqual(env_prod["name"], "PRODUÇÃO")
+            self.assertFalse(env_prod["is_dev"])
+
+        # Teste integrado no summary
+        summary = get_monitor_lite_summary(db_path=self.test_db)
+        self.assertIn(summary["system"]["environment"], ("DEV", "PRODUÇÃO"))
+        self.assertIn(summary["system"]["environment_badge"], ("DEV", "PRODUÇÃO"))
 
 
 if __name__ == "__main__":

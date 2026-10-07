@@ -12,7 +12,8 @@ Esta skill orienta o agente e o operador no fluxo híbrido de produção de víd
 ## 1. Registros e Foco Operacional
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.2_MANUAL_FLOW_OPTIMIZATION`
+- **CURRENT_PHASE** = `V1.3_AGENT_DIRECTOR`
+- **WORKFLOW_RUNNER** = `scripts/flow_workflow.py` (V1.2 concluída)
 
 ---
 
@@ -89,7 +90,7 @@ Esta skill orienta o agente e o operador no fluxo híbrido de produção de víd
 ## 6. Evolução das Fases
 
 - **V1.1:** Produzir o primeiro vídeo REAL manual com clipe do Flow + montagem da Video Factory (CONCLUÍDA — 90.50s aprovado).
-- **V1.2 (CURRENT_PHASE):** Otimizar unicamente os passos manuais que gerarem retrabalho real (prompts, cenas, organização e ingestão).
-- **V1.3:** Agente assume suporte à divisão de cenas, redação de prompts e manifesto de mídia.
+- **V1.2:** Otimizar unicamente os passos manuais que gerarem retrabalho real (CONCLUÍDA — utilitário `scripts/flow_workflow.py` com `prepare`, `status` e `render`).
+- **V1.3 (CURRENT_PHASE):** Agente assume suporte à divisão de cenas, redação de prompts e manifesto de mídia.
 - **V1.4:** Avaliação de API/automação somente após múltiplos vídeos reais bem-sucedidos.
 - **Futuro:** Upgrade de hardware e reavaliação de geração local. Arquitetura de uma única Video Factory para múltiplos canais/nichos.

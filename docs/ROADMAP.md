@@ -13,10 +13,10 @@
 # Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.2_MANUAL_FLOW_OPTIMIZATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.1_CONCLUDED`
+- **CURRENT_PHASE** = `V1.3_AGENT_DIRECTOR`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.2_CONCLUDED`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `OPTIMIZE_MANUAL_WORKFLOW_FRICTION`
+- **NEXT_GATE** = `AGENT_DIRECTOR_OR_NEXT_REAL_VIDEO`
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **BLOCKED_BY** = `NONE`
 
@@ -27,6 +27,8 @@
 
 - **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
+- **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
+- **V1.3 Agent Director Assistance** = ACTIVE (CURRENT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
@@ -1211,7 +1213,7 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
 
 **Status:** ✅ ACTIVE (07/10/2026)
 **CURRENT_FOCUS:** `VIDEO_QUALITY_GOOGLE_FLOW`
-**CURRENT_PHASE:** `V1.2_MANUAL_FLOW_OPTIMIZATION`
+**CURRENT_PHASE:** `V1.3_AGENT_DIRECTOR`
 
 ## Objetivo da Frente
 Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **Google AI Pro / Google Flow / Nano Banana** como geração externa de clipes, mantendo a **Video Factory (MoneyPrinterTurbo)** como o motor central responsável por:
@@ -1262,21 +1264,23 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
   - **Resultado:** `QUALITY_BASELINE = APROVADA`, `PUBLICÁVEL = SIM`.
   - **Core da aplicação:** 100% preservado sem nenhuma modificação.
 
-### V1.2 — Otimizar Passos Manuais com Fricção Real (CURRENT_PHASE)
+### V1.2 — Otimizar Passos Manuais com Fricção Real
 - **Objetivo:** Reduzir exclusivamente os passos manuais que efetivamente causarem atrito ou retrabalho durante a operação prática da frente:
-  - Preparação e estruturação de prompts visuais para o Google Flow;
-  - Divisão de cenas temporizada e alinhamento com a narração;
-  - Organização e nomenclatura padronizada dos clipes baixados;
-  - Ingestão simplificada dos clipes pela Video Factory no pipeline de renderização.
+  - Preparação e estruturação de prompts visuais para o Google Flow (9:16 portrait em `prompts_for_flow.md`);
+  - Divisão de cenas temporizada e alinhamento com a narração via `scene_planner`;
+  - Organização e nomenclatura padronizada dos clipes baixados (`manifest.json` e `clips/flow_scene_XX.mp4`);
+  - Ingestão simplificada dos clipes pela Video Factory no pipeline de renderização em comando único (`render` com `--dry-run` e fallback híbrido).
 - **Regra Rígida:** **NÃO integrar API do Google Flow ainda.** Manter fluxo operacional manual até validação de múltiplos vídeos reais.
-- **Status:** `IN PROGRESS / ACTIVE`
+- **Status:** ✅ CONCLUÍDA / HOMOLOGADA
+  - **Utilitário Padronizado:** `scripts/flow_workflow.py` com modos `prepare`, `status` e `render`.
+  - **Validação:** 3 testes unitários PASS em `test/services/test_flow_workflow.py` (0.07s).
 
-### V1.3 — Assistência do Agente (Cenas, Prompts e Manifesto)
+### V1.3 — Assistência do Agente (Cenas, Prompts e Manifesto) (CURRENT_PHASE)
 - **Objetivo:** Agente assume o papel de diretor assistente:
   - Divisão automatizada de cenas baseada no roteiro/áudio.
   - Formulação de prompts visuais detalhados prontos para colar no Google Flow.
   - Geração de manifesto de mídia estruturado para ingestão facilitada na montagem.
-- **Status:** `PLANNED`
+- **Status:** `ACTIVE / IN PROGRESS`
 
 ### V1.4 — Avaliação de API e Automação
 - **Objetivo:** Avaliar a viabilidade de automação via API ou conectores programáticos somente após a produção e validação de múltiplos vídeos reais manuais.

@@ -3,28 +3,28 @@
 ## Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.2_MANUAL_FLOW_OPTIMIZATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.1_CONCLUDED`
+- **CURRENT_PHASE** = `V1.3_AGENT_DIRECTOR`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.2_CONCLUDED`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `OPTIMIZE_MANUAL_WORKFLOW_FRICTION`
+- **NEXT_GATE** = `AGENT_DIRECTOR_OR_NEXT_REAL_VIDEO`
 - **BLOCKED_BY** = `NONE`
 
 ### Destaque da Frente Google Flow / Qualidade Visual:
-- **V1.1_FIRST_REAL_VIDEO** = CONCLUÍDA
+- **V1.2_MANUAL_FLOW_OPTIMIZATION** = CONCLUÍDA
+- **Runner Padronizado:** `scripts/flow_workflow.py`
+- **Validação Direcionada:** 3 PASS (`test/services/test_flow_workflow.py` in 0.07s)
+- **Fricções Eliminadas:**
+  - Preparação automatizada de prompts visuais para Google Flow (9:16 portrait em `prompts_for_flow.md`).
+  - Divisão de cenas temporizada e alinhamento com narração via `scene_planner`.
+  - Padronização de estrutura de diretório e nomenclatura (`manifest.json`, `clips/flow_scene_XX.mp4`).
+  - Ingestão simplificada e montagem em comando único (`render` com suporte a `--dry-run` e fallback híbrido automático para estoque stock da Video Factory).
+  - Zero alteração no core da aplicação.
+- **V1.1_FIRST_REAL_VIDEO** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
 - **QUALITY_BASELINE** = APROVADA
 - **PUBLICÁVEL** = SIM
 - **DURATION** = 90.50s
-- **V1.1 runner final** = `scripts/run_v1_1_flow_jfk_video.py`
-- **Último commit funcional** = `65ff981`
-- **Resultados Validados:**
-  - 4 clipes gerados no Google Flow utilizados como cenas premium nos momentos narrativos adequados.
-  - Video Factory aceita vídeos locais nativamente (`storage/local_videos/`).
-  - Áudio dos clipes Flow descartado; narração original integral (~90s com voz Antônio Neural) e legendas ASS nativas preservadas.
-  - Formato final 1080x1920 (9:16); vídeo de 90.50s assistido e aprovado para publicação.
-  - Não foi necessário alterar o core da aplicação.
-- **Próxima Fase:** `V1.2_MANUAL_FLOW_OPTIMIZATION`
-  - Objetivo: Reduzir trabalho manual incômodo (prompts, divisão de cenas, organização/nomenclatura de clipes e ingestão).
-  - Regra: **NÃO integrar API do Google Flow ainda.**
+- **Próxima Fase:** `V1.3_AGENT_DIRECTOR`
+  - Agente assume a assistência direta na formulação de prompts e divisão narrativa para o operador.
 - **Visão Futura:**
   - `FUTURE_MULTI_CHANNEL_MULTI_NICHE = planned` (uma única Video Factory atendendo múltiplos canais/nichos, sem forks por canal).
   - `FUTURE_LONG_FORM_VIDEO = planned`
@@ -37,7 +37,8 @@
 ### Status Consolidado dos Componentes:
 - **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
-- **V1.2 Manual Flow Optimization** = IN PROGRESS / ACTIVE (CURRENT_PHASE)
+- **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
+- **V1.3 Agent Director Assistance** = ACTIVE (CURRENT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)

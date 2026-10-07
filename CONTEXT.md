@@ -8,11 +8,22 @@
 ## 1. Estado Atual Canônico
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.2_MANUAL_FLOW_OPTIMIZATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.1_CONCLUDED`
+- **CURRENT_PHASE** = `V1.3_AGENT_DIRECTOR`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.2_CONCLUDED`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `OPTIMIZE_MANUAL_WORKFLOW_FRICTION`
+- **NEXT_GATE** = `AGENT_DIRECTOR_OR_NEXT_REAL_VIDEO`
 - **BLOCKED_BY** = `NONE`
+
+### Validação Concluída da V1.2 (Otimização do Fluxo Manual):
+- **V1.2_FLOW_OPTIMIZATION** = CONCLUÍDA
+- **WORKFLOW_RUNNER** = `scripts/flow_workflow.py`
+- **TESTES_DIRECIONADOS** = 3 PASS (`test/services/test_flow_workflow.py` in 0.07s)
+- **MELHORIAS ENTREGUES**:
+  - Preparação automatizada de prompts cinematográficos para Google Flow (9:16 vertical, `prompts_for_flow.md`).
+  - Divisão de cenas temporizada e alinhamento com a narração via `scene_planner`.
+  - Padronização da estrutura de diretório (`manifest.json`, `clips/flow_scene_XX.mp4`).
+  - Ingestão simplificada e montagem em comando único (`python scripts/flow_workflow.py render <dir>`), com suporte a `--dry-run` e fallback híbrido automático para estoque stock da Video Factory.
+  - Zero alteração no core da aplicação.
 
 ### Validação Concluída da V1.1 (Primeiro Vídeo Real):
 - **V1.1_FIRST_REAL_VIDEO** = CONCLUÍDA
@@ -21,15 +32,6 @@
 - **DURATION** = 90.50s
 - **V1.1 runner final** = `scripts/run_v1_1_flow_jfk_video.py`
 - **Commit funcional de referência** = `65ff981`
-
-**Resultados Validados na Prática:**
-- 4 clipes gerados no Google Flow utilizados como cenas premium nos momentos narrativos adequados (`flow_01_dallas.mp4`, `flow_02_parkland.mp4`, `flow_03_nuclear_briefcase.mp4`, `flow_04_cold_war.mp4`).
-- A Video Factory aceita vídeos locais nativamente via pipeline de cenas e `VideoParams(video_source="local")`.
-- Áudio interno dos clipes Flow é completamente descartado.
-- Narração original integral (~90s com voz `pt-BR-AntonioNeural-Male`) e legendas ASS nativas da Video Factory preservadas com sincronia exata.
-- Formato final renderizado em 1080x1920 (9:16 portrait).
-- Vídeo de 90.50s assistido e aprovado para publicação.
-- Zero alteração no core da aplicação (apenas o runner foi refinado).
 
 ---
 
@@ -95,21 +97,21 @@ O projeto opera sob a regra mandatória **DEV-FIRST / PRODUCTION-LAST** em dois 
 ## 6. Roadmap da Nova Frente
  
 ```text
-V1.1 (Concluída) ──> V1.2 (Atual: Otimização) ──> V1.3 (Agente Diretor) ──> V1.4 (Automação API) ──> Futuro
+V1.1 (Concluída) ──> V1.2 (Concluída) ──> V1.3 (Atual: Agente Diretor) ──> V1.4 (Automação API) ──> Futuro
 ```
 
 - **V1.1 — Primeiro Vídeo REAL (CONCLUÍDA):**
   - Produzido e aprovado o vídeo completo de JFK com 90.50s de duração.
   - 4 clipes premium Google Flow + clipes stock/cache da Video Factory para preenchimento.
   - Narração, legendas, áudio e formato 9:16 (1080x1920) 100% validados.
-- **V1.2 — Otimizar Passos Manuais (CURRENT_PHASE):**
-  - Objetivo: Reduzir somente o trabalho manual realmente incômodo na prática:
-    - Preparação de prompts visuais;
-    - Divisão de cenas temporizada;
-    - Organização e nomenclatura dos clipes;
-    - Ingestão simplificada dos clipes pela Video Factory.
-  - **NÃO integrar API do Google Flow ainda.**
-- **V1.3 — Agente Assistente de Cenas & Prompts:**
+- **V1.2 — Otimizar Passos Manuais (CONCLUÍDA):**
+  - Entregue utilitário padronizado `scripts/flow_workflow.py` com `prepare`, `status` e `render`.
+  - Preparação automatizada de prompts visuais para Google Flow (9:16 portrait em `prompts_for_flow.md`).
+  - Divisão de cenas temporizada e alinhamento via `scene_planner`.
+  - Organização de arquivos em `manifest.json` e `clips/flow_scene_XX.mp4`.
+  - Ingestão em comando único com `--dry-run` e fallback híbrido para estoque stock.
+  - Testes: 3 PASS em `test/services/test_flow_workflow.py`.
+- **V1.3 — Agente Assistente de Cenas & Prompts (CURRENT_PHASE):**
   - Agente prepara a divisão de cenas, prompts visuais e manifesto de mídia estruturado.
 - **V1.4 — Avaliação de API & Automação:**
   - Avaliar viabilidade de automação e integração de API somente após múltiplos vídeos reais bem-sucedidos.

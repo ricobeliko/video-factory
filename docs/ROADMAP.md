@@ -13,10 +13,10 @@
 # Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
-- **CURRENT_PHASE** = `V1.4D.2_FACT_SUFFICIENCY_GATE_AND_RUNTIME_FINALIZATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4D.2_CONCLUDED`
+- **CURRENT_PHASE** = `V1.4D_LOCAL_AI_SHADOW_HOMOLOGATION`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4D_CONCLUDED_AND_VALIDATED`
 - **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
-- **NEXT_GATE** = `PC_FORTE_SHADOW_HOMOLOGATION_RUN_CASE_6`
+- **NEXT_GATE** = `NEXT_CYCLE_PLANNING (LOCAL_AI_HOMOLOGATED / FLOW_6_SCENES_HOMOLOGATED)`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_AI_MODE** = `off` (DEFAULT = off; shadow disponível para testes/lab; active NÃO habilitado no pipeline de produção)
 - **LOCAL_AI_VIABLE** = `YES`
@@ -28,8 +28,9 @@
 
 ## Status Consolidado por Componente
 
-- **Local AI Track (V1.4A/V1.4B/V1.4C/V1.4D)** = ACTIVE (CURRENT_FOCUS)
-- **V1.4D.2 Fact Sufficiency Gate & Runtime Finalization** = CONCLUÍDA / HOMOLOGADA (Gate determinístico pré-geração com ratio conservador 2.0x, estado estruturado FACT_PACK_INSUFFICIENT evitando forçar o modelo a preencher vácuo com alucinação, telemetria de candidato rejeitado preservando fail-closed com final_content=None, runtime script atualizado com -tb 4, --reasoning off, --reasoning-budget 0, documentação de contenção de GPU por mineração Kryptex, 36/36 testes aprovados)
+- **Local AI Track (V1.4A/V1.4B/V1.4C/V1.4D)** = VALIDATED / COMPLETE (V1.4D = COMPLETE / VALIDATED)
+- **V1.4D Local AI Shadow Homologation** = COMPLETE / VALIDATED (Homologado no PC Forte com RX 580 8GB / Vulkan / Qwen3-8B; Caso Roanoke 45s aprovado com 0 claims não suportadas, 0 rewrites, duração tolerada e latência de 38.68s; Gate de suficiência validado com bloqueio zero-call em 70s; Kryptex documentado como ofensor de GPU contention e freeze formal dos parâmetros operacionais)
+- **V1.4D.2 Fact Sufficiency Gate & Runtime Finalization** = CONCLUÍDA / HOMOLOGADA (Gate determinístico pré-geração com ratio conservador 2.0x, estado estruturado FACT_PACK_INSUFFICIENT evitando forçar o modelo a preencher vácuo com alucinação, telemetria de candidato rejeitado preservando fail-closed com final_content=None, runtime script atualizado com -tb 4, --reasoning off, --reasoning-budget 0, harness com --duration override e exibição semântica refinada, 38/38 testes aprovados)
 - **V1.4D.1 Shadow Homologation Optimization** = CONCLUÍDA / HOMOLOGADA (Instrumentação por etapa de latência e tokens acumulados, alvo determinístico de palavras via words_per_second 2.4, eliminação de narração redundante cena a cena, suporte a caso único no harness)
 - **V1.4A Local AI Lab & Benchmark** = CONCLUÍDA / VIABILIDADE CONFIRMADA (LOCAL_AI_VIABLE = YES; PC Forte RX 580: Qwen3-4B ~21 tok/s, Qwen3-8B ~16.4 tok/s; DEV CPU: Qwen3-0.6B/1.7B/2.5-1.5B ~7-12 tok/s. Constatação: LLM factual grounding is NOT trusted without FactGuard)
 - **V1.4B Local Brain + FactPack + FactGuard** = CONCLUÍDA / HOMOLOGADA (LocalAIProvider compatível com OpenAI, FactPack atômico com validação de unicidade, Grounded Content com rastreio de fatos, FactGuard auditor fail-closed com max 1 rewrite, LocalAIRouter FAST vs QUALITY)

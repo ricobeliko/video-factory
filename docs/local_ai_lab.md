@@ -244,4 +244,73 @@ O script `scripts/start_local_ai_server.ps1` foi atualizado com as flags testada
 - `-GpuLayers 99` (`-ngl 99`)
 - `-Device "Vulkan0"` (`--device Vulkan0`)
 - Binding exclusivo em `127.0.0.1` (proibição de `0.0.0.0`).
+
+---
+
+## 9. Encerramento e Freeze da Homologação (Fase V1.4D — Validada)
+
+**Status Oficial:** `V1.4D = COMPLETE / VALIDATED`
+
+A homologação do Local Brain (Qwen3-8B Q4_K_M) em modo Shadow no hardware oficial do PC Forte foi concluída com sucesso e os critérios de validação foram formalmente homologados.
+
+### 9.1 Evidências Reais Homologadas no PC Forte
+
+- **Hardware:** AMD Radeon RX 580 2048SP 8GB, Qwen3-8B Q4_K_M, llama.cpp build 11476, Vulkan0
+- **Throughput com GPU Livre (Kryptex Pausado):** Prompt Processing ~96.8 tok/s, Token Generation ~16.9 tok/s.
+- **Throughput com Kryptex Ativo:** Prompt ~28 tok/s, Token Generation ~2.47 tok/s (Kryptex incompatível com inferência simultânea; deve permanecer pausado durante a execução).
+
+#### Teste A — Caso Roanoke com 70s (Gate de Suficiência Factual)
+- **FactPack de Entrada:** 58 palavras em 4 fatos atômicos.
+- **Meta Solicitada:** 168 palavras (70.0s @ 2.4 wps).
+- **Capacidade Segura Calculada:** 116 palavras (~48.3s a 2.0x).
+- **Resultado:** `FACT_PACK_INSUFFICIENT`
+- **Métricas:** LLM calls = 0, Tokens consumidos = 0, Latência de inferência = 0.0s.
+- **Veredito:** **PASS** semântico do gate pré-geração (impediu que o modelo alucinasse para preencher o vácuo de 70s).
+
+#### Teste B — Caso Roanoke com 45s (Geração Ancorada + FactGuard)
+- **Comando:** `.venv\Scripts\python.exe scripts\run_local_ai_shadow_homologation.py --case 6 --duration 45 --timeout 180`
+- **Meta Solicitada:** 108 palavras (45.0s @ 2.4 wps).
+- **Latência:** Geração = 28.56s, FactGuard = 10.12s, Total = 38.68s.
+- **Chamadas LLM:** 2 (1 geração + 1 auditoria).
+- **Consumo de Tokens:** Prompt = 1062, Completion = 452, Total = 1514 tokens.
+- **Validação Estrutural & Factual:**
+  - `JSON_VALID` = YES
+  - `FACT_GUARD` = PASS
+  - `UNSUPPORTED_CLAIMS` = 0
+  - `REWRITE` = 0 (aprovado na primeira tentativa de auditoria)
+- **Controle de Duração:**
+  - Script gerado: 75 palavras
+  - Duração estimada falada: 31.2s
+  - Duração solicitada: 45.0s
+  - Tolerância: ±15s (delta de -13.8s dentro do intervalo)
+  - `DURATION_WITHIN_TOLERANCE` = YES
+- **Veredito Oficial do Caso:** `CASE_VERDICT = PASS`
+
+### 9.2 Checklist Formal de Critérios Validados
+
+- `[PASS]` Local endpoint (`127.0.0.1:8089/v1` compatível com OpenAI)
+- `[PASS]` Vulkan GPU (aceleração na AMD Radeon RX 580 8GB)
+- `[PASS]` Qwen3-8B (alta qualidade em pt-BR e seguimento estrito de schemas)
+- `[PASS]` Grounded generation (roteiro gerado estritamente baseado nos IDs do FactPack)
+- `[PASS]` Valid JSON (respostas 100% parseáveis sem quebras)
+- `[PASS]` FactGuard (auditoria crítica pós-geração com temperature=0.0)
+- `[PASS]` Fail-closed (conteúdo reprovado jamais é promovido ou publicado)
+- `[PASS]` Rewrite path (capacidade de reescrita direcionada com histórico de reprovação)
+- `[PASS]` Fact Sufficiency Gate (avaliação determinística ratio 2.0x pré-LLM)
+- `[PASS]` Zero-call insufficient path (bloqueio de chamadas LLM e tokens quando insuficiente)
+- `[PASS]` Duration tolerance path (cálculo de cadência de fala e controle por tolerância)
+- `[PASS]` Isolated shadow persistence (gravação em tabela isolada `local_ai_shadow_runs`)
+- `[PASS]` Production untouched (zero impacto ou mutação no fluxo oficial de publicação)
+
+### 9.3 Diretriz de Freeze & Próximos Passos
+
+1. **Componentes Congelados:**
+   - Ratio de suficiência factual (`SAFE_EXPANSION_RATIO = 2.0`).
+   - Auditoria estrita do FactGuard.
+   - Tolerância de duração (±15s).
+   - Prompts de sistema e templates JSON.
+   - Modelos Qwen3-8B / Qwen3-4B e flags do `llama-server`.
+2. **Ajuste Fino Futuro:** A precisão fina da duração narrativa poderá ser refinada no futuro apenas se evidências estatísticas em escala justificarem.
+3. **Produção Mantida Intacta:** `LOCAL_AI_MODE = off` por padrão na fábrica de vídeos.
+
 

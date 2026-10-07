@@ -3,22 +3,27 @@
 ## Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
-- **CURRENT_PHASE** = `V1.4D.2_FACT_SUFFICIENCY_GATE_AND_RUNTIME_FINALIZATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4D.2_CONCLUDED`
+- **CURRENT_PHASE** = `V1.4D_LOCAL_AI_SHADOW_HOMOLOGATION`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4D_CONCLUDED_AND_VALIDATED`
 - **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
-- **NEXT_GATE** = `PC_FORTE_SHADOW_HOMOLOGATION_RUN_CASE_6`
+- **NEXT_GATE** = `NEXT_CYCLE_PLANNING (LOCAL_AI_HOMOLOGATED / FLOW_6_SCENES_HOMOLOGATED)`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_AI_MODE** = `off` (DEFAULT = off; shadow disponível para testes/lab; active NÃO habilitado no pipeline de produção)
 - **LOCAL_AI_VIABLE** = `YES`
 - **BLOCKED_BY** = `NONE`
 
 ### Destaque da Frente de IA Local (Local Brain + FactPack + FactGuard + Shadow Runner):
+- **V1.4D_LOCAL_AI_SHADOW_HOMOLOGATION** = CONCLUÍDA / VALIDADA (`V1.4D = COMPLETE / VALIDATED`)
+  - Homologação real concluída com sucesso no PC Forte com AMD Radeon RX 580 8GB / Vulkan / Qwen3-8B Q4_K_M.
+  - Teste A (Roanoke 70s): Gate de suficiência interceptou e retornou `FACT_PACK_INSUFFICIENT` com zero chamadas ao LLM e zero tokens, impedindo alucinação para preencher tempo.
+  - Teste B (Roanoke 45s): Roteiro gerado e aprovado com 0 claims não suportadas, 0 rewrites, 75 palavras faladas (~31.2s, dentro da tolerância de ±15s), latência total de 38.68s (28.56s geração + 10.12s auditoria) e `CASE_VERDICT = PASS`.
+  - Diagnóstico Kryptex: Mineração em GPU identificada como causa de degradação (~2.47 tok/s com Kryptex vs ~16.9 tok/s livre); regra operacional de pausa mantida.
+  - Freeze do Componente: Ratio 2.0x, FactGuard fail-closed, tolerâncias, prompts e runtime formalmente congelados (otimizações finas de duração apenas se justificadas por dados futuros).
 - **V1.4D.2_FACT_SUFFICIENCY_GATE_AND_RUNTIME_FINALIZATION** = CONCLUÍDA / HOMOLOGADA
   - `FactSufficiencyGate`: Gate determinístico pré-geração baseado em `DEFAULT_SAFE_EXPANSION_RATIO = 2.0`. Se a quantidade de fatos for insuficiente para sustentar a duração solicitada sem forçar alucinação, retorna estado estruturado `FACT_PACK_INSUFFICIENT` e **não chama o provedor LLM** (`total_llm_calls = 0`).
   - Telemetria de Candidato Rejeitado: Métricas do último candidato (`candidate_script_word_count`, `candidate_estimated_duration_seconds`, `candidate_duration_delta_seconds`) são preservadas no banco shadow para auditoria mesmo quando reprovado, mantendo `final_content = None` (fail-closed estrito).
   - Runtime Script Validado: `scripts/start_local_ai_server.ps1` atualizado com `-Threads 4` (`-t 4`), `-ThreadsBatch 4` (`-tb 4`), `-Reasoning off` (`--reasoning off`), `-ReasoningBudget 0` (`--reasoning-budget 0`).
-  - Diagnóstico de GPU Contention: Documentada a necessidade operacional de pausar o Kryptex/mineração durante inferência (rendimento da RX 580 passa de 2.47 tok/s para 16.9 tok/s de geração, e prompt de 28 tok/s para 96.8 tok/s).
-  - Suíte de Testes: 36/36 testes aprovados (`test/services/test_local_ai.py`).
+  - Suíte de Testes: 38/38 testes aprovados (`test/services/test_local_ai.py`).
 - **V1.4D.1_SHADOW_HOMOLOGATION_OPTIMIZATION** = CONCLUÍDA / HOMOLOGADA
   - Instrumentação por etapa (`generation_latency_seconds`, `fact_guard_latency_seconds`, `rewrite_latency_seconds`) e métricas acumuladas de tokens.
   - Alvo determinístico de palavras via ritmo de fala (~2.4 palavras por segundo) instruindo explicitamente o prompt.

@@ -10,13 +10,14 @@
 
 ---
 
-# Estado Atual Canônico — 06/10/2026
+# Estado Atual Canônico — 07/10/2026
 
-- **PROJECT_STATUS** = `DEV_VALIDATED / READY_FOR_V1_3_8_SELECTIVE_PRODUCTION_DEPLOY`
-- **ACTIVE_PHASE** = `V16.12 — Upstream v1.3.8 Selective Backport`
-- **ACTIVE_BRANCH** = `feat/v16-12-upstream-v138-selective-backport`
-- **NEXT_GATE** = `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY`
-- **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE`
+- **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
+- **CURRENT_PHASE** = `V1.1_FIRST_REAL_VIDEO`
+- **PROJECT_STATUS** = `ACTIVE_DEV / NEW_TRACK_INITIALIZED`
+- **ACTIVE_BRANCH** = `main`
+- **NEXT_GATE** = `PRODUCE_FIRST_REAL_VIDEO_WORKFLOW`
+- **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -24,6 +25,8 @@
 
 ## Status Consolidado por Componente
 
+- **Google Flow / External Video Quality Track** = INITIATED (CURRENT_FOCUS)
+- **V1.1 First Real Video Workflow** = IN PROGRESS (CURRENT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)
@@ -1201,6 +1204,75 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
   - Testes direcionados: 10 testes PASS em 2.70s (`test/services/test_v16_12_backport.py`), lint limpo (`uv run ruff check` — 0 erros).
 - **Próximo Gate Seguro:**
   - `SINGLE_CONSOLIDATED_PRODUCTION_DEPLOY` (Deploy único consolidado de DEV para Produção no PC Forte).
+
+---
+
+# Nova Frente: Qualidade Visual Externa (Google Flow / Google AI Pro / Nano Banana)
+
+**Status:** ✅ INITIATED / ACTIVE (07/10/2026)
+**CURRENT_FOCUS:** `VIDEO_QUALITY_GOOGLE_FLOW`
+**CURRENT_PHASE:** `V1.1_FIRST_REAL_VIDEO`
+
+## Objetivo da Frente
+Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **Google AI Pro / Google Flow / Nano Banana** como geração externa de clipes, mantendo a **Video Factory (MoneyPrinterTurbo)** como o motor central responsável por:
+- Roteiro (scriptwriting e estrutura de cenas)
+- Narração (TTS neural, timing e áudio)
+- Montagem (concatenação e edição)
+- Legendas (estilos ASS / burn-in nativo)
+- Música (trilha sonora de fundo)
+- Publicação (YouTube e canais configurados)
+
+## Princípio Fundamental: "FAZER MENOS"
+- **Sem arquitetura excessiva:** Evitar camadas de abstração prematuras ou especulativas.
+- **Sem testes redundantes:** Testes direcionados somente quando estritamente necessários; alterações puramente documentais não disparam pytest.
+- **Sem gates desnecessários:** Eliminar etapas burocráticas que não agreguem valor imediato.
+- **Não reconstruir o que já existe:** Aproveitar integralmente os serviços consolidados de TTS, legendagem, montagem e publicação da Video Factory.
+- **Se funcionou, considerar concluído:** Evitar refinamento infinito sobre o que já atingiu o objetivo.
+- **Priorizar solução pronta:** Focar no resultado prático e entrega rápida de vídeo real.
+
+## Isolamento Rígido de Ambientes
+- **DEV / Notebook:** `D:\Projetos\MoneyPrinterTurbo`
+- **PRODUÇÃO / PC Forte:** `C:\Projetos\MoneyPrinterTurbo`
+- **Regra de Ouro:** NUNCA misturar os ambientes. Toda exploração, preparação e testes ocorrem primeiro em DEV.
+
+## Fronteiras e Escopo de Modelos
+- **Google Flow API:** **NÃO integrar neste momento.** Produzir primeiro vídeos reais manualmente no Google Flow para entender e lapidar o workflow antes de qualquer tentativa de automação.
+- **MuseTalk local (RX580 + DirectML):** POC concluída com sucesso; permanece estritamente **congelado** como laboratório/fallback futuro. Não trabalhar nele agora.
+- **Fora de escopo atual:** Krea, HeyGen pago e ElevenLabs vídeo não fazem parte do escopo desta frente.
+
+---
+
+## Roadmap da Nova Frente
+
+### V1.1 — Produzir Primeiro Vídeo Real (CURRENT_PHASE)
+- **Objetivo:** Produzir o primeiro vídeo REAL de ponta a ponta combinando o melhor dos dois mundos:
+  1. Usar roteiro e narração já existentes gerados pela Video Factory.
+  2. Gerar manualmente os clipes visuais no Google Flow (Nano Banana / Google AI Pro) com qualidade cinematográfica.
+  3. Utilizar a Video Factory para a montagem final dos clipes, sincronização de áudio, geração de legendas ASS, adição de música e empacotamento para publicação.
+- **Critério de Aceite:** Exatamente 1 vídeo real produzido, montado e visualmente consistente.
+- **Status:** `IN PROGRESS`
+
+### V1.2 — Otimizar Passos Manuais com Fricção Real
+- **Objetivo:** Otimizar exclusivamente os passos manuais que efetivamente causarem atrito ou retrabalho durante a execução do V1.1.
+- **Critério:** Não antecipar otimizações teóricas. Agir apenas mediante evidência empírica de gargalo.
+- **Status:** `PLANNED`
+
+### V1.3 — Assistência do Agente (Cenas, Prompts e Manifesto)
+- **Objetivo:** Agente assume o papel de diretor assistente:
+  - Divisão automatizada de cenas baseada no roteiro/áudio.
+  - Formulação de prompts visuais detalhados prontos para colar no Google Flow.
+  - Geração de manifesto de mídia estruturado para ingestão facilitada na montagem.
+- **Status:** `PLANNED`
+
+### V1.4 — Avaliação de API e Automação
+- **Objetivo:** Avaliar a viabilidade de automação via API ou conectores programáticos somente após a produção e validação de múltiplos vídeos reais manuais.
+- **Critério:** Decisão baseada em volume real, estabilidade do workflow e custo-benefício.
+- **Status:** `FUTURE / CONDITIONAL`
+
+### Futuro — Hardware e Geração Local
+- Aquisição de hardware dedicado de alta performance para eventual retorno de modelos generativos locais.
+- MuseTalk (DirectML) preservado como base laboratorial para quando houver GPU adequada.
+- **Status:** `FROZEN_LAB / BACKLOG`
 
 ---
 

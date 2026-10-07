@@ -13,7 +13,13 @@ from app.services.local_ai.provider import (
     LocalAIServerUnavailableError,
     LocalAITimeoutError,
 )
-from app.services.local_ai.fact_pack import Fact, FactPack
+from app.services.local_ai.fact_pack import (
+    DEFAULT_SAFE_EXPANSION_RATIO,
+    Fact,
+    FactPack,
+    FactSufficiencyResult,
+    evaluate_fact_sufficiency,
+)
 from app.services.local_ai.router import LocalAIRole, LocalAIRouter
 from app.services.local_ai.fact_guard import (
     FactGuard,
@@ -40,6 +46,9 @@ __all__ = [
     "LocalAIProvider",
     "Fact",
     "FactPack",
+    "DEFAULT_SAFE_EXPANSION_RATIO",
+    "FactSufficiencyResult",
+    "evaluate_fact_sufficiency",
     "LocalAIRole",
     "LocalAIRouter",
     "FactGuard",

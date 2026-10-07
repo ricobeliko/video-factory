@@ -223,7 +223,15 @@ def run_homologation(
         )
         elapsed = time.time() - t0
 
-        status_flag = "PASS" if res.fact_guard_approved else ("FAIL_CLOSED" if res.generation_success else "ERROR")
+        if res.error_type == "FACT_PACK_INSUFFICIENT":
+            status_flag = "FACT_PACK_INSUFFICIENT"
+        elif res.fact_guard_approved:
+            status_flag = "PASS"
+        elif res.generation_success:
+            status_flag = "FAIL_CLOSED"
+        else:
+            status_flag = "ERROR"
+
         dur_flag = "OK" if res.duration_within_tolerance else "DELTA"
         print(
             f"       -> Status: {status_flag} | Latência Total: {res.latency_seconds:.1f}s "
@@ -235,8 +243,13 @@ def run_homologation(
             f"Duração: {res.estimated_duration_seconds:.1f}s/{res.requested_duration_seconds:.1f}s "
             f"(Palavras: {res.script_word_count}/{res.target_word_count}, {dur_flag})"
         )
+        if res.candidate_script_word_count > 0 and not res.fact_guard_approved:
+            print(
+                f"       -> Candidato Reprovado: {res.candidate_script_word_count} palavras | "
+                f"Duração estimada: {res.candidate_estimated_duration_seconds:.1f}s (delta: {res.candidate_duration_delta_seconds:.1f}s)"
+            )
         if res.error_type:
-            print(f"       -> Erro registrado: [{res.error_type}] {res.error_message}")
+            print(f"       -> Motivo/Erro: [{res.error_type}] {res.error_message}")
         if res.unsupported_claims:
             print(f"       -> Claims detectadas: {res.unsupported_claims}")
 
@@ -249,6 +262,7 @@ def run_homologation(
     json_valid = sum(1 for r in results if r.json_valid)
     fg_pass = sum(1 for r in results if r.fact_guard_approved)
     rewrites = sum(1 for r in results if r.rewrite_attempted)
+    insufficient = sum(1 for r in results if r.error_type == "FACT_PACK_INSUFFICIENT")
     fail_closed = sum(1 for r in results if (r.generation_success and not r.fact_guard_approved))
     dur_tol = sum(1 for r in results if r.duration_within_tolerance)
     unsupported_total = sum(r.unsupported_claims_count for r in results)
@@ -267,6 +281,8 @@ def run_homologation(
         verdict = "SINGLE_CASE"
         if total > 0 and all(r.generation_success and r.json_valid and r.fact_guard_approved for r in results):
             case_verdict = "PASS"
+        elif total > 0 and any(r.error_type == "FACT_PACK_INSUFFICIENT" for r in results):
+            case_verdict = "FACT_PACK_INSUFFICIENT"
         else:
             case_verdict = "FAIL"
     elif total >= 10 and json_valid >= 9 and fg_pass >= 8 and (fail_closed + fg_pass == success):
@@ -285,6 +301,7 @@ def run_homologation(
     print(f"FACT_GUARD_PASS = {fg_pass}")
     print(f"REWRITES = {rewrites}")
     print(f"FAIL_CLOSED = {fail_closed}")
+    print(f"FACT_PACK_INSUFFICIENT = {insufficient}")
     print(f"AVG_LATENCY = {avg_lat}s")
     print(f"GENERATION_LATENCY = {gen_lat_total}s")
     print(f"FACT_GUARD_LATENCY = {fg_lat_total}s")

@@ -17,7 +17,11 @@ from pydantic import BaseModel, Field
 
 from loguru import logger
 
-from app.services.local_ai.fact_pack import FactPack
+from app.services.local_ai.fact_pack import (
+    DEFAULT_SAFE_EXPANSION_RATIO,
+    FactPack,
+    FactSufficiencyResult,
+)
 from app.services.local_ai.provider import LocalAIProvider, LocalAIResponseFormatError
 from app.services.local_ai.router import LocalAIRole, LocalAIRouter
 
@@ -68,6 +72,18 @@ class FactGuardResult(BaseModel):
         default=None,
         description="Conteúdo final aprovado (ou None se reprovado)",
     )
+    last_candidate_content: Optional[GroundedContent] = Field(
+        default=None,
+        description="Último conteúdo candidato gerado antes da auditoria/rejeição (informativo)",
+    )
+
+    # Telemetria de suficiência factual pré-geração (Fase V1.4D.2)
+    sufficiency: Optional[FactSufficiencyResult] = Field(
+        default=None,
+        description="Resultado da avaliação de suficiência do FactPack",
+    )
+    safe_target_words: int = Field(default=0, description="Capacidade máxima segura de palavras estimada")
+    recommended_duration_seconds: float = Field(default=0.0, description="Duração máxima recomendada em segundos")
 
     # Telemetria por estágio e tokens (Fase V1.4D.1)
     target_word_count: int = Field(default=0, description="Alvo determinístico de palavras calculado")
@@ -309,18 +325,44 @@ def generate_grounded_content_with_guard(
     target_duration_seconds: int = 70,
     words_per_second: float = 2.4,
     duration_tolerance_seconds: float = 15.0,
+    safe_expansion_ratio: float = DEFAULT_SAFE_EXPANSION_RATIO,
+    check_sufficiency: bool = True,
 ) -> FactGuardResult:
     """
     Fluxo completo com rastreabilidade de latências por etapa e tokens:
+    0. Gate de suficiência factual pré-geração (evita forçar o modelo a preencher vácuo com alucinações).
     1. Geração fundamentada no FactPack (com alvo determinístico de palavras).
     2. Auditoria FactGuard (com JSON conciso).
     3. Se reprovada e max_rewrites >= 1: exatamente 1 reescrita e nova auditoria.
-    4. Se falhar novamente: FAIL-CLOSED.
+    4. Se falhar novamente: FAIL-CLOSED (final_content=None, preservando last_candidate_content para telemetria).
     """
     fact_pack.validate_integrity()
+    target_words = int(round(target_duration_seconds * words_per_second))
+
+    # 0. Gate de Suficiência Factual
+    if check_sufficiency:
+        sufficiency = fact_pack.evaluate_sufficiency(
+            requested_duration_seconds=float(target_duration_seconds),
+            words_per_second=words_per_second,
+            expansion_ratio=safe_expansion_ratio,
+        )
+        if not sufficiency.sufficient:
+            logger.warning(
+                f"[FactGuard] FactPack insuficiente para {target_duration_seconds}s: {sufficiency.reason}"
+            )
+            return FactGuardResult(
+                approved=False,
+                unsupported_claims=[],
+                notes=[f"FACT_PACK_INSUFFICIENT: {sufficiency.reason}"],
+                target_word_count=target_words,
+                safe_target_words=sufficiency.safe_target_words,
+                recommended_duration_seconds=sufficiency.recommended_duration_seconds,
+                sufficiency=sufficiency,
+                total_llm_calls=0,
+            )
+
     active_router = router or LocalAIRouter(provider)
     guard = FactGuard(provider=provider, router=active_router)
-    target_words = int(round(target_duration_seconds * words_per_second))
 
     # 1. Geração inicial
     logger.info(f"[LocalBrain] Gerando conteúdo ancorado para '{fact_pack.topic}' (alvo: ~{target_words} palavras)...")
@@ -347,6 +389,7 @@ def generate_grounded_content_with_guard(
     audit.prompt_tokens_total = p_tokens + audit.prompt_tokens_total
     audit.completion_tokens_total = c_tokens + audit.completion_tokens_total
     audit.total_tokens_total = t_tokens + audit.total_tokens_total
+    audit.last_candidate_content = content
     timings.update(audit.raw_timings)
     audit.raw_timings = timings
 
@@ -389,6 +432,7 @@ def generate_grounded_content_with_guard(
         second_audit.prompt_tokens_total = audit.prompt_tokens_total + p_rw + second_audit.prompt_tokens_total
         second_audit.completion_tokens_total = audit.completion_tokens_total + c_rw + second_audit.completion_tokens_total
         second_audit.total_tokens_total = audit.total_tokens_total + t_rw + second_audit.total_tokens_total
+        second_audit.last_candidate_content = rewritten_content
         timings.update(second_audit.raw_timings)
         second_audit.raw_timings = timings
 

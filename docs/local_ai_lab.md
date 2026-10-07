@@ -150,4 +150,98 @@ O script reportará a telemetria completa dos 10 domínios temáticos e emitirá
 Executar exclusivamente o caso 6 com as otimizações aplicadas:
 ```powershell
 .venv\Scripts\python.exe scripts\run_local_ai_shadow_homologation.py --case 6 --timeout 300
-```
+```
+
+---
+
+## 7. Descoberta Crítica de GPU Contention — Mineração Kryptex vs Inferência Local
+
+Durante a execução da homologação no PC Forte (RX 580 8 GB / Vulkan / Qwen3-8B Q4_K_M), identificou-se que processos de mineração em background (Kryptex) competiam pelos recursos de computação da GPU, degradando drasticamente o throughput.
+
+### 7.1 Métricas Comparativas Medidas em Produção (PC Forte)
+
+| Cenário de Execução | Prompt Processing (pp) | Token Generation (tg) | Latência Total Roanoke (4 chamadas) |
+|---|---|---|---|
+| **GPU com Mineração Ativa (Kryptex)** | ~28 tok/s | ~2.47 tok/s | ~480.28 s |
+| **GPU Livre (Kryptex Pausado)** | **~96.8 tok/s** | **~16.9 tok/s** | **99.25 s** |
+
+- **Conclusão:** A contenção de GPU era a causa primária da latência excessiva observada anteriormente. Com a GPU livre, o tempo de geração cai de minutos para ~32s, e o FactGuard valida em ~13s.
+- **Regra Operacional:** O Kryptex / software de mineração **deve estar expressamente pausado** durante janelas de inferência da Local AI.
+- **Diretriz de Automação:** Não automatizar pausa do Kryptex nesta fase; manter como pré-requisito operacional documentado.
+
+---
+
+## 8. Fact Sufficiency Gate & Finalização do Runtime (V1.4D.2)
+
+### 8.1 Diagnóstico do Caso Roanoke com GPU Livre
+
+Ao executar o shadow Roanoke com GPU livre:
+- **Total Latency:** 99.25s
+- **Generation:** 32.14s
+- **FactGuard #1:** 13.46s
+- **Rewrite:** 30.60s
+- **FactGuard #2:** 13.05s
+- **Veredito:** FAIL-CLOSED (ambas as auditorias rejeitaram com ungrounded claims).
+
+As afirmações não suportadas foram:
+- *"A falta de evidências deixou um mistério que ainda não foi resolvido."*
+- *"A Colônia de Roanoke permanece como um dos casos mais enigmáticos da história colonial."*
+- *"Pesquisas continuam, mas nenhuma explicação conclusiva foi encontrada."*
+
+**Causa Raiz:** O FactGuard funcionou corretamente. O problema real é que o FactPack possuía apenas 4 fatos curtos (~54 palavras), enquanto o sistema demandava ~168 palavras narrativas para preencher 70 segundos. O modelo foi forçado a preencher vácuo com especulações externas.
+
+**Regra Absoluta:** O Local Brain NUNCA deve ser usado para preencher falta de fatos.
+
+### 8.2 Arquitetura do Futuro Pipeline Factual
+
+```
+TOPIC
+  ↓
+RESEARCH
+  ↓
+FACT PACK
+  ↓
+FACT SUFFICIENCY GATE
+  ├── insufficient → MORE RESEARCH / SHORTER VIDEO
+  └── sufficient
+          ↓
+       QWEN
+          ↓
+       FACT GUARD
+```
+
+### 8.3 Heurística Determinística de Suficiência
+
+Antes de chamar o Qwen, o `FactSufficiencyGate` avalia se os fatos sustentam o tempo solicitado:
+- `fact_word_count`: total de palavras de todos os fatos atômicos.
+- `safe_expansion_ratio`: razão máxima segura entre narrativa e fatos (padrão conservador: `2.0`).
+- `safe_target_words` = $\text{fact\_word\_count} \times \text{safe\_expansion\_ratio}$
+- `target_words` = $\text{round}(\text{requested\_duration\_seconds} \times \text{words\_per\_second})$
+- Se `target_words > safe_target_words` $\implies$ **INSUFFICIENT**.
+- `recommended_duration_seconds` = $\text{safe\_target\_words} / \text{words\_per\_second}$
+
+### 8.4 Comportamento Diferenciado: FAIL_CLOSED vs FACT_PACK_INSUFFICIENT
+
+1. **`FACT_PACK_INSUFFICIENT`**: O modelo LLM **não é chamado** (`total_llm_calls = 0`). O runner registra o estado estruturado com `safe_target_words` e `recommended_duration_seconds`. No futuro, a fábrica pode optar por buscar mais fatos ou diminuir a duração do Short.
+2. **`FAIL_CLOSED`**: O modelo gerou conteúdo, mas o FactGuard detectou alucinação e reprovou mesmo após a tentativa de rewrite.
+
+### 8.5 Telemetria de Candidato Rejeitado
+
+Mesmo quando o conteúdo é reprovado e `final_content` permanece `None`, o shadow runner registra:
+- `candidate_script_word_count`
+- `candidate_estimated_duration_seconds`
+- `candidate_duration_delta_seconds`
+
+Isso fornece visibilidade analítica da tentativa do modelo sem quebrar o princípio fail-closed.
+
+### 8.6 Configuração do llama-server Validada no PC Forte
+
+O script `scripts/start_local_ai_server.ps1` foi atualizado com as flags testadas e aprovadas na RX 580:
+- `-Threads 4` (`-t 4`)
+- `-ThreadsBatch 4` (`-tb 4`)
+- `-Reasoning "off"` (`--reasoning off`)
+- `-ReasoningBudget 0` (`--reasoning-budget 0`)
+- `-GpuLayers 99` (`-ngl 99`)
+- `-Device "Vulkan0"` (`--device Vulkan0`)
+- Binding exclusivo em `127.0.0.1` (proibição de `0.0.0.0`).
+

@@ -31,7 +31,7 @@ from app.services.local_ai.fact_guard import (
     FactGuardResult,
     generate_grounded_content_with_guard,
 )
-from app.services.local_ai.fact_pack import FactPack
+from app.services.local_ai.fact_pack import DEFAULT_SAFE_EXPANSION_RATIO, FactPack
 from app.services.local_ai.provider import (
     LocalAIConfig,
     LocalAIError,
@@ -90,7 +90,7 @@ class ShadowRunResult(BaseModel):
     error_type: Optional[str] = Field(default=None, description="Código tipado de erro se houver")
     error_message: Optional[str] = Field(default=None, description="Mensagem sanitizada de erro")
 
-    # Métricas de comparação & Duração do roteiro
+    # Métricas de comparação & Duração do roteiro (conteúdo aprovado)
     script_length_chars: int = Field(default=0, description="Comprimento em caracteres do roteiro")
     script_word_count: int = Field(default=0, description="Contagem de palavras faladas calculada")
     target_word_count: int = Field(default=0, description="Alvo determinístico de palavras calculado")
@@ -99,6 +99,17 @@ class ShadowRunResult(BaseModel):
     duration_delta_seconds: float = Field(default=0.0, description="Diferença: estimada - solicitada")
     duration_within_tolerance: bool = Field(default=False, description="Duração estimada dentro da tolerância esperada")
     cost_comparison: str = Field(default="UNKNOWN", description="Comparação de custo de API evitado")
+
+    # Telemetria do candidato gerado (mesmo se reprovado pelo FactGuard — Fase V1.4D.2)
+    candidate_script_word_count: int = Field(default=0, description="Palavras do último candidato gerado (mesmo se reprovado)")
+    candidate_estimated_duration_seconds: float = Field(default=0.0, description="Duração estimada do último candidato em segundos")
+    candidate_duration_delta_seconds: float = Field(default=0.0, description="Delta de duração do último candidato em segundos")
+
+    # Telemetria de suficiência factual pré-geração (Fase V1.4D.2)
+    safe_target_words: int = Field(default=0, description="Capacidade máxima segura de palavras do FactPack")
+    recommended_duration_seconds: float = Field(default=0.0, description="Duração recomendada pelo gate de suficiência")
+    fact_count: int = Field(default=0, description="Quantidade de fatos no FactPack")
+    fact_word_count: int = Field(default=0, description="Total de palavras no texto dos fatos")
 
     # Telemetria detalhada por estágio e tokens (V1.4D.1)
     generation_latency_seconds: float = Field(default=0.0, description="Latência da etapa de geração em segundos")
@@ -192,6 +203,13 @@ def init_shadow_db(target: Optional[Union[str, sqlite3.Connection]] = None) -> N
                 prompt_tokens_total INTEGER DEFAULT 0,
                 completion_tokens_total INTEGER DEFAULT 0,
                 total_tokens_total INTEGER DEFAULT 0,
+                candidate_script_word_count INTEGER DEFAULT 0,
+                candidate_estimated_duration_seconds REAL DEFAULT 0.0,
+                candidate_duration_delta_seconds REAL DEFAULT 0.0,
+                safe_target_words INTEGER DEFAULT 0,
+                recommended_duration_seconds REAL DEFAULT 0.0,
+                fact_count INTEGER DEFAULT 0,
+                fact_word_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """
@@ -215,6 +233,13 @@ def init_shadow_db(target: Optional[Union[str, sqlite3.Connection]] = None) -> N
             ("prompt_tokens_total", "INTEGER DEFAULT 0"),
             ("completion_tokens_total", "INTEGER DEFAULT 0"),
             ("total_tokens_total", "INTEGER DEFAULT 0"),
+            ("candidate_script_word_count", "INTEGER DEFAULT 0"),
+            ("candidate_estimated_duration_seconds", "REAL DEFAULT 0.0"),
+            ("candidate_duration_delta_seconds", "REAL DEFAULT 0.0"),
+            ("safe_target_words", "INTEGER DEFAULT 0"),
+            ("recommended_duration_seconds", "REAL DEFAULT 0.0"),
+            ("fact_count", "INTEGER DEFAULT 0"),
+            ("fact_word_count", "INTEGER DEFAULT 0"),
         ]
         for col_name, col_type in new_cols:
             if col_name not in existing_cols:
@@ -242,7 +267,11 @@ def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3
                 generation_latency_seconds, fact_guard_latency_seconds,
                 rewrite_latency_seconds, second_guard_latency_seconds,
                 total_llm_calls,
-                prompt_tokens_total, completion_tokens_total, total_tokens_total
+                prompt_tokens_total, completion_tokens_total, total_tokens_total,
+                candidate_script_word_count, candidate_estimated_duration_seconds,
+                candidate_duration_delta_seconds,
+                safe_target_words, recommended_duration_seconds,
+                fact_count, fact_word_count
             ) VALUES (
                 ?, ?, ?, ?, ?, ?,
                 ?, ?, ?,
@@ -258,7 +287,10 @@ def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3
                 ?, ?,
                 ?, ?,
                 ?,
-                ?, ?, ?
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?,
+                ?, ?
             );
             """,
             (
@@ -297,6 +329,13 @@ def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3
                 result.prompt_tokens_total,
                 result.completion_tokens_total,
                 result.total_tokens_total,
+                result.candidate_script_word_count,
+                result.candidate_estimated_duration_seconds,
+                result.candidate_duration_delta_seconds,
+                result.safe_target_words,
+                result.recommended_duration_seconds,
+                result.fact_count,
+                result.fact_word_count,
             ),
         )
 
@@ -317,11 +356,13 @@ class LocalAIShadowRunner:
         provider: Optional[LocalAIProvider] = None,
         router: Optional[LocalAIRouter] = None,
         db_path: Optional[str] = None,
+        safe_expansion_ratio: float = DEFAULT_SAFE_EXPANSION_RATIO,
     ):
         self.provider = provider or LocalAIProvider()
         # Na V1.4C homologa prioritariamente QUALITY MODEL (qwen3-8b)
         self.router = router or LocalAIRouter(self.provider, quality_model="qwen3-8b")
         self.db_path = db_path
+        self.safe_expansion_ratio = safe_expansion_ratio
 
     def should_run(self) -> bool:
         """Determina se a IA local está configurada para rodar em modo shadow."""
@@ -368,6 +409,49 @@ class LocalAIShadowRunner:
                 requested_duration_seconds=requested_duration_seconds,
             )
 
+        # 1.5 Gate de Suficiência Factual ANTES de qualquer chamada ao LLM (Fase V1.4D.2)
+        sufficiency = fact_pack.evaluate_sufficiency(
+            requested_duration_seconds=requested_duration_seconds,
+            words_per_second=words_per_second,
+            expansion_ratio=self.safe_expansion_ratio,
+        )
+        if not sufficiency.sufficient:
+            logger.warning(
+                f"[LocalAIShadow] FactPack insuficiente para {requested_duration_seconds:.1f}s: {sufficiency.reason}"
+            )
+            finished_at = datetime.now(timezone.utc).isoformat()
+            dt = time.time() - t0
+            result = ShadowRunResult(
+                shadow_run_id=run_id,
+                task_id=task_id,
+                profile_id=profile_id,
+                topic=fact_pack.topic,
+                model_role=LocalAIRole.QUALITY.value,
+                model_name=self.router.get_model_for_role(LocalAIRole.QUALITY),
+                started_at=started_at,
+                finished_at=finished_at,
+                latency_seconds=round(dt, 3),
+                generation_success=False,
+                json_valid=False,
+                fact_guard_approved=False,
+                final_shadow_available=False,
+                current_provider=current_provider,
+                error_type="FACT_PACK_INSUFFICIENT",
+                error_message=sufficiency.reason,
+                target_word_count=sufficiency.target_words,
+                safe_target_words=sufficiency.safe_target_words,
+                requested_duration_seconds=requested_duration_seconds,
+                recommended_duration_seconds=sufficiency.recommended_duration_seconds,
+                fact_count=sufficiency.fact_count,
+                fact_word_count=sufficiency.fact_word_count,
+                total_llm_calls=0,
+            )
+            try:
+                save_shadow_run(result, target=self.db_path)
+            except Exception as exc:
+                logger.error(f"[LocalAIShadow] Falha ao persistir corrida shadow no banco: {exc}")
+            return result
+
         # 2. Execução protegida do Local Brain
         target_model = self.router.get_model_for_role(LocalAIRole.QUALITY)
         error_type: Optional[str] = None
@@ -388,6 +472,8 @@ class LocalAIShadowRunner:
                 target_duration_seconds=int(requested_duration_seconds),
                 words_per_second=words_per_second,
                 duration_tolerance_seconds=duration_tolerance_seconds,
+                safe_expansion_ratio=self.safe_expansion_ratio,
+                check_sufficiency=False,  # Já validado pelo gate acima
             )
             generation_success = True
             json_valid = True
@@ -432,6 +518,16 @@ class LocalAIShadowRunner:
             delta_duration = round(est_duration - requested_duration_seconds, 1)
             within_tolerance = abs(delta_duration) <= duration_tolerance_seconds
             shadow_content_dict = guard_result.final_content.model_dump()
+
+        # Telemetria do candidato gerado (mesmo se reprovado pelo FactGuard — Fase V1.4D.2)
+        cand_word_count = 0
+        cand_est_duration = 0.0
+        cand_delta_duration = 0.0
+        candidate_obj = getattr(guard_result, "last_candidate_content", None) or (guard_result.final_content if guard_result else None)
+        if candidate_obj and candidate_obj.script:
+            cand_word_count = count_spoken_words(candidate_obj.script)
+            cand_est_duration = estimate_duration_seconds(cand_word_count, words_per_second=words_per_second)
+            cand_delta_duration = round(cand_est_duration - requested_duration_seconds, 1)
 
         # Extração dos resultados do FactGuard e telemetria por estágio
         fact_guard_approved = guard_result.approved if guard_result else False
@@ -481,6 +577,13 @@ class LocalAIShadowRunner:
             estimated_duration_seconds=est_duration,
             duration_delta_seconds=delta_duration,
             duration_within_tolerance=within_tolerance,
+            candidate_script_word_count=cand_word_count,
+            candidate_estimated_duration_seconds=cand_est_duration,
+            candidate_duration_delta_seconds=cand_delta_duration,
+            safe_target_words=sufficiency.safe_target_words,
+            recommended_duration_seconds=sufficiency.recommended_duration_seconds,
+            fact_count=sufficiency.fact_count,
+            fact_word_count=sufficiency.fact_word_count,
             cost_comparison="UNKNOWN",
             generation_latency_seconds=round(gen_latency, 3),
             fact_guard_latency_seconds=round(fg_latency, 3),

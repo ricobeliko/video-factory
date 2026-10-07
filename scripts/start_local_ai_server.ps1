@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Script de Inicializacao do Servidor de IA Local (Fase V1.4D.1).
+    Script de Inicializacao do Servidor de IA Local (Fase V1.4D.2).
 .DESCRIPTION
     Inicia o servidor de inferencia local (llama-server) compativel com OpenAI
     para atuar como Local Brain (Qwen3-8B) no PC Forte.
@@ -8,6 +8,7 @@
     - Proibido qualquer bind em 0.0.0.0
     - Suporte acelerado via GPU Vulkan (Radeon RX 580)
     - Totalmente parametrizavel e portavel (PowerShell 5.1 compativel, pure ASCII)
+    - Parametrizacao validada para RX580 livre (-t 4, -tb 4, reasoning off)
 #>
 
 [CmdletBinding()]
@@ -19,7 +20,10 @@ param(
     [int]$ContextSize = 4096,
     [int]$GpuLayers = 99,
     [string]$Device = "Vulkan0",
-    [int]$Threads = 4
+    [int]$Threads = 4,
+    [int]$ThreadsBatch = 4,
+    [string]$Reasoning = "off",
+    [int]$ReasoningBudget = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,13 +71,14 @@ if ([string]::IsNullOrWhiteSpace($LlamaServerExe)) {
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " VIDEO FACTORY - LOCAL AI SERVER INITIALIZER (V1.4D.1)    " -ForegroundColor Cyan
+Write-Host " VIDEO FACTORY - LOCAL AI SERVER INITIALIZER (V1.4D.2)    " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "Host:        $HostAddress"
 Write-Host "Porta:       $Port"
 Write-Host "Contexto:    $ContextSize tokens"
 Write-Host "GPU Layers:  $GpuLayers ($Device)"
-Write-Host "Threads:     $Threads"
+Write-Host "Threads:     $Threads (batch: $ThreadsBatch)"
+Write-Host "Reasoning:   $Reasoning (budget: $ReasoningBudget)"
 Write-Host "Modelo:      $ModelPath"
 Write-Host "Executavel:  $LlamaServerExe"
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -97,11 +102,20 @@ $Arguments = @(
     "--port", $Port,
     "-c", $ContextSize,
     "-ngl", $GpuLayers,
-    "-t", $Threads
+    "-t", $Threads,
+    "-tb", $ThreadsBatch
 )
 
 if (-not [string]::IsNullOrWhiteSpace($Device)) {
     $Arguments += @("--device", $Device)
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Reasoning)) {
+    $Arguments += @("--reasoning", $Reasoning)
+}
+
+if ($ReasoningBudget -ge 0) {
+    $Arguments += @("--reasoning-budget", $ReasoningBudget)
 }
 
 $EndpointUrl = "http://${HostAddress}:${Port}/v1"

@@ -3,16 +3,27 @@
 ## Estado Atual Canônico — 07/10/2026
 
 - **CURRENT_FOCUS** = `LOCAL_AI_BRAIN_AND_VIDEO_QUALITY`
-- **CURRENT_PHASE** = `V1.4C_LOCAL_AI_SHADOW_RUNNER`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4B_CONCLUDED / V1.4C_SHADOW_IMPLEMENTED`
+- **CURRENT_PHASE** = `V1.4D.2_FACT_SUFFICIENCY_GATE_AND_RUNTIME_FINALIZATION`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4D.2_CONCLUDED`
 - **ACTIVE_BRANCH** = `feat/v1-4a-local-ai-lab`
-- **NEXT_GATE** = `LOCAL_AI_SHADOW_VALIDATION_OR_INTEGRATION_GATE`
+- **NEXT_GATE** = `PC_FORTE_SHADOW_HOMOLOGATION_RUN_CASE_6`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_AI_MODE** = `off` (DEFAULT = off; shadow disponível para testes/lab; active NÃO habilitado no pipeline de produção)
 - **LOCAL_AI_VIABLE** = `YES`
 - **BLOCKED_BY** = `NONE`
 
 ### Destaque da Frente de IA Local (Local Brain + FactPack + FactGuard + Shadow Runner):
+- **V1.4D.2_FACT_SUFFICIENCY_GATE_AND_RUNTIME_FINALIZATION** = CONCLUÍDA / HOMOLOGADA
+  - `FactSufficiencyGate`: Gate determinístico pré-geração baseado em `DEFAULT_SAFE_EXPANSION_RATIO = 2.0`. Se a quantidade de fatos for insuficiente para sustentar a duração solicitada sem forçar alucinação, retorna estado estruturado `FACT_PACK_INSUFFICIENT` e **não chama o provedor LLM** (`total_llm_calls = 0`).
+  - Telemetria de Candidato Rejeitado: Métricas do último candidato (`candidate_script_word_count`, `candidate_estimated_duration_seconds`, `candidate_duration_delta_seconds`) são preservadas no banco shadow para auditoria mesmo quando reprovado, mantendo `final_content = None` (fail-closed estrito).
+  - Runtime Script Validado: `scripts/start_local_ai_server.ps1` atualizado com `-Threads 4` (`-t 4`), `-ThreadsBatch 4` (`-tb 4`), `-Reasoning off` (`--reasoning off`), `-ReasoningBudget 0` (`--reasoning-budget 0`).
+  - Diagnóstico de GPU Contention: Documentada a necessidade operacional de pausar o Kryptex/mineração durante inferência (rendimento da RX 580 passa de 2.47 tok/s para 16.9 tok/s de geração, e prompt de 28 tok/s para 96.8 tok/s).
+  - Suíte de Testes: 36/36 testes aprovados (`test/services/test_local_ai.py`).
+- **V1.4D.1_SHADOW_HOMOLOGATION_OPTIMIZATION** = CONCLUÍDA / HOMOLOGADA
+  - Instrumentação por etapa (`generation_latency_seconds`, `fact_guard_latency_seconds`, `rewrite_latency_seconds`) e métricas acumuladas de tokens.
+  - Alvo determinístico de palavras via ritmo de fala (~2.4 palavras por segundo) instruindo explicitamente o prompt.
+  - Otimização de formato: campos de narração cena a cena simplificados, concentrando a fala exclusivamente no campo `script`.
+  - Harness de homologação (`scripts/run_local_ai_shadow_homologation.py`) adaptado para caso individual (`--case N`) com emissão de veredito `SINGLE_CASE`.
 - **V1.4C_LOCAL_AI_SHADOW_RUNNER** = CONCLUÍDA / HOMOLOGADA
   - `LOCAL_AI_MODE`: Suporte nativo aos modos `off|shadow|active` (padrão: `off`). O Local Brain NÃO toma decisões no pipeline de produção.
   - `LocalAIShadowRunner`: Executor isolado executando em modo de observação paralela. Se o servidor local estiver offline, o erro é gravado sem nunca quebrar o fluxo principal (fail-safe total).

@@ -32,10 +32,12 @@ from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
 from app.services.local_ai import (
+    DEFAULT_SAFE_EXPANSION_RATIO,
     Fact,
     FactGuard,
     FactGuardResult,
     FactPack,
+    FactSufficiencyResult,
     GroundedContent,
     GroundedScene,
     LocalAIConfig,
@@ -49,6 +51,7 @@ from app.services.local_ai import (
     LocalAITimeoutError,
     LocalAIShadowRunner,
     ShadowRunResult,
+    evaluate_fact_sufficiency,
     generate_grounded_content_with_guard,
     get_shadow_db_path,
     init_shadow_db,
@@ -187,11 +190,11 @@ class TestFactGuardAndGroundedGeneration(unittest.TestCase):
         self.router = LocalAIRouter(self.provider, fast_model="qwen3-4b", quality_model="qwen3-8b")
 
         self.roanoke_facts = [
-            Fact(id="F1", text="A Colônia de Roanoke foi estabelecida por colonos ingleses na atual Carolina do Norte."),
-            Fact(id="F2", text="John White retornou à Inglaterra em busca de suprimentos."),
-            Fact(id="F3", text="Quando voltou em 1590, os colonos haviam desaparecido."),
-            Fact(id="F4", text="A palavra CROATOAN estava gravada em um poste."),
-            Fact(id="F5", text="O destino definitivo dos colonos permanece incerto."),
+            Fact(id="F1", text="A Colônia de Roanoke foi estabelecida em 1587 por colonos ingleses na costa da atual Carolina do Norte como pioneira tentativa de colonização permanente."),
+            Fact(id="F2", text="O governador John White retornou imediatamente à Inglaterra para obter provisões e suprimentos vitais para a sobrevivência dos colonos remanescentes."),
+            Fact(id="F3", text="Quando a expedição inglesa retornou em 1590 após grandes atrasos provocados pela guerra anglo-espanhola, todos os colonos haviam desaparecido do assentamento."),
+            Fact(id="F4", text="A única pista encontrada gravada na entrada da fortificação foi a enigmática inscrição da palavra CROATOAN talhada em um poste de madeira."),
+            Fact(id="F5", text="Nenhum vestígio humano ou sinal de combate foi localizado, e o destino final dos colonos permanece sem comprovação documental definitiva até os dias atuais."),
         ]
         self.roanoke_pack = FactPack(topic="Colônia de Roanoke", facts=self.roanoke_facts)
 
@@ -440,11 +443,11 @@ class TestLocalAIShadowRunner(unittest.TestCase):
         self.provider = LocalAIProvider(self.cfg)
         self.router = LocalAIRouter(self.provider, fast_model="qwen3-4b", quality_model="qwen3-8b")
         self.roanoke_facts = [
-            Fact(id="F1", text="A Colônia de Roanoke foi estabelecida por colonos ingleses na atual Carolina do Norte."),
-            Fact(id="F2", text="John White retornou à Inglaterra em busca de suprimentos."),
-            Fact(id="F3", text="Quando voltou em 1590, os colonos haviam desaparecido."),
-            Fact(id="F4", text="A palavra CROATOAN estava gravada em um poste."),
-            Fact(id="F5", text="O destino definitivo dos colonos permanece incerto."),
+            Fact(id="F1", text="A Colônia de Roanoke foi estabelecida em 1587 por colonos ingleses na costa da atual Carolina do Norte como pioneira tentativa de colonização permanente."),
+            Fact(id="F2", text="O governador John White retornou imediatamente à Inglaterra para obter provisões e suprimentos vitais para a sobrevivência dos colonos remanescentes."),
+            Fact(id="F3", text="Quando a expedição inglesa retornou em 1590 após grandes atrasos provocados pela guerra anglo-espanhola, todos os colonos haviam desaparecido do assentamento."),
+            Fact(id="F4", text="A única pista encontrada gravada na entrada da fortificação foi a enigmática inscrição da palavra CROATOAN talhada em um poste de madeira."),
+            Fact(id="F5", text="Nenhum vestígio humano ou sinal de combate foi localizado, e o destino final dos colonos permanece sem comprovação documental definitiva até os dias atuais."),
         ]
         self.roanoke_pack = FactPack(topic="Colônia de Roanoke", facts=self.roanoke_facts)
 
@@ -995,6 +998,171 @@ class TestLocalAIShadowRunner(unittest.TestCase):
         cfg = LocalAIConfig(mode="off")
         self.assertFalse(cfg.is_active())
         self.assertEqual(cfg.mode, "off")
+
+    def test_31_fact_sufficiency_gate_evaluation_and_pass(self):
+        """V1.4D.2: FactPack suficiente passa pelo gate com métricas calculadas."""
+        pack = self.roanoke_pack  # ~99 palavras
+        res = pack.evaluate_sufficiency(requested_duration_seconds=70.0, words_per_second=2.4, expansion_ratio=2.0)
+        self.assertTrue(res.sufficient)
+        self.assertEqual(res.target_words, 168)
+        self.assertEqual(res.fact_count, 5)
+        self.assertGreaterEqual(res.fact_word_count, 90)
+        self.assertGreaterEqual(res.safe_target_words, 180)
+        self.assertGreaterEqual(res.recommended_duration_seconds, 70.0)
+
+    def test_32_fact_pack_insufficient_stops_before_llm(self):
+        """V1.4D.2: FactPack insuficiente não chama provider e calcula recommended_duration."""
+        short_facts = [
+            Fact(id="F1", text="Roanoke sumiu."),
+            Fact(id="F2", text="Croatoan no poste."),
+        ]
+        short_pack = FactPack(topic="Roanoke", facts=short_facts)
+        # short_pack tem 5 palavras -> safe_target_words = 10 -> recommended_duration = 10 / 2.4 = 4.17s
+        sufficiency = evaluate_fact_sufficiency(short_pack, requested_duration_seconds=70.0, words_per_second=2.4)
+        self.assertFalse(sufficiency.sufficient)
+        self.assertEqual(sufficiency.target_words, 168)
+        self.assertEqual(sufficiency.fact_word_count, 5)
+        self.assertEqual(sufficiency.safe_target_words, 10)
+        self.assertAlmostEqual(sufficiency.recommended_duration_seconds, 4.17, places=1)
+
+        # Na geração com guarda, o LLM não pode ser chamado
+        with patch.object(self.router, "dispatch_chat") as mock_dispatch:
+            guard_res = generate_grounded_content_with_guard(
+                fact_pack=short_pack,
+                provider=self.provider,
+                router=self.router,
+                target_duration_seconds=70,
+            )
+            mock_dispatch.assert_not_called()
+
+        self.assertFalse(guard_res.approved)
+        self.assertIsNone(guard_res.final_content)
+        self.assertEqual(guard_res.total_llm_calls, 0)
+        self.assertIn("FACT_PACK_INSUFFICIENT", guard_res.notes[0])
+        self.assertIsNotNone(guard_res.sufficiency)
+        self.assertFalse(guard_res.sufficiency.sufficient)
+
+    def test_33_shadow_runner_fact_pack_insufficient_state_persisted(self):
+        """V1.4D.2: Shadow runner persiste estado FACT_PACK_INSUFFICIENT sem crash e sem chamar LLM."""
+        short_facts = [
+            Fact(id="F1", text="Roanoke desapareceu."),
+            Fact(id="F2", text="Poste com Croatoan."),
+        ]
+        short_pack = FactPack(topic="Roanoke", facts=short_facts)
+        cfg = LocalAIConfig(mode="shadow")
+        runner = LocalAIShadowRunner(provider=LocalAIProvider(cfg))
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard") as mock_gen:
+                res = runner.run_shadow(
+                    short_pack,
+                    task_id="insufficient_facts_task",
+                    requested_duration_seconds=70.0,
+                    words_per_second=2.4,
+                )
+                mock_gen.assert_not_called()
+
+            self.assertFalse(res.generation_success)
+            self.assertEqual(res.error_type, "FACT_PACK_INSUFFICIENT")
+            self.assertEqual(res.total_llm_calls, 0)
+            self.assertFalse(res.final_shadow_available)
+            self.assertEqual(res.safe_target_words, 10)
+            self.assertAlmostEqual(res.recommended_duration_seconds, 4.17, places=1)
+
+            # Valida leitura no SQLite
+            conn = sqlite3.connect(temp_db)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM local_ai_shadow_runs WHERE id = ?", (res.shadow_run_id,)).fetchone()
+            conn.close()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(row["error_type"], "FACT_PACK_INSUFFICIENT")
+            self.assertEqual(row["generation_success"], 0)
+            self.assertEqual(row["safe_target_words"], 10)
+            self.assertAlmostEqual(row["recommended_duration_seconds"], 4.17, places=1)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_34_rejected_candidate_telemetry_recorded_and_final_content_none(self):
+        """V1.4D.2: Candidato rejeitado registra métricas (word count, duração), mas final_content permanece None."""
+        cfg = LocalAIConfig(mode="shadow")
+        runner = LocalAIShadowRunner(provider=LocalAIProvider(cfg))
+
+        candidate_content = GroundedContent(
+            topic="Colônia de Roanoke",
+            hook="Hook não fundamentado",
+            script=" ".join(["palavra"] * 100),  # 100 palavras
+            duration_seconds=70,
+            facts_used=["F1"],
+        )
+        fake_guard_res = FactGuardResult(
+            approved=False,
+            unsupported_claims=["Afirmação inventada"],
+            used_fact_ids=["F1"],
+            final_content=None,
+            last_candidate_content=candidate_content,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+
+        try:
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=fake_guard_res):
+                res = runner.run_shadow(
+                    self.roanoke_pack,
+                    requested_duration_seconds=70.0,
+                    words_per_second=2.0,
+                )
+
+            # Falha de auditoria: fail-closed estrito
+            self.assertFalse(res.fact_guard_approved)
+            self.assertFalse(res.final_shadow_available)
+            # Porém a telemetria do candidato rejeitado é preservada
+            self.assertEqual(res.candidate_script_word_count, 100)
+            self.assertEqual(res.candidate_estimated_duration_seconds, 50.0)  # 100 / 2.0 = 50s
+            self.assertEqual(res.candidate_duration_delta_seconds, -20.0)      # 50 - 70 = -20s
+            # final_content nunca é publicado nem fica disponível
+            self.assertEqual(res.script_word_count, 0)
+            self.assertEqual(res.estimated_duration_seconds, 0.0)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_35_start_local_ai_server_runtime_arguments(self):
+        """V1.4D.2: start_local_ai_server.ps1 inclui -tb, reasoning off, reasoning-budget 0 e defaults seguros."""
+        ps1_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts", "start_local_ai_server.ps1")
+        self.assertTrue(os.path.isfile(ps1_path))
+        with open(ps1_path, "r", encoding="ascii") as f:
+            content = f.read()
+
+        # Valida parâmetros default declarados no script
+        self.assertIn("[int]$Threads = 4", content)
+        self.assertIn("[int]$ThreadsBatch = 4", content)
+        self.assertIn('[string]$Reasoning = "off"', content)
+        self.assertIn("[int]$ReasoningBudget = 0", content)
+
+        # Valida que as flags são passadas para o llama-server
+        self.assertIn('"-t", $Threads', content)
+        self.assertIn('"-tb", $ThreadsBatch', content)
+        self.assertIn('"--reasoning", $Reasoning', content)
+        self.assertIn('"--reasoning-budget", $ReasoningBudget', content)
+
+    def test_36_mode_off_preserves_pipeline_without_llm(self):
+        """V1.4D.2: Modo off continua intacto sem acionar LLM ou gates."""
+        cfg = LocalAIConfig(mode="off")
+        runner = LocalAIShadowRunner(provider=LocalAIProvider(cfg))
+        with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard") as mock_gen:
+            res = runner.run_shadow(self.roanoke_pack)
+            mock_gen.assert_not_called()
+        self.assertEqual(res.error_type, "MODE_OFF")
+        self.assertFalse(res.generation_success)
+        self.assertFalse(res.final_shadow_available)
 
 
 if __name__ == "__main__":

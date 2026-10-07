@@ -36,10 +36,11 @@ from app.services.local_ai import LocalAIConfig, get_shadow_db_path
 
 def detect_environment() -> Dict[str, Any]:
     """
-    Detecta de forma simples e segura o ambiente de execução: 'DEV' ou 'PRODUÇÃO'.
-    - Variável de ambiente explícita (VIDEO_FACTORY_ENV, APP_ENV, ENVIRONMENT)
-    - Hostname conhecido do notebook de desenvolvimento DEV (ex: DESKTOP-MU3HR6J)
-    - Branch git atual (se diferente de 'main', indica DEV)
+    Detecta de forma simples e segura o ambiente de execução: 'DEV', 'PRODUÇÃO' ou 'DESCONHECIDO'.
+    - Variável de ambiente explícita (VIDEO_FACTORY_ENV, APP_ENV, ENVIRONMENT) - MAIOR PRECEDÊNCIA
+    - Hostname conhecido de desenvolvimento DEV: DESKTOP-MU3HR6J
+    - Hostname conhecido de PRODUÇÃO (PC Forte): DESKTOP-21KQ4RJ
+    - Host desconhecido + ausência de variável explícita: NUNCA assumir PRODUÇÃO (retorna DESCONHECIDO)
     """
     env_var = (
         os.getenv("VIDEO_FACTORY_ENV")
@@ -61,40 +62,52 @@ def detect_environment() -> Dict[str, Any]:
             "is_dev": True,
         }
 
-    current_host = (platform.node() or socket.gethostname() or os.getenv("COMPUTERNAME") or "").upper()
-    if "DESKTOP-MU3HR6J" in current_host or "NOTEBOOK" in current_host or "DEV" in current_host:
+    current_host = (
+        platform.node()
+        or socket.gethostname()
+        or os.getenv("COMPUTERNAME")
+        or ""
+    ).strip().upper()
+
+    # 1. Notebook DEV oficial catalogado
+    if "DESKTOP-MU3HR6J" in current_host or "NOTEBOOK" in current_host:
         return {
             "name": "DEV",
             "badge": "DEV",
             "is_dev": True,
         }
-    if "PC-FORTE" in current_host or "PROD" in current_host:
+
+    # 2. PC Forte oficial de Produção catalogado
+    if "DESKTOP-21KQ4RJ" in current_host or "PC-FORTE" in current_host:
         return {
             "name": "PRODUÇÃO",
             "badge": "PRODUÇÃO",
             "is_dev": False,
         }
 
+    # 3. Host desconhecido sem variável explícita: fail-safe neutro (nunca assume produção)
+    return {
+        "name": "DESCONHECIDO",
+        "badge": "DESCONHECIDO",
+        "is_dev": True,
+    }
+
+
+def _resolve_profile_display_name(profile_id: Optional[str], db_path: Optional[str] = None) -> str:
+    """Resolve o nome canônico do perfil dinamicamente a partir do SQLite sem hardcoding."""
+    clean_id = str(profile_id or "").strip()
+    if not clean_id:
+        return "Canal Principal"
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        head_file = os.path.join(base_dir, ".git", "HEAD")
-        if os.path.isfile(head_file):
-            with open(head_file, "r", encoding="utf-8") as f:
-                ref_line = f.read().strip()
-                if "ref: refs/heads/main" not in ref_line:
-                    return {
-                        "name": "DEV",
-                        "badge": "DEV",
-                        "is_dev": True,
-                    }
+        from app.services import profile_manager
+        prof = profile_manager.get_profile(clean_id, db_path=db_path)
+        if prof and prof.get("name"):
+            return str(prof["name"])
     except Exception:
         pass
-
-    return {
-        "name": "PRODUÇÃO",
-        "badge": "PRODUÇÃO",
-        "is_dev": False,
-    }
+    if clean_id == "default":
+        return "Canal Principal"
+    return clean_id
 
 
 def _get_ro_connection(db_path: Optional[str] = None) -> Optional[sqlite3.Connection]:
@@ -246,7 +259,7 @@ def get_local_ai_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def format_actionable_alerts(warnings: List[str]) -> List[Dict[str, str]]:
+def format_actionable_alerts(warnings: List[str], db_path: Optional[str] = None) -> List[Dict[str, str]]:
     """Traduz códigos brutos de warnings observáveis em alertas acionáveis em pt-BR."""
     alerts: List[Dict[str, str]] = []
     seen = set()
@@ -260,7 +273,10 @@ def format_actionable_alerts(warnings: List[str]) -> List[Dict[str, str]]:
         code = parts[0]
         scope = parts[1] if len(parts) > 1 else ""
 
-        channel_prefix = "Canal Principal: " if scope == "default" else ("Histórias e Mistérios: " if scope == "profile-historias-misterio" else "")
+        channel_prefix = ""
+        if scope:
+            ch_name = _resolve_profile_display_name(scope, db_path=db_path)
+            channel_prefix = f"{ch_name}: "
 
         if code == "READY_STOCK_EMPTY":
             alerts.append({
@@ -343,7 +359,7 @@ def get_recent_tasks_summary(db_path: Optional[str] = None, limit: int = 8) -> L
 
             topic = t.get("video_subject") or t.get("topic") or "Vídeo Short"
             prof_id = t.get("profile_id") or "default"
-            channel_label = "Canal Principal" if prof_id == "default" else "Histórias e Mistérios"
+            channel_label = _resolve_profile_display_name(prof_id, db_path=db_path)
 
             recent_tasks.append({
                 "task_id": str(t.get("task_id", ""))[:8],
@@ -389,7 +405,7 @@ def get_recent_tasks_summary(db_path: Optional[str] = None, limit: int = 8) -> L
                             st_text = s_status.capitalize()
 
                         p_id = r["profile_id"] or "default"
-                        ch_label = "Canal Principal" if p_id == "default" else "Histórias e Mistérios"
+                        ch_label = _resolve_profile_display_name(p_id, db_path=db_path)
                         recent_tasks.append({
                             "task_id": str(r["task_id"] or r["id"])[:8],
                             "topic": f"Short #{r['id']}",
@@ -556,24 +572,32 @@ def get_monitor_lite_summary(
                 current_prod["progress_percent"] = int(t.get("progress") or 50)
                 current_prod["task_id"] = t.get("task_id")
                 p_id = t.get("profile_id")
-                current_prod["profile_name"] = "Canal Principal" if (not p_id or p_id == "default") else "Histórias e Mistérios"
+                current_prod["profile_name"] = _resolve_profile_display_name(p_id, db_path=db_path)
                 break
     except Exception as exc:
         logger.debug(f"[MonitorLite] Falha ao ler active_task de sm.state: {exc}")
 
-    # 5. Canais (Dose Diária & Histórias e Mistérios)
+    # 5. Canais (dinâmico sobre todos os perfis retornados pela observabilidade)
     channel_list: List[Dict[str, Any]] = []
-    p_keys = [
-        (production_observability.PROFILE_DEFAULT, "Dose Diária de Internet (Principal)"),
-        (production_observability.PROFILE_MYSTERY, "Histórias e Mistérios (Secundário)"),
-    ]
 
-    for p_id, default_display_name in p_keys:
-        p_data = profiles.get(p_id, {})
+    active_profile_entries = list(profiles.items())
+    if not active_profile_entries:
+        try:
+            db_profs = profile_manager.list_profiles(active_only=True, db_path=db_path)
+            active_profile_entries = [(str(p["id"]), {"profile": p}) for p in db_profs if p.get("id")]
+        except Exception:
+            pass
+    if not active_profile_entries:
+        active_profile_entries = [(production_observability.PROFILE_DEFAULT, {})]
+
+    for p_id, p_data in active_profile_entries:
+        p_info = p_data.get("profile", {}) if isinstance(p_data, dict) else {}
+        ch_name = p_info.get("name") or _resolve_profile_display_name(p_id, db_path=db_path)
+
         if not isinstance(p_data, dict) or p_data.get("status") == "unavailable":
             channel_list.append({
                 "id": p_id,
-                "name": default_display_name,
+                "name": ch_name,
                 "status": "OFFLINE",
                 "status_badge": "⚪",
                 "ready_stock": 0,
@@ -586,7 +610,6 @@ def get_monitor_lite_summary(
             })
             continue
 
-        p_info = p_data.get("profile", {})
         p_stock = p_data.get("ready_stock", {})
         p_sched = p_data.get("scheduler", {})
         p_pubs = p_data.get("publications", {}).get("recent_publications", [])
@@ -595,14 +618,6 @@ def get_monitor_lite_summary(
         stock_cnt = int(p_stock.get("count", 0))
         stock_tgt = int(p_stock.get("target", 3))
         is_low = stock_cnt < stock_tgt
-
-        # Nome de apresentação amigável e consistente
-        if p_id == production_observability.PROFILE_DEFAULT:
-            ch_name = "Dose Diária de Internet (Principal)"
-        elif p_id == production_observability.PROFILE_MYSTERY:
-            ch_name = "Histórias e Mistérios (Secundário)"
-        else:
-            ch_name = p_info.get("name") or default_display_name
 
         # Última publicação
         last_pub_info = {"title": "Nenhum vídeo publicado ainda", "published_at": None, "time_ago": "—"}
@@ -648,8 +663,13 @@ def get_monitor_lite_summary(
     auto_an_enabled = bool(analytics_sched.get("auto_collection_enabled", False))
     auto_an_badge = "✅ Ativo" if auto_an_enabled else "⚠️ Inativo"
 
-    # Feedback loop do canal padrão como referência
-    cl_p1 = profiles.get(production_observability.PROFILE_DEFAULT, {}).get("closed_feedback_loop", {})
+    # Feedback loop do canal padrão ou primeiro canal ativo como referência
+    reference_profile_id = (
+        production_observability.PROFILE_DEFAULT
+        if production_observability.PROFILE_DEFAULT in profiles
+        else (next(iter(profiles.keys())) if profiles else production_observability.PROFILE_DEFAULT)
+    )
+    cl_p1 = profiles.get(reference_profile_id, {}).get("closed_feedback_loop", {})
     cl_mode = cl_p1.get("mode", "baseline")
     cl_samples = int(cl_p1.get("sample_count", 0))
     cl_badge = "✅ Adaptativo" if cl_mode == "adaptive" and cl_samples >= 12 else "⚠️ Baseline"
@@ -672,7 +692,7 @@ def get_monitor_lite_summary(
     }
 
     # 8. Alertas Acionáveis
-    actionable_alerts = format_actionable_alerts(raw_warnings)
+    actionable_alerts = format_actionable_alerts(raw_warnings, db_path=db_path)
 
     # 9. Últimas Tarefas
     recent_tasks = get_recent_tasks_summary(db_path=db_path, limit=8)

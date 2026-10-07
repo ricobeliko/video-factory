@@ -46,7 +46,6 @@ from app.services import (
 
 PROFILE_DEFAULT = "default"
 PROFILE_MYSTERY = "profile-historias-misterio"
-OBSERVABILITY_PROFILES = (PROFILE_DEFAULT, PROFILE_MYSTERY)
 
 
 def _get_ro_connection(db_path: Optional[str] = None):
@@ -73,17 +72,19 @@ def _get_profile_observability(
     profile_info: Dict[str, Any] = {
         "status": "available",
         "profile_id": clean_p,
-        "name": "Canal Principal (Padrão)" if is_default else clean_p,
+        "name": clean_p,
         "niche": "unknown",
         "growth_mode": "unknown",
         "channel_id": "unknown",
     }
     try:
         prof = profile_manager.get_profile(clean_p, db_path=db_path)
-        if prof:
-            profile_info["name"] = prof.get("name") or profile_info["name"]
+        if prof and prof.get("name"):
+            profile_info["name"] = prof.get("name")
             profile_info["niche"] = prof.get("niche") or "unknown"
             profile_info["growth_mode"] = prof.get("growth_mode") or "unknown"
+        elif is_default:
+            profile_info["name"] = "Canal Principal (Padrão)"
 
         gm = autonomous_production.get_profile_growth_mode(clean_p, db_path=db_path)
         if gm:
@@ -508,9 +509,21 @@ def get_production_observability_snapshot(
     """Gera um snapshot consolidado, passivo e determinístico da observabilidade de produção."""
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Prepara profiles
+    # Prepara profiles dinamicamente a partir dos perfis ativos cadastrados no SQLite
     profiles_result: Dict[str, Any] = {}
-    for p_id in OBSERVABILITY_PROFILES:
+    target_profile_ids: List[str] = []
+    try:
+        active_profiles = profile_manager.list_profiles(active_only=True, db_path=db_path)
+        if active_profiles:
+            target_profile_ids = [str(p["id"]) for p in active_profiles if p.get("id")]
+    except Exception as exc:
+        logger.debug(f"[ProductionObservability] Falha ao listar perfis ativos via profile_manager: {exc}")
+
+    # Fallback determinístico se não houver perfis cadastrados ou tabela vazia
+    if not target_profile_ids:
+        target_profile_ids = [PROFILE_DEFAULT]
+
+    for p_id in target_profile_ids:
         try:
             profiles_result[p_id] = _get_profile_observability(
                 profile_id=p_id,

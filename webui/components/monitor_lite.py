@@ -23,6 +23,40 @@ from typing import Any, Dict, Optional
 from app.services.monitor_lite import get_monitor_lite_summary
 
 
+def _render_channel_card(ch: Dict[str, Any]):
+    """Renderiza um card visual individual de canal."""
+    with st.container(border=True):
+        st.markdown(f"**{ch.get('status_badge', '⚪')} {ch.get('name', 'Canal')}**")
+
+        stock_cnt = ch.get("ready_stock", 0)
+        stock_tgt = ch.get("target_stock", 3)
+        stock_st = ch.get("stock_status", "UNKNOWN")
+        stock_lbl = ch.get("stock_label", "—")
+
+        # Semântica visual estrita de estoque (sem backticks verdes enganosos)
+        if stock_st == "UNKNOWN" or "Sem dados" in str(stock_lbl):
+            stock_html = f'<span style="color: #888888; font-weight: 600;">{stock_lbl}</span>'
+        elif stock_st == "LOW" or stock_cnt < stock_tgt:
+            stock_html = f'<span style="color: #eab308; font-weight: 600;">⚠️ {stock_lbl}</span>'
+        else:
+            stock_html = f'<span style="color: #22c55e; font-weight: 600;">✅ {stock_lbl}</span>'
+
+        st.markdown(f"📦 **Estoque Pronto:** {stock_html}", unsafe_allow_html=True)
+
+        last_pub = ch.get("last_published", {})
+        st.markdown(f"🚀 **Última Publicação:** {last_pub.get('title', '—')}")
+
+        # Semântica visual estrita de próximo slot (neutro quando não agendado)
+        next_sl = ch.get("next_slot", {})
+        time_until = next_sl.get("time_until", "—")
+        if not next_sl.get("scheduled_at") or "Nenhum" in str(time_until):
+            slot_html = f'<span style="color: #888888;">{time_until}</span>'
+        else:
+            slot_html = f'<span style="color: #22c55e; font-weight: 500;">{time_until}</span>'
+
+        st.markdown(f"⏰ **Próximo Slot:** {slot_html}", unsafe_allow_html=True)
+
+
 def _render_monitor_lite_content(db_path: Optional[str] = None):
     """Renderiza o conteúdo visual completo do painel executivo do Monitor Lite."""
     try:
@@ -45,11 +79,19 @@ def _render_monitor_lite_content(db_path: Optional[str] = None):
     # -------------------------------------------------------------------------
     col_title, col_status = st.columns([0.7, 0.3], vertical_alignment="center")
     with col_title:
-        env_name = sys_info.get("environment", "DEV")
-        is_dev = sys_info.get("is_dev", True)
-        env_color = "#eab308" if is_dev else "#3b82f6"
-        env_bg = "rgba(234, 179, 8, 0.15)" if is_dev else "rgba(59, 130, 246, 0.15)"
-        env_border = "rgba(234, 179, 8, 0.4)" if is_dev else "rgba(59, 130, 246, 0.4)"
+        env_name = str(sys_info.get("environment") or "DESCONHECIDO").upper()
+        if "PROD" in env_name:
+            env_color = "#3b82f6"
+            env_bg = "rgba(59, 130, 246, 0.15)"
+            env_border = "rgba(59, 130, 246, 0.4)"
+        elif "DEV" in env_name:
+            env_color = "#eab308"
+            env_bg = "rgba(234, 179, 8, 0.15)"
+            env_border = "rgba(234, 179, 8, 0.4)"
+        else:
+            env_color = "#9ca3af"
+            env_bg = "rgba(156, 163, 175, 0.15)"
+            env_border = "rgba(156, 163, 175, 0.4)"
 
         st.markdown(
             f"""
@@ -138,44 +180,23 @@ def _render_monitor_lite_content(db_path: Optional[str] = None):
     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # 4. CANAIS: Visão Operacional com Cores Semânticas
+    # 4. CANAIS: Visão Operacional com Grid Dinâmico (2 colunas por linha)
     # -------------------------------------------------------------------------
     st.markdown("##### 📺 Canais Operacionais")
-    c_col1, c_col2 = st.columns(2)
-
-    for i, ch in enumerate(channels):
-        target_col = c_col1 if i == 0 else c_col2
-        with target_col:
-            with st.container(border=True):
-                st.markdown(f"**{ch.get('status_badge')} {ch.get('name')}**")
-
-                stock_cnt = ch.get("ready_stock", 0)
-                stock_tgt = ch.get("target_stock", 3)
-                stock_st = ch.get("stock_status", "UNKNOWN")
-                stock_lbl = ch.get("stock_label", "—")
-
-                # Semântica visual estrita de estoque (sem backticks verdes enganosos)
-                if stock_st == "UNKNOWN" or "Sem dados" in str(stock_lbl):
-                    stock_html = f'<span style="color: #888888; font-weight: 600;">{stock_lbl}</span>'
-                elif stock_st == "LOW" or stock_cnt < stock_tgt:
-                    stock_html = f'<span style="color: #eab308; font-weight: 600;">⚠️ {stock_lbl}</span>'
-                else:
-                    stock_html = f'<span style="color: #22c55e; font-weight: 600;">✅ {stock_lbl}</span>'
-
-                st.markdown(f"📦 **Estoque Pronto:** {stock_html}", unsafe_allow_html=True)
-
-                last_pub = ch.get("last_published", {})
-                st.markdown(f"🚀 **Última Publicação:** {last_pub.get('title', '—')}")
-
-                # Semântica visual estrita de próximo slot (neutro quando não agendado)
-                next_sl = ch.get("next_slot", {})
-                time_until = next_sl.get("time_until", "—")
-                if not next_sl.get("scheduled_at") or "Nenhum" in str(time_until):
-                    slot_html = f'<span style="color: #888888;">{time_until}</span>'
-                else:
-                    slot_html = f'<span style="color: #22c55e; font-weight: 500;">{time_until}</span>'
-
-                st.markdown(f"⏰ **Próximo Slot:** {slot_html}", unsafe_allow_html=True)
+    if not channels:
+        st.info("Nenhum canal ativo cadastrado.", icon="ℹ️")
+    elif len(channels) == 1:
+        cols = st.columns(1)
+        with cols[0]:
+            _render_channel_card(channels[0])
+    else:
+        for i in range(0, len(channels), 2):
+            cols = st.columns(2)
+            with cols[0]:
+                _render_channel_card(channels[i])
+            if i + 1 < len(channels):
+                with cols[1]:
+                    _render_channel_card(channels[i + 1])
 
     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 

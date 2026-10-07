@@ -52,6 +52,11 @@ class TestMonitorLite(unittest.TestCase):
         # Inicializa tabelas mínimas necessárias
         profile_manager.init_profile_db(db_path=self.test_db)
         profile_manager.ensure_default_profile(db_path=self.test_db)
+        profile_manager.update_profile(
+            profile_id="default",
+            name="Canal Principal",
+            db_path=self.test_db,
+        )
         scheduler.init_db(db_path=self.test_db)
         operator_console.init_operator_db(db_path=self.test_db)
         analytics.init_analytics_db(db_path=self.test_db)
@@ -180,7 +185,7 @@ class TestMonitorLite(unittest.TestCase):
             "GLOBAL_COST_GUARD_NEAR_LIMIT",
             "CLOSED_LOOP_BASELINE:default",
         ]
-        alerts = format_actionable_alerts(raw_warnings)
+        alerts = format_actionable_alerts(raw_warnings, db_path=self.test_db)
 
         self.assertEqual(len(alerts), 6)
         messages_text = " ".join(a["message"] for a in alerts)
@@ -222,8 +227,8 @@ class TestMonitorLite(unittest.TestCase):
         ch_mystery = next(c for c in channels if c["id"] == "profile-historias-misterio")
 
         self.assertNotEqual(ch_default["id"], ch_mystery["id"])
-        self.assertIn("Dose Diária", ch_default["name"])
-        self.assertIn("Histórias e Mistérios", ch_mystery["name"])
+        self.assertEqual(ch_default["name"], "Canal Principal")
+        self.assertEqual(ch_mystery["name"], "Histórias e Mistérios")
 
     def test_07_fail_soft_on_missing_or_corrupt_data(self):
         """7. Resiliência fail-soft: caminho inválido/ausente resulta em DEGRADED, nunca ONLINE."""
@@ -294,6 +299,131 @@ class TestMonitorLite(unittest.TestCase):
         self.assertIn(summary["system"]["environment"], ("DEV", "PRODUÇÃO"))
         self.assertIn(summary["system"]["environment_badge"], ("DEV", "PRODUÇÃO"))
 
+    def test_10_dynamic_multi_channel_three_profiles(self):
+        """10. Observabilidade e Monitor Lite suportam N perfis dinamicamente sem código fixo."""
+        # Cadastra 3º perfil ativo: "Dose Diária de Futebol"
+        profile_manager.create_profile(
+            profile_id="profile-futebol",
+            name="Dose Diária de Futebol",
+            niche="futebol",
+            growth_mode="normal",
+            is_active=True,
+            db_path=self.test_db,
+        )
+
+        # 1. Production Observability Snapshot
+        from app.services import production_observability
+        obs = production_observability.get_production_observability_snapshot(db_path=self.test_db)
+        obs_profiles = obs.get("profiles", {})
+
+        # Comprova que os 3 perfis ativos aparecem na observabilidade
+        self.assertEqual(len(obs_profiles), 3)
+        self.assertIn("default", obs_profiles)
+        self.assertIn("profile-historias-misterio", obs_profiles)
+        self.assertIn("profile-futebol", obs_profiles)
+
+        # Comprova que os nomes vêm do banco de dados
+        self.assertEqual(obs_profiles["default"]["profile"]["name"], "Canal Principal")
+        self.assertEqual(obs_profiles["profile-historias-misterio"]["profile"]["name"], "Histórias e Mistérios")
+        self.assertEqual(obs_profiles["profile-futebol"]["profile"]["name"], "Dose Diária de Futebol")
+
+        # Comprova que nenhum tratamento especial transforma o 3º canal em Histórias
+        self.assertNotEqual(obs_profiles["profile-futebol"]["profile"]["name"], "Histórias e Mistérios")
+        self.assertIn("Futebol", obs_profiles["profile-futebol"]["profile"]["name"])
+
+        # 2. Monitor Lite Summary
+        summary = get_monitor_lite_summary(db_path=self.test_db)
+        channels = summary.get("channels", [])
+
+        # Comprova que os 3 perfis aparecem no Monitor Lite
+        self.assertEqual(len(channels), 3)
+        ch_ids = [c["id"] for c in channels]
+        self.assertIn("default", ch_ids)
+        self.assertIn("profile-historias-misterio", ch_ids)
+        self.assertIn("profile-futebol", ch_ids)
+
+        ch_futebol = next(c for c in channels if c["id"] == "profile-futebol")
+        self.assertEqual(ch_futebol["name"], "Dose Diária de Futebol")
+
+        # Isolamento por profile_id continua correto
+        self.assertEqual(ch_futebol["id"], "profile-futebol")
+        self.assertNotEqual(ch_futebol["name"], "Histórias e Mistérios")
+
+        # 3. Alertas acionáveis com 3º perfil
+        warns = ["READY_STOCK_EMPTY:profile-futebol"]
+        alerts = format_actionable_alerts(warns, db_path=self.test_db)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("Dose Diária de Futebol: Estoque pronto zerado", alerts[0]["message"])
+        self.assertNotIn("Histórias e Mistérios", alerts[0]["message"])
+
+        # 4. Streamlit Grid com 3 canais renderiza com segurança (grid 2 colunas por linha)
+        def mock_columns(spec, **kwargs):
+            cnt = len(spec) if isinstance(spec, (list, tuple)) else int(spec)
+            return [MagicMock() for _ in range(cnt)]
+
+        with patch("streamlit.columns", side_effect=mock_columns), \
+             patch("streamlit.container", return_value=MagicMock()), \
+             patch("streamlit.metric"), \
+             patch("streamlit.progress"), \
+             patch("streamlit.markdown"), \
+             patch("streamlit.caption"), \
+             patch("streamlit.write"), \
+             patch("streamlit.info"), \
+             patch("streamlit.warning"), \
+             patch("streamlit.success"), \
+             patch("streamlit.error"), \
+             patch("streamlit.expander", return_value=MagicMock()), \
+             patch("streamlit.divider"), \
+             patch("streamlit.json"):
+            render_monitor_lite(db_path=self.test_db)
+
+    def test_11_environment_hostname_fail_safe_matrix(self):
+        """11. Fail-safe de hostname: DEV -> DEV, PC Forte -> PRODUÇÃO, desconhecido -> DESCONHECIDO."""
+        clean_env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("VIDEO_FACTORY_ENV", "APP_ENV", "ENVIRONMENT")
+        }
+
+        # 1. Hostname DEV conhecido
+        with patch.dict(os.environ, clean_env, clear=True), \
+             patch("platform.node", return_value="DESKTOP-MU3HR6J"), \
+             patch("socket.gethostname", return_value="DESKTOP-MU3HR6J"):
+            env = detect_environment()
+            self.assertEqual(env["name"], "DEV")
+            self.assertTrue(env["is_dev"])
+
+        # 2. Hostname real conhecido do PC Forte (Produção)
+        with patch.dict(os.environ, clean_env, clear=True), \
+             patch("platform.node", return_value="DESKTOP-21KQ4RJ"), \
+             patch("socket.gethostname", return_value="DESKTOP-21KQ4RJ"):
+            env = detect_environment()
+            self.assertEqual(env["name"], "PRODUÇÃO")
+            self.assertFalse(env["is_dev"])
+
+        # 3. Hostname desconhecido NUNCA assume PRODUÇÃO por default (fail-safe neutro)
+        with patch.dict(os.environ, clean_env, clear=True), \
+             patch("platform.node", return_value="UNKNOWN-DESKTOP-XYZ"), \
+             patch("socket.gethostname", return_value="UNKNOWN-DESKTOP-XYZ"):
+            env = detect_environment()
+            self.assertEqual(env["name"], "DESCONHECIDO")
+            self.assertEqual(env["badge"], "DESCONHECIDO")
+            self.assertTrue(env["is_dev"])
+            self.assertNotEqual(env["name"], "PRODUÇÃO")
+
+        # 4. Variável explícita continua tendo maior precedência sobre hostname
+        with patch.dict(os.environ, {"VIDEO_FACTORY_ENV": "PROD"}), \
+             patch("platform.node", return_value="DESKTOP-MU3HR6J"):
+            env = detect_environment()
+            self.assertEqual(env["name"], "PRODUÇÃO")
+            self.assertFalse(env["is_dev"])
+
+        with patch.dict(os.environ, {"VIDEO_FACTORY_ENV": "DEV"}), \
+             patch("platform.node", return_value="DESKTOP-21KQ4RJ"):
+            env = detect_environment()
+            self.assertEqual(env["name"], "DEV")
+            self.assertTrue(env["is_dev"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

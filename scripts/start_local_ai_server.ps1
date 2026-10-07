@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Script de Inicialização do Servidor de IA Local (Fase V1.4C).
+    Script de Inicializacao do Servidor de IA Local (Fase V1.4D.1).
 .DESCRIPTION
-    Inicia o servidor de inferência local (llama-server) compatível com OpenAI
+    Inicia o servidor de inferencia local (llama-server) compativel com OpenAI
     para atuar como Local Brain (Qwen3-8B) no PC Forte.
-    - Operação estritamente em localhost (127.0.0.1)
+    - Operacao estritamente em localhost (127.0.0.1)
     - Proibido qualquer bind em 0.0.0.0
     - Suporte acelerado via GPU Vulkan (Radeon RX 580)
-    - Totalmente parametrizável e portável
+    - Totalmente parametrizavel e portavel (PowerShell 5.1 compativel, pure ASCII)
 #>
 
 [CmdletBinding()]
@@ -24,27 +24,27 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# 1. Validação de Segurança Estrita: Apenas Localhost
+# 1. Validacao de Seguranca Estrita: Apenas Localhost
 if ($HostAddress -eq "0.0.0.0" -or $HostAddress -eq "::") {
-    Write-Error "[SEGURANÇA] Bind em 0.0.0.0 é estritamente proibido por política da Video Factory. Use apenas 127.0.0.1."
+    Write-Error "[SEGURANCA] Bind em 0.0.0.0 eh estritamente proibido por politica da Video Factory. Use apenas 127.0.0.1."
     exit 1
 }
 
-# 2. Resolução do Diretório Raiz do Projeto
+# 2. Resolucao do Diretorio Raiz do Projeto
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 
-# 3. Resolução do Caminho do Modelo GGUF
+# 3. Resolucao do Caminho do Modelo GGUF
 if ([string]::IsNullOrWhiteSpace($ModelPath)) {
     if ($env:LOCAL_AI_MODEL_PATH) {
         $ModelPath = $env:LOCAL_AI_MODEL_PATH
     } else {
-        # Caminho padrão no armazenamento local
+        # Caminho padrao no armazenamento local
         $ModelPath = Join-Path $ProjectRoot "storage\models\Qwen3-8B-Q4_K_M.gguf"
     }
 }
 
-# 4. Resolução do Executável do llama-server
+# 4. Resolucao do Executavel do llama-server
 if ([string]::IsNullOrWhiteSpace($LlamaServerExe)) {
     $Candidates = @(
         (Join-Path $ProjectRoot "tools\llama.cpp\llama-server.exe"),
@@ -67,7 +67,7 @@ if ([string]::IsNullOrWhiteSpace($LlamaServerExe)) {
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " VIDEO FACTORY — LOCAL AI SERVER INITIALIZER (V1.4C)      " -ForegroundColor Cyan
+Write-Host " VIDEO FACTORY - LOCAL AI SERVER INITIALIZER (V1.4D.1)    " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "Host:        $HostAddress"
 Write-Host "Porta:       $Port"
@@ -75,19 +75,19 @@ Write-Host "Contexto:    $ContextSize tokens"
 Write-Host "GPU Layers:  $GpuLayers ($Device)"
 Write-Host "Threads:     $Threads"
 Write-Host "Modelo:      $ModelPath"
-Write-Host "Executável:  $LlamaServerExe"
+Write-Host "Executavel:  $LlamaServerExe"
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# Verificações de Pré-Requisitos
+# Verificacoes de Pre-Requisitos
 if (-not (Test-Path $ModelPath)) {
-    Write-Warning "[AVISO] Arquivo do modelo não encontrado em: $ModelPath"
+    Write-Warning "[AVISO] Arquivo do modelo nao encontrado em: $ModelPath"
     Write-Warning "Por favor, baixe ou copie o modelo Qwen3-8B-Q4_K_M.gguf para esse local ou especifique -ModelPath."
     exit 2
 }
 
 if (-not $LlamaServerExe -or -not (Test-Path $LlamaServerExe)) {
-    Write-Warning "[AVISO] llama-server.exe não localizado."
-    Write-Warning "Especifique o caminho do executável com o parâmetro -LlamaServerExe."
+    Write-Warning "[AVISO] llama-server.exe nao localizado."
+    Write-Warning "Especifique o caminho do executavel com o parametro -LlamaServerExe."
     exit 3
 }
 
@@ -104,5 +104,6 @@ if (-not [string]::IsNullOrWhiteSpace($Device)) {
     $Arguments += @("--device", $Device)
 }
 
-Write-Host "[INICIANDO] Executando llama-server em http://$HostAddress:$Port/v1 ..." -ForegroundColor Green
+$EndpointUrl = "http://${HostAddress}:${Port}/v1"
+Write-Host "[INICIANDO] Executando llama-server em $EndpointUrl ..." -ForegroundColor Green
 & $LlamaServerExe @Arguments

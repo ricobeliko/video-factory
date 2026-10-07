@@ -163,7 +163,7 @@ def build_homologation_cases() -> List[Dict[str, Any]]:
 def run_homologation(
     base_url: str = "http://127.0.0.1:8089/v1",
     model: str = "qwen3-8b",
-    timeout: float = 120.0,
+    timeout: float = 300.0,
     db_path: Optional[str] = None,
     case_filter: Optional[int] = None,
     tolerance_seconds: float = 15.0,
@@ -175,7 +175,7 @@ def run_homologation(
     print("=" * 70)
     print(f"Endpoint:           {base_url}")
     print(f"Modelo Alvo:        {model}")
-    print(f"Timeout:            {timeout}s")
+    print(f"Timeout por Chamada:{timeout}s (HTTP per-call timeout)")
     print(f"Database Isolado:   {storage_db}")
     print(f"Tolerância Duração: ±{tolerance_seconds}s")
     print("=" * 70 + "\n")
@@ -226,11 +226,14 @@ def run_homologation(
         status_flag = "PASS" if res.fact_guard_approved else ("FAIL_CLOSED" if res.generation_success else "ERROR")
         dur_flag = "OK" if res.duration_within_tolerance else "DELTA"
         print(
-            f"       -> Status: {status_flag} | Latência: {res.latency_seconds:.1f}s | "
+            f"       -> Status: {status_flag} | Latência Total: {res.latency_seconds:.1f}s "
+            f"(Gen: {res.generation_latency_seconds:.1f}s, FG: {res.fact_guard_latency_seconds:.1f}s, Rew: {res.rewrite_latency_seconds:.1f}s) | "
+            f"Tokens: P={res.prompt_tokens_total} C={res.completion_tokens_total} T={res.total_tokens_total} (Calls: {res.total_llm_calls}) | "
             f"JSON: {'SIM' if res.json_valid else 'NÃO'} | "
             f"FactGuard: {'APROVADO' if res.fact_guard_approved else 'REPROVADO'} | "
             f"Claims Não Suportadas: {res.unsupported_claims_count} | "
-            f"Duração: {res.estimated_duration_seconds:.1f}s/{res.requested_duration_seconds:.1f}s ({dur_flag})"
+            f"Duração: {res.estimated_duration_seconds:.1f}s/{res.requested_duration_seconds:.1f}s "
+            f"(Palavras: {res.script_word_count}/{res.target_word_count}, {dur_flag})"
         )
         if res.error_type:
             print(f"       -> Erro registrado: [{res.error_type}] {res.error_message}")
@@ -251,12 +254,22 @@ def run_homologation(
     unsupported_total = sum(r.unsupported_claims_count for r in results)
     avg_lat = round(sum(r.latency_seconds for r in results) / max(1, total), 2)
 
+    gen_lat_total = round(sum(r.generation_latency_seconds for r in results), 2)
+    fg_lat_total = round(sum(r.fact_guard_latency_seconds for r in results), 2)
+    rew_lat_total = round(sum(r.rewrite_latency_seconds for r in results), 2)
+    total_llm_calls = sum(r.total_llm_calls for r in results)
+    prompt_tokens_total = sum(r.prompt_tokens_total for r in results)
+    completion_tokens_total = sum(r.completion_tokens_total for r in results)
+
     # Cálculo do Veredito Oficial
-    # Critérios:
-    # PASS: total == 10, sem crashes não tratados, json_valid >= 9, fg_pass >= 8, zero vazamento de claims externas
-    # REVIEW: total == 10, sem crashes, mas json_valid 7..8 ou fg_pass 6..7
-    # FAIL: crashes, json_valid < 7, fg_pass < 6, ou indisponibilidade total
-    if total >= 10 and json_valid >= 9 and fg_pass >= 8 and (fail_closed + fg_pass == success):
+    case_verdict: Optional[str] = None
+    if case_filter is not None:
+        verdict = "SINGLE_CASE"
+        if total > 0 and all(r.generation_success and r.json_valid and r.fact_guard_approved for r in results):
+            case_verdict = "PASS"
+        else:
+            case_verdict = "FAIL"
+    elif total >= 10 and json_valid >= 9 and fg_pass >= 8 and (fail_closed + fg_pass == success):
         verdict = "PASS"
     elif total >= 10 and json_valid >= 7 and fg_pass >= 6:
         verdict = "REVIEW"
@@ -273,10 +286,18 @@ def run_homologation(
     print(f"REWRITES = {rewrites}")
     print(f"FAIL_CLOSED = {fail_closed}")
     print(f"AVG_LATENCY = {avg_lat}s")
+    print(f"GENERATION_LATENCY = {gen_lat_total}s")
+    print(f"FACT_GUARD_LATENCY = {fg_lat_total}s")
+    print(f"REWRITE_LATENCY = {rew_lat_total}s")
+    print(f"TOTAL_LLM_CALLS = {total_llm_calls}")
+    print(f"PROMPT_TOKENS_TOTAL = {prompt_tokens_total}")
+    print(f"COMPLETION_TOKENS_TOTAL = {completion_tokens_total}")
     print(f"DURATION_WITHIN_TOLERANCE = {dur_tol}")
     print(f"UNSUPPORTED_CLAIMS_TOTAL = {unsupported_total}")
     print("-" * 70)
     print(f"SHADOW_HOMOLOGATION_VERDICT = {verdict}")
+    if case_verdict is not None:
+        print(f"CASE_VERDICT = {case_verdict}")
     print("=" * 70 + "\n")
 
     return results, verdict
@@ -286,7 +307,7 @@ def main():
     parser = argparse.ArgumentParser(description="MoneyPrinterTurbo - Local AI Shadow Homologation Harness")
     parser.add_argument("--base-url", type=str, default="http://127.0.0.1:8089/v1", help="URL do servidor OpenAI-compatible")
     parser.add_argument("--model", type=str, default="qwen3-8b", help="Nome do modelo configurado no servidor")
-    parser.add_argument("--timeout", type=float, default=120.0, help="Tempo limite por inferência em segundos")
+    parser.add_argument("--timeout", type=float, default=300.0, help="Tempo limite POR chamada HTTP em segundos (não é timeout total)")
     parser.add_argument("--db-path", type=str, default=None, help="Caminho do SQLite isolado para homologação")
     parser.add_argument("--case", type=int, default=None, help="Executar apenas caso específico (1 a 10)")
     parser.add_argument("--tolerance", type=float, default=15.0, help="Tolerância de duração estimada em segundos (±)")
@@ -301,8 +322,11 @@ def main():
         tolerance_seconds=args.tolerance,
     )
 
-    # Retorna 0 para PASS e REVIEW, 1 para FAIL
-    sys.exit(0 if verdict in ("PASS", "REVIEW") else 1)
+    # Retorna 0 para PASS e REVIEW, ou se SINGLE_CASE tiver sido aprovado
+    all_ok = verdict in ("PASS", "REVIEW") or (
+        verdict == "SINGLE_CASE" and len(results) > 0 and all(r.generation_success and r.json_valid and r.fact_guard_approved for r in results)
+    )
+    sys.exit(0 if all_ok else 1)
 
 
 if __name__ == "__main__":

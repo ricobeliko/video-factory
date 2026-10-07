@@ -436,6 +436,9 @@ class TestLocalAIShadowRunner(unittest.TestCase):
     """Validações do executor Shadow (V1.4C) garantindo isolamento total de produção."""
 
     def setUp(self):
+        self.cfg = LocalAIConfig(base_url="http://127.0.0.1:8089/v1", model="qwen3-8b")
+        self.provider = LocalAIProvider(self.cfg)
+        self.router = LocalAIRouter(self.provider, fast_model="qwen3-4b", quality_model="qwen3-8b")
         self.roanoke_facts = [
             Fact(id="F1", text="A Colônia de Roanoke foi estabelecida por colonos ingleses na atual Carolina do Norte."),
             Fact(id="F2", text="John White retornou à Inglaterra em busca de suprimentos."),
@@ -790,6 +793,208 @@ class TestLocalAIShadowRunner(unittest.TestCase):
         finally:
             if os.path.exists(temp_db):
                 os.remove(temp_db)
+
+    def test_23_target_word_count_calculation_and_prompt(self):
+        """V1.4D.1: Target word count é calculado deterministicamente e injetado no prompt."""
+        from app.services.local_ai.fact_guard import _generate_grounded_raw
+        mock_llm_json = {
+            "topic": "Colônia de Roanoke",
+            "hook": "O enigma de Roanoke.",
+            "script": "A Colônia de Roanoke foi estabelecida por colonos ingleses na costa da Carolina do Norte. John White viajou para a Inglaterra em busca de suprimentos urgentes.",
+            "duration_seconds": 70,
+            "facts_used": ["F1", "F2"],
+            "scenes": [{"scene": 1, "visual_prompt": "navio", "facts_used": ["F1"]}],
+        }
+        mock_resp = LocalAIResponse(
+            content=json.dumps(mock_llm_json),
+            model="qwen3-8b",
+            prompt_tokens=150,
+            completion_tokens=80,
+            total_tokens=230,
+            raw_response={"timings": {"predicted_ms": 1200.0}},
+        )
+        with patch.object(self.router, "dispatch_chat", return_value=mock_resp) as mock_dispatch:
+            content = _generate_grounded_raw(
+                self.roanoke_pack,
+                self.router,
+                target_duration_seconds=70.0,
+                words_per_second=2.4,
+                duration_tolerance_seconds=15.0,
+            )
+            self.assertGreaterEqual(content.generation_latency_seconds, 0.0)
+            self.assertEqual(content.prompt_tokens, 150)
+            self.assertEqual(content.completion_tokens, 80)
+            self.assertEqual(content.raw_timings.get("predicted_ms"), 1200.0)
+            # Verifica que o prompt recebeu o alvo de palavras calculado: 70 * 2.4 = 168 palavras
+            sent_messages = mock_dispatch.call_args[1]["messages"]
+            user_prompt = sent_messages[1]["content"]
+            self.assertIn("168 palavras", user_prompt)
+            # Faixa: (70 - 15) * 2.4 = 132 a (70 + 15) * 2.4 = 204 palavras
+            self.assertIn("132 a 204 palavras", user_prompt)
+
+    def test_24_output_does_not_duplicate_scene_narration(self):
+        """V1.4D.1: GroundedScene permite narration vazia e prompt não induz repetição do script."""
+        scene = GroundedScene(scene=1, visual_prompt="close no poste CROATOAN", facts_used=["F4"])
+        self.assertEqual(scene.narration, "")
+
+        from app.services.local_ai.fact_guard import _generate_grounded_raw
+        mock_llm_json = {
+            "topic": "Colônia de Roanoke",
+            "hook": "O mistério.",
+            "script": "Texto do roteiro sem duplicação.",
+            "duration_seconds": 70,
+            "facts_used": ["F1"],
+            "scenes": [{"scene": 1, "visual_prompt": "cena 1", "facts_used": ["F1"]}],
+        }
+        with patch.object(self.router, "dispatch_chat", return_value=LocalAIResponse(content=json.dumps(mock_llm_json), model="qwen3-8b")) as mock_dispatch:
+            _generate_grounded_raw(self.roanoke_pack, self.router)
+            user_prompt = mock_dispatch.call_args[1]["messages"][1]["content"]
+            self.assertIn("NÃO repita a narração", user_prompt)
+
+    def test_25_per_stage_timing_recorded(self):
+        """V1.4D.1: Latências por estágio (generation, fact_guard, rewrite) são registradas."""
+        cfg = LocalAIConfig(mode="shadow")
+        provider = LocalAIProvider(cfg)
+        runner = LocalAIShadowRunner(provider=provider, router=self.router)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        runner.db_path = temp_db
+        try:
+            audit_res = FactGuardResult(
+                approved=True,
+                unsupported_claims=[],
+                used_fact_ids=["F1"],
+                notes=[],
+                final_content=GroundedContent(
+                    topic="Roanoke",
+                    hook="Hook",
+                    script="Palavras do roteiro de teste.",
+                    duration_seconds=70,
+                    facts_used=["F1"],
+                    generation_latency_seconds=3.2,
+                    prompt_tokens=40,
+                    completion_tokens=20,
+                    total_tokens=60,
+                ),
+                generation_latency_seconds=3.2,
+                fact_guard_latency_seconds=1.5,
+                prompt_tokens_total=90,
+                completion_tokens_total=35,
+                total_tokens_total=125,
+                total_llm_calls=2,
+            )
+            with patch("app.services.local_ai.shadow_runner.generate_grounded_content_with_guard", return_value=audit_res):
+                res = runner.run_shadow(self.roanoke_pack, task_id="stage_timing_test")
+
+            self.assertEqual(res.generation_latency_seconds, 3.2)
+            self.assertEqual(res.fact_guard_latency_seconds, 1.5)
+            self.assertEqual(res.rewrite_latency_seconds, 0.0)
+            self.assertEqual(res.total_llm_calls, 2)
+            self.assertEqual(res.prompt_tokens_total, 90)
+            self.assertEqual(res.completion_tokens_total, 35)
+            self.assertEqual(res.total_tokens_total, 125)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_26_token_usage_telemetry_recorded_and_optional(self):
+        """V1.4D.1: Ausência de campo usage na resposta do LLM não quebra execução."""
+        resp_no_usage = LocalAIResponse(
+            content='{"approved": true, "unsupported_claims": [], "used_fact_ids": ["F1"], "notes": []}',
+            model="qwen3-8b",
+            prompt_tokens=None,
+            completion_tokens=None,
+            total_tokens=None,
+        )
+        self.assertIsNone(resp_no_usage.prompt_tokens)
+
+        guard = FactGuard(provider=self.provider, router=self.router)
+        with patch.object(self.router, "dispatch_chat", return_value=resp_no_usage):
+            audit_res = guard.validate_content(
+                self.roanoke_pack,
+                GroundedContent(topic="T", hook="H", script="S", duration_seconds=10, facts_used=["F1"]),
+            )
+            self.assertTrue(audit_res.approved)
+            self.assertEqual(audit_res.prompt_tokens_total, 0)
+            self.assertEqual(audit_res.completion_tokens_total, 0)
+            self.assertEqual(audit_res.total_tokens_total, 0)
+
+    def test_27_fact_guard_fail_closed_remains_intact(self):
+        """V1.4D.1: FactGuard continua fail-closed com claims não fundamentadas."""
+        guard = FactGuard(provider=self.provider, router=self.router)
+        content = GroundedContent(
+            topic="Colônia de Roanoke",
+            hook="O enigma.",
+            script="Aliens abduziram todos os colonos em 1590.",
+            duration_seconds=70,
+            facts_used=["F1"],
+        )
+        mock_audit_reject = LocalAIResponse(
+            content=json.dumps({
+                "approved": False,
+                "unsupported_claims": ["Aliens abduziram todos os colonos"],
+                "used_fact_ids": [],
+                "notes": ["Fato não consta no FactPack."],
+            }),
+            model="qwen3-8b",
+        )
+        with patch.object(self.router, "dispatch_chat", return_value=mock_audit_reject):
+            audit_res = guard.validate_content(self.roanoke_pack, content)
+            self.assertFalse(audit_res.approved)
+            self.assertIn("Aliens abduziram todos os colonos", audit_res.unsupported_claims)
+            self.assertIsNone(audit_res.final_content)
+
+    def test_28_single_case_verdict_formatting(self):
+        """V1.4D.1: Single-case harness emite SINGLE_CASE e CASE_VERDICT = PASS sem marcar FAIL geral."""
+        from scripts.run_local_ai_shadow_homologation import run_homologation
+        mock_run_res = ShadowRunResult(
+            shadow_run_id="test_single_case",
+            task_id="homolog_case_06",
+            topic="Colônia de Roanoke",
+            model_role="QUALITY",
+            model_name="qwen3-8b",
+            started_at="2026-10-07T12:00:00Z",
+            finished_at="2026-10-07T12:00:05Z",
+            latency_seconds=5.0,
+            generation_success=True,
+            json_valid=True,
+            fact_guard_approved=True,
+            final_shadow_available=True,
+            script_word_count=168,
+            requested_duration_seconds=70.0,
+            estimated_duration_seconds=70.0,
+            duration_delta_seconds=0.0,
+            duration_within_tolerance=True,
+        )
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+            temp_db = tf.name
+        try:
+            with patch("app.services.local_ai.shadow_runner.LocalAIShadowRunner.run_shadow", return_value=mock_run_res):
+                results, verdict = run_homologation(case_filter=6, db_path=temp_db)
+            self.assertEqual(verdict, "SINGLE_CASE")
+            self.assertEqual(len(results), 1)
+            self.assertTrue(results[0].fact_guard_approved)
+        finally:
+            if os.path.exists(temp_db):
+                os.remove(temp_db)
+
+    def test_29_powershell_starter_syntax_and_interpolation(self):
+        """V1.4D.1: Script PowerShell de inicialização é compatível com PS 5.1 (ASCII e sem $HostAddress:$Port)."""
+        ps1_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts", "start_local_ai_server.ps1")
+        self.assertTrue(os.path.isfile(ps1_path))
+        with open(ps1_path, "rb") as f:
+            content_bytes = f.read()
+        # Valida que é puramente ASCII para evitar mojibake no Windows PowerShell 5.1
+        content_text = content_bytes.decode("ascii")
+        # Valida ausência da interpolação que quebra o parser do PowerShell 5.1
+        self.assertNotIn("$HostAddress:$Port", content_text)
+        self.assertIn("${HostAddress}:${Port}", content_text)
+
+    def test_30_mode_off_behavior_remains_intact(self):
+        """V1.4D.1: Modo off permanece inerte e seguro."""
+        cfg = LocalAIConfig(mode="off")
+        self.assertFalse(cfg.is_active())
+        self.assertEqual(cfg.mode, "off")
 
 
 if __name__ == "__main__":

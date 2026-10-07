@@ -93,11 +93,23 @@ class ShadowRunResult(BaseModel):
     # Métricas de comparação & Duração do roteiro
     script_length_chars: int = Field(default=0, description="Comprimento em caracteres do roteiro")
     script_word_count: int = Field(default=0, description="Contagem de palavras faladas calculada")
+    target_word_count: int = Field(default=0, description="Alvo determinístico de palavras calculado")
     requested_duration_seconds: float = Field(default=70.0, description="Duração solicitada em segundos")
     estimated_duration_seconds: float = Field(default=0.0, description="Duração estimada baseada em palavras faladas")
     duration_delta_seconds: float = Field(default=0.0, description="Diferença: estimada - solicitada")
     duration_within_tolerance: bool = Field(default=False, description="Duração estimada dentro da tolerância esperada")
     cost_comparison: str = Field(default="UNKNOWN", description="Comparação de custo de API evitado")
+
+    # Telemetria detalhada por estágio e tokens (V1.4D.1)
+    generation_latency_seconds: float = Field(default=0.0, description="Latência da etapa de geração em segundos")
+    fact_guard_latency_seconds: float = Field(default=0.0, description="Latência da primeira auditoria em segundos")
+    rewrite_latency_seconds: float = Field(default=0.0, description="Latência da reescrita em segundos")
+    second_guard_latency_seconds: float = Field(default=0.0, description="Latência da segunda auditoria em segundos")
+    total_llm_calls: int = Field(default=0, description="Total de chamadas LLM realizadas no fluxo")
+    prompt_tokens_total: int = Field(default=0, description="Total de tokens de prompt somados")
+    completion_tokens_total: int = Field(default=0, description="Total de tokens de completion somados")
+    total_tokens_total: int = Field(default=0, description="Total de tokens somados")
+    raw_timings: Dict[str, Any] = Field(default_factory=dict, description="Timings detalhados consolidados")
 
     # Conteúdo de observação (somente para auditoria analítica interna)
     shadow_content: Optional[Dict[str, Any]] = Field(default=None, description="Cópia observacional do conteúdo shadow")
@@ -171,6 +183,15 @@ def init_shadow_db(target: Optional[Union[str, sqlite3.Connection]] = None) -> N
                 duration_delta_seconds REAL,
                 duration_within_tolerance INTEGER,
                 cost_comparison TEXT,
+                target_word_count INTEGER DEFAULT 0,
+                generation_latency_seconds REAL DEFAULT 0.0,
+                fact_guard_latency_seconds REAL DEFAULT 0.0,
+                rewrite_latency_seconds REAL DEFAULT 0.0,
+                second_guard_latency_seconds REAL DEFAULT 0.0,
+                total_llm_calls INTEGER DEFAULT 0,
+                prompt_tokens_total INTEGER DEFAULT 0,
+                completion_tokens_total INTEGER DEFAULT 0,
+                total_tokens_total INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """
@@ -181,6 +202,23 @@ def init_shadow_db(target: Optional[Union[str, sqlite3.Connection]] = None) -> N
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_shadow_created_at ON local_ai_shadow_runs (created_at);"
         )
+
+        # Migração idempotente para bancos existentes sem as novas colunas
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(local_ai_shadow_runs);").fetchall()}
+        new_cols = [
+            ("target_word_count", "INTEGER DEFAULT 0"),
+            ("generation_latency_seconds", "REAL DEFAULT 0.0"),
+            ("fact_guard_latency_seconds", "REAL DEFAULT 0.0"),
+            ("rewrite_latency_seconds", "REAL DEFAULT 0.0"),
+            ("second_guard_latency_seconds", "REAL DEFAULT 0.0"),
+            ("total_llm_calls", "INTEGER DEFAULT 0"),
+            ("prompt_tokens_total", "INTEGER DEFAULT 0"),
+            ("completion_tokens_total", "INTEGER DEFAULT 0"),
+            ("total_tokens_total", "INTEGER DEFAULT 0"),
+        ]
+        for col_name, col_type in new_cols:
+            if col_name not in existing_cols:
+                conn.execute(f"ALTER TABLE local_ai_shadow_runs ADD COLUMN {col_name} {col_type};")
 
 
 def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3.Connection]] = None) -> None:
@@ -199,7 +237,12 @@ def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3
                 script_length_chars, script_word_count,
                 requested_duration_seconds, estimated_duration_seconds,
                 duration_delta_seconds, duration_within_tolerance,
-                cost_comparison
+                cost_comparison,
+                target_word_count,
+                generation_latency_seconds, fact_guard_latency_seconds,
+                rewrite_latency_seconds, second_guard_latency_seconds,
+                total_llm_calls,
+                prompt_tokens_total, completion_tokens_total, total_tokens_total
             ) VALUES (
                 ?, ?, ?, ?, ?, ?,
                 ?, ?, ?,
@@ -210,7 +253,12 @@ def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3
                 ?, ?,
                 ?, ?,
                 ?, ?,
-                ?
+                ?,
+                ?,
+                ?, ?,
+                ?, ?,
+                ?,
+                ?, ?, ?
             );
             """,
             (
@@ -240,8 +288,18 @@ def save_shadow_run(result: ShadowRunResult, target: Optional[Union[str, sqlite3
                 result.duration_delta_seconds,
                 1 if result.duration_within_tolerance else 0,
                 result.cost_comparison,
+                result.target_word_count,
+                result.generation_latency_seconds,
+                result.fact_guard_latency_seconds,
+                result.rewrite_latency_seconds,
+                result.second_guard_latency_seconds,
+                result.total_llm_calls,
+                result.prompt_tokens_total,
+                result.completion_tokens_total,
+                result.total_tokens_total,
             ),
         )
+
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +386,8 @@ class LocalAIShadowRunner:
                 router=self.router,
                 max_rewrites=1,
                 target_duration_seconds=int(requested_duration_seconds),
+                words_per_second=words_per_second,
+                duration_tolerance_seconds=duration_tolerance_seconds,
             )
             generation_success = True
             json_valid = True
@@ -373,7 +433,7 @@ class LocalAIShadowRunner:
             within_tolerance = abs(delta_duration) <= duration_tolerance_seconds
             shadow_content_dict = guard_result.final_content.model_dump()
 
-        # Extração dos resultados do FactGuard
+        # Extração dos resultados do FactGuard e telemetria por estágio
         fact_guard_approved = guard_result.approved if guard_result else False
         rewrite_attempted = guard_result.rewrite_attempted if guard_result else False
         unsupported_claims = guard_result.unsupported_claims if guard_result else []
@@ -382,6 +442,17 @@ class LocalAIShadowRunner:
             and fact_guard_approved
             and (guard_result.final_content is not None)
         )
+
+        target_words = int(round(requested_duration_seconds * words_per_second))
+        gen_latency = getattr(guard_result, "generation_latency_seconds", 0.0) if guard_result else 0.0
+        fg_latency = getattr(guard_result, "fact_guard_latency_seconds", 0.0) if guard_result else 0.0
+        rw_latency = getattr(guard_result, "rewrite_latency_seconds", 0.0) if guard_result else 0.0
+        sec_guard_latency = getattr(guard_result, "second_guard_latency_seconds", 0.0) if guard_result else 0.0
+        llm_calls = getattr(guard_result, "total_llm_calls", 0) if guard_result else 0
+        prompt_tokens_tot = getattr(guard_result, "prompt_tokens_total", 0) if guard_result else 0
+        comp_tokens_tot = getattr(guard_result, "completion_tokens_total", 0) if guard_result else 0
+        total_tokens_tot = getattr(guard_result, "total_tokens_total", 0) if guard_result else 0
+        raw_timings_dict = getattr(guard_result, "raw_timings", {}) if guard_result else {}
 
         result = ShadowRunResult(
             shadow_run_id=run_id,
@@ -405,11 +476,21 @@ class LocalAIShadowRunner:
             error_message=error_message,
             script_length_chars=script_len,
             script_word_count=word_count,
+            target_word_count=target_words,
             requested_duration_seconds=requested_duration_seconds,
             estimated_duration_seconds=est_duration,
             duration_delta_seconds=delta_duration,
             duration_within_tolerance=within_tolerance,
             cost_comparison="UNKNOWN",
+            generation_latency_seconds=round(gen_latency, 3),
+            fact_guard_latency_seconds=round(fg_latency, 3),
+            rewrite_latency_seconds=round(rw_latency, 3),
+            second_guard_latency_seconds=round(sec_guard_latency, 3),
+            total_llm_calls=llm_calls,
+            prompt_tokens_total=prompt_tokens_tot,
+            completion_tokens_total=comp_tokens_tot,
+            total_tokens_total=total_tokens_tot,
+            raw_timings=raw_timings_dict,
             shadow_content=shadow_content_dict,
         )
 
@@ -421,3 +502,4 @@ class LocalAIShadowRunner:
             logger.error(f"[LocalAIShadow] Falha ao persistir corrida shadow no banco: {exc}")
 
         return result
+

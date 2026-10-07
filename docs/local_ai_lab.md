@@ -58,4 +58,31 @@
 
 1. **Viabilidade Técnica em CPU Confirmada:** O runtime `llama.cpp` + `llama-server` na porta 8089 funciona com total estabilidade na CPU AVX2 do notebook DEV, sem custos de API.
 2. **Compatibilidade OpenAI:** A Video Factory pode integrar diretamente qualquer um desses modelos via chamada padrão `POST /v1/chat/completions` em `127.0.0.1`.
-3. **Projeção para Produção (PC Forte com RX 580 8 GB + Vulkan):** A carga de 1.5B a 7B em GGUF com Vulkan alcançará throughput projetado de 35 a 70 tok/s.
+3. **Projeção para Produção (PC Forte com RX 580 8 GB + Vulkan):** A carga de Qwen3-4B (~21 tok/s) e Qwen3-8B (~16.4 tok/s) com Vulkan foi comprovada no PC Forte.
+
+---
+
+## 5. Procedimento de Homologação Manual Shadow no PC Forte (V1.4D)
+
+Como o agente **não acessa o PC Forte** diretamente, o operador humano pode executar a bateria de homologação oficial de forma 100% isolada e segura seguindo os passos abaixo:
+
+### Passo 1: Iniciar o llama-server no PC Forte
+Abra um terminal PowerShell no PC Forte em `C:\Projetos\MoneyPrinterTurbo` e execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start_local_ai_server.ps1 -ModelPath storage\models\Qwen3-8B-Q4_K_M.gguf -Device Vulkan0 -Port 8089
+```
+
+> **Nota de Segurança:** O script valida e bloqueia estritamente qualquer tentativa de bind em `0.0.0.0`. O servidor opera exclusivamente em `127.0.0.1`.
+
+### Passo 2: Executar a Bateria de 10 Casos Shadow
+Em outro terminal no PC Forte (mantendo o servidor ativo):
+
+```powershell
+.venv\Scripts\python.exe scripts\run_local_ai_shadow_homologation.py --base-url http://127.0.0.1:8089/v1 --model qwen3-8b
+```
+
+### Passo 3: Avaliar o Veredito
+O script reportará a telemetria completa dos 10 domínios temáticos e emitirá o veredito consolidado:
+- `SHADOW_HOMOLOGATION_VERDICT = PASS` (se 10/10 sem crash, JSON >= 9, FactGuard aprovado >= 8, zero vazamento de claims inventadas).
+- Os registros são gravados de forma isolada em `storage/shadow_homologation.db` sem tocar nas tabelas nem no banco oficial da fábrica de vídeos (`video_factory.db`).

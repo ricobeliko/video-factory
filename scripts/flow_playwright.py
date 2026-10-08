@@ -30,6 +30,8 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from app.services.task_artifacts import atomic_write_json  # noqa: E402
+
 DEFAULT_FLOW_URL = "https://flow.google.com"
 DEFAULT_USER_DATA_DIR = os.path.join(ROOT_DIR, "storage", "flow_browser_profile")
 DEFAULT_TIMEOUT_UI_MS = 30000
@@ -1249,9 +1251,8 @@ def generate_flow_scene(
     if effective_url and manifest.get("flow_project_url") != effective_url:
         try:
             manifest["flow_project_url"] = effective_url
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
-            logger.info(f"flow_project_url persistido no manifest: {effective_url}")
+            atomic_write_json(manifest_path, manifest)
+            logger.info(f"flow_project_url persistido atomicamente no manifest: {effective_url}")
         except Exception as p_exc:
             logger.warning(f"Não foi possível persistir flow_project_url no manifest: {p_exc}")
 

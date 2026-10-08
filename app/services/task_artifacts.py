@@ -18,7 +18,7 @@ def _script_file(task_id: str) -> Path:
     return Path(utils.task_dir(task_id)) / "script.json"
 
 
-def _write_json_atomic(target: Path, payload: Mapping[str, Any]) -> None:
+def _write_json_atomic(target: Path, payload: Mapping[str, Any], indent: int = 4) -> None:
     """
     在目标目录内原子写入 JSON，避免进程中断留下半个文件。
 
@@ -42,7 +42,7 @@ def _write_json_atomic(target: Path, payload: Mapping[str, Any]) -> None:
                 payload,
                 temp_file,
                 ensure_ascii=False,
-                indent=4,
+                indent=indent,
                 default=lambda value: value.__dict__,
             )
             temp_file.write("\n")
@@ -54,6 +54,18 @@ def _write_json_atomic(target: Path, payload: Mapping[str, Any]) -> None:
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+def atomic_write_json(
+    target: str | Path,
+    payload: Mapping[str, Any],
+    indent: int = 2,
+) -> None:
+    """
+    Grava JSON de forma atômica no mesmo diretório do arquivo de destino.
+    Usa NamedTemporaryFile + flush + os.fsync + os.replace para garantir integridade.
+    """
+    _write_json_atomic(Path(target), payload, indent=indent)
 
 
 def write_script_data(task_id: str, payload: Mapping[str, Any]) -> None:

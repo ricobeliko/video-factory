@@ -126,20 +126,21 @@ class TestFlowWorkflow(unittest.TestCase):
         with open(clip1_path, "wb") as f:
             f.write(b"\x00" * 1024)
 
-        status_after = get_project_status(p_dir)
-        self.assertEqual(status_after["ready_flow_clips"], 1)
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
+            status_after = get_project_status(p_dir)
+            self.assertEqual(status_after["ready_flow_clips"], 1)
 
-        # Cria mock para a cena 2 para permitir dry_run sem depender de cache_videos
-        clip2_path = os.path.join(prep["clips_dir"], "flow_scene_02.mp4")
-        with open(clip2_path, "wb") as f:
-            f.write(b"\x00" * 1024)
+            # Cria mock para a cena 2 para permitir dry_run sem depender de cache_videos
+            clip2_path = os.path.join(prep["clips_dir"], "flow_scene_02.mp4")
+            with open(clip2_path, "wb") as f:
+                f.write(b"\x00" * 1024)
 
-        # Executa montagem em modo dry-run
-        render_res = render_project(project_dir=p_dir, dry_run=True)
-        self.assertEqual(render_res["status"], "DRY_RUN_SUCCESS")
-        self.assertEqual(render_res["total_scenes"], status_after["total_scenes"])
-        self.assertGreater(render_res["estimated_duration"], 0.0)
-        self.assertEqual(len(render_res["instructions"]), status_after["total_scenes"])
+            # Executa montagem em modo dry-run
+            render_res = render_project(project_dir=p_dir, dry_run=True)
+            self.assertEqual(render_res["status"], "DRY_RUN_SUCCESS")
+            self.assertEqual(render_res["total_scenes"], status_after["total_scenes"])
+            self.assertGreater(render_res["estimated_duration"], 0.0)
+            self.assertEqual(len(render_res["instructions"]), status_after["total_scenes"])
 
     def test_select_default_flow_scenes_and_backward_compatibility(self):
         self.assertEqual(DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, 6)
@@ -407,7 +408,8 @@ class TestFlowWorkflow(unittest.TestCase):
         with open(filler_path, "wb") as f:
             f.write(b"\x00" * 1024)
 
-        with patch("scripts.flow_workflow._find_stock_filler_clip", return_value=filler_path):
+        with patch("scripts.flow_workflow._find_stock_filler_clip", return_value=filler_path), \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
             res = render_project(
                 project_dir=prep["project_dir"],
                 dry_run=True,
@@ -477,15 +479,175 @@ class TestFlowWorkflow(unittest.TestCase):
         with open(os.path.join(clips_dir, "stock_scene_02.mp4"), "wb") as f:
             f.write(b"\x00" * 1024)
 
-        status_info = get_project_status(self.test_dir)
-        self.assertEqual(status_info["ready_flow_clips"], 1)
-        self.assertEqual(status_info["ready_stock_clips"], 1)
-        self.assertEqual(status_info["scenes"][0]["status"], "READY_FLOW")
-        self.assertEqual(status_info["scenes"][1]["status"], "READY_STOCK")
-        self.assertEqual(status_info["scenes"][2]["status"], "PENDING_FLOW")
-        self.assertEqual(status_info["scenes"][3]["status"], "MISSING (STOCK_FALLBACK)")
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
+            status_info = get_project_status(self.test_dir)
+            self.assertEqual(status_info["ready_flow_clips"], 1)
+            self.assertEqual(status_info["ready_stock_clips"], 1)
+            self.assertEqual(status_info["scenes"][0]["status"], "READY_FLOW")
+            self.assertEqual(status_info["scenes"][1]["status"], "READY_STOCK")
+            self.assertEqual(status_info["scenes"][2]["status"], "PENDING_FLOW")
+            self.assertEqual(status_info["scenes"][3]["status"], "MISSING (STOCK_FALLBACK)")
+
+    def test_mp4_size_gt_zero_but_invalid_does_not_become_ready_flow(self):
+        """12. MP4 com size > 0 mas validate_clip_file=False não vira READY_FLOW e sim INVALID_FLOW."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "invalid_clip_test",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "A"}
+            ],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        clip_path = os.path.join(clips_dir, "flow_scene_01.mp4")
+        with open(clip_path, "wb") as f:
+            f.write(b"corrupted_video_header_payload")
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": False, "error": "moov atom missing"}):
+            status = get_project_status(self.test_dir)
+            self.assertEqual(status["ready_flow_clips"], 0)
+            self.assertEqual(status["invalid_flow_clips"], 1)
+            self.assertEqual(status["scenes"][0]["status"], "INVALID_FLOW")
+            self.assertFalse(status["scenes"][0]["is_valid"])
+
+    def test_render_strict_rejects_invalid_flow_clip(self):
+        """13. Render strict bloqueia com erro explícito INVALID_FLOW_CLIP quando clipe existe porém é inválido."""
+        prep = prepare_project(
+            script_text="Cena flow com clipe corrompido.",
+            project_name="strict_invalid_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1],
+        )
+        clip_path = os.path.join(prep["clips_dir"], "flow_scene_01.mp4")
+        with open(clip_path, "wb") as f:
+            f.write(b"truncated_clip")
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": False, "error": "truncated"}):
+            with self.assertRaises(RuntimeError) as ctx:
+                render_project(
+                    project_dir=prep["project_dir"],
+                    dry_run=True,
+                    flow_failure_policy="strict",
+                )
+            self.assertIn("INVALID_FLOW_CLIP", str(ctx.exception))
+
+    def test_fallback_stock_accepts_invalid_flow_when_no_recovery_pending(self):
+        """14. Render com fallback_stock permite stock quando clipe é inválido e nenhum recovery está pendente."""
+        prep = prepare_project(
+            script_text="Cena flow com clipe corrompido aceita fallback.",
+            project_name="fallback_invalid_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1],
+        )
+        clip_path = os.path.join(prep["clips_dir"], "flow_scene_01.mp4")
+        with open(clip_path, "wb") as f:
+            f.write(b"truncated_clip")
+
+        filler_path = os.path.join(self.test_dir, "filler.mp4")
+        with open(filler_path, "wb") as f:
+            f.write(b"valid_filler_bytes")
+
+        def mock_validate(path):
+            if path == filler_path:
+                return {"valid": True, "duration": 5.0}
+            return {"valid": False, "error": "corrupted"}
+
+        with patch("scripts.flow_workflow._find_stock_filler_clip", return_value=filler_path), \
+             patch("scripts.flow_workflow.validate_clip_file", side_effect=mock_validate):
+            res = render_project(
+                project_dir=prep["project_dir"],
+                dry_run=True,
+                flow_failure_policy="fallback_stock",
+            )
+            self.assertEqual(res["status"], "DRY_RUN_SUCCESS")
+            self.assertEqual(res["instructions"][0]["source"], "stock_fallback")
+            self.assertEqual(res["instructions"][0]["material_path"], filler_path)
+
+    def test_needs_recovery_not_masked_by_fallback_stock(self):
+        """15. FLOW_GENERATION_NEEDS_RECOVERY não é mascarado silenciosamente por fallback_stock no render."""
+        prep = prepare_project(
+            script_text="Cena flow que requer recovery.",
+            project_name="needs_recovery_render_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1],
+        )
+        update_manifest_flow_checkpoint(
+            prep["manifest_path"],
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            completed_scenes=[],
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            render_project(
+                project_dir=prep["project_dir"],
+                dry_run=True,
+                flow_failure_policy="fallback_stock",
+            )
+        self.assertIn("FLOW_GENERATION_NEEDS_RECOVERY", str(ctx.exception))
+
+    def test_atomic_checkpoint_preserves_valid_json(self):
+        """16. atomic_write_json escreve JSON UTF-8 válido e íntegro."""
+        from app.services.task_artifacts import atomic_write_json
+
+        manifest_path = os.path.join(self.test_dir, "atomic_manifest.json")
+        payload = {"project_name": "atomic_test", "scenes": [1, 2, 3], "status": "COMPLETE"}
+        atomic_write_json(manifest_path, payload)
+
+        self.assertTrue(os.path.exists(manifest_path))
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        self.assertEqual(loaded, payload)
+
+    def test_atomic_write_uses_tempfile_and_os_replace(self):
+        """17. atomic_write_json cria tempfile no mesmo diretório e executa os.replace ao final."""
+        from app.services.task_artifacts import atomic_write_json
+
+        manifest_path = os.path.join(self.test_dir, "replace_manifest.json")
+        payload = {"key": "value"}
+
+        replaced_args = []
+        original_replace = os.replace
+
+        def mock_replace(src, dst):
+            replaced_args.append((src, dst))
+            original_replace(src, dst)
+
+        with patch("os.replace", side_effect=mock_replace):
+            atomic_write_json(manifest_path, payload)
+
+        self.assertEqual(len(replaced_args), 1)
+        src, dst = replaced_args[0]
+        self.assertEqual(os.path.abspath(dst), os.path.abspath(manifest_path))
+        self.assertEqual(os.path.dirname(os.path.abspath(src)), os.path.abspath(self.test_dir))
+        self.assertTrue(os.path.basename(src).endswith(".tmp"))
+
+    def test_atomic_write_failure_preserves_previous_manifest(self):
+        """18. Falha antes de os.replace mantém arquivo anterior intocado e limpa tempfile."""
+        from app.services.task_artifacts import atomic_write_json
+
+        manifest_path = os.path.join(self.test_dir, "safe_manifest.json")
+        original_payload = {"version": 1, "state": "ORIGINAL"}
+        atomic_write_json(manifest_path, original_payload)
+
+        with patch("os.fsync", side_effect=IOError("Simulated disk fsync crash")):
+            with self.assertRaises(IOError):
+                atomic_write_json(manifest_path, {"version": 2, "state": "CORRUPTED"})
+
+        # Arquivo original deve permanecer inalterado
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            current = json.load(f)
+        self.assertEqual(current, original_payload)
+
+        # Nenhum arquivo temporário .tmp residual deve permanecer
+        tmp_files = [f for f in os.listdir(self.test_dir) if f.endswith(".tmp")]
+        self.assertEqual(len(tmp_files), 0)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

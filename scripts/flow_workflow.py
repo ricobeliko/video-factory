@@ -26,6 +26,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from loguru import logger  # noqa: E402
+from app.services.task_artifacts import atomic_write_json  # noqa: E402
 from scripts.flow_playwright import (  # noqa: E402
     FlowSceneResult,
     generate_flow_scene,
@@ -273,8 +274,7 @@ def prepare_project(
     }
 
     manifest_path = os.path.join(project_dir, "manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest_data, f, indent=2, ensure_ascii=False)
+    atomic_write_json(manifest_path, manifest_data)
 
     prompts_md_path = os.path.join(project_dir, "prompts_for_flow.md")
     with open(prompts_md_path, "w", encoding="utf-8") as f:
@@ -327,10 +327,7 @@ def update_manifest_flow_checkpoint(
     flow_gen["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     manifest["flow_generation"] = flow_gen
-
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
-
+    atomic_write_json(manifest_path, manifest)
     return flow_gen
 
 
@@ -478,7 +475,8 @@ def generate_pending_flow_scenes(
 def get_project_status(project_dir: str) -> Dict[str, Any]:
     """
     Passo 3: Inspeciona o estado dos clipes baixados para o projeto.
-    Distingue: READY_FLOW, READY_STOCK, PENDING_FLOW, FLOW_NEEDS_RECOVERY, FAILED_FLOW.
+    Distingue: READY_FLOW, READY_STOCK, PENDING_FLOW, INVALID_FLOW, FLOW_NEEDS_RECOVERY, FAILED_FLOW.
+    Usa validate_clip_file() como única fonte de verdade para validade de mídia.
     """
     manifest_path = os.path.join(project_dir, "manifest.json")
     if not os.path.exists(manifest_path):
@@ -495,21 +493,32 @@ def get_project_status(project_dir: str) -> Dict[str, Any]:
     scenes_status = []
     ready_flow_count = 0
     ready_stock_count = 0
+    invalid_flow_count = 0
 
     for sc in manifest.get("scenes", []):
         s_idx = sc["scene_index"]
         expected_clip = sc["expected_clip"]
         clip_path = os.path.join(clips_dir, expected_clip)
-        exists = os.path.exists(clip_path) and os.path.getsize(clip_path) > 0
+        exists = os.path.exists(clip_path)
+        size_mb = (os.path.getsize(clip_path) / (1024 * 1024)) if exists else 0.0
+        val = validate_clip_file(clip_path) if exists else {"valid": False}
+        is_valid = bool(val.get("valid", False))
         is_flow = sc.get("is_flow_premium", True)
 
         if is_flow:
             if exists:
-                ready_flow_count += 1
-                size_mb = os.path.getsize(clip_path) / (1024 * 1024)
-                status_tag = "READY_FLOW"
+                if is_valid:
+                    ready_flow_count += 1
+                    status_tag = "READY_FLOW"
+                else:
+                    if flow_gen_status == "FLOW_GENERATION_NEEDS_RECOVERY" and (
+                        last_scene == s_idx or not flow_gen.get("completed_scenes")
+                    ):
+                        status_tag = "FLOW_NEEDS_RECOVERY"
+                    else:
+                        status_tag = "INVALID_FLOW"
+                        invalid_flow_count += 1
             else:
-                size_mb = 0.0
                 if flow_gen_status == "FLOW_GENERATION_NEEDS_RECOVERY" and (
                     last_scene == s_idx or not flow_gen.get("completed_scenes")
                 ):
@@ -520,11 +529,12 @@ def get_project_status(project_dir: str) -> Dict[str, Any]:
                     status_tag = "PENDING_FLOW"
         else:
             if exists:
-                ready_stock_count += 1
-                size_mb = os.path.getsize(clip_path) / (1024 * 1024)
-                status_tag = "READY_STOCK"
+                if is_valid:
+                    ready_stock_count += 1
+                    status_tag = "READY_STOCK"
+                else:
+                    status_tag = "MISSING (STOCK_FALLBACK)"
             else:
-                size_mb = 0.0
                 status_tag = "MISSING (STOCK_FALLBACK)"
 
         scenes_status.append({
@@ -534,6 +544,7 @@ def get_project_status(project_dir: str) -> Dict[str, Any]:
             "size_mb": round(size_mb, 2),
             "narration": sc["narration"][:60] + "...",
             "is_flow_premium": is_flow,
+            "is_valid": is_valid,
         })
 
     total = len(scenes_status)
@@ -545,6 +556,7 @@ def get_project_status(project_dir: str) -> Dict[str, Any]:
         "total_scenes": total,
         "ready_flow_clips": ready_flow_count,
         "ready_stock_clips": ready_stock_count,
+        "invalid_flow_clips": invalid_flow_count,
         "missing_clips": total - (ready_flow_count + ready_stock_count),
         "is_fully_flow": ready_flow_count == total and total > 0,
         "is_hybrid": 0 < ready_flow_count < total,
@@ -561,7 +573,7 @@ def _find_stock_filler_clip(scene_idx: int) -> Optional[str]:
             for fname in os.listdir(c_dir):
                 if fname.endswith(".mp4") and not fname.startswith("flow_"):
                     fpath = os.path.join(c_dir, fname)
-                    if os.path.getsize(fpath) > 0:
+                    if os.path.getsize(fpath) > 0 and validate_clip_file(fpath).get("valid", False):
                         all_videos.append(fpath)
 
     if not all_videos:
@@ -581,7 +593,8 @@ def render_project(
     """
     Passo 4: Ingestão simplificada e montagem pela Video Factory.
     Se dry_run=True, monta o ScenePlan e as instruções sem renderizar vídeo físico.
-    flow_failure_policy: 'strict' (falha se Flow ausente) ou 'fallback_stock' (resolve stock).
+    flow_failure_policy: 'strict' (falha se Flow ausente/inválido) ou 'fallback_stock' (resolve stock).
+    Se manifest indicar FLOW_GENERATION_NEEDS_RECOVERY, fail-closed imediato sem fallback.
     """
     manifest_path = os.path.join(project_dir, "manifest.json")
     if not os.path.exists(manifest_path):
@@ -595,6 +608,9 @@ def render_project(
     clips_dir = os.path.join(project_dir, "clips")
     out_dir = output_dir or os.path.join(project_dir, "final")
     os.makedirs(out_dir, exist_ok=True)
+
+    flow_gen = manifest.get("flow_generation", {})
+    flow_gen_status = flow_gen.get("status")
 
     params = VideoParams(
         video_subject=manifest.get("video_subject", project_name),
@@ -630,64 +646,91 @@ def render_project(
         flow_clip_path = os.path.join(clips_dir, expected_clip)
 
         if is_flow:
-            if not os.path.exists(flow_clip_path) or os.path.getsize(flow_clip_path) == 0:
-                if flow_failure_policy == "strict":
-                    raise FileNotFoundError(
-                        f"Cena {s_idx} [FLOW PREMIUM]: clipe obrigatório não encontrado ({expected_clip}). "
-                        f"Cenas premium do Google Flow não podem ser substituídas por stock (policy=strict)."
+            flow_exists = os.path.exists(flow_clip_path)
+            flow_valid = flow_exists and validate_clip_file(flow_clip_path).get("valid", False)
+
+            if not flow_valid:
+                # Se manifest indicar FLOW_GENERATION_NEEDS_RECOVERY, fail-closed imediato sem mascarar com stock
+                if flow_gen_status == "FLOW_GENERATION_NEEDS_RECOVERY":
+                    raise RuntimeError(
+                        f"FLOW_GENERATION_NEEDS_RECOVERY: Cena {s_idx} [FLOW PREMIUM] requer recuperação explícita "
+                        f"antes de renderizar. Fallback para stock não permitido neste estado."
                     )
-                elif flow_failure_policy == "fallback_stock":
-                    logger.warning(
-                        f"Cena {s_idx} [FLOW PREMIUM]: clipe ausente ({expected_clip}). "
-                        f"Aplicando fallback para material de estoque (policy=fallback_stock)."
-                    )
-                    filler = _find_stock_filler_clip(s_idx)
-                    if filler and os.path.exists(filler) and os.path.getsize(filler) > 0:
-                        mat_path = filler
-                        provider = "stock_fallback"
-                        source_type = "stock_fallback"
+
+                if not flow_exists:
+                    if flow_failure_policy == "strict":
+                        raise FileNotFoundError(
+                            f"Cena {s_idx} [FLOW PREMIUM]: clipe obrigatório não encontrado ({expected_clip}). "
+                            f"Cenas premium do Google Flow não podem ser substituídas por stock (policy=strict)."
+                        )
+                    elif flow_failure_policy == "fallback_stock":
+                        logger.warning(
+                            f"Cena {s_idx} [FLOW PREMIUM]: clipe ausente ({expected_clip}). "
+                            f"Aplicando fallback para material de estoque (policy=fallback_stock)."
+                        )
                     else:
-                        from app.services import material, scene_material
-
-                        effective_stock = (
-                            stock_source
-                            or manifest.get("stock_source")
-                            or config.app.get("video_source", "coverr")
-                            or "coverr"
-                        )
-                        if not material.has_material_api_keys(effective_stock):
-                            raise RuntimeError(
-                                f"Cena {s_idx} [STOCK FALLBACK]: Nenhuma credencial configurada para o provider de stock '{effective_stock}'. "
-                                f"Configure uma chave válida para buscar materiais de estoque contextuais."
-                            )
-
-                        single_scene_plan = ScenePlan(
-                            total_scenes=1,
-                            scenes=[
-                                ScenePlanItem(
-                                    scene_index=s_idx,
-                                    narration=sc["narration"],
-                                    duration_hint=float(sc.get("duration_hint", 8.0)),
-                                    search_terms=sc.get("search_terms", []),
-                                    visual_intent=sc.get("visual_intent", "cinematic"),
-                                )
-                            ],
-                        )
-                        scene_params = params.model_copy(update={"video_source": effective_stock})
-                        resolved_selections = scene_material.resolve_scene_materials(
-                            task_id=effective_task_id,
-                            scene_plan=single_scene_plan,
-                            params=scene_params,
-                            audio_duration=float(sc.get("duration_hint", 8.0)),
-                            strict=True,
-                        )
-                        if not resolved_selections or not resolved_selections[0].material_path:
-                            raise RuntimeError(f"Falha ao resolver material stock fallback para a cena {s_idx}")
-                        mat_path = resolved_selections[0].material_path
-                        provider = "stock_fallback"
-                        source_type = "stock_fallback"
+                        raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
                 else:
-                    raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
+                    # Arquivo existe mas validate_clip_file retornou False!
+                    if flow_failure_policy == "strict":
+                        raise RuntimeError(
+                            f"INVALID_FLOW_CLIP: Cena {s_idx} [FLOW PREMIUM] possui clipe corrompido ou inválido ({flow_clip_path}). "
+                            f"Render bloqueado (policy=strict)."
+                        )
+                    elif flow_failure_policy == "fallback_stock":
+                        logger.warning(
+                            f"Cena {s_idx} [FLOW PREMIUM]: clipe corrompido ou inválido ({flow_clip_path}). "
+                            f"Aplicando fallback para material de estoque (policy=fallback_stock)."
+                        )
+                    else:
+                        raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
+
+                # Resolução de material stock fallback
+                filler = _find_stock_filler_clip(s_idx)
+                if filler and os.path.exists(filler) and validate_clip_file(filler).get("valid", False):
+                    mat_path = filler
+                    provider = "stock_fallback"
+                    source_type = "stock_fallback"
+                else:
+                    from app.services import material, scene_material
+
+                    effective_stock = (
+                        stock_source
+                        or manifest.get("stock_source")
+                        or config.app.get("video_source", "coverr")
+                        or "coverr"
+                    )
+                    if not material.has_material_api_keys(effective_stock):
+                        raise RuntimeError(
+                            f"Cena {s_idx} [STOCK FALLBACK]: Nenhuma credencial configurada para o provider de stock '{effective_stock}'. "
+                            f"Configure uma chave válida para buscar materiais de estoque contextuais."
+                        )
+
+                    single_scene_plan = ScenePlan(
+                        total_scenes=1,
+                        scenes=[
+                            ScenePlanItem(
+                                scene_index=s_idx,
+                                narration=sc["narration"],
+                                duration_hint=float(sc.get("duration_hint", 8.0)),
+                                search_terms=sc.get("search_terms", []),
+                                visual_intent=sc.get("visual_intent", "cinematic"),
+                            )
+                        ],
+                    )
+                    scene_params = params.model_copy(update={"video_source": effective_stock})
+                    resolved_selections = scene_material.resolve_scene_materials(
+                        task_id=effective_task_id,
+                        scene_plan=single_scene_plan,
+                        params=scene_params,
+                        audio_duration=float(sc.get("duration_hint", 8.0)),
+                        strict=True,
+                    )
+                    if not resolved_selections or not resolved_selections[0].material_path:
+                        raise RuntimeError(f"Falha ao resolver material stock fallback para a cena {s_idx}")
+                    mat_path = resolved_selections[0].material_path
+                    provider = "stock_fallback"
+                    source_type = "stock_fallback"
             else:
                 mat_path = flow_clip_path
                 provider = "google_flow"
@@ -695,13 +738,13 @@ def render_project(
         else:
             # Cenas STOCK FILLER:
             # 1. Tentar material local/cache existente (na pasta clips/ ou nos caches)
-            if os.path.exists(flow_clip_path) and os.path.getsize(flow_clip_path) > 0:
+            if os.path.exists(flow_clip_path) and validate_clip_file(flow_clip_path).get("valid", False):
                 mat_path = flow_clip_path
                 provider = "local_clip"
                 source_type = "stock"
             else:
                 filler = _find_stock_filler_clip(s_idx)
-                if filler and os.path.exists(filler) and os.path.getsize(filler) > 0:
+                if filler and os.path.exists(filler) and validate_clip_file(filler).get("valid", False):
                     mat_path = filler
                     provider = "local_cache"
                     source_type = "stock"

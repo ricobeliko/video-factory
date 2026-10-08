@@ -32,6 +32,7 @@ from scripts.flow_web_automation import (
     find_generate_button,
     inspect_credits_menu,
     navigate_landing_to_studio,
+    perform_confirmed_action,
     run_arm,
     run_fill_check,
     run_preflight,
@@ -897,6 +898,8 @@ class TestFlowWebAutomation(unittest.TestCase):
             {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
             # js_click
             {"clicked": True},
+            # confirm: check_auth_and_ui_state returns isGenerating=True
+            {"surface": FlowSurface.STUDIO, "isAuthenticated": True, "isGenerating": True},
         ]
 
         click_res = click_generate_once(mock_cdp)
@@ -927,6 +930,8 @@ class TestFlowWebAutomation(unittest.TestCase):
             {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
             # js_click
             {"clicked": True},
+            # confirm: check_auth_and_ui_state returns isGenerating=True
+            {"surface": FlowSurface.STUDIO, "isAuthenticated": True, "isGenerating": True},
         ]
 
         click_res = click_generate_once(mock_cdp)
@@ -1004,6 +1009,156 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertEqual(res["generation_attempts"], 0)
         self.assertFalse(res["generation_click_attempted"])
         self.assertFalse(res["generation_click_confirmed"])
+
+    def test_perform_confirmed_action_precondition_invalid_blocks_without_dispatch(self):
+        """Confirmed Click Contract: Pré-condição inválida bloqueia antes do clique e não dispara ação."""
+        mock_pre = MagicMock(return_value=(False, "PRECONDITION_CUSTOM_ERROR"))
+        mock_target = MagicMock(return_value=(True, 1, None))
+        mock_dispatch = MagicMock(return_value=(True, None))
+        mock_confirm = MagicMock(return_value=(True, "OK"))
+
+        res = perform_confirmed_action(
+            action_name="test_precondition_fail",
+            validate_precondition_fn=mock_pre,
+            target_validation_fn=mock_target,
+            dispatch_fn=mock_dispatch,
+            confirm_fn=mock_confirm,
+            timeout_sec=1.0,
+        )
+
+        self.assertFalse(res["precondition_ok"])
+        self.assertFalse(res["click_dispatched"])
+        self.assertFalse(res["action_confirmed"])
+        self.assertEqual(res["error"], "PRECONDITION_CUSTOM_ERROR")
+        mock_dispatch.assert_not_called()
+        mock_confirm.assert_not_called()
+
+    def test_perform_confirmed_action_target_ambiguous_blocks_without_dispatch(self):
+        """Confirmed Click Contract: Alvo ambíguo (match_count > 1) bloqueia antes do clique e não dispara ação."""
+        mock_pre = MagicMock(return_value=(True, None))
+        mock_target = MagicMock(return_value=(True, 2, "AMBIGUOUS_TARGET_2"))
+        mock_dispatch = MagicMock(return_value=(True, None))
+        mock_confirm = MagicMock(return_value=(True, "OK"))
+
+        res = perform_confirmed_action(
+            action_name="test_target_ambiguous",
+            validate_precondition_fn=mock_pre,
+            target_validation_fn=mock_target,
+            dispatch_fn=mock_dispatch,
+            confirm_fn=mock_confirm,
+            timeout_sec=1.0,
+        )
+
+        self.assertTrue(res["precondition_ok"])
+        self.assertEqual(res["target_match_count"], 2)
+        self.assertFalse(res["click_dispatched"])
+        self.assertFalse(res["action_confirmed"])
+        self.assertEqual(res["error"], "AMBIGUOUS_TARGET_2")
+        mock_dispatch.assert_not_called()
+
+    def test_perform_confirmed_action_dispatched_and_confirmed(self):
+        """Confirmed Click Contract: Disparo único com confirmação de estado registra latência e sucesso."""
+        mock_pre = MagicMock(return_value=(True, None))
+        mock_target = MagicMock(return_value=(True, 1, None))
+        mock_dispatch = MagicMock(return_value=(True, None))
+        mock_confirm = MagicMock(return_value=(True, {"state": "NEW_STATE"}))
+
+        res = perform_confirmed_action(
+            action_name="test_success",
+            validate_precondition_fn=mock_pre,
+            target_validation_fn=mock_target,
+            dispatch_fn=mock_dispatch,
+            confirm_fn=mock_confirm,
+            timeout_sec=2.0,
+            poll_interval_sec=0.01,
+        )
+
+        self.assertTrue(res["click_dispatched"])
+        self.assertTrue(res["action_confirmed"])
+        self.assertFalse(res["timeout"])
+        self.assertIsNone(res["error"])
+        self.assertIsNotNone(res["confirmation_latency_ms"])
+        self.assertGreaterEqual(res["confirmation_latency_ms"], 0.0)
+        self.assertEqual(res["data"], {"state": "NEW_STATE"})
+        mock_dispatch.assert_called_once()
+
+    def test_perform_confirmed_action_dispatched_but_not_confirmed_fails_closed_no_retry(self):
+        """Confirmed Click Contract: Disparo sem confirmação falha com CLICK_DISPATCHED_BUT_NOT_CONFIRMED e NUNCA repete clique."""
+        mock_pre = MagicMock(return_value=(True, None))
+        mock_target = MagicMock(return_value=(True, 1, None))
+        mock_dispatch = MagicMock(return_value=(True, None))
+        mock_confirm = MagicMock(return_value=(False, None))
+
+        res = perform_confirmed_action(
+            action_name="test_timeout_fail_closed",
+            validate_precondition_fn=mock_pre,
+            target_validation_fn=mock_target,
+            dispatch_fn=mock_dispatch,
+            confirm_fn=mock_confirm,
+            timeout_sec=0.1,
+            poll_interval_sec=0.02,
+        )
+
+        self.assertTrue(res["click_dispatched"])
+        self.assertFalse(res["action_confirmed"])
+        self.assertTrue(res["timeout"])
+        self.assertEqual(res["error"], "CLICK_DISPATCHED_BUT_NOT_CONFIRMED")
+        # GARANTIA MANDATÓRIA: disparado estritamente UMA VEZ
+        mock_dispatch.assert_called_once()
+
+    def test_click_generate_once_dispatched_but_not_confirmed_sets_attempts_0(self):
+        """Confirmed Click Contract em click_generate_once: Disparado mas não confirmado -> generation_attempts=0."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state (precondition)
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "surface": FlowSurface.STUDIO,
+                "isAuthenticated": True,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.AVAILABLE,
+            },
+            # find_generate_button (target validation)
+            {"found": True, "matchCount": 1, "disabled": False, "ambiguous": False},
+            # capture_studio_baseline (pre-dispatch)
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+            # js_click (dispatch)
+            {"clicked": True},
+            # confirm() -> check_auth_and_ui_state retorna isGenerating=False repetidamente até timeout
+            {"surface": FlowSurface.STUDIO, "isAuthenticated": True, "isGenerating": False},
+            {"confirmed": False},
+            {"surface": FlowSurface.STUDIO, "isAuthenticated": True, "isGenerating": False},
+            {"confirmed": False},
+        ]
+
+        click_res = click_generate_once(mock_cdp, timeout_confirm_sec=0.1)
+        self.assertFalse(click_res["success"])
+        self.assertTrue(click_res["clicked"])
+        self.assertEqual(click_res["error"], "CLICK_DISPATCHED_BUT_NOT_CONFIRMED")
+        self.assertEqual(click_res["generation_attempts"], 0)
+        self.assertTrue(click_res["generation_click_attempted"])
+        self.assertFalse(click_res["generation_click_confirmed"])
+
+    def test_navigate_landing_to_studio_confirmed_contract(self):
+        """Confirmed Click Contract em navigate_landing_to_studio: Disparo de Novo Projeto confirmado transiciona para STUDIO."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state (precondition)
+            {"surface": FlowSurface.LANDING, "isAuthenticated": True, "hasPromptInput": False},
+            # validate_precondition inside action
+            {"surface": FlowSurface.LANDING, "isAuthenticated": True, "hasCaptcha": False},
+            # target_validation
+            {"found": True, "count": 1, "text": "Novo projeto"},
+            # dispatch
+            {"clicked": True, "text": "Novo projeto"},
+            # confirm -> check_auth_and_ui_state retorna STUDIO e editor pronto
+            {"surface": FlowSurface.STUDIO, "hasPromptInput": True, "url": "https://flow.google.com/project/new-uuid"},
+        ]
+
+        res = navigate_landing_to_studio(mock_cdp, timeout_sec=2)
+        self.assertEqual(res.get("surface"), FlowSurface.STUDIO)
+        self.assertTrue(res.get("hasPromptInput"))
 
 
 if __name__ == "__main__":

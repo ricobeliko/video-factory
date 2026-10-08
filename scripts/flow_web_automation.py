@@ -28,7 +28,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -479,10 +479,132 @@ def navigate_to_login(cdp: CDPConnection):
     cdp.send("Page.navigate", {"url": LOGIN_URL})
 
 
+def perform_confirmed_action(
+    action_name: str,
+    validate_precondition_fn: Callable[[], Tuple[bool, Optional[str]]],
+    target_validation_fn: Callable[[], Tuple[bool, int, Optional[str]]],
+    dispatch_fn: Callable[[], Tuple[bool, Optional[str]]],
+    confirm_fn: Callable[[], Tuple[bool, Optional[Any]]],
+    timeout_sec: float = 10.0,
+    poll_interval_sec: float = 0.5,
+) -> Dict[str, Any]:
+    """
+    Executa ação de clique transacional seguindo o Confirmed Click Contract:
+    1. PRECONDITION: Validação antes de qualquer interação.
+    2. TARGET VALIDATION: Alvo único e pronto (match_count == 1).
+    3. SINGLE DISPATCH: Disparo único (exatamente uma vez).
+    4. POST-ACTION CONFIRMATION: Polling de confirmação de estado até timeout.
+    5. FAIL-CLOSED / NO BLIND RETRY: Se disparado mas não confirmado, NUNCA clica uma segunda vez.
+    """
+    # 1. Validação de pré-condição
+    pre_ok, pre_err = validate_precondition_fn()
+    if not pre_ok:
+        logger.error(f"[{action_name}] PRECONDITION_FAILED: {pre_err}")
+        return {
+            "action_name": action_name,
+            "precondition_ok": False,
+            "target_found": False,
+            "target_match_count": 0,
+            "click_dispatched": False,
+            "action_confirmed": False,
+            "confirmation_latency_ms": None,
+            "timeout": False,
+            "error": pre_err or f"PRECONDITION_FAILED_{action_name.upper()}",
+            "data": None,
+        }
+
+    # 2. Validação do alvo (único e pronto)
+    target_found, match_count, target_err = target_validation_fn()
+    if not target_found or match_count != 1:
+        err_msg = target_err or ("TARGET_NOT_FOUND" if not target_found else f"AMBIGUOUS_TARGET_{match_count}")
+        logger.error(f"[{action_name}] TARGET_VALIDATION_FAILED: {err_msg} (match_count={match_count})")
+        return {
+            "action_name": action_name,
+            "precondition_ok": True,
+            "target_found": target_found,
+            "target_match_count": match_count,
+            "click_dispatched": False,
+            "action_confirmed": False,
+            "confirmation_latency_ms": None,
+            "timeout": False,
+            "error": err_msg,
+            "data": None,
+        }
+
+    # 3. Disparo único (Single Dispatch)
+    dispatched_at = time.time()
+    logger.info(f"[{action_name}] CLICK_DISPATCHED_AT={dispatched_at:.3f}")
+    dispatched_ok, dispatch_err = dispatch_fn()
+    if not dispatched_ok:
+        logger.error(f"[{action_name}] DISPATCH_FAILED: {dispatch_err}")
+        return {
+            "action_name": action_name,
+            "precondition_ok": True,
+            "target_found": True,
+            "target_match_count": 1,
+            "click_dispatched": False,
+            "action_confirmed": False,
+            "confirmation_latency_ms": None,
+            "timeout": False,
+            "error": dispatch_err or f"DISPATCH_FAILED_{action_name.upper()}",
+            "data": None,
+        }
+
+    # 4. Confirmação pós-ação com timeout finito e polling
+    start_poll = time.time()
+    confirmed = False
+    confirm_data = None
+
+    while time.time() - start_poll < timeout_sec:
+        is_conf, conf_res = confirm_fn()
+        if is_conf:
+            confirmed = True
+            confirm_data = conf_res
+            break
+        time.sleep(poll_interval_sec)
+
+    now = time.time()
+    latency_ms = (now - dispatched_at) * 1000.0
+
+    if confirmed:
+        logger.info(
+            f"[{action_name}] ACTION_CONFIRMED_AT={now:.3f} CONFIRMATION_LATENCY_MS={latency_ms:.1f}ms"
+        )
+        return {
+            "action_name": action_name,
+            "precondition_ok": True,
+            "target_found": True,
+            "target_match_count": 1,
+            "click_dispatched": True,
+            "action_confirmed": True,
+            "confirmation_latency_ms": latency_ms,
+            "timeout": False,
+            "error": None,
+            "data": confirm_data,
+        }
+
+    # FAIL-CLOSED: Se disparado mas não confirmado, NUNCA tentar clicar uma segunda vez
+    logger.error(
+        f"[{action_name}] CLICK_DISPATCHED_BUT_NOT_CONFIRMED (timeout={timeout_sec}s, elapsed={latency_ms:.1f}ms)"
+    )
+    return {
+        "action_name": action_name,
+        "precondition_ok": True,
+        "target_found": True,
+        "target_match_count": 1,
+        "click_dispatched": True,
+        "action_confirmed": False,
+        "confirmation_latency_ms": latency_ms,
+        "timeout": True,
+        "error": "CLICK_DISPATCHED_BUT_NOT_CONFIRMED",
+        "data": None,
+    }
+
+
 def navigate_landing_to_studio(cdp: CDPConnection, timeout_sec: int = 15) -> Dict[str, Any]:
     """
     Navega com segurança da landing page do Flow para a superfície do Studio (editor).
-    Não insere prompt e não consome créditos.
+    Usa o Confirmed Click Contract.
     """
     state = check_auth_and_ui_state(cdp)
     if state.get("surface") == FlowSurface.STUDIO and state.get("hasPromptInput"):
@@ -493,66 +615,104 @@ def navigate_landing_to_studio(cdp: CDPConnection, timeout_sec: int = 15) -> Dic
         logger.warning(f"Tentativa de navegar ao Studio a partir de superfície não-LANDING: {state.get('surface')}")
         return state
 
-    logger.info("Navegando da LANDING para o STUDIO (clicando em Novo projeto)...")
-    nav_js = """
-    (() => {
-        function isElementVisible(el) {
-            if (!el) return false;
-            if (el.getAttribute('aria-hidden') === 'true') return false;
-            const style = window.getComputedStyle(el);
-            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
-            const rect = el.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
-        }
+    def validate_precondition() -> Tuple[bool, Optional[str]]:
+        st = check_auth_and_ui_state(cdp)
+        if not st.get("isAuthenticated"):
+            return False, "NOT_AUTHENTICATED"
+        if st.get("hasCaptcha"):
+            return False, "CAPTCHA_DETECTED"
+        if st.get("surface") != FlowSurface.LANDING:
+            return False, f"SURFACE_NOT_LANDING_{st.get('surface')}"
+        return True, None
 
-        const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-        const newProjBtn = btns.find(b => {
-            if (!isElementVisible(b)) return false;
-            const txt = (b.innerText || '').toLowerCase().trim();
-            const aria = (b.getAttribute('aria-label') || '').toLowerCase().trim();
-            const cls = (b.className || '').toString().toLowerCase();
-            return txt.includes('novo projeto') || txt.includes('new project') ||
-                   aria.includes('novo projeto') || aria.includes('new project') ||
-                   cls.includes('new-project');
-        });
+    def target_validation() -> Tuple[bool, int, Optional[str]]:
+        js_target = """
+        (() => {
+            function isElementVisible(el) {
+                if (!el) return false;
+                if (el.getAttribute('aria-hidden') === 'true') return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }
+            const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            const newProjBtns = btns.filter(b => {
+                if (!isElementVisible(b)) return false;
+                const txt = (b.innerText || '').toLowerCase().trim();
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+                const cls = (b.className || '').toString().toLowerCase();
+                return txt.includes('novo projeto') || txt.includes('new project') ||
+                       aria.includes('novo projeto') || aria.includes('new project') ||
+                       cls.includes('new-project');
+            });
+            if (newProjBtns.length > 0) return { found: true, count: newProjBtns.length, text: newProjBtns[0].innerText };
+            const projectLinks = Array.from(document.querySelectorAll('a[href*="/project/"]')).filter(a => isElementVisible(a));
+            if (projectLinks.length > 0) return { found: true, count: projectLinks.length, text: 'existing-project' };
+            return { found: false, count: 0 };
+        })()
+        """
+        res = cdp.eval_js(js_target) or {}
+        found = bool(res.get("found"))
+        count = res.get("count", 0)
+        return found, count, None if found else "NO_NEW_PROJECT_CTA_FOUND"
 
-        if (newProjBtn) {
-            newProjBtn.click();
-            return { clicked: true, text: newProjBtn.innerText };
-        }
+    def dispatch() -> Tuple[bool, Optional[str]]:
+        js_click = """
+        (() => {
+            function isElementVisible(el) {
+                if (!el) return false;
+                if (el.getAttribute('aria-hidden') === 'true') return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }
+            const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            const newProjBtn = btns.find(b => {
+                if (!isElementVisible(b)) return false;
+                const txt = (b.innerText || '').toLowerCase().trim();
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+                const cls = (b.className || '').toString().toLowerCase();
+                return txt.includes('novo projeto') || txt.includes('new project') ||
+                       aria.includes('novo projeto') || aria.includes('new project') ||
+                       cls.includes('new-project');
+            });
+            if (newProjBtn) {
+                newProjBtn.click();
+                return { clicked: true, text: newProjBtn.innerText };
+            }
+            const projectLink = Array.from(document.querySelectorAll('a[href*="/project/"]')).find(a => isElementVisible(a));
+            if (projectLink) {
+                projectLink.click();
+                return { clicked: true, text: 'existing-project' };
+            }
+            return { clicked: false, error: "TARGET_NOT_FOUND_AT_DISPATCH" };
+        })()
+        """
+        c_res = cdp.eval_js(js_click) or {}
+        return bool(c_res.get("clicked")), c_res.get("error")
 
-        const projectLink = Array.from(document.querySelectorAll('a[href*="/project/"]')).find(a => isElementVisible(a));
-        if (projectLink) {
-            projectLink.click();
-            return { clicked: true, text: 'existing-project', href: projectLink.href };
-        }
-
-        return { clicked: false };
-    })()
-    """
-
-    start_t = time.time()
-    clicked = False
-    while time.time() - start_t < timeout_sec:
-        click_res = cdp.eval_js(nav_js)
-        if click_res and click_res.get("clicked"):
-            clicked = True
-            logger.info(f"CTA de criação de projeto acionado com sucesso: {click_res.get('text')}")
-            break
-        time.sleep(1)
-
-    if not clicked:
-        logger.warning("Nenhum botão de Novo Projeto ou link de projeto encontrado na LANDING.")
-        return check_auth_and_ui_state(cdp)
-
-    # Aguarda estabilização da SPA e aparição do ProseMirror / editor
-    studio_start = time.time()
-    while time.time() - studio_start < timeout_sec:
-        time.sleep(1)
+    def confirm() -> Tuple[bool, Optional[Any]]:
         new_state = check_auth_and_ui_state(cdp)
-        if new_state.get("surface") == FlowSurface.STUDIO and new_state.get("hasPromptInput"):
-            logger.info(f"Superfície STUDIO confirmada com editor de prompt pronto! ({new_state.get('url')})")
-            return new_state
+        url = new_state.get("url") or ""
+        if new_state.get("surface") == FlowSurface.STUDIO and new_state.get("hasPromptInput") and ("/project/" in url or "/tools/flow" in url):
+            return True, new_state
+        return False, None
+
+    action_res = perform_confirmed_action(
+        action_name="new_project",
+        validate_precondition_fn=validate_precondition,
+        target_validation_fn=target_validation,
+        dispatch_fn=dispatch,
+        confirm_fn=confirm,
+        timeout_sec=float(timeout_sec),
+        poll_interval_sec=0.5,
+    )
+
+    if action_res.get("action_confirmed") and action_res.get("data"):
+        logger.info(f"Superfície STUDIO confirmada com editor de prompt pronto! ({action_res['data'].get('url')})")
+        return action_res["data"]
 
     return check_auth_and_ui_state(cdp)
 
@@ -560,62 +720,161 @@ def navigate_landing_to_studio(cdp: CDPConnection, timeout_sec: int = 15) -> Dic
 def inspect_credits_menu(cdp: CDPConnection) -> Dict[str, Any]:
     """
     Inspeciona com segurança elementos visíveis da interface para obter status de créditos.
-    Clica em 'Detalhes da conta' (.header-user-button), extrai o saldo de créditos da sobreposição,
-    e fecha o painel imediatamente.
+    Usa o Confirmed Click Contract para abrir e fechar o painel.
     Não acessa cookies, tokens ou storage sensível.
     """
-    js_probe = """
+    # 1. Se saldo já for visível no corpo da página, não precisa abrir menu
+    js_quick = """
     (() => {
         const m = (document.body.innerText || '').match(/(\\d+)\\s*(?:créditos|credits)/i);
         if (m) {
             const count = parseInt(m[1], 10);
-            return { count: count, status: count > 0 ? 'AVAILABLE' : 'ZERO', opened: false };
+            return { count: count, status: count > 0 ? 'AVAILABLE' : 'ZERO' };
         }
-
-        const btn = document.querySelector('div[aria-label="Detalhes da conta"], .header-user-button');
-        if (!btn) {
-            return { count: null, status: 'UNKNOWN', opened: false };
-        }
-        btn.click();
-        return { opened: true };
+        return null;
     })()
     """
-    res1 = cdp.eval_js(js_probe)
-    if not res1 or not res1.get("opened"):
-        status = res1.get("status", CreditsStatus.UNKNOWN) if res1 else CreditsStatus.UNKNOWN
-        count = res1.get("count") if res1 else None
-        return {"credits": count, "creditsStatus": status}
+    quick_res = cdp.eval_js(js_quick)
+    if quick_res:
+        return {"credits": quick_res.get("count"), "creditsStatus": quick_res.get("status")}
 
-    time.sleep(1)
-    js_read_close = """
-    (() => {
-        const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
-        let count = null;
-        let status = 'UNKNOWN';
-        if (overlay) {
+    # 2. Abrir menu de créditos via Confirmed Click Contract
+    def validate_open_precondition() -> Tuple[bool, Optional[str]]:
+        st = check_auth_and_ui_state(cdp)
+        if st.get("hasCaptcha"):
+            return False, "CAPTCHA_DETECTED"
+        return True, None
+
+    def open_target_validation() -> Tuple[bool, int, Optional[str]]:
+        js_find_btn = """
+        (() => {
+            const btns = Array.from(document.querySelectorAll('div[aria-label="Detalhes da conta"], .header-user-button'));
+            return { found: btns.length > 0, count: btns.length };
+        })()
+        """
+        res = cdp.eval_js(js_find_btn) or {}
+        found = bool(res.get("found"))
+        count = res.get("count", 0)
+        return found, count, None if found else "NO_CREDITS_BUTTON_FOUND"
+
+    def open_dispatch() -> Tuple[bool, Optional[str]]:
+        js_open = """
+        (() => {
+            const btn = document.querySelector('div[aria-label="Detalhes da conta"], .header-user-button');
+            if (!btn) return { clicked: false, error: "NO_CREDITS_BUTTON" };
+            btn.click();
+            return { clicked: true };
+        })()
+        """
+        res = cdp.eval_js(js_open) or {}
+        return bool(res.get("clicked")), res.get("error")
+
+    def open_confirm() -> Tuple[bool, Optional[Any]]:
+        js_check_overlay = """
+        (() => {
+            const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
+            if (!overlay) return { confirmed: false };
             const txt = overlay.innerText || '';
             const m = txt.match(/(\\d+)\\s*(?:créditos|credits)/i);
             if (m) {
-                count = parseInt(m[1], 10);
-                status = count > 0 ? 'AVAILABLE' : 'ZERO';
-            } else if (txt.includes('0 créditos') || txt.includes('sem créditos') || txt.includes('0 credits')) {
-                count = 0;
-                status = 'ZERO';
+                const count = parseInt(m[1], 10);
+                return { confirmed: true, count: count, status: count > 0 ? 'AVAILABLE' : 'ZERO' };
             }
-            const closeBtn = overlay.querySelector('button, [role="button"]');
-            if (closeBtn) closeBtn.click();
-        }
-        const backdrop = document.querySelector('.cdk-overlay-backdrop');
-        if (backdrop) backdrop.click();
+            if (txt.includes('0 créditos') || txt.includes('sem créditos') || txt.includes('0 credits')) {
+                return { confirmed: true, count: 0, status: 'ZERO' };
+            }
+            return { confirmed: false };
+        })()
+        """
+        res = cdp.eval_js(js_check_overlay) or {}
+        if res.get("confirmed"):
+            return True, res
+        return False, None
 
-        return { count: count, status: status };
-    })()
-    """
-    res2 = cdp.eval_js(js_read_close)
-    if res2 and res2.get("status") in (CreditsStatus.AVAILABLE, CreditsStatus.ZERO):
-        return {"credits": res2.get("count"), "creditsStatus": res2.get("status")}
+    open_res = perform_confirmed_action(
+        action_name="open_credits_menu",
+        validate_precondition_fn=validate_open_precondition,
+        target_validation_fn=open_target_validation,
+        dispatch_fn=open_dispatch,
+        confirm_fn=open_confirm,
+        timeout_sec=5.0,
+        poll_interval_sec=0.25,
+    )
 
-    return {"credits": None, "creditsStatus": CreditsStatus.UNKNOWN}
+    if not open_res.get("action_confirmed") or not open_res.get("data"):
+        return {"credits": None, "creditsStatus": CreditsStatus.UNKNOWN}
+
+    cred_data = open_res["data"]
+    count = cred_data.get("count")
+    status = cred_data.get("status", CreditsStatus.UNKNOWN)
+
+    # 3. Fechar menu de créditos via Confirmed Click Contract
+    def validate_close_precondition() -> Tuple[bool, Optional[str]]:
+        js_has_overlay = """
+        (() => {
+            const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
+            return !!overlay;
+        })()
+        """
+        return bool(cdp.eval_js(js_has_overlay)), None
+
+    def close_target_validation() -> Tuple[bool, int, Optional[str]]:
+        js_find_close = """
+        (() => {
+            const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
+            const closeBtn = overlay ? overlay.querySelector('button, [role="button"]') : null;
+            const backdrop = document.querySelector('.cdk-overlay-backdrop');
+            const found = !!(closeBtn || backdrop);
+            return { found: found, count: found ? 1 : 0 };
+        })()
+        """
+        res = cdp.eval_js(js_find_close) or {}
+        return bool(res.get("found")), res.get("count", 0), None
+
+    def close_dispatch() -> Tuple[bool, Optional[str]]:
+        js_close = """
+        (() => {
+            const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
+            const closeBtn = overlay ? overlay.querySelector('button, [role="button"]') : null;
+            if (closeBtn) {
+                closeBtn.click();
+                return { clicked: true };
+            }
+            const backdrop = document.querySelector('.cdk-overlay-backdrop');
+            if (backdrop) {
+                backdrop.click();
+                return { clicked: true };
+            }
+            return { clicked: false, error: "NO_CLOSE_ELEMENT" };
+        })()
+        """
+        res = cdp.eval_js(js_close) or {}
+        return bool(res.get("clicked")), res.get("error")
+
+    def close_confirm() -> Tuple[bool, Optional[Any]]:
+        js_closed = """
+        (() => {
+            const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
+            if (!overlay) return { confirmed: true };
+            const style = window.getComputedStyle(overlay);
+            const hidden = style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0;
+            return { confirmed: hidden };
+        })()
+        """
+        res = cdp.eval_js(js_closed) or {}
+        return bool(res.get("confirmed")), None
+
+    perform_confirmed_action(
+        action_name="close_credits_menu",
+        validate_precondition_fn=validate_close_precondition,
+        target_validation_fn=close_target_validation,
+        dispatch_fn=close_dispatch,
+        confirm_fn=close_confirm,
+        timeout_sec=5.0,
+        poll_interval_sec=0.25,
+    )
+
+    return {"credits": count, "creditsStatus": status}
 
 
 def find_generate_button(cdp: CDPConnection) -> Dict[str, Any]:
@@ -1320,78 +1579,158 @@ def wait_until_generation_ready(cdp: CDPConnection, timeout_sec: float = 10.0) -
     }
 
 
-def click_generate_once(cdp: CDPConnection) -> Dict[str, Any]:
+def click_generate_once(cdp: CDPConnection, timeout_confirm_sec: float = 15.0) -> Dict[str, Any]:
     """
-    Executa o clique no botão Generate de forma atômica e exatamente UMA vez.
-    Revalida todos os gates de segurança antes de disparar o clique.
-    Retorna baseline e start_marker para acompanhamento do download.
+    Executa o clique no botão Generate de forma atômica e exatamente UMA vez,
+    seguindo o Confirmed Click Contract:
+    1. PRECONDITION: Valida autenticação, CAPTCHA, STUDIO, ausência de geração ativa e créditos AVAILABLE.
+    2. TARGET VALIDATION: Garante botão Generate único, encontrado e não-desabilitado.
+    3. SINGLE DISPATCH: Dispara clique exatamente UMA VEZ.
+    4. POST-ACTION CONFIRMATION: Polling por mudança de estado (isGenerating, active spinner, new tile, ou botão disabled/transicionado).
+    5. FAIL-CLOSED / NO BLIND RETRY: Se disparado mas não confirmado, NUNCA clica uma segunda vez e retorna CLICK_DISPATCHED_BUT_NOT_CONFIRMED.
     """
-    # 1. Revalidação de sessão, CAPTCHA, superfície e concorrência
-    state = check_auth_and_ui_state(cdp)
-    if not state.get("isAuthenticated"):
-        return {"success": False, "clicked": False, "error": "NOT_AUTHENTICATED"}
-    if state.get("hasCaptcha"):
-        return {"success": False, "clicked": False, "error": "CAPTCHA_DETECTED"}
-    if state.get("surface") != FlowSurface.STUDIO:
-        return {"success": False, "clicked": False, "error": "SURFACE_NOT_STUDIO"}
-    if state.get("isGenerating"):
-        return {"success": False, "clicked": False, "error": "GENERATION_IN_PROGRESS"}
+    baseline: Optional[Dict[str, Any]] = None
+    start_marker: Optional[float] = None
 
-    # 2. Revalidação de créditos
-    credits_status = state.get("creditsStatus", CreditsStatus.UNKNOWN)
-    if credits_status == CreditsStatus.UNKNOWN:
-        cred_info = inspect_credits_menu(cdp)
-        credits_status = cred_info.get("creditsStatus", CreditsStatus.UNKNOWN)
+    def validate_precondition() -> Tuple[bool, Optional[str]]:
+        state = check_auth_and_ui_state(cdp)
+        if not state.get("isAuthenticated"):
+            return False, "NOT_AUTHENTICATED"
+        if state.get("hasCaptcha"):
+            return False, "CAPTCHA_DETECTED"
+        if state.get("surface") != FlowSurface.STUDIO:
+            return False, "SURFACE_NOT_STUDIO"
+        if state.get("isGenerating"):
+            return False, "GENERATION_IN_PROGRESS"
 
-    if credits_status != CreditsStatus.AVAILABLE:
+        credits_status = state.get("creditsStatus", CreditsStatus.UNKNOWN)
+        if credits_status == CreditsStatus.UNKNOWN:
+            cred_info = inspect_credits_menu(cdp)
+            credits_status = cred_info.get("creditsStatus", CreditsStatus.UNKNOWN)
+
+        if credits_status != CreditsStatus.AVAILABLE:
+            return False, "NO_CREDITS_AVAILABLE" if credits_status == CreditsStatus.ZERO else "BLOCKED_CREDITS_UNKNOWN"
+
+        return True, None
+
+    def target_validation() -> Tuple[bool, int, Optional[str]]:
+        btn_info = find_generate_button(cdp)
+        if not btn_info.get("found"):
+            return False, 0, "NO_GENERATE_BUTTON_FOUND"
+        if btn_info.get("matchCount", 0) != 1 or btn_info.get("ambiguous"):
+            return False, btn_info.get("matchCount", 0), "BLOCK_AMBIGUOUS_GENERATE_BUTTON"
+        if btn_info.get("disabled"):
+            return False, 1, "GENERATE_BUTTON_DISABLED"
+        return True, 1, None
+
+    def dispatch() -> Tuple[bool, Optional[str]]:
+        nonlocal baseline, start_marker
+        baseline = capture_studio_baseline(cdp)
+        start_marker = time.time()
+
+        js_click = """
+        (() => {
+            const btn = document.querySelector('flow-generate-icon-button button, button.generate-button, button[aria-label="Iniciar geração"], button[aria-label="Start generation"]');
+            if (!btn) return { clicked: false, error: "NO_GENERATE_BUTTON_FOUND" };
+            if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
+                return { clicked: false, error: "GENERATE_BUTTON_DISABLED" };
+            }
+            btn.click();
+            return { clicked: true };
+        })()
+        """
+        click_res = cdp.eval_js(js_click) or {}
+        return bool(click_res.get("clicked")), click_res.get("error")
+
+    def confirm() -> Tuple[bool, Optional[Any]]:
+        curr_state = check_auth_and_ui_state(cdp)
+        if curr_state.get("isGenerating"):
+            return True, "STATE_IS_GENERATING"
+
+        js_check_evidence = """
+        (() => {
+            const spinners = Array.from(document.querySelectorAll('*')).filter(el => {
+                const role = el.getAttribute('role') || '';
+                const cls = (el.className || '').toString().toLowerCase();
+                const txt = (el.innerText || '').toLowerCase();
+                if (role === 'progressbar' || cls.includes('spinner') || cls.includes('progress') ||
+                    txt.includes('gerando...') || txt.includes('generating...') || txt.includes('criando...') || txt.includes('creating...')) {
+                    const style = window.getComputedStyle(el);
+                    if (style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity || '1') > 0) {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    }
+                }
+                return false;
+            });
+            if (spinners.length > 0) return { confirmed: true, evidence: "ACTIVE_SPINNER" };
+
+            const btn = document.querySelector('flow-generate-icon-button button, button.generate-button, button[aria-label="Iniciar geração"], button[aria-label="Start generation"]');
+            if (btn && (btn.disabled || btn.getAttribute('aria-disabled') === 'true')) {
+                return { confirmed: true, evidence: "GENERATE_BUTTON_DISABLED_AFTER_CLICK" };
+            }
+
+            return { confirmed: false };
+        })()
+        """
+        ev_res = cdp.eval_js(js_check_evidence) or {}
+        if ev_res.get("confirmed"):
+            return True, ev_res.get("evidence")
+
+        if baseline:
+            curr_base = capture_studio_baseline(cdp)
+            if curr_base.get("tilesCount", 0) > baseline.get("tilesCount", 0):
+                return True, "NEW_TILE_CREATED"
+
+        return False, None
+
+    action_res = perform_confirmed_action(
+        action_name="generate",
+        validate_precondition_fn=validate_precondition,
+        target_validation_fn=target_validation,
+        dispatch_fn=dispatch,
+        confirm_fn=confirm,
+        timeout_sec=timeout_confirm_sec,
+        poll_interval_sec=0.5,
+    )
+
+    if action_res.get("action_confirmed"):
+        logger.info("Clique no botão Generate CONFIRMADO com sucesso!")
+        return {
+            "success": True,
+            "clicked": True,
+            "baseline": baseline,
+            "start_marker": start_marker,
+            "generation_attempts": 1,
+            "generation_click_attempted": True,
+            "generation_click_confirmed": True,
+            "confirmation_latency_ms": action_res.get("confirmation_latency_ms"),
+            "confirm_evidence": action_res.get("data"),
+        }
+
+    # FAIL-CLOSED: Se disparado mas NÃO confirmado, NUNCA tentar clicar uma segunda vez
+    if action_res.get("click_dispatched"):
+        logger.error("FAIL-CLOSED: Clique Generate foi disparado mas NÃO foi confirmado pela UI (sem retry)!")
         return {
             "success": False,
-            "clicked": False,
-            "error": "NO_CREDITS_AVAILABLE" if credits_status == CreditsStatus.ZERO else "BLOCKED_CREDITS_UNKNOWN",
+            "clicked": True,
+            "error": "CLICK_DISPATCHED_BUT_NOT_CONFIRMED",
+            "baseline": baseline,
+            "start_marker": start_marker,
+            "generation_attempts": 0,
+            "generation_click_attempted": True,
+            "generation_click_confirmed": False,
+            "confirmation_latency_ms": action_res.get("confirmation_latency_ms"),
         }
 
-    # 3. Revalidação do botão Generate
-    btn_info = find_generate_button(cdp)
-    if not btn_info.get("found"):
-        return {"success": False, "clicked": False, "error": "NO_GENERATE_BUTTON_FOUND"}
-    if btn_info.get("matchCount", 0) != 1 or btn_info.get("ambiguous"):
-        return {"success": False, "clicked": False, "error": "BLOCK_AMBIGUOUS_GENERATE_BUTTON"}
-    if btn_info.get("disabled"):
-        return {"success": False, "clicked": False, "error": "GENERATE_BUTTON_DISABLED"}
-
-    # 4. Capturar baseline do estúdio e registrar start_marker antes do clique
-    baseline = capture_studio_baseline(cdp)
-    start_marker = time.time()
-
-    # 5. Clicar exatamente uma vez
-    js_click = """
-    (() => {
-        const btn = document.querySelector('flow-generate-icon-button button, button.generate-button, button[aria-label="Iniciar geração"], button[aria-label="Start generation"]');
-        if (!btn) return { clicked: false, error: "NO_GENERATE_BUTTON_FOUND" };
-        if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
-            return { clicked: false, error: "GENERATE_BUTTON_DISABLED" };
-        }
-        btn.click();
-        return { clicked: true };
-    })()
-    """
-    click_res = cdp.eval_js(js_click) or {}
-    if not click_res.get("clicked"):
-        return {
-            "success": False,
-            "clicked": False,
-            "error": click_res.get("error", "CLICK_FAILED"),
-        }
-
-    logger.info("Clique no botão Generate realizado com sucesso (UMA VEZ)!")
+    # Bloqueado antes do clique (precondition ou target validation falhou)
     return {
-        "success": True,
-        "clicked": True,
-        "baseline": baseline,
-        "start_marker": start_marker,
-        "generation_attempts": 1,
-        "generation_click_attempted": True,
-        "generation_click_confirmed": True,
+        "success": False,
+        "clicked": False,
+        "error": action_res.get("error", "CLICK_FAILED"),
+        "generation_attempts": 0,
+        "generation_click_attempted": False,
+        "generation_click_confirmed": False,
     }
 
 
@@ -1492,34 +1831,72 @@ def wait_for_generation_and_download(
     if not generation_finished:
         raise TimeoutError(f"FAIL_CLOSED: Timeout de {timeout_generation_sec}s atingido aguardando geração do Flow.")
 
-    # Dispara o download clicando no botão correspondente
-    logger.info("Disparando download do clipe gerado...")
-    js_trigger_dl = """
-    (() => {
-        const dlBtn = Array.from(document.querySelectorAll('button, a')).find(el => {
-            const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
-            return txt.includes('download') || txt.includes('baixar');
-        });
-        if (dlBtn) {
-            dlBtn.click();
-            return { clicked: true };
-        }
-        const vid = document.querySelector('video');
-        if (vid && (vid.src || vid.currentSrc)) {
-            const a = document.createElement('a');
-            a.href = vid.src || vid.currentSrc;
-            a.download = 'flow_clip.mp4';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            return { clicked: true, directVideo: true };
-        }
-        return { clicked: false, error: "DOWNLOAD_ELEMENT_NOT_FOUND" };
-    })()
-    """
-    dl_res = cdp.eval_js(js_trigger_dl)
-    if not dl_res.get("clicked"):
-        raise RuntimeError(f"FAIL_CLOSED: Falha ao disparar download: {dl_res.get('error')}")
+    # Dispara o download clicando no botão correspondente via Confirmed Click Contract
+    logger.info("Disparando download do clipe gerado (Confirmed Click Contract)...")
+
+    def validate_dl_precondition() -> Tuple[bool, Optional[str]]:
+        if not generation_finished:
+            return False, "GENERATION_NOT_FINISHED"
+        return True, None
+
+    def dl_target_validation() -> Tuple[bool, int, Optional[str]]:
+        # ready_info já validou no DOM a presença de vídeo ou botão de download
+        has_target = bool(ready_info.get("hasVideo") or ready_info.get("hasDownloadBtn"))
+        return has_target, 1 if has_target else 0, None if has_target else "DOWNLOAD_ELEMENT_NOT_FOUND"
+
+    def dl_dispatch() -> Tuple[bool, Optional[str]]:
+        js_trigger_dl = """
+        (() => {
+            const dlBtn = Array.from(document.querySelectorAll('button, a')).find(el => {
+                const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+                return txt.includes('download') || txt.includes('baixar');
+            });
+            if (dlBtn) {
+                dlBtn.click();
+                return { clicked: true };
+            }
+            const vid = document.querySelector('video');
+            if (vid && (vid.src || vid.currentSrc)) {
+                const a = document.createElement('a');
+                a.href = vid.src || vid.currentSrc;
+                a.download = 'flow_clip.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                return { clicked: true, directVideo: true };
+            }
+            return { clicked: false, error: "DOWNLOAD_ELEMENT_NOT_FOUND" };
+        })()
+        """
+        res = cdp.eval_js(js_trigger_dl) or {}
+        return bool(res.get("clicked")), res.get("error")
+
+    def dl_confirm() -> Tuple[bool, Optional[Any]]:
+        crdownloads = glob.glob(os.path.join(download_dir, "*.crdownload"))
+        if crdownloads:
+            return True, "CRDOWNLOAD_DETECTED"
+        mp4_files = glob.glob(os.path.join(download_dir, "*.mp4"))
+        fresh = [f for f in mp4_files if os.path.getmtime(f) >= (start_marker - 1.0) and os.path.getsize(f) > 0]
+        if fresh:
+            return True, "FRESH_MP4_DETECTED"
+        return False, None
+
+    dl_action_res = perform_confirmed_action(
+        action_name="download",
+        validate_precondition_fn=validate_dl_precondition,
+        target_validation_fn=dl_target_validation,
+        dispatch_fn=dl_dispatch,
+        confirm_fn=dl_confirm,
+        timeout_sec=min(float(timeout_download_sec), 15.0),
+        poll_interval_sec=0.25,
+    )
+
+    if not dl_action_res.get("action_confirmed"):
+        if dl_action_res.get("timeout"):
+            raise TimeoutError(f"FAIL_CLOSED: Timeout de {timeout_download_sec}s: CLICK_DISPATCHED_BUT_NOT_CONFIRMED")
+        if dl_action_res.get("click_dispatched"):
+            raise RuntimeError("FAIL_CLOSED: CLICK_DISPATCHED_BUT_NOT_CONFIRMED: download não confirmado na pasta local")
+        raise RuntimeError(f"FAIL_CLOSED: Falha ao disparar download: {dl_action_res.get('error')}")
 
     # Monitora pasta de download para acompanhar .crdownload e encontrar o arquivo final .mp4
     # CRÍTICO: aceitar apenas arquivo com mtime posterior a start_marker

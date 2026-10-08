@@ -13,7 +13,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.flow_playwright import (
-    capture_tile_baseline,
     check_generate_actionable,
     check_login_state,
     check_pending_credit_approval,
@@ -461,7 +460,6 @@ class TestFlowPlaywright(unittest.TestCase):
 
     def test_scene_01_not_destination_of_scene_02_download(self):
         """15. Cena 01 não pode ser destino do download da Cena 02."""
-        from scripts.flow_playwright import run_playwright_flow_poc
         # Garante que o caminho canônico para cena 2 é flow_scene_02.mp4
         manifest_path = "storage/manual_media/flow_web_poc/manifest.json"
         if os.path.exists(manifest_path):

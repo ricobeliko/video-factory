@@ -13,6 +13,7 @@ Substitui a engine CDP raw por abstrações de alto nível:
 """
 
 import argparse
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -735,6 +736,7 @@ def run_playwright_flow_poc(
         "output_file": None,
         "output_valid": False,
         "output_duration": 0.0,
+        "project_url": project_url,
         "error": None,
     }
 
@@ -761,6 +763,25 @@ def run_playwright_flow_poc(
     project_dir = os.path.dirname(os.path.abspath(manifest_path))
     clip_filename = target_scene.get("expected_clip", f"flow_scene_{scene_index:02d}.mp4")
     canonical_output_path = os.path.join(project_dir, "clips", clip_filename)
+
+    # 0. Idempotência estrita: se expected_clip já existir e for válido, pula Playwright totalmente
+    if not trial_only and not download_only and os.path.exists(canonical_output_path):
+        val_clip = validate_clip_file(canonical_output_path)
+        if val_clip.get("valid"):
+            logger.info(
+                f"[IDEMPOTENCY] Cena {scene_index} já concluída e válida ({canonical_output_path}). "
+                f"Pulando abertura de navegador (zero cliques, zero créditos)."
+            )
+            report["status"] = "ALREADY_COMPLETE"
+            report["output_file"] = canonical_output_path
+            report["output_valid"] = True
+            report["output_duration"] = val_clip.get("duration", 0.0)
+            report["generate_click_count_this_run"] = 0
+            report["credit_cost"] = 0
+            report["credit_approval_click_count"] = 0
+            report["project_url"] = target_project_url
+            report["error"] = None
+            return report
 
     # Captura SHA da Cena 01 antes de qualquer ação
     scene_01_path = os.path.join(project_dir, "clips", "flow_scene_01.mp4")
@@ -819,6 +840,7 @@ def run_playwright_flow_poc(
             report["landing_to_studio"] = True
             report["editor_found"] = True
             report["project_url_confirmed"] = True
+            report["project_url"] = page.url
 
             # 3. Preenchimento e confirmação do prompt (apenas se editor estiver livre)
             is_pending, p_count, p_cost = check_pending_credit_approval(page)
@@ -1075,6 +1097,175 @@ def run_playwright_flow_poc(
             except Exception:
                 pass
             return report
+
+
+@dataclass
+class FlowSceneResult:
+    """
+    Resultado canônico de geração/recuperação de cena no Google Flow.
+    Abstração de alto nível para consumo pela fábrica / flow_workflow.
+    """
+    status: str
+    scene_index: int
+    output_file: Optional[str] = None
+    output_valid: bool = False
+    duration: float = 0.0
+    credits_consumed: int = 0
+    project_url: Optional[str] = None
+    error: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "scene_index": self.scene_index,
+            "output_file": self.output_file,
+            "output_valid": self.output_valid,
+            "duration": self.duration,
+            "credits_consumed": self.credits_consumed,
+            "project_url": self.project_url,
+            "error": self.error,
+            "details": self.details,
+        }
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
+
+def generate_flow_scene(
+    manifest_path: str,
+    scene_index: int,
+    project_url: Optional[str] = None,
+    failure_policy: str = "strict",
+    trial_only: bool = False,
+    timeout_gen_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
+    download_only: bool = False,
+) -> FlowSceneResult:
+    """
+    API canônica reutilizável para o flow_workflow.py.
+    FLOW É SINGLE-FLIGHT (FLOW_BROWSER_CONCURRENCY = 1).
+    Encapsula toda a automação Playwright sem expor seletores internos.
+    
+    Idempotência:
+    Se expected_clip já existir e for válido, retorna ALREADY_COMPLETE com zero browser.
+    
+    Persistência:
+    Salva flow_project_url no manifest.json do projeto.
+    
+    Segurança de crédito:
+    Se geração/aprovação foi confirmada mas houve falha posterior, retorna
+    FLOW_GENERATION_NEEDS_RECOVERY para evitar duplo consumo ou fallback cego.
+    """
+    if not os.path.exists(manifest_path):
+        return FlowSceneResult(
+            status="FAILED",
+            scene_index=scene_index,
+            error=f"MANIFEST_NOT_FOUND: {manifest_path}",
+        )
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as exc:
+        return FlowSceneResult(
+            status="FAILED",
+            scene_index=scene_index,
+            error=f"MANIFEST_READ_ERROR: {exc}",
+        )
+
+    scenes = manifest.get("scenes", [])
+    target_scene = next((s for s in scenes if s.get("scene_index") == scene_index), None)
+    if not target_scene:
+        return FlowSceneResult(
+            status="FAILED",
+            scene_index=scene_index,
+            error=f"SCENE_{scene_index}_NOT_FOUND_IN_MANIFEST",
+        )
+
+    target_project_url = project_url or manifest.get("flow_project_url")
+    project_dir = os.path.dirname(os.path.abspath(manifest_path))
+    clip_filename = target_scene.get("expected_clip", f"flow_scene_{scene_index:02d}.mp4")
+    canonical_output_path = os.path.join(project_dir, "clips", clip_filename)
+
+    # 1. IDEMPOTÊNCIA ANTES DO NAVEGADOR
+    if not trial_only and not download_only and os.path.exists(canonical_output_path):
+        val_media = validate_clip_file(canonical_output_path)
+        if val_media.get("valid"):
+            logger.info(
+                f"[IDEMPOTENCY] Cena {scene_index} já concluída e válida ({canonical_output_path}). "
+                f"Retornando ALREADY_COMPLETE (zero browser, zero créditos)."
+            )
+            return FlowSceneResult(
+                status="ALREADY_COMPLETE",
+                scene_index=scene_index,
+                output_file=canonical_output_path,
+                output_valid=True,
+                duration=val_media.get("duration", 0.0),
+                credits_consumed=0,
+                project_url=target_project_url,
+                error=None,
+                details={"reused_existing": True},
+            )
+
+    # 2. Executa driver Playwright (single-flight)
+    raw_res = run_playwright_flow_poc(
+        manifest_path=manifest_path,
+        scene_index=scene_index,
+        trial_only=trial_only,
+        timeout_gen_sec=timeout_gen_sec,
+        project_url=target_project_url,
+        download_only=download_only,
+    )
+
+    raw_status = raw_res.get("status")
+    confirmed_dispatch = bool(
+        raw_res.get("generation_start_confirmed")
+        or raw_res.get("credit_approval_confirmed")
+    )
+
+    # Cálculo de créditos
+    credits_consumed = 0
+    if raw_status == "ALREADY_COMPLETE":
+        credits_consumed = 0
+    elif raw_res.get("credit_approval_confirmed") or raw_res.get("generation_start_confirmed"):
+        credits_consumed = raw_res.get("credit_cost") or 15
+
+    # Mapeamento canônico de status
+    if raw_status in ("SUCCESS", "ALREADY_COMPLETE", "PRE_FLIGHT_TRIAL_PASS"):
+        final_status = raw_status
+    elif raw_status == "AWAITING_FLOW_EDGE_PROFILE_CLOSE":
+        final_status = "FLOW_BROWSER_BUSY"
+    elif confirmed_dispatch and raw_status != "SUCCESS":
+        # Crédito despachado / aprovação confirmada: não regenerar e não cair para stock cegamente
+        final_status = "FLOW_GENERATION_NEEDS_RECOVERY"
+    else:
+        final_status = raw_status or "FAILED"
+
+    # Persistência de project_url no manifest
+    effective_url = raw_res.get("project_url") or target_project_url
+    if effective_url and manifest.get("flow_project_url") != effective_url:
+        try:
+            manifest["flow_project_url"] = effective_url
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+            logger.info(f"flow_project_url persistido no manifest: {effective_url}")
+        except Exception as p_exc:
+            logger.warning(f"Não foi possível persistir flow_project_url no manifest: {p_exc}")
+
+    return FlowSceneResult(
+        status=final_status,
+        scene_index=scene_index,
+        output_file=raw_res.get("output_file"),
+        output_valid=raw_res.get("output_valid", False),
+        duration=raw_res.get("output_duration", 0.0),
+        credits_consumed=credits_consumed,
+        project_url=effective_url,
+        error=raw_res.get("error"),
+        details=raw_res,
+    )
 
 
 def main():

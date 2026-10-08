@@ -11,16 +11,19 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.flow_playwright import (
+    capture_tile_baseline,
     check_generate_actionable,
     check_login_state,
     check_pending_credit_approval,
     download_generated_clip,
     execute_credit_approval,
+    extract_tile_identifier_from_src,
     fill_prompt,
     find_single_approve_button,
     launch_flow_context,
     navigate_landing_to_studio,
     validate_clip_file,
+    wait_for_generation_complete,
     wait_for_generation_started,
 )
 
@@ -139,10 +142,12 @@ class TestFlowPlaywright(unittest.TestCase):
     def test_download_generated_clip_expect_download(self):
         """Download utiliza expect_download nativo e salva com download.save_as."""
         mock_page = MagicMock()
+        mock_tile = MagicMock()
+        mock_tile.count.return_value = 1
         mock_btn = MagicMock()
         mock_btn.count.return_value = 1
         mock_btn.is_visible.return_value = True
-        mock_page.locator.return_value.first = mock_btn
+        mock_tile.locator.return_value = mock_btn
 
         mock_download = MagicMock()
         mock_download.suggested_filename = "flow_video.mp4"
@@ -153,11 +158,12 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
         mock_page.expect_download.return_value.__exit__.return_value = None
 
-        ok, err = download_generated_clip(mock_page, "storage/output.mp4")
-        self.assertTrue(ok)
-        self.assertIsNone(err)
-        mock_btn.click.assert_called_once()
-        mock_download.save_as.assert_called_once_with("storage/output.mp4")
+        with patch("scripts.flow_playwright.expect"):
+            ok, err = download_generated_clip(mock_page, "storage/output.mp4", tile_locator=mock_tile)
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            mock_btn.click.assert_called_once()
+            mock_download.save_as.assert_called_once_with("storage/output.mp4")
 
     def test_approval_present_does_not_mean_generation_started(self):
         """1. A presença de Aprovar significa apenas aprovação requerida, NÃO geração iniciada."""
@@ -234,12 +240,152 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(cost, 15)
 
-    def test_generation_started_success_contract(self):
-        """7. Generation start real bem-sucedido retorna True permitindo attempts = 1."""
+    def test_old_result_cannot_confirm_new_job_when_baseline_has_same_tile(self):
+        """1. Resultado antigo no baseline não confirma resultado novo (timeout -> fail-closed)."""
         mock_page = MagicMock()
-        mock_page.wait_for_function.return_value = True
-        started = wait_for_generation_started(mock_page, timeout_ms=500)
-        self.assertTrue(started)
+        mock_page.wait_for_function.side_effect = Exception("Timeout waiting for new tile")
+        ok, tile_loc, err = wait_for_generation_complete(
+            mock_page, baseline_ids={"token_cena_01"}, timeout_sec=1
+        )
+        self.assertFalse(ok)
+        self.assertIsNone(tile_loc)
+        self.assertEqual(err, "GENERATION_RESULT_NOT_FOUND")
+
+    def test_baseline_with_same_tile_not_complete(self):
+        """2. Baseline com 1 tile + mesmo tile presente no DOM => não completo."""
+        mock_page = MagicMock()
+        mock_page.wait_for_function.side_effect = Exception("Timeout: only existing tile in DOM")
+        ok, tile_loc, err = wait_for_generation_complete(
+            mock_page, baseline_ids={"asb_existing_scene_01"}, timeout_sec=1
+        )
+        self.assertFalse(ok)
+        self.assertIsNone(tile_loc)
+        self.assertEqual(err, "GENERATION_RESULT_NOT_FOUND")
+
+    def test_baseline_with_one_new_tile_identifies_new_tile(self):
+        """3. Baseline com 1 tile existente + exatamente 1 novo tile identifica e retorna o novo tile."""
+        mock_page = MagicMock()
+        mock_wait_res = MagicMock()
+        mock_wait_res.json_value.return_value = {"status": "READY", "newId": "token_cena_02"}
+        mock_page.wait_for_function.return_value = mock_wait_res
+
+        mock_tile_loc = MagicMock()
+        mock_page.locator.return_value.filter.return_value = mock_tile_loc
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            ok, tile_loc, err = wait_for_generation_complete(
+                mock_page, baseline_ids={"token_cena_01"}, timeout_sec=10
+            )
+            self.assertTrue(ok)
+            self.assertEqual(tile_loc, mock_tile_loc)
+            self.assertIsNone(err)
+            mock_expect.assert_called_once_with(mock_tile_loc)
+
+    def test_multiple_new_tiles_fails_closed_ambiguous(self):
+        """4. Mais de 1 novo tile detectado simultaneamente falha fechado com AMBIGUOUS_GENERATION_RESULTS."""
+        mock_page = MagicMock()
+        mock_wait_res = MagicMock()
+        mock_wait_res.json_value.return_value = {"status": "AMBIGUOUS", "count": 2}
+        mock_page.wait_for_function.return_value = mock_wait_res
+
+        ok, tile_loc, err = wait_for_generation_complete(
+            mock_page, baseline_ids={"token_cena_01"}, timeout_sec=10
+        )
+        self.assertFalse(ok)
+        self.assertIsNone(tile_loc)
+        self.assertEqual(err, "AMBIGUOUS_GENERATION_RESULTS")
+
+    def test_download_requires_or_receives_specific_tile(self):
+        """5. Download recebe tile_locator específico e busca elementos dentro dele."""
+        mock_page = MagicMock()
+        mock_tile = MagicMock()
+        mock_tile.count.return_value = 1
+
+        mock_dl_btn = MagicMock()
+        mock_dl_btn.count.return_value = 1
+        mock_dl_btn.is_visible.return_value = True
+        mock_tile.locator.return_value = mock_dl_btn
+
+        mock_download = MagicMock()
+        mock_download.suggested_filename = "clip.mp4"
+        mock_download_info = MagicMock()
+        mock_download_info.value = mock_download
+        mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
+        mock_page.expect_download.return_value.__exit__.return_value = None
+
+        with patch("scripts.flow_playwright.expect"):
+            ok, err = download_generated_clip(mock_page, "storage/output.mp4", tile_locator=mock_tile)
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            mock_tile.hover.assert_called_once()
+            mock_dl_btn.click.assert_called_once()
+            mock_download.save_as.assert_called_once_with("storage/output.mp4")
+
+    def test_two_tiles_does_not_arbitrarily_pick_first(self):
+        """6. Se houver 2 tiles existentes e nenhum tile_locator específico, download bloqueia fail-closed sem usar .first."""
+        mock_page = MagicMock()
+        mock_tiles = MagicMock()
+        mock_tiles.count.return_value = 2
+        mock_page.locator.return_value = mock_tiles
+
+        ok, err = download_generated_clip(mock_page, "storage/output.mp4", tile_locator=None)
+        self.assertFalse(ok)
+        self.assertEqual(err, "AMBIGUOUS_TILE_TARGET_COUNT_2")
+        mock_tiles.hover.assert_not_called()
+
+    def test_ambiguous_tile_locator_blocks(self):
+        """7. Se tile_locator não passar na asserção de unicidade (count != 1), download bloqueia."""
+        mock_page = MagicMock()
+        mock_tile = MagicMock()
+        with patch("scripts.flow_playwright.expect", side_effect=Exception("Locator count != 1")):
+            ok, err = download_generated_clip(mock_page, "storage/output.mp4", tile_locator=mock_tile)
+            self.assertFalse(ok)
+            self.assertEqual(err, "AMBIGUOUS_TILE_TARGET")
+
+    def test_expect_download_remains_used(self):
+        """8. Verifica que o context manager expect_download nativo é ativado durante o download."""
+        mock_page = MagicMock()
+        mock_tile = MagicMock()
+        mock_tile.count.return_value = 1
+        mock_dl_btn = MagicMock()
+        mock_dl_btn.count.return_value = 1
+        mock_dl_btn.is_visible.return_value = True
+        mock_tile.locator.return_value = mock_dl_btn
+
+        mock_download = MagicMock()
+        mock_download.suggested_filename = "test.mp4"
+        mock_download_info = MagicMock()
+        mock_download_info.value = mock_download
+        mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
+        mock_page.expect_download.return_value.__exit__.return_value = None
+
+        with patch("scripts.flow_playwright.expect"):
+            download_generated_clip(mock_page, "storage/out.mp4", tile_locator=mock_tile)
+            mock_page.expect_download.assert_called_once()
+
+    def test_playwright_pinned_in_dependencies(self):
+        """9. Verifica que playwright==1.63.0 está fixado em pyproject.toml e requirements.txt."""
+        root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        pyproject_path = os.path.join(root_dir, "pyproject.toml")
+        req_path = os.path.join(root_dir, "requirements.txt")
+
+        with open(pyproject_path, "r", encoding="utf-8") as f:
+            pyproject_content = f.read()
+        self.assertIn('"playwright==1.63.0"', pyproject_content)
+
+        with open(req_path, "r", encoding="utf-8") as f:
+            req_content = f.read()
+        self.assertIn("playwright==1.63.0", req_content)
+
+    def test_uv_lock_contains_playwright_pinned(self):
+        """10. Verifica que uv.lock contém playwright 1.63.0."""
+        root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        uv_lock_path = os.path.join(root_dir, "uv.lock")
+
+        with open(uv_lock_path, "r", encoding="utf-8") as f:
+            uv_lock_content = f.read()
+        self.assertIn('name = "playwright"', uv_lock_content)
+        self.assertIn('version = "1.63.0"', uv_lock_content)
 
 
 if __name__ == "__main__":

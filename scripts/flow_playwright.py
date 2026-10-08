@@ -18,7 +18,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 from loguru import logger
 from playwright.sync_api import BrowserContext, Locator, Page, Playwright, expect, sync_playwright
@@ -134,8 +134,19 @@ def launch_flow_context(
         ):
             logger.error(f"Perfil de navegação bloqueado por processo Edge existente: {err_msg}")
             return None, "AWAITING_FLOW_EDGE_PROFILE_CLOSE"
+
+        if (
+            "Executable doesn't exist" in err_msg
+            or "cannot find" in err_msg.lower()
+            or "channel 'msedge' is not supported" in err_msg.lower()
+            or 'channel "msedge"' in err_msg.lower()
+            or "browsertype.launch: channel" in err_msg.lower()
+        ):
+            logger.error(f"Microsoft Edge (channel='msedge') não disponível no sistema: {err_msg}")
+            return None, "EDGE_CHANNEL_UNAVAILABLE"
+
         logger.error(f"Falha ao iniciar contexto Playwright com channel='msedge': {err_msg}")
-        raise
+        return None, f"PLAYWRIGHT_LAUNCH_FAILED: {err_msg}"
 
 
 def check_login_state(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> str:
@@ -281,9 +292,12 @@ def check_pending_credit_approval(page: Page) -> Tuple[bool, int, Optional[int]]
     """
     approve_btn = find_single_approve_button(page)
     count = approve_btn.count()
-    if count > 0 and approve_btn.first.is_visible():
+    if count == 1 and approve_btn.is_visible():
         cost = extract_credit_cost(page)
-        return True, count, cost
+        return True, 1, cost
+    elif count > 1:
+        logger.warning(f"Múltiplos botões de aprovação encontrados no início: count={count}")
+        return True, count, extract_credit_cost(page)
     return False, 0, None
 
 
@@ -363,105 +377,223 @@ def wait_for_generation_started(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI
         return False
 
 
-def wait_for_generation_complete(page: Page, timeout_sec: int = DEFAULT_TIMEOUT_GEN_SEC) -> bool:
+def extract_tile_identifier_from_src(src: str) -> Optional[str]:
+    """Extrai o token ASB estável da URL de thumbnail ou vídeo."""
+    if not src:
+        return None
+    m = re.search(r"/asb/([^?=&]+)", src)
+    if m:
+        return m.group(1)[:32]
+    return None
+
+
+def capture_tile_baseline(page: Page) -> Set[str]:
     """
-    Acompanha a geração até a conclusão (até 600s).
-    Evidência: vídeo pronto ou botão de download disponível.
+    Captura o conjunto de identificadores dos tiles/assets já existentes antes de uma nova geração.
+    Evita que um tile antigo confirme falsamente uma nova geração.
     """
-    logger.info(f"Aguardando conclusão da geração no Flow (timeout: {timeout_sec}s)...")
+    tiles = page.locator("flow-grid-tile-container")
+    count = tiles.count()
+    baseline_ids: Set[str] = set()
+    for i in range(count):
+        t = tiles.nth(i)
+        img = t.locator("img.thumbnail")
+        ident = None
+        if img.count() > 0:
+            src = img.get_attribute("src") or ""
+            token = extract_tile_identifier_from_src(src)
+            if token:
+                ident = token
+        if not ident:
+            label = t.get_attribute("aria-label")
+            if label:
+                ident = f"label:{label.strip()}"
+        if ident:
+            baseline_ids.add(ident)
+    logger.info(f"RESULT_BASELINE capturado: {len(baseline_ids)} tiles pré-existentes identificados.")
+    return baseline_ids
+
+
+def wait_for_generation_complete(
+    page: Page,
+    baseline_ids: Optional[Set[str]] = None,
+    timeout_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
+) -> Tuple[bool, Optional[Locator], Optional[str]]:
+    """
+    Acompanha a conclusão da geração garantindo isolamento do novo resultado.
+    Se baseline_ids for fornecido:
+    - Um resultado pré-existente no baseline NUNCA confirma a nova geração.
+    - Exige exatamente 1 novo resultado (len(new_ids) == 1).
+    - Se 0 novos resultados ao expirar timeout: GENERATION_RESULT_NOT_FOUND.
+    - Se > 1 novos resultados: AMBIGUOUS_GENERATION_RESULTS.
+    Retorna: (completed: bool, new_tile_locator: Optional[Locator], error: Optional[str])
+    """
+    logger.info(f"Aguardando conclusão da geração no Flow com isolamento de resultado (timeout: {timeout_sec}s)...")
+    baseline_list = list(baseline_ids or [])
+
     try:
-        page.wait_for_function(
-            """() => {
-                const hasVideo = Array.from(document.querySelectorAll('video')).some(v => v.src || v.currentSrc);
-                const hasDl = Array.from(document.querySelectorAll('button, a')).some(el => {
-                    const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
-                    return txt.includes('download') || txt.includes('baixar');
-                });
-                return hasVideo || hasDl;
+        wait_res = page.wait_for_function(
+            """(baselineList) => {
+                const baselineSet = new Set(baselineList || []);
+                const gridTiles = Array.from(document.querySelectorAll('flow-grid-tile-container'));
+                const newTiles = [];
+
+                for (const t of gridTiles) {
+                    const img = t.querySelector('img.thumbnail');
+                    const video = t.querySelector('video');
+                    const hotbar = t.querySelector('flow-video-hotbar');
+                    const src = (img && img.src) ? img.src : (video && (video.src || video.currentSrc) ? (video.src || video.currentSrc) : '');
+                    const m = src.match(/\\/asb\\/([^?=&]+)/);
+                    let id = null;
+                    if (m) {
+                        id = m[1].slice(0, 32);
+                    } else {
+                        const aria = (t.getAttribute('aria-label') || '').trim();
+                        if (aria) id = 'label:' + aria;
+                    }
+
+                    if (id && !baselineSet.has(id)) {
+                        // Tile novo precisa estar em estado pronto (thumbnail, hotbar ou video carregado)
+                        if (img || video || hotbar) {
+                            newTiles.push(id);
+                        }
+                    }
+                }
+
+                if (newTiles.length === 1) {
+                    return { status: 'READY', newId: newTiles[0] };
+                }
+                if (newTiles.length > 1) {
+                    return { status: 'AMBIGUOUS', count: newTiles.length };
+                }
+                return false;
             }""",
+            arg=baseline_list,
             timeout=timeout_sec * 1000,
         )
-        logger.info("Geração do Flow concluída com sucesso (mídia disponível)!")
-        return True
+        res_val = wait_res.json_value()
     except Exception as exc:
-        logger.error(f"Timeout ou erro aguardando conclusão da geração: {exc}")
-        return False
+        logger.error(f"Timeout aguardando novo resultado de geração: {exc}")
+        return False, None, "GENERATION_RESULT_NOT_FOUND"
+
+    if res_val.get("status") == "AMBIGUOUS":
+        cnt = res_val.get("count", 0)
+        logger.error(f"Resultados de geração ambíguos: {cnt} novos tiles detectados simultaneamente.")
+        return False, None, "AMBIGUOUS_GENERATION_RESULTS"
+
+    if res_val.get("status") == "READY":
+        new_id = res_val.get("newId")
+        logger.info(f"Novo resultado isolado identificado com sucesso: {new_id}")
+        if new_id.startswith("label:"):
+            label_val = new_id[6:]
+            tile_loc = page.locator("flow-grid-tile-container").filter(
+                has=page.locator(f'[aria-label="{label_val}"]')
+            )
+        else:
+            tile_loc = page.locator("flow-grid-tile-container").filter(
+                has=page.locator(f'img[src*="{new_id}"]')
+            )
+
+        try:
+            expect(tile_loc).to_have_count(1)
+        except Exception as exc:
+            logger.error(f"Falha na asserção de unicidade do tile gerado: {exc}")
+            return False, None, "AMBIGUOUS_GENERATION_RESULTS"
+
+        return True, tile_loc, None
+
+    return False, None, "GENERATION_RESULT_NOT_FOUND"
 
 
 def download_generated_clip(
     page: Page,
     output_path: str,
+    tile_locator: Optional[Locator] = None,
     timeout_ms: int = DEFAULT_TIMEOUT_DOWNLOAD_MS,
 ) -> Tuple[bool, Optional[str]]:
     """
-    Executa o download do clipe gerado utilizando o evento nativo expect_download do Playwright:
-        with page.expect_download(timeout=30_000) as download_info:
-            download_button.click()
-        download = download_info.value
-        download.save_as(canonical_output_path)
+    Executa o download do clipe gerado utilizando o evento nativo expect_download do Playwright.
+    Estritamente escopado ao tile do clipe gerado:
+    - Se tile_locator for fornecido, deve ter count == 1.
+    - Se não fornecido e houver mais de 1 tile, BLOQUEIA (fail-closed, sem usar .first arbitrário).
+    - Navega: tile -> hover -> Mais opções -> Fazer o download -> 720p Tamanho original.
     """
-    logger.info("Localizando botão ou menu de download no Studio...")
+    logger.info("Iniciando fluxo de download escopado...")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    # 1. Se houver container de vídeo gerado, passa o mouse para revelar a hotbar
-    container = page.locator(".container:has(img.thumbnail), flow-tile, .project-tile-hover-footer").first
-    if container.count() > 0:
-        try:
-            container.hover()
-        except Exception:
-            pass
+    if tile_locator is None:
+        all_tiles = page.locator("flow-grid-tile-container")
+        tile_count = all_tiles.count()
+        if tile_count != 1:
+            logger.error(f"Download não pode inferir tile alvo: encontrados {tile_count} tiles sem tile_locator explícito.")
+            return False, f"AMBIGUOUS_TILE_TARGET_COUNT_{tile_count}"
+        tile_locator = all_tiles
 
-    # 2. Localiza botão direto de download ou abre o menu 'Mais opções'
-    dl_btn = page.locator(
+    # Valida unicidade estrita do alvo
+    try:
+        expect(tile_locator).to_have_count(1)
+    except Exception as exc:
+        logger.error(f"Tile locator alvo não é único: {exc}")
+        return False, "AMBIGUOUS_TILE_TARGET"
+
+    # 1. Hover no tile alvo para revelar a hotbar
+    try:
+        tile_locator.hover()
+    except Exception as exc:
+        logger.warning(f"Hover no tile falhou ou não foi necessário: {exc}")
+
+    # 2. Localiza botão direto de download dentro do tile se existir
+    dl_btn = tile_locator.locator(
         "button[aria-label*='Download' i], button[aria-label*='Baixar' i], "
         "a[aria-label*='Download' i], a[aria-label*='Baixar' i]"
-    ).first
+    )
+    if dl_btn.count() == 1 and dl_btn.is_visible():
+        try:
+            with page.expect_download(timeout=timeout_ms) as download_info:
+                dl_btn.click()
+            download = download_info.value
+            download.save_as(output_path)
+            return True, None
+        except Exception as exc:
+            return False, f"DOWNLOAD_FAILED: {exc}"
 
-    more_btn = page.locator("flow-video-hotbar button[aria-label*='Mais op' i], button[aria-label*='Mais op' i]").first
+    # 3. Localiza botão 'Mais opções' estritamente dentro do tile alvo
+    more_btn = tile_locator.locator("button[aria-label*='Mais op' i]")
+    if more_btn.count() != 1:
+        logger.error(f"Botão 'Mais opções' não encontrado ou ambíguo no tile: count={more_btn.count()}")
+        return False, "MORE_OPTIONS_BUTTON_NOT_UNIQUE"
+
+    logger.info("Abrindo menu 'Mais opções' no tile alvo...")
+    more_btn.click()
+
+    # 4. Localiza opção de download no menu overlay
+    menu_dl = page.locator(".cdk-overlay-pane [role='menuitem']").filter(
+        has_text=re.compile(r"download|baixar", re.I)
+    )
+    if menu_dl.count() != 1:
+        logger.error(f"Item de menu download não encontrado ou ambíguo: count={menu_dl.count()}")
+        return False, "DOWNLOAD_MENUITEM_NOT_UNIQUE"
+
+    menu_dl.click()
+
+    # 5. Localiza resolução 720p (Tamanho original) no submenu
+    opt_720 = page.locator(".cdk-overlay-pane [role='menuitem']").filter(
+        has_text=re.compile(r"720p|original", re.I)
+    )
+    if opt_720.count() != 1:
+        logger.error(f"Opção de resolução 720p não encontrada ou ambígua: count={opt_720.count()}")
+        return False, "RESOLUTION_720P_NOT_UNIQUE"
 
     try:
         with page.expect_download(timeout=timeout_ms) as download_info:
-            if dl_btn.count() > 0 and dl_btn.is_visible():
-                dl_btn.click()
-            elif more_btn.count() > 0:
-                logger.info("Abrindo menu 'Mais opções' na hotbar do clipe...")
-                more_btn.click()
-                menu_dl = page.locator(
-                    "[role='menuitem']:has-text('download'), [role='menuitem']:has-text('Download'), "
-                    "[role='menuitem']:has-text('Baixar')"
-                ).first
-                menu_dl.wait_for(state="visible", timeout=5000)
-                menu_dl.click()
-
-                # Clica na opção de resolução 720p (Tamanho original)
-                opt_720 = page.locator(
-                    "[role='menuitem']:has-text('720p'), [role='menuitem']:has-text('original'), button:has-text('720p')"
-                ).first
-                opt_720.wait_for(state="visible", timeout=5000)
-                opt_720.click()
-            else:
-                # Dispara download através da fonte direta do vídeo mantendo expect_download nativo
-                logger.info("Disparando download via elemento de vídeo...")
-                page.evaluate("""() => {
-                    const vid = document.querySelector('video');
-                    const src = vid ? (vid.src || vid.currentSrc) : null;
-                    if (src) {
-                        const a = document.createElement('a');
-                        a.href = src;
-                        a.download = 'flow_clip.mp4';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    }
-                }""")
-
+            opt_720.click()
         download = download_info.value
         logger.info(f"Download capturado ({download.suggested_filename}). Salvando em {output_path}...")
         download.save_as(output_path)
         logger.info("Download salvo com sucesso!")
         return True, None
     except Exception as exc:
-        logger.error(f"Falha ao capturar ou salvar download: {exc}")
+        logger.error(f"Falha ao capturar download do clipe: {exc}")
         return False, f"DOWNLOAD_FAILED: {exc}"
 
 
@@ -505,6 +637,12 @@ def run_playwright_flow_poc(
         "credit_approval_click_count": 0,
         "credit_approval_confirmed": False,
         "always_approve_clicked": False,
+        "existing_tile_count": 0,
+        "baseline_result_capture_supported": True,
+        "new_result_isolation_supported": True,
+        "trace_capture_enabled": True,
+        "trace_saved_on_failure_only": True,
+        "trace_file": None,
         "generation_start_confirmed": False,
         "generation_attempts": 0,
         "generation_complete_confirmed": False,
@@ -544,6 +682,30 @@ def run_playwright_flow_poc(
             report["error"] = err
             return report
 
+        # Inicia Playwright Tracing oficial para diagnóstico de falhas
+        context.tracing.start(
+            screenshots=True,
+            snapshots=True,
+            sources=True,
+            aria_snapshots=True,
+        )
+
+        def _stop_tracing(st: str) -> None:
+            try:
+                if st in ("SUCCESS", "PRE_FLIGHT_TRIAL_PASS"):
+                    context.tracing.stop()
+                else:
+                    trace_dir = os.path.join(ROOT_DIR, "storage", "flow_traces")
+                    os.makedirs(trace_dir, exist_ok=True)
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    safe_st = re.sub(r"[^a-zA-Z0-9_-]", "_", str(st or "FAIL"))
+                    trace_path = os.path.join(trace_dir, f"{timestamp}_{safe_st}.zip")
+                    context.tracing.stop(path=trace_path)
+                    report["trace_file"] = trace_path
+                    logger.info(f"Trace de falha salvo em: {trace_path}")
+            except Exception as tr_exc:
+                logger.warning(f"Erro ao gerenciar tracing: {tr_exc}")
+
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_UI_MS)
 
@@ -554,6 +716,7 @@ def run_playwright_flow_poc(
             if login_st != "AUTHENTICATED":
                 report["status"] = login_st
                 report["error"] = login_st
+                _stop_tracing(login_st)
                 context.close()
                 return report
 
@@ -582,12 +745,17 @@ def run_playwright_flow_poc(
 
             logger.info("=== PRE-FLIGHT VALIDAÇÕES CONCLUÍDAS ===")
 
+            # 4. CAPTURA DE BASELINE DE RESULTADOS PRÉ-EXISTENTES
+            baseline_ids = capture_tile_baseline(page)
+            report["existing_tile_count"] = len(baseline_ids)
+
             if trial_only:
                 report["status"] = "PRE_FLIGHT_TRIAL_PASS"
+                _stop_tracing("PRE_FLIGHT_TRIAL_PASS")
                 context.close()
                 return report
 
-            # 4. MÁQUINA DE ESTADOS: VERIFICAÇÃO DE ESTADO PRÉ-EXISTENTE
+            # 5. MÁQUINA DE ESTADOS: VERIFICAÇÃO DE ESTADO PRÉ-EXISTENTE
             if is_pending:
                 logger.info(f"ESTADO PRÉ-EXISTENTE DETECTADO: pedido de aprovação pendente encontrado (custo={p_cost}).")
                 logger.info("NÃO clicando no botão Generate novamente nesta execução!")
@@ -604,6 +772,7 @@ def run_playwright_flow_poc(
                 if not appr_res["confirmed"]:
                     report["status"] = "CREDIT_APPROVAL_FAILED"
                     report["error"] = appr_res.get("error")
+                    _stop_tracing(report["status"])
                     context.close()
                     return report
 
@@ -637,6 +806,7 @@ def run_playwright_flow_poc(
                     logger.error(f"Timeout aguardando aprovação ou início de geração: {exc}")
                     report["status"] = "GENERATION_DISPATCH_TIMEOUT_30S"
                     report["error"] = "GENERATION_DISPATCH_TIMEOUT_30S"
+                    _stop_tracing(report["status"])
                     context.close()
                     return report
 
@@ -653,41 +823,47 @@ def run_playwright_flow_poc(
                     if not appr_res["confirmed"]:
                         report["status"] = "CREDIT_APPROVAL_FAILED"
                         report["error"] = appr_res.get("error")
+                        _stop_tracing(report["status"])
                         context.close()
                         return report
 
-            # 5. CONFIRMAÇÃO REAL DE GENERATION_STARTED (posterior à aprovação)
+            # 6. CONFIRMAÇÃO REAL DE GENERATION_STARTED (posterior à aprovação)
             started = wait_for_generation_started(page, timeout_ms=DEFAULT_TIMEOUT_UI_MS)
             report["generation_start_confirmed"] = started
             if not started:
                 report["status"] = "GENERATION_START_NOT_CONFIRMED"
                 report["error"] = "GENERATION_START_NOT_CONFIRMED"
+                _stop_tracing(report["status"])
                 context.close()
                 return report
 
             report["generation_attempts"] = 1
 
-            # 6. Aguarda conclusão da geração (até timeout_gen_sec)
-            completed = wait_for_generation_complete(page, timeout_sec=timeout_gen_sec)
+            # 7. Aguarda conclusão do NOVO resultado isolado (até timeout_gen_sec)
+            completed, new_tile_loc, comp_err = wait_for_generation_complete(
+                page, baseline_ids=baseline_ids, timeout_sec=timeout_gen_sec
+            )
             report["generation_complete_confirmed"] = completed
             if not completed:
-                report["status"] = "GENERATION_COMPLETION_FAILED"
-                report["error"] = f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
+                report["status"] = comp_err or "GENERATION_COMPLETION_FAILED"
+                report["error"] = comp_err or f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
+                _stop_tracing(report["status"])
                 context.close()
                 return report
 
-            # 7. DOWNLOAD VIA EXPECT_DOWNLOAD
-            dl_ok, dl_err = download_generated_clip(page, canonical_output_path)
+            # 8. DOWNLOAD ESCOPADO AO TILE NOVO VIA EXPECT_DOWNLOAD
+            dl_ok, dl_err = download_generated_clip(page, canonical_output_path, tile_locator=new_tile_loc)
             report["download_event_confirmed"] = dl_ok
             if not dl_ok:
                 report["status"] = "DOWNLOAD_FAILED"
                 report["error"] = dl_err
+                _stop_tracing(report["status"])
                 context.close()
                 return report
 
             report["output_file"] = canonical_output_path
 
-            # 8. VALIDAÇÃO DE MÍDIA COM PROBE_MEDIA
+            # 9. VALIDAÇÃO DE MÍDIA COM PROBE_MEDIA
             media_val = validate_clip_file(canonical_output_path)
             report["output_valid"] = media_val.get("valid", False)
             report["output_duration"] = media_val.get("duration", 0.0)
@@ -695,11 +871,13 @@ def run_playwright_flow_poc(
             if not media_val.get("valid"):
                 report["status"] = "INVALID_OUTPUT_MEDIA"
                 report["error"] = media_val.get("error")
+                _stop_tracing(report["status"])
                 context.close()
                 return report
 
             report["status"] = "SUCCESS"
             report["error"] = None
+            _stop_tracing("SUCCESS")
             context.close()
             return report
 
@@ -707,6 +885,7 @@ def run_playwright_flow_poc(
             logger.exception(f"Erro durante a execução do Playwright Flow: {exc}")
             report["status"] = "UNEXPECTED_ERROR"
             report["error"] = str(exc)
+            _stop_tracing("UNEXPECTED_ERROR")
             try:
                 context.close()
             except Exception:

@@ -1954,7 +1954,11 @@ def _render_final_ffmpeg_ass(
     """Renderização acelerada de legendas via FFmpeg libass nativo."""
     ffmpeg_exe = utils.get_ffmpeg_binary()
     output_dir = os.path.dirname(os.path.abspath(output_file))
-    ass_rel = os.path.relpath(ass_path, output_dir).replace("\\", "/")
+    ass_abs = os.path.abspath(ass_path)
+    try:
+        ass_rel = os.path.relpath(ass_abs, os.getcwd()).replace("\\", "/")
+    except ValueError:
+        ass_rel = ass_abs.replace("\\", "/").replace(":", r"\\:")
     fdir_escaped = utils.font_dir().replace(os.sep, "/").replace(":", r"\\:")
 
     vf_filter = f"ass=filename='{ass_rel}':fontsdir={fdir_escaped},{_BT709_VIDEO_FILTER}"

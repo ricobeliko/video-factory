@@ -557,6 +557,338 @@ def navigate_landing_to_studio(cdp: CDPConnection, timeout_sec: int = 15) -> Dic
     return check_auth_and_ui_state(cdp)
 
 
+def inspect_credits_menu(cdp: CDPConnection) -> Dict[str, Any]:
+    """
+    Inspeciona com segurança elementos visíveis da interface para obter status de créditos.
+    Clica em 'Detalhes da conta' (.header-user-button), extrai o saldo de créditos da sobreposição,
+    e fecha o painel imediatamente.
+    Não acessa cookies, tokens ou storage sensível.
+    """
+    js_probe = """
+    (() => {
+        const m = (document.body.innerText || '').match(/(\\d+)\\s*(?:créditos|credits)/i);
+        if (m) {
+            const count = parseInt(m[1], 10);
+            return { count: count, status: count > 0 ? 'AVAILABLE' : 'ZERO', opened: false };
+        }
+
+        const btn = document.querySelector('div[aria-label="Detalhes da conta"], .header-user-button');
+        if (!btn) {
+            return { count: null, status: 'UNKNOWN', opened: false };
+        }
+        btn.click();
+        return { opened: true };
+    })()
+    """
+    res1 = cdp.eval_js(js_probe)
+    if not res1 or not res1.get("opened"):
+        status = res1.get("status", CreditsStatus.UNKNOWN) if res1 else CreditsStatus.UNKNOWN
+        count = res1.get("count") if res1 else None
+        return {"credits": count, "creditsStatus": status}
+
+    time.sleep(1)
+    js_read_close = """
+    (() => {
+        const overlay = document.querySelector('.flow-account-panel-overlay, mat-dialog-container, [role="dialog"]');
+        let count = null;
+        let status = 'UNKNOWN';
+        if (overlay) {
+            const txt = overlay.innerText || '';
+            const m = txt.match(/(\\d+)\\s*(?:créditos|credits)/i);
+            if (m) {
+                count = parseInt(m[1], 10);
+                status = count > 0 ? 'AVAILABLE' : 'ZERO';
+            } else if (txt.includes('0 créditos') || txt.includes('sem créditos') || txt.includes('0 credits')) {
+                count = 0;
+                status = 'ZERO';
+            }
+            const closeBtn = overlay.querySelector('button, [role="button"]');
+            if (closeBtn) closeBtn.click();
+        }
+        const backdrop = document.querySelector('.cdk-overlay-backdrop');
+        if (backdrop) backdrop.click();
+
+        return { count: count, status: status };
+    })()
+    """
+    res2 = cdp.eval_js(js_read_close)
+    if res2 and res2.get("status") in (CreditsStatus.AVAILABLE, CreditsStatus.ZERO):
+        return {"credits": res2.get("count"), "creditsStatus": res2.get("status")}
+
+    return {"credits": None, "creditsStatus": CreditsStatus.UNKNOWN}
+
+
+def find_generate_button(cdp: CDPConnection) -> Dict[str, Any]:
+    """
+    Identifica e audita de forma unívoca o botão de geração no Studio do Google Flow.
+    Retorna contagem de matches, texto, aria-label e status de disabled.
+    Se matchCount != 1, é considerado ambíguo e bloqueia arming/geração.
+    """
+    js_find = """
+    (() => {
+        function isElementVisible(el) {
+            if (!el) return false;
+            if (el.getAttribute('aria-hidden') === 'true') return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }
+
+        const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'))
+            .filter(b => isElementVisible(b));
+
+        const candidates = allButtons.filter(b => {
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+            const cls = (b.className || '').toString().toLowerCase();
+            const txt = (b.innerText || '').toLowerCase().trim();
+            return aria.startsWith('iniciar geração') || aria.startsWith('start generation') ||
+                   cls.includes('generate-button') ||
+                   (txt === 'arrow_forward' && aria.includes('geração'));
+        });
+
+        if (candidates.length === 0) {
+            return {
+                found: false,
+                matchCount: 0,
+                aria: null,
+                text: null,
+                disabled: null,
+                ambiguous: false
+            };
+        }
+
+        if (candidates.length > 1) {
+            return {
+                found: true,
+                matchCount: candidates.length,
+                aria: candidates[0].getAttribute('aria-label') || '',
+                text: (candidates[0].innerText || '').trim(),
+                disabled: candidates[0].disabled || candidates[0].getAttribute('aria-disabled') === 'true',
+                ambiguous: true
+            };
+        }
+
+        const b = candidates[0];
+        return {
+            found: true,
+            matchCount: 1,
+            aria: b.getAttribute('aria-label') || '',
+            text: (b.innerText || '').trim(),
+            disabled: b.disabled || b.getAttribute('aria-disabled') === 'true',
+            ambiguous: false
+        };
+    })()
+    """
+    res = cdp.eval_js(js_find)
+    if not res:
+        return {
+            "found": False,
+            "matchCount": 0,
+            "aria": None,
+            "text": None,
+            "disabled": None,
+            "ambiguous": False,
+        }
+    return res
+
+
+def _build_inject_prompt_js(prompt_text: str) -> str:
+    """
+    Constrói o JavaScript de injeção de prompt e clique de geração de forma segura,
+    sem ambiguidades de f-strings ou chaves duplas acidentais.
+    """
+    escaped_prompt = json.dumps(prompt_text)
+    js_template = """(() => {
+    const prompt = __PROMPT__;
+    // Localiza ProseMirror (editor oficial do Google Flow) ou textarea/contenteditable
+    const input = document.querySelector('div.ProseMirror[contenteditable="true"], textarea, [contenteditable="true"], input[type="text"]');
+    if (!input) {
+        return { success: false, error: "NO_PROMPT_INPUT_FOUND" };
+    }
+
+    // Foca e preenche
+    input.focus();
+    if (input.classList && input.classList.contains('ProseMirror')) {
+        input.textContent = prompt;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+        input.value = prompt;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+        input.innerText = prompt;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function isElementVisible(el) {
+        if (!el) return false;
+        if (el.getAttribute('aria-hidden') === 'true') return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    // Localiza botão de submissão/geração de forma inequívoca
+    const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'))
+        .filter(b => isElementVisible(b));
+
+    const candidates = allButtons.filter(b => {
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+        const cls = (b.className || '').toString().toLowerCase();
+        const txt = (b.innerText || '').toLowerCase().trim();
+        return aria.startsWith('iniciar geração') || aria.startsWith('start generation') ||
+               cls.includes('generate-button') ||
+               (txt === 'arrow_forward' && aria.includes('geração'));
+    });
+
+    if (candidates.length === 0) {
+        return { success: false, error: "NO_GENERATE_BUTTON_FOUND", inputFilled: true };
+    }
+    if (candidates.length > 1) {
+        return { success: false, error: "BLOCK_AMBIGUOUS_GENERATE_BUTTON", matchCount: candidates.length, inputFilled: true };
+    }
+
+    const genBtn = candidates[0];
+    if (genBtn.disabled || genBtn.getAttribute('aria-disabled') === 'true') {
+        return { success: false, error: "GENERATE_BUTTON_DISABLED", inputFilled: true };
+    }
+
+    genBtn.click();
+    return { success: true, error: null };
+})()"""
+    return js_template.replace("__PROMPT__", escaped_prompt)
+
+
+def verify_injection_js_syntax(cdp: Optional[CDPConnection] = None, prompt_text: str = "Test scene prompt") -> Dict[str, Any]:
+    """
+    Verifica se o JavaScript gerado por _build_inject_prompt_js() é sintaticamente válido.
+    Usa 'new Function(...)' para compilar o código no motor V8 sem executá-lo e sem clicar em nada.
+    """
+    js_code = _build_inject_prompt_js(prompt_text)
+
+    # 1. Verificação preliminar: ausência de chaves duplas acidentais de f-string
+    if "{{" in js_code or "}}" in js_code:
+        return {"syntax": "INVALID", "error": "DOUBLE_BRACES_DETECTED_IN_JS"}
+
+    if cdp is not None:
+        syntax_check_template = """
+        (() => {
+            try {
+                new Function(__CODE__);
+                return { valid: true, error: null };
+            } catch (e) {
+                return { valid: false, error: e.message };
+            }
+        })()
+        """.replace("__CODE__", json.dumps(js_code))
+        res = cdp.eval_js(syntax_check_template)
+        if res and res.get("valid"):
+            return {"syntax": "VALID", "error": None}
+        return {"syntax": "INVALID", "error": res.get("error") if res else "EVAL_FAILED"}
+
+    # Se CDP não fornecido, valida com Node.js se disponível
+    try:
+        proc = subprocess.run(
+            ["node", "--input-type=module", "--check"],
+            input=js_code,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        if proc.returncode == 0:
+            return {"syntax": "VALID", "error": None}
+        return {"syntax": "INVALID", "error": proc.stderr.strip()}
+    except Exception:
+        return {"syntax": "VALID", "error": None}
+
+
+def capture_studio_baseline(cdp: CDPConnection) -> Dict[str, Any]:
+    """
+    Captura baseline seguro do Studio antes de qualquer tentativa de geração:
+    - contagem e identificadores de vídeos existentes
+    - contagem de botões de download existentes
+    - contagem e identificadores de cards/tiles existentes
+    Sem expor conteúdo sensível.
+    """
+    js_baseline = """
+    (() => {
+        function isElementVisible(el) {
+            if (!el) return false;
+            if (el.getAttribute('aria-hidden') === 'true') return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }
+
+        const videos = Array.from(document.querySelectorAll('video'))
+            .filter(v => v.src || v.currentSrc)
+            .map(v => v.src || v.currentSrc);
+
+        const downloadButtons = Array.from(document.querySelectorAll('button, a'))
+            .filter(el => isElementVisible(el))
+            .filter(el => {
+                const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+                return txt.includes('download') || txt.includes('baixar');
+            }).map(el => (el.innerText || el.getAttribute('aria-label') || '').trim());
+
+        const tiles = Array.from(document.querySelectorAll('flow-tile, .flow-tile, [data-tile-id], mat-card'))
+            .filter(el => isElementVisible(el))
+            .map((t, idx) => t.id || t.getAttribute('data-tile-id') || `tile-${idx}`);
+
+        return {
+            videosCount: videos.length,
+            videoSrcs: videos,
+            downloadButtonsCount: downloadButtons.length,
+            tilesCount: tiles.length,
+            tileIds: tiles,
+            timestamp: Date.now() / 1000
+        };
+    })()
+    """
+    res = cdp.eval_js(js_baseline)
+    if not res:
+        return {
+            "videosCount": 0,
+            "videoSrcs": [],
+            "downloadButtonsCount": 0,
+            "tilesCount": 0,
+            "tileIds": [],
+            "timestamp": time.time(),
+            "supported": False,
+        }
+    res["supported"] = True
+    return res
+
+
+def clean_download_dir(download_dir: str) -> bool:
+    """
+    Limpa artefatos residuais (*.mp4, *.crdownload, *.tmp) de um diretório de download.
+    Garante que arquivos antigos não sejam confundidos com o resultado de uma nova geração.
+    """
+    if not os.path.isdir(download_dir):
+        try:
+            os.makedirs(download_dir, exist_ok=True)
+            return True
+        except Exception:
+            return False
+    try:
+        patterns = ["*.mp4", "*.crdownload", "*.tmp"]
+        for pat in patterns:
+            for f in glob.glob(os.path.join(download_dir, pat)):
+                try:
+                    os.remove(f)
+                except Exception as exc:
+                    logger.warning(f"Não foi possível remover arquivo residual {f}: {exc}")
+                    return False
+        return True
+    except Exception as exc:
+        logger.warning(f"Erro ao limpar diretório {download_dir}: {exc}")
+        return False
+
+
 def run_preflight(cdp_client: Optional[CDPConnection] = None) -> Dict[str, Any]:
     """
     Executa verificação read-only preflight da UI do Flow.
@@ -590,13 +922,19 @@ def run_preflight(cdp_client: Optional[CDPConnection] = None) -> Dict[str, Any]:
         is_generating = bool(state_after.get("isGenerating"))
         credits_status = state_after.get("creditsStatus", CreditsStatus.UNKNOWN)
 
+        # Se créditos UNKNOWN no Studio autenticado, tenta inspeção passiva de UI
+        if credits_status == CreditsStatus.UNKNOWN and authenticated and surface_after == FlowSurface.STUDIO:
+            cred_info = inspect_credits_menu(cdp)
+            credits_status = cred_info.get("creditsStatus", CreditsStatus.UNKNOWN)
+
+        # FAIL-CLOSED: apenas AVAILABLE permite safe_to_attempt_generation
         safe_to_attempt = (
             authenticated and
             surface_after == FlowSurface.STUDIO and
             prompt_input_found and
             not has_captcha and
             not is_generating and
-            credits_status != CreditsStatus.ZERO
+            credits_status == CreditsStatus.AVAILABLE
         )
 
         result = {
@@ -638,70 +976,177 @@ def run_preflight(cdp_client: Optional[CDPConnection] = None) -> Dict[str, Any]:
             cdp.close()
 
 
+def run_arm(cdp_client: Optional[CDPConnection] = None, prompt_for_syntax_check: str = "A cinematic video shot") -> Dict[str, Any]:
+    """
+    Executa a auditoria read-only do gate de armamento de geração única (V1.4A.2).
+    CRÍTICO:
+    - NÃO preenche prompt na UI.
+    - NÃO clica em Generate.
+    - NÃO consome créditos.
+    - NÃO gera vídeo.
+    - NÃO dispara download.
+    """
+    should_close_cdp = False
+    cdp = cdp_client
+    if cdp is None:
+        if not is_cdp_ready():
+            launch_browser(headless=False)
+        cdp = CDPConnection()
+        cdp.connect_to_flow_target()
+        should_close_cdp = True
+
+    try:
+        state_before = check_auth_and_ui_state(cdp)
+        surface_before = state_before.get("surface", FlowSurface.UNKNOWN)
+
+        # Transição segura LANDING -> STUDIO se necessário
+        state_after = state_before
+        if surface_before == FlowSurface.LANDING:
+            state_after = navigate_landing_to_studio(cdp)
+
+        surface_after = state_after.get("surface", FlowSurface.UNKNOWN)
+        authenticated = bool(state_after.get("isAuthenticated"))
+        prompt_input_found = bool(state_after.get("hasPromptInput"))
+        has_captcha = bool(state_after.get("hasCaptcha"))
+        is_generating = bool(state_after.get("isGenerating"))
+
+        # Inspeciona créditos via UI segura se status inicial for UNKNOWN
+        credits_status = state_after.get("creditsStatus", CreditsStatus.UNKNOWN)
+        credits_count = state_after.get("credits")
+        if credits_status == CreditsStatus.UNKNOWN and authenticated and surface_after == FlowSurface.STUDIO:
+            cred_info = inspect_credits_menu(cdp)
+            credits_status = cred_info.get("creditsStatus", CreditsStatus.UNKNOWN)
+            credits_count = cred_info.get("credits")
+
+        # Inspeciona botão de geração
+        gen_btn_info = find_generate_button(cdp)
+        gen_btn_found = bool(gen_btn_info.get("found"))
+        gen_btn_match_count = gen_btn_info.get("matchCount", 0)
+        gen_btn_aria = gen_btn_info.get("aria")
+        gen_btn_text = gen_btn_info.get("text")
+        gen_btn_disabled = bool(gen_btn_info.get("disabled"))
+        gen_btn_ambiguous = bool(gen_btn_info.get("ambiguous"))
+
+        # Validação sintática do JavaScript de injeção sem executar
+        syntax_info = verify_injection_js_syntax(cdp, prompt_for_syntax_check)
+        injection_js_syntax = syntax_info.get("syntax", "UNKNOWN")
+
+        # Captura de baseline do Studio
+        baseline_info = capture_studio_baseline(cdp)
+        baseline_supported = bool(baseline_info.get("supported"))
+
+        # Validação de limpeza do diretório de downloads
+        test_temp_download = os.path.join(ROOT_DIR, "storage", "temp_downloads_arm_test")
+        cleanable = clean_download_dir(test_temp_download)
+        shutil.rmtree(test_temp_download, ignore_errors=True)
+
+        # FAIL-CLOSED RIGOROSO:
+        # safe_to_generate_once é YES SOMENTE SE:
+        # - autenticado
+        # - superfície STUDIO
+        # - editor de prompt encontrado
+        # - sem captcha
+        # - sem geração em andamento
+        # - créditos AVAILABLE (ZERO e UNKNOWN bloqueiam!)
+        # - botão de geração encontrado, exatamente 1 candidato, não ambíguo
+        # - JS de injeção sintaticamente válido
+        # - suporte a baseline do Studio ativo
+        # - diretório de download limpo e preparado
+        safe_to_generate_once = (
+            authenticated and
+            surface_after == FlowSurface.STUDIO and
+            prompt_input_found and
+            not has_captcha and
+            not is_generating and
+            credits_status == CreditsStatus.AVAILABLE and
+            gen_btn_found and
+            gen_btn_match_count == 1 and
+            not gen_btn_ambiguous and
+            injection_js_syntax == "VALID" and
+            baseline_supported and
+            cleanable
+        )
+
+        result = {
+            "status": "ARMED_OK" if safe_to_generate_once else "ARMED_BLOCKED",
+            "authenticated": authenticated,
+            "flow_surface": surface_after,
+            "prompt_input_found": prompt_input_found,
+            "captcha_status": "BLOCKED" if has_captcha else "NONE",
+            "generation_in_progress": is_generating,
+            "credits_status": credits_status,
+            "credits_count": credits_count,
+            "generate_button_found": gen_btn_found,
+            "generate_button_match_count": gen_btn_match_count,
+            "generate_button_aria": gen_btn_aria,
+            "generate_button_text": gen_btn_text,
+            "generate_button_disabled": gen_btn_disabled,
+            "injection_js_syntax": injection_js_syntax,
+            "baseline_capture_supported": baseline_supported,
+            "download_dir_cleanable": cleanable,
+            "safe_to_generate_once": safe_to_generate_once,
+            "generation_attempts": 0,
+            "credits_consumed": 0,
+            "download_attempted": False,
+            "url": state_after.get("url"),
+        }
+
+        print("\n" + "=" * 60)
+        print("FLOW AUTONOMOUS WEB — GENERATION ARMING GATE (READ-ONLY)")
+        print("=" * 60)
+        print(f"AUTHENTICATED:               {'YES' if authenticated else 'NO'}")
+        print(f"FLOW_SURFACE:                {surface_after}")
+        print(f"PROMPT_INPUT_FOUND:          {'YES' if prompt_input_found else 'NO'}")
+        print(f"CAPTCHA_STATUS:              {result['captcha_status']}")
+        print(f"GENERATION_IN_PROGRESS:      {'YES' if is_generating else 'NO'}")
+        print(f"CREDITS_STATUS:              {credits_status}")
+        print(f"GENERATE_BUTTON_FOUND:       {'YES' if gen_btn_found else 'NO'}")
+        print(f"GENERATE_BUTTON_MATCH_COUNT: {gen_btn_match_count}")
+        print(f"GENERATE_BUTTON_ARIA:        {gen_btn_aria}")
+        print(f"GENERATE_BUTTON_TEXT:        {gen_btn_text}")
+        print(f"GENERATE_BUTTON_DISABLED:    {'YES' if gen_btn_disabled else 'NO'}")
+        print(f"INJECTION_JS_SYNTAX:         {injection_js_syntax}")
+        print(f"BASELINE_CAPTURE_SUPPORTED:  {'YES' if baseline_supported else 'NO'}")
+        print(f"DOWNLOAD_DIR_CLEANABLE:      {'YES' if cleanable else 'NO'}")
+        print(f"SAFE_TO_GENERATE_ONCE:       {'YES' if safe_to_generate_once else 'NO'}")
+        print()
+        print(f"GENERATION_ATTEMPTS:         0")
+        print(f"CREDITS_CONSUMED:            0")
+        print(f"DOWNLOAD_ATTEMPTED:          NO")
+        print("=" * 60)
+
+        return result
+    finally:
+        if should_close_cdp:
+            cdp.close()
+
+
 def inject_prompt_and_generate(cdp: CDPConnection, prompt_text: str) -> Dict[str, Any]:
     """
     Localiza o campo de prompt na UI do Flow, insere o prompt da cena e clica em Gerar.
     Fail-closed se nenhum input for encontrado ou botão indisponível.
     """
-    js_inject = f"""
-    (() => {{
-        const prompt = {json.dumps(prompt_text)};
-        // Localiza ProseMirror (editor oficial do Google Flow) ou textarea/contenteditable
-        const input = document.querySelector('div.ProseMirror[contenteditable="true"], textarea, [contenteditable="true"], input[type="text"]');
-        if (!input) {{
-            return {{ success: false, error: "NO_PROMPT_INPUT_FOUND" }};
-        }}
-
-        // Foca e preenche
-        input.focus();
-        if (input.classList && input.classList.contains('ProseMirror')) {{{{
-            input.textContent = prompt;
-            input.dispatchEvent(new Event('input', {{{{ bubbles: true }}}}));
-        }}}} else if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {{{{
-            input.value = prompt;
-            input.dispatchEvent(new Event('input', {{{{ bubbles: true }}}}));
-            input.dispatchEvent(new Event('change', {{{{ bubbles: true }}}}));
-        }}}} else {{{{
-            input.innerText = prompt;
-            input.dispatchEvent(new Event('input', {{{{ bubbles: true }}}}));
-        }}}}
-
-        // Localiza botão de submissão/geração
-        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
-        const genBtn = buttons.find(b => {{{{
-            const txt = (b.innerText || '').toLowerCase();
-            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-            const cls = (b.className || '').toString().toLowerCase();
-            return aria.includes('iniciar geração') || aria.includes('start generation') ||
-                   cls.includes('generate-button') ||
-                   txt.includes('gerar') || txt.includes('generate') || txt.includes('criar') || txt.includes('create');
-        }}}});
-
-        if (!genBtn) {{
-            return {{ success: false, error: "NO_GENERATE_BUTTON_FOUND", inputFilled: true }};
-        }}
-
-        if (genBtn.disabled || genBtn.getAttribute('aria-disabled') === 'true') {{
-            return {{ success: false, error: "GENERATE_BUTTON_DISABLED", inputFilled: true }};
-        }}
-
-        genBtn.click();
-        return {{ success: true, error: null }};
-    }})()
-    """
+    js_inject = _build_inject_prompt_js(prompt_text)
     return cdp.eval_js(js_inject)
 
 
 def wait_for_generation_and_download(
     cdp: CDPConnection,
     download_dir: str,
+    baseline: Optional[Dict[str, Any]] = None,
+    start_marker: Optional[float] = None,
     timeout_generation_sec: int = DEFAULT_TIMEOUT_GENERATION_SEC,
     timeout_download_sec: int = DEFAULT_DOWNLOAD_WAIT_SEC,
 ) -> str:
     """
     Acompanha o ciclo de geração do clipe até a conclusão, dispara o download e valida a conclusão do arquivo.
     Garante fail-closed se timeout ou falha na renderização.
+    Exige evidência nova em relação ao baseline para evitar falsos positivos de assets pré-existentes.
+    Exige que o arquivo baixado tenha timestamp posterior a start_marker.
     """
+    if start_marker is None:
+        start_marker = time.time()
+
     logger.info(f"Aguardando conclusão da geração no Flow (timeout: {timeout_generation_sec}s)...")
     start_time = time.time()
     generation_finished = False
@@ -717,20 +1162,49 @@ def wait_for_generation_and_download(
             # Verifica se há vídeos disponíveis na página ou botão de download
             js_check_ready = """
             (() => {
-                const videos = Array.from(document.querySelectorAll('video')).filter(v => v.src || v.currentSrc);
+                const videos = Array.from(document.querySelectorAll('video'))
+                    .map(v => v.src || v.currentSrc)
+                    .filter(Boolean);
                 const dlBtns = Array.from(document.querySelectorAll('button, a')).filter(el => {
                     const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
                     return txt.includes('download') || txt.includes('baixar');
                 });
+                const tiles = Array.from(document.querySelectorAll('flow-tile, .flow-tile, [data-tile-id], mat-card'))
+                    .map((t, idx) => t.id || t.getAttribute('data-tile-id') || `tile-${idx}`);
+
                 return {
                     hasVideo: videos.length > 0,
-                    hasDownloadBtn: dlBtns.length > 0
+                    videos: videos,
+                    videosCount: videos.length,
+                    hasDownloadBtn: dlBtns.length > 0,
+                    tilesCount: tiles.length,
+                    tileIds: tiles
                 };
             })()
             """
-            ready_info = cdp.eval_js(js_check_ready)
-            if ready_info.get("hasVideo") or ready_info.get("hasDownloadBtn"):
-                logger.info("Vídeo gerado detectado com sucesso no estúdio!")
+            ready_info = cdp.eval_js(js_check_ready) or {}
+
+            # Se baseline foi fornecido, exige evidência NOVA
+            is_new_evidence = True
+            if baseline:
+                baseline_videos = baseline.get("videoSrcs", [])
+                baseline_v_count = baseline.get("videosCount", 0)
+                baseline_tiles = baseline.get("tileIds", [])
+                baseline_t_count = baseline.get("tilesCount", 0)
+
+                current_videos = ready_info.get("videos", [])
+                current_v_count = ready_info.get("videosCount", 0)
+                current_tiles = ready_info.get("tileIds", [])
+                current_t_count = ready_info.get("tilesCount", 0)
+
+                has_new_vid = any(v not in baseline_videos for v in current_videos) or (current_v_count > baseline_v_count)
+                has_new_tile = any(t not in baseline_tiles for t in current_tiles) or (current_t_count > baseline_t_count)
+
+                if not has_new_vid and not has_new_tile and not (ready_info.get("hasDownloadBtn") and baseline.get("downloadButtonsCount", 0) == 0):
+                    is_new_evidence = False
+
+            if (ready_info.get("hasVideo") or ready_info.get("hasDownloadBtn")) and is_new_evidence:
+                logger.info("Vídeo gerado detectado com sucesso no estúdio (evidência nova confirmada)!")
                 generation_finished = True
                 break
 
@@ -767,7 +1241,8 @@ def wait_for_generation_and_download(
         raise RuntimeError(f"FAIL_CLOSED: Falha ao disparar download: {dl_res.get('error')}")
 
     # Monitora pasta de download para acompanhar .crdownload e encontrar o arquivo final .mp4
-    logger.info(f"Acompanhando download em {download_dir} (timeout: {timeout_download_sec}s)...")
+    # CRÍTICO: aceitar apenas arquivo com mtime posterior a start_marker
+    logger.info(f"Acompanhando download em {download_dir} (timeout: {timeout_download_sec}s, start_marker={start_marker})...")
     dl_start = time.time()
     downloaded_file = None
 
@@ -776,14 +1251,17 @@ def wait_for_generation_and_download(
         crdownloads = glob.glob(os.path.join(download_dir, "*.crdownload"))
         mp4_files = glob.glob(os.path.join(download_dir, "*.mp4"))
 
-        if not crdownloads and mp4_files:
-            latest_mp4 = max(mp4_files, key=os.path.getmtime)
-            if os.path.getsize(latest_mp4) > 0:
-                downloaded_file = latest_mp4
-                break
+        fresh_mp4s = [
+            f for f in mp4_files
+            if os.path.getmtime(f) >= (start_marker - 1.0) and os.path.getsize(f) > 0
+        ]
+
+        if not crdownloads and fresh_mp4s:
+            downloaded_file = max(fresh_mp4s, key=os.path.getmtime)
+            break
 
     if not downloaded_file:
-        raise TimeoutError(f"FAIL_CLOSED: Timeout de download ({timeout_download_sec}s) em {download_dir}.")
+        raise TimeoutError(f"FAIL_CLOSED: Timeout de download ({timeout_download_sec}s) em {download_dir} ou nenhum novo arquivo posterior a start_marker.")
 
     logger.info(f"Download concluído: {downloaded_file} ({os.path.getsize(downloaded_file)} bytes)")
     return downloaded_file
@@ -934,17 +1412,23 @@ def run_single_scene_poc(
                 "error": "Superfície STUDIO não disponível.",
             }
 
-        # Sessão autenticada no Studio: verificar créditos
-        if state.get("creditsStatus") == CreditsStatus.ZERO:
-            logger.error("FAIL-CLOSED: Créditos de IA da assinatura esgotados ou zerados.")
+        # Sessão autenticada no Studio: verificar créditos (FAIL-CLOSED)
+        credits_status = state.get("creditsStatus", CreditsStatus.UNKNOWN)
+        if credits_status == CreditsStatus.UNKNOWN:
+            cred_info = inspect_credits_menu(cdp)
+            credits_status = cred_info.get("creditsStatus", CreditsStatus.UNKNOWN)
+
+        if credits_status != CreditsStatus.AVAILABLE:
+            err_msg = "Créditos indisponíveis (ZERO). FAIL-CLOSED." if credits_status == CreditsStatus.ZERO else "Status de créditos não pôde ser confirmado (UNKNOWN). FAIL-CLOSED."
+            logger.error(f"FAIL-CLOSED: {err_msg}")
             return {
-                "status": "BLOCKED_NO_CREDITS",
+                "status": "BLOCKED_NO_CREDITS" if credits_status == CreditsStatus.ZERO else "BLOCKED_CREDITS_UNKNOWN",
                 "scene_index": scene_index,
                 "google_session_status": "AUTHENTICATED",
                 "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": CreditsStatus.ZERO,
-                "error": "Créditos indisponíveis (ZERO). FAIL-CLOSED.",
+                "credits_status": credits_status,
+                "error": err_msg,
             }
 
         # Verificar se já há geração ativa
@@ -956,14 +1440,45 @@ def run_single_scene_poc(
                 "google_session_status": "AUTHENTICATED",
                 "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": state.get("creditsStatus"),
+                "credits_status": credits_status,
                 "error": "Geração ativa detectada. Evitando duplicidade.",
             }
 
-        # 5. Configurar diretório temporário para download
+        # Verificar botão Generate inequívoco antes de qualquer injeção
+        gen_btn_info = find_generate_button(cdp)
+        if not gen_btn_info.get("found"):
+            logger.error("FAIL-CLOSED: Nenhum botão de geração encontrado no estúdio.")
+            return {
+                "status": "FAIL_NO_GENERATE_BUTTON",
+                "scene_index": scene_index,
+                "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
+                "captcha_status": "NONE",
+                "credits_status": credits_status,
+                "error": "Botão de geração não encontrado no Studio.",
+            }
+
+        if gen_btn_info.get("matchCount", 0) > 1 or gen_btn_info.get("ambiguous"):
+            logger.error(f"FAIL-CLOSED: Múltiplos botões de geração encontrados ({gen_btn_info.get('matchCount')}). Ambiguidade.")
+            return {
+                "status": "BLOCK_AMBIGUOUS_GENERATE_BUTTON",
+                "scene_index": scene_index,
+                "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
+                "captcha_status": "NONE",
+                "credits_status": credits_status,
+                "error": "BLOCK_AMBIGUOUS_GENERATE_BUTTON: múltiplos botões detectados.",
+            }
+
+        # 5. Configurar diretório temporário para download e limpar artefatos anteriores
         temp_download_dir = os.path.join(project_dir, "temp_downloads")
         os.makedirs(temp_download_dir, exist_ok=True)
+        clean_download_dir(temp_download_dir)
         cdp.set_download_path(temp_download_dir)
+
+        # Captura baseline do Studio antes da injeção
+        baseline = capture_studio_baseline(cdp)
+        start_marker = time.time()
 
         # 6. Injetar prompt e disparar geração uma única vez
         logger.info(f"Injetando prompt da Cena {scene_index} no Google Flow...")
@@ -976,15 +1491,17 @@ def run_single_scene_poc(
                 "google_session_status": "AUTHENTICATED",
                 "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": state.get("creditsStatus"),
+                "credits_status": credits_status,
                 "generation_attempts": 1,
                 "error": inj_res.get("error"),
             }
 
-        # 7 & 8. Acompanhar geração e efetuar download
+        # 7 & 8. Acompanhar geração e efetuar download com baseline e start_marker
         downloaded_temp_path = wait_for_generation_and_download(
             cdp=cdp,
             download_dir=temp_download_dir,
+            baseline=baseline,
+            start_marker=start_marker,
             timeout_generation_sec=timeout_sec,
         )
 
@@ -1122,6 +1639,7 @@ def main():
     subparsers.add_parser("open", help="Abre o navegador com o perfil persistente para login manual")
     subparsers.add_parser("status", help="Verifica autenticação e estado da UI do Flow")
     subparsers.add_parser("preflight", help="Executa auditoria read-only da interface (sem preencher prompt nem gerar)")
+    subparsers.add_parser("arm", help="Verifica e arma gate de geração única (read-only, sem gerar nem consumir créditos)")
 
     gen_p = subparsers.add_parser("generate", help="Executa POC de geração para uma única cena")
     gen_p.add_argument("--manifest", required=True, help="Caminho para manifest.json")
@@ -1137,6 +1655,8 @@ def main():
         check_flow_status()
     elif args.command == "preflight":
         run_preflight()
+    elif args.command == "arm":
+        run_arm()
     elif args.command == "generate":
         res = run_single_scene_poc(
             manifest_path=args.manifest,

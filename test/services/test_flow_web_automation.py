@@ -23,11 +23,18 @@ from unittest.mock import MagicMock, patch
 from scripts.flow_web_automation import (
     CreditsStatus,
     FlowSurface,
+    _build_inject_prompt_js,
+    capture_studio_baseline,
     check_auth_and_ui_state,
+    clean_download_dir,
+    find_generate_button,
+    inspect_credits_menu,
     navigate_landing_to_studio,
+    run_arm,
     run_preflight,
     run_single_scene_poc,
     validate_clip_file,
+    verify_injection_js_syntax,
     wait_for_generation_and_download,
 )
 from scripts.flow_workflow import get_project_status
@@ -282,7 +289,7 @@ class TestFlowWebAutomation(unittest.TestCase):
             "promptInputsCount": 1,
             "hasCaptcha": False,
             "isGenerating": False,
-            "creditsStatus": CreditsStatus.UNKNOWN,
+            "creditsStatus": CreditsStatus.AVAILABLE,
             "falsePositiveSource": None,
         }
 
@@ -405,6 +412,324 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertEqual(scene1["scene_index"], 1)
         self.assertEqual(scene1["expected_clip"], "flow_scene_01.mp4")
         self.assertEqual(scene1["status"], "READY_FLOW")
+
+    def test_injection_js_syntax_is_valid(self):
+        """Verifica que o JS de injeção gerado não contém double braces e é sintaticamente válido."""
+        prompt = "Cosmic nebula, 9:16 vertical, slow glide, high details."
+        js_code = _build_inject_prompt_js(prompt)
+        self.assertNotIn("{{", js_code, "JS não pode conter double braces de f-string")
+        self.assertNotIn("}}", js_code, "JS não pode conter double braces de f-string")
+        self.assertIn("Cosmic nebula", js_code)
+
+        syntax_res = verify_injection_js_syntax(cdp=None, prompt_text=prompt)
+        self.assertEqual(syntax_res["syntax"], "VALID")
+        self.assertIsNone(syntax_res["error"])
+
+    def test_arm_credits_unknown_blocks_arming(self):
+        """Créditos UNKNOWN devem resultar em SAFE_TO_GENERATE_ONCE = NO (Fail-Closed)."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state: Studio autenticado, mas créditos UNKNOWN
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "title": "Google Flow Studio",
+                "isAuthenticated": True,
+                "surface": FlowSurface.STUDIO,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.UNKNOWN,
+                "credits": None,
+            },
+            # inspect_credits_menu: não consegue encontrar contador
+            {"count": None, "status": CreditsStatus.UNKNOWN, "opened": False},
+            # find_generate_button: 1 botão único
+            {"found": True, "matchCount": 1, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": True, "ambiguous": False},
+            # verify_injection_js_syntax via CDP
+            {"valid": True, "error": None},
+            # capture_studio_baseline
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+        ]
+
+        res = run_arm(cdp_client=mock_cdp)
+        self.assertEqual(res["status"], "ARMED_BLOCKED")
+        self.assertFalse(res["safe_to_generate_once"])
+        self.assertEqual(res["credits_status"], CreditsStatus.UNKNOWN)
+        self.assertEqual(res["generation_attempts"], 0)
+        self.assertEqual(res["credits_consumed"], 0)
+        self.assertFalse(res["download_attempted"])
+
+    def test_arm_credits_zero_blocks_arming(self):
+        """Créditos ZERO devem resultar em SAFE_TO_GENERATE_ONCE = NO (Fail-Closed)."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state: Studio autenticado, créditos ZERO
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "title": "Google Flow Studio",
+                "isAuthenticated": True,
+                "surface": FlowSurface.STUDIO,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.ZERO,
+                "credits": 0,
+            },
+            # find_generate_button: 1 botão único
+            {"found": True, "matchCount": 1, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": True, "ambiguous": False},
+            # verify_injection_js_syntax via CDP
+            {"valid": True, "error": None},
+            # capture_studio_baseline
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+        ]
+
+        res = run_arm(cdp_client=mock_cdp)
+        self.assertEqual(res["status"], "ARMED_BLOCKED")
+        self.assertFalse(res["safe_to_generate_once"])
+        self.assertEqual(res["credits_status"], CreditsStatus.ZERO)
+        self.assertEqual(res["generation_attempts"], 0)
+
+    def test_arm_credits_available_passes_gate(self):
+        """Créditos AVAILABLE e todos os requisitos válidos resultam em SAFE_TO_GENERATE_ONCE = YES."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state: Studio autenticado com 915 créditos
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "title": "Google Flow Studio",
+                "isAuthenticated": True,
+                "surface": FlowSurface.STUDIO,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.AVAILABLE,
+                "credits": 915,
+            },
+            # find_generate_button: 1 botão único e visível
+            {"found": True, "matchCount": 1, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": True, "ambiguous": False},
+            # verify_injection_js_syntax via CDP
+            {"valid": True, "error": None},
+            # capture_studio_baseline
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+        ]
+
+        res = run_arm(cdp_client=mock_cdp)
+        self.assertEqual(res["status"], "ARMED_OK")
+        self.assertTrue(res["safe_to_generate_once"])
+        self.assertEqual(res["credits_status"], CreditsStatus.AVAILABLE)
+        self.assertEqual(res["credits_count"], 915)
+        self.assertTrue(res["generate_button_found"])
+        self.assertEqual(res["generate_button_match_count"], 1)
+        self.assertEqual(res["generate_button_aria"], "Iniciar geração")
+        self.assertEqual(res["generate_button_text"], "arrow_forward")
+        self.assertTrue(res["generate_button_disabled"])
+        self.assertEqual(res["injection_js_syntax"], "VALID")
+        self.assertTrue(res["baseline_capture_supported"])
+        self.assertTrue(res["download_dir_cleanable"])
+        self.assertEqual(res["generation_attempts"], 0)
+        self.assertEqual(res["credits_consumed"], 0)
+        self.assertFalse(res["download_attempted"])
+
+    def test_arm_multiple_generate_buttons_blocks_arming(self):
+        """Múltiplos botões de geração na interface devem bloquear o arming (ambiguidade)."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "title": "Google Flow Studio",
+                "isAuthenticated": True,
+                "surface": FlowSurface.STUDIO,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.AVAILABLE,
+                "credits": 915,
+            },
+            # find_generate_button: 2 botões encontrados (ambiguidade!)
+            {"found": True, "matchCount": 2, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": True, "ambiguous": True},
+            # verify_injection_js_syntax via CDP
+            {"valid": True, "error": None},
+            # capture_studio_baseline
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+        ]
+
+        res = run_arm(cdp_client=mock_cdp)
+        self.assertEqual(res["status"], "ARMED_BLOCKED")
+        self.assertFalse(res["safe_to_generate_once"])
+        self.assertEqual(res["generate_button_match_count"], 2)
+
+    def test_run_single_scene_fails_closed_on_unknown_credits(self):
+        """run_single_scene_poc falha fechado se créditos permanecerem UNKNOWN."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "title": "Google Flow Studio",
+                "isAuthenticated": True,
+                "surface": FlowSurface.STUDIO,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.UNKNOWN,
+                "credits": None,
+            },
+            # inspect_credits_menu falha em resolver
+            {"count": None, "status": CreditsStatus.UNKNOWN, "opened": False},
+        ]
+
+        res = run_single_scene_poc(
+            manifest_path=self.manifest_path,
+            scene_index=1,
+            cdp_client=mock_cdp,
+        )
+        self.assertEqual(res["status"], "BLOCKED_CREDITS_UNKNOWN")
+        self.assertEqual(res["credits_status"], CreditsStatus.UNKNOWN)
+
+    def test_run_single_scene_fails_closed_on_ambiguous_generate_buttons(self):
+        """run_single_scene_poc falha fechado se houver múltiplos botões de geração."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "title": "Google Flow Studio",
+                "isAuthenticated": True,
+                "surface": FlowSurface.STUDIO,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.AVAILABLE,
+                "credits": 50,
+            },
+            # find_generate_button retorna ambíguo
+            {"found": True, "matchCount": 2, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": False, "ambiguous": True},
+        ]
+
+        res = run_single_scene_poc(
+            manifest_path=self.manifest_path,
+            scene_index=1,
+            cdp_client=mock_cdp,
+        )
+        self.assertEqual(res["status"], "BLOCK_AMBIGUOUS_GENERATE_BUTTON")
+
+    def test_baseline_prevents_old_result_acceptance(self):
+        """Resultado antigo já existente no baseline NÃO deve ser aceito como nova geração."""
+        mock_cdp = MagicMock()
+        baseline = {
+            "videosCount": 1,
+            "videoSrcs": ["https://flow.google.com/media/existing_old_video.mp4"],
+            "downloadButtonsCount": 1,
+            "tilesCount": 1,
+            "tileIds": ["tile-0"],
+            "timestamp": 1000.0,
+            "supported": True,
+        }
+
+        # Simula que a página do Studio só tem o MESMO vídeo e mesmo tile pré-existente
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {"hasCaptcha": False, "isGenerating": False},
+            # js_check_ready: mesmos vídeos e tiles do baseline
+            {
+                "hasVideo": True,
+                "videos": ["https://flow.google.com/media/existing_old_video.mp4"],
+                "videosCount": 1,
+                "hasDownloadBtn": True,
+                "tilesCount": 1,
+                "tileIds": ["tile-0"],
+            },
+        ]
+
+        # Com timeout curto de 1s, deve estourar TimeoutError porque não há evidência NOVA
+        with self.assertRaises(TimeoutError):
+            wait_for_generation_and_download(
+                cdp=mock_cdp,
+                download_dir=self.clips_dir,
+                baseline=baseline,
+                start_marker=2000.0,
+                timeout_generation_sec=1,
+            )
+
+    def test_download_ignores_old_mp4_in_temp_dir(self):
+        """Um mp4 antigo com mtime anterior ao start_marker é estritamente ignorado."""
+        download_dir = os.path.join(self.test_dir, "temp_test_download")
+        os.makedirs(download_dir, exist_ok=True)
+
+        old_mp4 = os.path.join(download_dir, "old_file.mp4")
+        with open(old_mp4, "wb") as f:
+            f.write(b"old_clip_data")
+        # Define mtime antigo (1 hora atrás)
+        os.utime(old_mp4, (1000.0, 1000.0))
+
+        start_marker = 5000.0  # Muito posterior ao mtime do old_file
+
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {"hasCaptcha": False, "isGenerating": False},
+            # js_check_ready: novo vídeo detectado
+            {"hasVideo": True, "videos": ["https://new.mp4"], "videosCount": 1, "hasDownloadBtn": True, "tilesCount": 1, "tileIds": ["new-tile"]},
+            # js_trigger_dl: download clicado
+            {"clicked": True},
+        ]
+
+        # Com timeout curto de download, deve estourar TimeoutError pois o old_mp4 não é aceito
+        with self.assertRaises(TimeoutError):
+            wait_for_generation_and_download(
+                cdp=mock_cdp,
+                download_dir=download_dir,
+                baseline={"videosCount": 0, "videoSrcs": [], "tileIds": []},
+                start_marker=start_marker,
+                timeout_generation_sec=5,
+                timeout_download_sec=2,
+            )
+
+    def test_download_accepts_new_mp4_after_start_marker(self):
+        """Um mp4 novo com mtime posterior ao start_marker é selecionado com sucesso."""
+        download_dir = os.path.join(self.test_dir, "temp_test_download_valid")
+        os.makedirs(download_dir, exist_ok=True)
+
+        # Arquivo antigo (deve ser ignorado)
+        old_mp4 = os.path.join(download_dir, "stale_file.mp4")
+        with open(old_mp4, "wb") as f:
+            f.write(b"stale_data")
+        os.utime(old_mp4, (1000.0, 1000.0))
+
+        # Start marker definido no tempo presente
+        start_marker = 5000.0
+
+        # Arquivo novo (deve ser selecionado)
+        new_mp4 = os.path.join(download_dir, "fresh_flow_video.mp4")
+        with open(new_mp4, "wb") as f:
+            f.write(b"fresh_video_data")
+        os.utime(new_mp4, (5005.0, 5005.0))
+
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            {"hasCaptcha": False, "isGenerating": False},
+            {"hasVideo": True, "videos": ["https://new.mp4"], "videosCount": 1, "hasDownloadBtn": True, "tilesCount": 1, "tileIds": ["new-tile"]},
+            {"clicked": True},
+        ]
+
+        res_file = wait_for_generation_and_download(
+            cdp=mock_cdp,
+            download_dir=download_dir,
+            baseline={"videosCount": 0, "videoSrcs": [], "tileIds": []},
+            start_marker=start_marker,
+            timeout_generation_sec=5,
+            timeout_download_sec=5,
+        )
+
+        self.assertEqual(res_file, new_mp4)
+
 
 
 if __name__ == "__main__":

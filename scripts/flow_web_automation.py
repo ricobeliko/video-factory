@@ -1338,9 +1338,17 @@ def click_generate_once(cdp: CDPConnection) -> Dict[str, Any]:
         return {"success": False, "clicked": False, "error": "GENERATION_IN_PROGRESS"}
 
     # 2. Revalidação de créditos
-    credits_status = state.get("creditsStatus")
+    credits_status = state.get("creditsStatus", CreditsStatus.UNKNOWN)
+    if credits_status == CreditsStatus.UNKNOWN:
+        cred_info = inspect_credits_menu(cdp)
+        credits_status = cred_info.get("creditsStatus", CreditsStatus.UNKNOWN)
+
     if credits_status != CreditsStatus.AVAILABLE:
-        return {"success": False, "clicked": False, "error": "NO_CREDITS_AVAILABLE"}
+        return {
+            "success": False,
+            "clicked": False,
+            "error": "NO_CREDITS_AVAILABLE" if credits_status == CreditsStatus.ZERO else "BLOCKED_CREDITS_UNKNOWN",
+        }
 
     # 3. Revalidação do botão Generate
     btn_info = find_generate_button(cdp)
@@ -1866,7 +1874,21 @@ def run_single_scene_poc(
         # 5. Configurar diretório temporário para download e limpar artefatos anteriores
         temp_download_dir = os.path.join(project_dir, "temp_downloads")
         os.makedirs(temp_download_dir, exist_ok=True)
-        clean_download_dir(temp_download_dir)
+        if not clean_download_dir(temp_download_dir):
+            logger.error(f"FAIL-CLOSED: Falha ao limpar diretório de download temporário: {temp_download_dir}")
+            return {
+                "status": "BLOCKED_DOWNLOAD_DIR_NOT_CLEAN",
+                "scene_index": scene_index,
+                "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
+                "captcha_status": "NONE",
+                "credits_status": credits_status,
+                "prompt_fill_attempts": 0,
+                "generation_click_attempted": False,
+                "generation_click_confirmed": False,
+                "generation_attempts": 0,
+                "error": "Diretório temporário de download não pôde ser limpo com segurança.",
+            }
         cdp.set_download_path(temp_download_dir)
 
         # 6. Preencher prompt no editor e validar handshake

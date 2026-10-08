@@ -906,6 +906,105 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertTrue(click_res["generation_click_attempted"])
         self.assertTrue(click_res["generation_click_confirmed"])
 
+    @patch("scripts.flow_web_automation.inspect_credits_menu")
+    def test_click_generate_once_revalidates_credits_unknown_to_available(self, mock_inspect_menu):
+        """click_generate_once: DOM credits UNKNOWN + inspect menu AVAILABLE -> prossegue e clica com sucesso."""
+        mock_inspect_menu.return_value = {"creditsStatus": CreditsStatus.AVAILABLE, "count": 915}
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state (creditsStatus UNKNOWN)
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "surface": FlowSurface.STUDIO,
+                "isAuthenticated": True,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.UNKNOWN,
+            },
+            # find_generate_button
+            {"found": True, "matchCount": 1, "disabled": False, "ambiguous": False},
+            # capture_studio_baseline
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+            # js_click
+            {"clicked": True},
+        ]
+
+        click_res = click_generate_once(mock_cdp)
+        self.assertTrue(click_res["success"])
+        self.assertTrue(click_res["clicked"])
+        self.assertEqual(click_res["generation_attempts"], 1)
+        mock_inspect_menu.assert_called_once_with(mock_cdp)
+
+    @patch("scripts.flow_web_automation.inspect_credits_menu")
+    def test_click_generate_once_blocks_on_unknown_credits_after_inspect(self, mock_inspect_menu):
+        """click_generate_once: UNKNOWN + inspect UNKNOWN -> bloqueia fail-closed."""
+        mock_inspect_menu.return_value = {"creditsStatus": CreditsStatus.UNKNOWN, "count": None}
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/project/test-uuid",
+            "surface": FlowSurface.STUDIO,
+            "isAuthenticated": True,
+            "hasCaptcha": False,
+            "isGenerating": False,
+            "creditsStatus": CreditsStatus.UNKNOWN,
+        }
+
+        click_res = click_generate_once(mock_cdp)
+        self.assertFalse(click_res["success"])
+        self.assertFalse(click_res["clicked"])
+        self.assertEqual(click_res["error"], "BLOCKED_CREDITS_UNKNOWN")
+        mock_inspect_menu.assert_called_once_with(mock_cdp)
+
+    def test_click_generate_once_blocks_on_zero_credits(self):
+        """click_generate_once: ZERO créditos -> bloqueia fail-closed."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/project/test-uuid",
+            "surface": FlowSurface.STUDIO,
+            "isAuthenticated": True,
+            "hasCaptcha": False,
+            "isGenerating": False,
+            "creditsStatus": CreditsStatus.ZERO,
+        }
+
+        click_res = click_generate_once(mock_cdp)
+        self.assertFalse(click_res["success"])
+        self.assertFalse(click_res["clicked"])
+        self.assertEqual(click_res["error"], "NO_CREDITS_AVAILABLE")
+
+    @patch("scripts.flow_web_automation.clean_download_dir")
+    def test_run_single_scene_blocks_when_clean_download_dir_fails(self, mock_clean_dir):
+        """run_single_scene_poc: clean_download_dir retorna False -> fail-closed sem clicar geração."""
+        mock_clean_dir.return_value = False
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state (STUDIO, autenticado, créditos AVAILABLE)
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "surface": FlowSurface.STUDIO,
+                "isAuthenticated": True,
+                "hasPromptInput": True,
+                "promptInputsCount": 1,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.AVAILABLE,
+                "credits": 915,
+            },
+            # find_generate_button
+            {"found": True, "matchCount": 1, "disabled": False, "ambiguous": False},
+        ]
+
+        res = run_single_scene_poc(
+            manifest_path=self.manifest_path,
+            scene_index=1,
+            cdp_client=mock_cdp,
+        )
+
+        self.assertEqual(res["status"], "BLOCKED_DOWNLOAD_DIR_NOT_CLEAN")
+        self.assertEqual(res["generation_attempts"], 0)
+        self.assertFalse(res["generation_click_attempted"])
+        self.assertFalse(res["generation_click_confirmed"])
+
 
 if __name__ == "__main__":
     unittest.main()

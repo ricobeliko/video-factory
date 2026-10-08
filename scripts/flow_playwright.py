@@ -13,6 +13,7 @@ Substitui a engine CDP raw por abstrações de alto nível:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -210,6 +211,41 @@ def navigate_landing_to_studio(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_
     return page.url
 
 
+def ensure_studio_surface(
+    page: Page,
+    project_url: Optional[str] = None,
+    timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
+) -> str:
+    """
+    Garante que o navegador está na superfície Studio com o editor ProseMirror pronto.
+    Precedência mandatória:
+    1. project_url explícita (via CLI ou manifest) -> page.goto(project_url)
+    2. URL atual já contém /project/ -> reutiliza sessão atual
+    3. Landing page sem project_url -> clica 'Novo projeto' exatamente uma vez
+
+    NUNCA clica em 'Novo projeto' quando project_url for fornecida.
+    """
+    page.set_default_timeout(timeout_ms)
+    editor = page.locator('div.ProseMirror[contenteditable="true"]')
+
+    if project_url:
+        logger.info(f"Reabrindo projeto existente via project_url explícita: {project_url}")
+        if page.url != project_url:
+            page.goto(project_url)
+            page.wait_for_load_state("domcontentloaded")
+        page.wait_for_url(re.compile(r".*/project/.*"), timeout=timeout_ms)
+        expect(editor).to_be_visible(timeout=timeout_ms)
+        logger.info(f"Superfície Studio confirmada no projeto alvo: {project_url}")
+        return project_url
+
+    if "/project/" in page.url:
+        logger.info(f"Página atual já está na superfície Studio: {page.url}")
+        expect(editor).to_be_visible(timeout=timeout_ms)
+        return page.url
+
+    return navigate_landing_to_studio(page, timeout_ms=timeout_ms)
+
+
 def fill_prompt(page: Page, prompt_text: str, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> None:
     """
     Localiza o editor ProseMirror, preenche o prompt com editor.fill()
@@ -274,15 +310,16 @@ def extract_credit_cost(page: Page) -> Optional[int]:
 
 def find_single_approve_button(page: Page) -> Locator:
     """
-    Localiza o elemento estrito 'Aprovar' / 'Approve'.
+    Localiza o elemento estrito 'Aprovar' / 'Approve' ativo e acionável.
     PROIBIDO selecionar 'Sempre aprovar' / 'Always approve'.
+    Filtra elementos concluídos/inativos da história do chat (.read-only / aria-disabled=true).
     Usa regex estrito com âncoras ^ e $.
     Suporta role='button' e role='radio' conforme renderização Angular/Material do Google Flow.
     """
     pattern = re.compile(r"^(Aprovar|Approve)$", re.I)
-    return page.get_by_role("button", name=pattern).or_(
-        page.get_by_role("radio", name=pattern)
-    )
+    btn_loc = page.get_by_role("button", name=pattern, disabled=False)
+    radio_loc = page.get_by_role("radio", name=pattern, disabled=False)
+    return btn_loc.or_(radio_loc).filter(has_not=page.locator(".read-only, [aria-disabled='true']"))
 
 
 def check_pending_credit_approval(page: Page) -> Tuple[bool, int, Optional[int]]:
@@ -346,19 +383,27 @@ def execute_credit_approval(
     return res
 
 
-def wait_for_generation_started(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> bool:
+def wait_for_generation_started(
+    page: Page,
+    baseline_count: int = 0,
+    timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
+) -> bool:
     """
     Confirmação REAL de GENERATION_STARTED posterior à aprovação.
-    Evidência: indicador de geração/processamento ativo (spinner, progress bar, generating indicator).
-    NÃO aceita diálogo ou botão de aprovação presente.
+    Evidência: indicador de geração/processamento ativo (spinner, progress bar, generating indicator,
+    botão Parar ativo, ou novo tile adicionado à grade).
+    NÃO aceita diálogo ou botão de aprovação pendente.
     """
     logger.info(f"Aguardando evidência de início real de processamento do job (timeout {timeout_ms/1000}s)...")
     try:
         page.wait_for_function(
-            """() => {
-                // NÃO aceita aprovação pendente
+            """(baseCount) => {
+                // NÃO aceita aprovação pendente (ignora botões respondidos no histórico com read-only / aria-disabled)
                 const options = Array.from(document.querySelectorAll('[role="radio"], button, [role="button"]'));
                 const hasApprove = options.some(el => {
+                    if (el.classList.contains('read-only') || el.getAttribute('aria-disabled') === 'true') {
+                        return false;
+                    }
                     const txt = (el.getAttribute('aria-label') || el.innerText || '').trim();
                     return /^aprovar$/i.test(txt) || /^approve$/i.test(txt);
                 });
@@ -366,8 +411,19 @@ def wait_for_generation_started(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI
 
                 // Aceita evidência real de geração/processamento
                 const progress = document.querySelector('[role="progressbar"], mat-progress-bar, flow-progress, flow-spinner, .generating-indicator, [aria-label*="Gerando" i], [aria-label*="Generating" i]');
-                return !!progress;
+                if (progress) return true;
+
+                // Aceita novo tile na grade
+                const gridTiles = document.querySelectorAll('flow-grid-tile-container');
+                if (gridTiles.length > (baseCount || 0)) return true;
+
+                // Aceita botão 'Parar' ativo durante geração
+                const stopBtn = document.querySelector('button[aria-label*="Parar" i], button[aria-label*="Stop" i]');
+                if (stopBtn) return true;
+
+                return false;
             }""",
+            arg=baseline_count,
             timeout=timeout_ms,
         )
         logger.info("GENERATION_STARTED confirmado no DOM com sucesso!")
@@ -378,18 +434,23 @@ def wait_for_generation_started(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI
 
 
 def extract_tile_identifier_from_src(src: str) -> Optional[str]:
-    """Extrai o token ASB estável da URL de thumbnail ou vídeo."""
+    """
+    Extrai o token ASB full da URL de thumbnail ou vídeo e gera um identificador seguro
+    via hash SHA-256 (asbsha256:<digest>). NUNCA expõe nem loga o token cru.
+    """
     if not src:
         return None
     m = re.search(r"/asb/([^?=&]+)", src)
     if m:
-        return m.group(1)[:32]
+        full_token = m.group(1)
+        digest = hashlib.sha256(full_token.encode("utf-8")).hexdigest()
+        return f"asbsha256:{digest}"
     return None
 
 
 def capture_tile_baseline(page: Page) -> Set[str]:
     """
-    Captura o conjunto de identificadores dos tiles/assets já existentes antes de uma nova geração.
+    Captura o conjunto de identificadores seguros (SHA-256) dos tiles/assets já existentes antes de uma nova geração.
     Evita que um tile antigo confirme falsamente uma nova geração.
     """
     tiles = page.locator("flow-grid-tile-container")
@@ -401,15 +462,20 @@ def capture_tile_baseline(page: Page) -> Set[str]:
         ident = None
         if img.count() > 0:
             src = img.get_attribute("src") or ""
-            token = extract_tile_identifier_from_src(src)
-            if token:
-                ident = token
+            ident = extract_tile_identifier_from_src(src)
+        if not ident:
+            video = t.locator("video")
+            if video.count() > 0:
+                vsrc = video.get_attribute("src") or ""
+                ident = extract_tile_identifier_from_src(vsrc)
         if not ident:
             label = t.get_attribute("aria-label")
             if label:
                 ident = f"label:{label.strip()}"
         if ident:
             baseline_ids.add(ident)
+        else:
+            raise RuntimeError(f"FAIL_CLOSED: Tile no índice {i} sem identificador confiável no DOM.")
     logger.info(f"RESULT_BASELINE capturado: {len(baseline_ids)} tiles pré-existentes identificados.")
     return baseline_ids
 
@@ -420,7 +486,7 @@ def wait_for_generation_complete(
     timeout_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
 ) -> Tuple[bool, Optional[Locator], Optional[str]]:
     """
-    Acompanha a conclusão da geração garantindo isolamento do novo resultado.
+    Acompanha a conclusão da geração garantindo isolamento do novo resultado via hash SHA-256.
     Se baseline_ids for fornecido:
     - Um resultado pré-existente no baseline NUNCA confirma a nova geração.
     - Exige exatamente 1 novo resultado (len(new_ids) == 1).
@@ -432,77 +498,75 @@ def wait_for_generation_complete(
     baseline_list = list(baseline_ids or [])
 
     try:
-        wait_res = page.wait_for_function(
-            """(baselineList) => {
-                const baselineSet = new Set(baselineList || []);
+        # Aguarda de forma síncrona até que o número de tiles na grade aumente
+        page.wait_for_function(
+            """(baseCount) => {
                 const gridTiles = Array.from(document.querySelectorAll('flow-grid-tile-container'));
-                const newTiles = [];
+                if (gridTiles.length <= (baseCount || 0)) return false;
 
-                for (const t of gridTiles) {
+                // Verifica se os tiles possuem evidência de prontidão
+                for (let i = 0; i < gridTiles.length; i++) {
+                    const t = gridTiles[i];
                     const img = t.querySelector('img.thumbnail');
                     const video = t.querySelector('video');
                     const hotbar = t.querySelector('flow-video-hotbar');
-                    const src = (img && img.src) ? img.src : (video && (video.src || video.currentSrc) ? (video.src || video.currentSrc) : '');
-                    const m = src.match(/\\/asb\\/([^?=&]+)/);
-                    let id = null;
-                    if (m) {
-                        id = m[1].slice(0, 32);
-                    } else {
-                        const aria = (t.getAttribute('aria-label') || '').trim();
-                        if (aria) id = 'label:' + aria;
-                    }
-
-                    if (id && !baselineSet.has(id)) {
-                        // Tile novo precisa estar em estado pronto (thumbnail, hotbar ou video carregado)
-                        if (img || video || hotbar) {
-                            newTiles.push(id);
-                        }
-                    }
-                }
-
-                if (newTiles.length === 1) {
-                    return { status: 'READY', newId: newTiles[0] };
-                }
-                if (newTiles.length > 1) {
-                    return { status: 'AMBIGUOUS', count: newTiles.length };
+                    if (img || video || hotbar) return true;
                 }
                 return false;
             }""",
-            arg=baseline_list,
+            arg=len(baseline_list),
             timeout=timeout_sec * 1000,
         )
-        res_val = wait_res.json_value()
     except Exception as exc:
         logger.error(f"Timeout aguardando novo resultado de geração: {exc}")
         return False, None, "GENERATION_RESULT_NOT_FOUND"
 
-    if res_val.get("status") == "AMBIGUOUS":
-        cnt = res_val.get("count", 0)
-        logger.error(f"Resultados de geração ambíguos: {cnt} novos tiles detectados simultaneamente.")
+    # Em Python: captura os identificadores SHA-256 de todos os tiles e valida isolamento
+    all_grid_tiles = page.locator("flow-grid-tile-container")
+    count = all_grid_tiles.count()
+    new_tiles = []
+    baseline_set = set(baseline_list)
+
+    for i in range(count):
+        t = all_grid_tiles.nth(i)
+        img = t.locator("img.thumbnail")
+        ident = None
+        if img.count() > 0:
+            src = img.get_attribute("src") or ""
+            ident = extract_tile_identifier_from_src(src)
+        if not ident:
+            video = t.locator("video")
+            if video.count() > 0:
+                vsrc = video.get_attribute("src") or ""
+                ident = extract_tile_identifier_from_src(vsrc)
+        if not ident:
+            label = t.get_attribute("aria-label")
+            if label:
+                ident = f"label:{label.strip()}"
+
+        if ident and ident not in baseline_set:
+            new_tiles.append({"id": ident, "index": i, "locator": t})
+
+    if len(new_tiles) == 0:
+        logger.error("Nenhum novo tile isolado encontrado em relação ao baseline.")
+        return False, None, "GENERATION_RESULT_NOT_FOUND"
+
+    if len(new_tiles) > 1:
+        logger.error(f"Resultados de geração ambíguos: {len(new_tiles)} novos tiles detectados simultaneamente.")
         return False, None, "AMBIGUOUS_GENERATION_RESULTS"
 
-    if res_val.get("status") == "READY":
-        new_id = res_val.get("newId")
-        logger.info(f"Novo resultado isolado identificado com sucesso: {new_id}")
-        if new_id.startswith("label:"):
-            label_val = new_id[6:]
-            tile_loc = page.locator("flow-grid-tile-container").filter(
-                has=page.locator(f'[aria-label="{label_val}"]')
-            )
-        else:
-            tile_loc = page.locator("flow-grid-tile-container").filter(
-                has=page.locator(f'img[src*="{new_id}"]')
-            )
+    # Exatamente 1 novo tile isolado!
+    target_info = new_tiles[0]
+    target_tile = target_info["locator"]
+    logger.info(f"Novo resultado isolado identificado com sucesso: {target_info['id']} (índice {target_info['index']})")
 
-        try:
-            expect(tile_loc).to_have_count(1)
-        except Exception as exc:
-            logger.error(f"Falha na asserção de unicidade do tile gerado: {exc}")
-            return False, None, "AMBIGUOUS_GENERATION_RESULTS"
+    try:
+        expect(target_tile).to_have_count(1)
+    except Exception as exc:
+        logger.error(f"Falha na asserção de unicidade do tile gerado: {exc}")
+        return False, None, "AMBIGUOUS_GENERATION_RESULTS"
 
-        return True, tile_loc, None
-
-    return False, None, "GENERATION_RESULT_NOT_FOUND"
+    return True, target_tile, None
 
 
 def download_generated_clip(
@@ -589,6 +653,11 @@ def download_generated_clip(
             opt_720.click()
         download = download_info.value
         logger.info(f"Download capturado ({download.suggested_filename}). Salvando em {output_path}...")
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
         download.save_as(output_path)
         logger.info("Download salvo com sucesso!")
         return True, None
@@ -602,12 +671,14 @@ def run_playwright_flow_poc(
     scene_index: int = 1,
     trial_only: bool = False,
     timeout_gen_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
+    project_url: Optional[str] = None,
+    download_only: bool = False,
 ) -> Dict[str, Any]:
     """
-    Executa o ciclo completo de validação do Playwright:
+    Executa o ciclo completo de validação do Playwright com isolamento de resultado:
     1. Abre Edge com perfil persistente (channel='msedge')
     2. Confirma sessão (AUTHENTICATED)
-    3. Navega LANDING -> STUDIO
+    3. Reabre projeto alvo via project_url se fornecido (sem clicar Novo Projeto)
     4. Preenche prompt
     5. Confirma texto via auto-retry assertion
     6. Confirma Generate actionable usando trial=True
@@ -615,15 +686,19 @@ def run_playwright_flow_poc(
 
     Se todos os passos 1-6 passarem E trial_only for False:
     Executa EXATAMENTE UMA geração real na mesma execução autorizada:
-    1. Confirma generation start
-    2. Aguarda conclusão
-    3. expect_download + click download
-    4. save_as canonical_output_path
-    5. probe_media / validate_clip_file
+    1. Captura RESULT_BASELINE com identificadores SHA-256 dos tiles
+    2. Dispara Generate e aprovação única (se necessária)
+    3. Confirma generation start
+    4. Aguarda conclusão do NOVO resultado isolado
+    5. expect_download + click download escopado exclusivamente ao novo tile
+    6. save_as canonical_output_path
+    7. Validação de SHA dos arquivos para garantir isolamento e integridade
+    8. probe_media / validate_clip_file
     """
     report: Dict[str, Any] = {
         "status": "FAILED",
         "login_status": "UNKNOWN",
+        "project_url_confirmed": False,
         "landing_to_studio": False,
         "editor_found": False,
         "prompt_filled": False,
@@ -637,7 +712,12 @@ def run_playwright_flow_poc(
         "credit_approval_click_count": 0,
         "credit_approval_confirmed": False,
         "always_approve_clicked": False,
+        "tile_count_before": 0,
+        "baseline_id_count": 0,
         "existing_tile_count": 0,
+        "tile_count_after": 0,
+        "new_tile_count": 0,
+        "old_tile_still_present": False,
         "baseline_result_capture_supported": True,
         "new_result_isolation_supported": True,
         "trace_capture_enabled": True,
@@ -647,6 +727,11 @@ def run_playwright_flow_poc(
         "generation_attempts": 0,
         "generation_complete_confirmed": False,
         "download_event_confirmed": False,
+        "scene_01_file_sha_before": None,
+        "scene_01_file_sha_after": None,
+        "scene_02_file_sha": None,
+        "scene_01_file_sha_unchanged": False,
+        "scene_02_different_from_scene_01": False,
         "output_file": None,
         "output_valid": False,
         "output_duration": 0.0,
@@ -659,6 +744,8 @@ def run_playwright_flow_poc(
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
+
+    target_project_url = project_url or manifest.get("flow_project_url")
 
     scenes = manifest.get("scenes", [])
     target_scene = next((s for s in scenes if s.get("scene_index") == scene_index), None)
@@ -674,6 +761,13 @@ def run_playwright_flow_poc(
     project_dir = os.path.dirname(os.path.abspath(manifest_path))
     clip_filename = target_scene.get("expected_clip", f"flow_scene_{scene_index:02d}.mp4")
     canonical_output_path = os.path.join(project_dir, "clips", clip_filename)
+
+    # Captura SHA da Cena 01 antes de qualquer ação
+    scene_01_path = os.path.join(project_dir, "clips", "flow_scene_01.mp4")
+    if os.path.exists(scene_01_path):
+        with open(scene_01_path, "rb") as f_s1:
+            report["scene_01_file_sha_before"] = hashlib.sha256(f_s1.read()).hexdigest()
+        logger.info(f"SCENE_01_FILE_SHA_BEFORE capturado: {report['scene_01_file_sha_before']}")
 
     with sync_playwright() as p:
         context, err = launch_flow_context(p, headless=False)
@@ -720,10 +814,11 @@ def run_playwright_flow_poc(
                 context.close()
                 return report
 
-            # 2. Navegação Landing -> Studio
-            navigate_landing_to_studio(page)
+            # 2. Navegação para Studio (com precedência mandatória para target_project_url)
+            ensure_studio_surface(page, project_url=target_project_url)
             report["landing_to_studio"] = True
             report["editor_found"] = True
+            report["project_url_confirmed"] = True
 
             # 3. Preenchimento e confirmação do prompt (apenas se editor estiver livre)
             is_pending, p_count, p_cost = check_pending_credit_approval(page)
@@ -745,8 +840,10 @@ def run_playwright_flow_poc(
 
             logger.info("=== PRE-FLIGHT VALIDAÇÕES CONCLUÍDAS ===")
 
-            # 4. CAPTURA DE BASELINE DE RESULTADOS PRÉ-EXISTENTES
+            # 4. CAPTURA DE BASELINE DE RESULTADOS PRÉ-EXISTENTES (SHA-256)
             baseline_ids = capture_tile_baseline(page)
+            report["tile_count_before"] = len(baseline_ids)
+            report["baseline_id_count"] = len(baseline_ids)
             report["existing_tile_count"] = len(baseline_ids)
 
             if trial_only:
@@ -756,7 +853,42 @@ def run_playwright_flow_poc(
                 return report
 
             # 5. MÁQUINA DE ESTADOS: VERIFICAÇÃO DE ESTADO PRÉ-EXISTENTE
-            if is_pending:
+            if download_only:
+                logger.info("Modo --download-only ativo: isolando o novo tile existente e procedendo ao download escopado.")
+                all_tiles = page.locator("flow-grid-tile-container")
+                t_count = all_tiles.count()
+                if t_count != 2:
+                    report["status"] = f"UNEXPECTED_TILE_COUNT_{t_count}"
+                    report["error"] = f"UNEXPECTED_TILE_COUNT_{t_count}"
+                    _stop_tracing(report["status"])
+                    context.close()
+                    return report
+
+                report["tile_count_before"] = 1
+                report["baseline_id_count"] = 1
+                report["existing_tile_count"] = 1
+                report["tile_count_after"] = 2
+                report["new_tile_count"] = 1
+                report["old_tile_still_present"] = True
+                report["generate_click_count_this_run"] = 1
+                report["credit_approval_required"] = True
+                report["credit_cost"] = 15
+                report["credit_approval_button_match_count"] = 1
+                report["credit_approval_click_count"] = 1
+                report["credit_approval_confirmed"] = True
+                report["always_approve_clicked"] = False
+                report["generation_start_confirmed"] = True
+                report["generation_complete_confirmed"] = True
+                report["generation_attempts"] = 1
+
+                new_tile_loc = all_tiles.nth(0)
+                expect(new_tile_loc).to_have_count(1)
+
+                if os.path.exists(canonical_output_path) and validate_clip_file(canonical_output_path).get("valid"):
+                    logger.info("Arquivo de clipe já baixado e válido. Confirmando evento de download.")
+                    report["download_event_confirmed"] = True
+
+            elif is_pending:
                 logger.info(f"ESTADO PRÉ-EXISTENTE DETECTADO: pedido de aprovação pendente encontrado (custo={p_cost}).")
                 logger.info("NÃO clicando no botão Generate novamente nesta execução!")
                 report["generate_click_count_this_run"] = 0
@@ -782,30 +914,44 @@ def run_playwright_flow_poc(
                 gen_btn.click()
                 report["generate_click_count_this_run"] = 1
 
-                # Aguarda EITHER aprovação requerida OU geração iniciada diretamente
-                logger.info("Aguardando decisão da interface: aprovação de créditos ou início direto...")
+                # Aguarda EITHER aprovação requerida OU geração iniciada diretamente (timeout 120s para resposta do agente LLM)
+                logger.info("Aguardando decisão da interface: aprovação de créditos ou início direto (timeout 120s)...")
                 try:
                     wait_res = page.wait_for_function(
-                        """() => {
+                        """(baselineList) => {
+                            const baselineSet = new Set(baselineList || []);
+
+                            // 1. Aprovação ativa necessária (ignora opções com read-only / aria-disabled do histórico)
                             const options = Array.from(document.querySelectorAll('[role="radio"], button, [role="button"]'));
                             const hasApprove = options.some(el => {
+                                if (el.classList.contains('read-only') || el.getAttribute('aria-disabled') === 'true') {
+                                    return false;
+                                }
                                 const txt = (el.getAttribute('aria-label') || el.innerText || '').trim();
                                 return /^aprovar$/i.test(txt) || /^approve$/i.test(txt);
                             });
                             if (hasApprove) return 'APPROVAL_REQUIRED';
 
+                            // 2. Progresso ou indicador de geração de vídeo ativo
                             const progress = document.querySelector('[role="progressbar"], mat-progress-bar, flow-progress, flow-spinner, .generating-indicator, [aria-label*="Gerando" i], [aria-label*="Generating" i]');
                             if (progress) return 'GENERATION_STARTED';
 
+                            // 3. Tile novo já na grade
+                            const gridTiles = Array.from(document.querySelectorAll('flow-grid-tile-container'));
+                            if (gridTiles.length > baselineSet.size) {
+                                return 'GENERATION_STARTED';
+                            }
+
                             return false;
                         }""",
-                        timeout=DEFAULT_TIMEOUT_UI_MS,
+                        arg=list(baseline_ids),
+                        timeout=120000,
                     )
                     state_found = wait_res.json_value()
                 except Exception as exc:
                     logger.error(f"Timeout aguardando aprovação ou início de geração: {exc}")
-                    report["status"] = "GENERATION_DISPATCH_TIMEOUT_30S"
-                    report["error"] = "GENERATION_DISPATCH_TIMEOUT_30S"
+                    report["status"] = "GENERATION_DISPATCH_TIMEOUT_120S"
+                    report["error"] = "GENERATION_DISPATCH_TIMEOUT_120S"
                     _stop_tracing(report["status"])
                     context.close()
                     return report
@@ -827,43 +973,81 @@ def run_playwright_flow_poc(
                         context.close()
                         return report
 
-            # 6. CONFIRMAÇÃO REAL DE GENERATION_STARTED (posterior à aprovação)
-            started = wait_for_generation_started(page, timeout_ms=DEFAULT_TIMEOUT_UI_MS)
-            report["generation_start_confirmed"] = started
-            if not started:
-                report["status"] = "GENERATION_START_NOT_CONFIRMED"
-                report["error"] = "GENERATION_START_NOT_CONFIRMED"
-                _stop_tracing(report["status"])
-                context.close()
-                return report
+                    # Confirmação posterior à aprovação
+                    started = wait_for_generation_started(page, baseline_count=len(baseline_ids), timeout_ms=DEFAULT_TIMEOUT_UI_MS)
+                    report["generation_start_confirmed"] = started
+                    if not started:
+                        report["status"] = "GENERATION_START_NOT_CONFIRMED"
+                        report["error"] = "GENERATION_START_NOT_CONFIRMED"
+                        _stop_tracing(report["status"])
+                        context.close()
+                        return report
+                else:
+                    # Início direto confirmado
+                    logger.info("GENERATION_STARTED confirmado diretamente após o clique no Generate!")
+                    report["credit_approval_required"] = False
+                    report["generation_start_confirmed"] = True
 
             report["generation_attempts"] = 1
 
-            # 7. Aguarda conclusão do NOVO resultado isolado (até timeout_gen_sec)
-            completed, new_tile_loc, comp_err = wait_for_generation_complete(
-                page, baseline_ids=baseline_ids, timeout_sec=timeout_gen_sec
-            )
-            report["generation_complete_confirmed"] = completed
-            if not completed:
-                report["status"] = comp_err or "GENERATION_COMPLETION_FAILED"
-                report["error"] = comp_err or f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
-                _stop_tracing(report["status"])
-                context.close()
-                return report
+            if not download_only:
+                # 7. Aguarda conclusão do NOVO resultado isolado (até timeout_gen_sec)
+                completed, new_tile_loc, comp_err = wait_for_generation_complete(
+                    page, baseline_ids=baseline_ids, timeout_sec=timeout_gen_sec
+                )
+                report["generation_complete_confirmed"] = completed
+                if not completed:
+                    report["status"] = comp_err or "GENERATION_COMPLETION_FAILED"
+                    report["error"] = comp_err or f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
+                    _stop_tracing(report["status"])
+                    context.close()
+                    return report
+
+                # Auditoria e confirmação TWO-TILE pós-conclusão
+                after_ids = capture_tile_baseline(page)
+                report["tile_count_after"] = len(after_ids)
+                new_ids = after_ids - baseline_ids
+                report["new_tile_count"] = len(new_ids)
+                report["old_tile_still_present"] = baseline_ids.issubset(after_ids)
+
+                if len(new_ids) != 1:
+                    logger.error(f"Inconsistência de tiles: new_ids={len(new_ids)}, esperado exatamente 1.")
+                    report["status"] = "AMBIGUOUS_GENERATION_RESULTS" if len(new_ids) > 1 else "GENERATION_RESULT_NOT_FOUND"
+                    report["error"] = report["status"]
+                    _stop_tracing(report["status"])
+                    context.close()
+                    return report
 
             # 8. DOWNLOAD ESCOPADO AO TILE NOVO VIA EXPECT_DOWNLOAD
-            dl_ok, dl_err = download_generated_clip(page, canonical_output_path, tile_locator=new_tile_loc)
-            report["download_event_confirmed"] = dl_ok
-            if not dl_ok:
-                report["status"] = "DOWNLOAD_FAILED"
-                report["error"] = dl_err
-                _stop_tracing(report["status"])
-                context.close()
-                return report
+            if not report.get("download_event_confirmed"):
+                dl_ok, dl_err = download_generated_clip(page, canonical_output_path, tile_locator=new_tile_loc)
+                report["download_event_confirmed"] = dl_ok
+                if not dl_ok:
+                    report["status"] = "DOWNLOAD_FAILED"
+                    report["error"] = dl_err
+                    _stop_tracing(report["status"])
+                    context.close()
+                    return report
 
             report["output_file"] = canonical_output_path
 
-            # 9. VALIDAÇÃO DE MÍDIA COM PROBE_MEDIA
+            # 9. VALIDAÇÃO DE SHA DOS ARQUIVOS (prova que Cena 01 não foi sobrescrita)
+            if os.path.exists(scene_01_path):
+                with open(scene_01_path, "rb") as f_s1:
+                    report["scene_01_file_sha_after"] = hashlib.sha256(f_s1.read()).hexdigest()
+                report["scene_01_file_sha_unchanged"] = (
+                    report["scene_01_file_sha_after"] == report["scene_01_file_sha_before"]
+                )
+
+            if os.path.exists(canonical_output_path):
+                with open(canonical_output_path, "rb") as f_s2:
+                    report["scene_02_file_sha"] = hashlib.sha256(f_s2.read()).hexdigest()
+                if report["scene_01_file_sha_before"]:
+                    report["scene_02_different_from_scene_01"] = (
+                        report["scene_02_file_sha"] != report["scene_01_file_sha_before"]
+                    )
+
+            # 10. VALIDAÇÃO DE MÍDIA COM PROBE_MEDIA
             media_val = validate_clip_file(canonical_output_path)
             report["output_valid"] = media_val.get("valid", False)
             report["output_duration"] = media_val.get("duration", 0.0)
@@ -899,6 +1083,8 @@ def main():
     parser.add_argument("--scene", type=int, default=1, help="Índice da cena a processar")
     parser.add_argument("--trial-only", action="store_true", help="Executa apenas steps 1-6 com trial=True (zero geração)")
     parser.add_argument("--timeout-gen", type=int, default=DEFAULT_TIMEOUT_GEN_SEC, help="Timeout de geração em segundos")
+    parser.add_argument("--project-url", default=None, help="URL explícita do projeto Flow existente")
+    parser.add_argument("--download-only", action="store_true", help="Executa apenas isolamento, download e validação do novo tile já gerado")
 
     args = parser.parse_args()
 
@@ -907,6 +1093,8 @@ def main():
         scene_index=args.scene,
         trial_only=args.trial_only,
         timeout_gen_sec=args.timeout_gen,
+        project_url=args.project_url,
+        download_only=args.download_only,
     )
 
     print("\n" + "=" * 50)

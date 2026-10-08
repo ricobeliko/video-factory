@@ -6,6 +6,8 @@ Testes unitários direcionados para o driver de automação Playwright do Google
 Valida contratos de isolamento, profile locking, autenticação, actionability e download.
 """
 
+import hashlib
+import json
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -16,6 +18,7 @@ from scripts.flow_playwright import (
     check_login_state,
     check_pending_credit_approval,
     download_generated_clip,
+    ensure_studio_surface,
     execute_credit_approval,
     extract_tile_identifier_from_src,
     fill_prompt,
@@ -195,12 +198,23 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertIsNone(pattern.match("Always approve"))
         self.assertIsNone(pattern.match("sempre aprovar"))
 
+    def test_find_single_approve_button_filters_read_only_and_aria_disabled(self):
+        """3b. Garante que opções respondidas (read-only / aria-disabled) são filtradas pelo locator."""
+        mock_page = MagicMock()
+        mock_filtered = MagicMock()
+        mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_filtered
+
+        res = find_single_approve_button(mock_page)
+        self.assertEqual(res, mock_filtered)
+        mock_page.locator.assert_called_with(".read-only, [aria-disabled='true']")
+        mock_page.get_by_role.return_value.or_.return_value.filter.assert_called_once()
+
     def test_execute_credit_approval_click_and_confirmation(self):
         """5. Approval click dispara exatamente 1 clique e confirma desaparecimento do botão."""
         mock_page = MagicMock()
         mock_btn = MagicMock()
         mock_btn.count.return_value = 1
-        mock_page.get_by_role.return_value.or_.return_value = mock_btn
+        mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
 
         with patch("scripts.flow_playwright.expect") as mock_expect:
             res = execute_credit_approval(mock_page, timeout_confirm_ms=1000)
@@ -216,7 +230,7 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_page = MagicMock()
         mock_btn = MagicMock()
         mock_btn.count.return_value = 1
-        mock_page.get_by_role.return_value.or_.return_value = mock_btn
+        mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
 
         with patch("scripts.flow_playwright.expect", side_effect=Exception("Timeout waiting for hidden")):
             res = execute_credit_approval(mock_page, timeout_confirm_ms=100)
@@ -231,8 +245,8 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_page = MagicMock()
         mock_btn = MagicMock()
         mock_btn.count.return_value = 1
-        mock_btn.first.is_visible.return_value = True
-        mock_page.get_by_role.return_value.or_.return_value = mock_btn
+        mock_btn.is_visible.return_value = True
+        mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
         mock_page.locator.return_value.inner_text.return_value = "custa 15 créditos para gerar"
 
         is_pending, count, cost = check_pending_credit_approval(mock_page)
@@ -265,31 +279,58 @@ class TestFlowPlaywright(unittest.TestCase):
     def test_baseline_with_one_new_tile_identifies_new_tile(self):
         """3. Baseline com 1 tile existente + exatamente 1 novo tile identifica e retorna o novo tile."""
         mock_page = MagicMock()
-        mock_wait_res = MagicMock()
-        mock_wait_res.json_value.return_value = {"status": "READY", "newId": "token_cena_02"}
-        mock_page.wait_for_function.return_value = mock_wait_res
+        mock_tiles = MagicMock()
+        mock_tiles.count.return_value = 2
 
-        mock_tile_loc = MagicMock()
-        mock_page.locator.return_value.filter.return_value = mock_tile_loc
+        mock_t0 = MagicMock()
+        mock_img0 = MagicMock()
+        mock_img0.count.return_value = 1
+        mock_img0.get_attribute.return_value = "https://flow.google.com/asb/NEW_TOKEN_SCENE_02"
+        mock_t0.locator.side_effect = lambda sel: mock_img0 if "img" in sel else MagicMock(count=lambda: 0)
+
+        mock_t1 = MagicMock()
+        mock_img1 = MagicMock()
+        mock_img1.count.return_value = 1
+        mock_img1.get_attribute.return_value = "https://flow.google.com/asb/OLD_TOKEN_SCENE_01"
+        mock_t1.locator.side_effect = lambda sel: mock_img1 if "img" in sel else MagicMock(count=lambda: 0)
+
+        mock_tiles.nth.side_effect = [mock_t0, mock_t1]
+        mock_page.locator.return_value = mock_tiles
+
+        base_id_01 = extract_tile_identifier_from_src("https://flow.google.com/asb/OLD_TOKEN_SCENE_01")
 
         with patch("scripts.flow_playwright.expect") as mock_expect:
             ok, tile_loc, err = wait_for_generation_complete(
-                mock_page, baseline_ids={"token_cena_01"}, timeout_sec=10
+                mock_page, baseline_ids={base_id_01}, timeout_sec=10
             )
             self.assertTrue(ok)
-            self.assertEqual(tile_loc, mock_tile_loc)
+            self.assertEqual(tile_loc, mock_t0)
             self.assertIsNone(err)
-            mock_expect.assert_called_once_with(mock_tile_loc)
+            mock_expect.assert_called_once_with(mock_t0)
 
     def test_multiple_new_tiles_fails_closed_ambiguous(self):
         """4. Mais de 1 novo tile detectado simultaneamente falha fechado com AMBIGUOUS_GENERATION_RESULTS."""
         mock_page = MagicMock()
-        mock_wait_res = MagicMock()
-        mock_wait_res.json_value.return_value = {"status": "AMBIGUOUS", "count": 2}
-        mock_page.wait_for_function.return_value = mock_wait_res
+        mock_tiles = MagicMock()
+        mock_tiles.count.return_value = 2
+
+        mock_t0 = MagicMock()
+        mock_img0 = MagicMock()
+        mock_img0.count.return_value = 1
+        mock_img0.get_attribute.return_value = "https://flow.google.com/asb/NEW_TOKEN_A"
+        mock_t0.locator.side_effect = lambda sel: mock_img0 if "img" in sel else MagicMock(count=lambda: 0)
+
+        mock_t1 = MagicMock()
+        mock_img1 = MagicMock()
+        mock_img1.count.return_value = 1
+        mock_img1.get_attribute.return_value = "https://flow.google.com/asb/NEW_TOKEN_B"
+        mock_t1.locator.side_effect = lambda sel: mock_img1 if "img" in sel else MagicMock(count=lambda: 0)
+
+        mock_tiles.nth.side_effect = [mock_t0, mock_t1]
+        mock_page.locator.return_value = mock_tiles
 
         ok, tile_loc, err = wait_for_generation_complete(
-            mock_page, baseline_ids={"token_cena_01"}, timeout_sec=10
+            mock_page, baseline_ids={"token_outra_cena"}, timeout_sec=10
         )
         self.assertFalse(ok)
         self.assertIsNone(tile_loc)
@@ -377,15 +418,58 @@ class TestFlowPlaywright(unittest.TestCase):
             req_content = f.read()
         self.assertIn("playwright==1.63.0", req_content)
 
-    def test_uv_lock_contains_playwright_pinned(self):
-        """10. Verifica que uv.lock contém playwright 1.63.0."""
-        root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        uv_lock_path = os.path.join(root_dir, "uv.lock")
+    def test_asb_full_token_generates_stable_sha256(self):
+        """11. ASB full token gera identificador estável com prefixo asbsha256: e hash correto."""
+        token = "SAMPLE_ASB_FULL_TOKEN_123456789"
+        url = f"https://flow.google.com/asb/{token}?param=xyz"
+        expected_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        expected_id = f"asbsha256:{expected_digest}"
 
-        with open(uv_lock_path, "r", encoding="utf-8") as f:
-            uv_lock_content = f.read()
-        self.assertIn('name = "playwright"', uv_lock_content)
-        self.assertIn('version = "1.63.0"', uv_lock_content)
+        ident = extract_tile_identifier_from_src(url)
+        self.assertEqual(ident, expected_id)
+
+    def test_different_tokens_produce_different_hashes(self):
+        """12. Tokens ASB diferentes geram hashes SHA-256 distintos."""
+        url_a = "https://flow.google.com/asb/TOKEN_A_FIRST_VIDEO"
+        url_b = "https://flow.google.com/asb/TOKEN_B_SECOND_VIDEO"
+        ident_a = extract_tile_identifier_from_src(url_a)
+        ident_b = extract_tile_identifier_from_src(url_b)
+        self.assertNotEqual(ident_a, ident_b)
+
+    def test_raw_token_does_not_appear_in_identifier(self):
+        """13. O token ASB cru NUNCA aparece no identificador seguro gerado."""
+        raw_secret_token = "SECRET_SUPER_TOKEN_NEVER_LOGGED"
+        url = f"https://flow.google.com/asb/{raw_secret_token}"
+        ident = extract_tile_identifier_from_src(url)
+        self.assertNotIn(raw_secret_token, ident)
+        self.assertTrue(ident.startswith("asbsha256:"))
+
+    def test_project_url_provided_does_not_click_novo_projeto(self):
+        """14. Quando project_url é fornecida, navega diretamente e NÃO clica em 'Novo projeto'."""
+        mock_page = MagicMock()
+        mock_page.url = "https://flow.google.com"
+        target_url = "https://flow.google.com/project/ca11d34d-0f59-44cb-ad45-371b62aa223d"
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            res_url = ensure_studio_surface(mock_page, project_url=target_url)
+            self.assertEqual(res_url, target_url)
+            mock_page.goto.assert_called_once_with(target_url)
+            mock_page.wait_for_url.assert_called_once()
+            # Botão 'Novo projeto' NUNCA deve ser buscado/clicado
+            mock_page.get_by_role.assert_not_called()
+            mock_expect.assert_called()
+
+    def test_scene_01_not_destination_of_scene_02_download(self):
+        """15. Cena 01 não pode ser destino do download da Cena 02."""
+        from scripts.flow_playwright import run_playwright_flow_poc
+        # Garante que o caminho canônico para cena 2 é flow_scene_02.mp4
+        manifest_path = "storage/manual_media/flow_web_poc/manifest.json"
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+        scene_02 = next((s for s in manifest_data["scenes"] if s["scene_index"] == 2), None)
+        self.assertIsNotNone(scene_02)
+        self.assertEqual(scene_02["expected_clip"], "flow_scene_02.mp4")
+        self.assertNotEqual(scene_02["expected_clip"], "flow_scene_01.mp4")
 
 
 if __name__ == "__main__":

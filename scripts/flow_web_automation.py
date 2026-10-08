@@ -702,7 +702,7 @@ def _build_inject_prompt_js(prompt_text: str) -> str:
     js_template = """(() => {
     const prompt = __PROMPT__;
     // Localiza ProseMirror (editor oficial do Google Flow) ou textarea/contenteditable
-    const input = document.querySelector('div.ProseMirror[contenteditable="true"], textarea, [contenteditable="true"], input[type="text"]');
+    const input = document.querySelector('div.ProseMirror[contenteditable="true"], div.ProseMirror, textarea:not([class*="recaptcha"])');
     if (!input) {
         return { success: false, error: "NO_PROMPT_INPUT_FOUND" };
     }
@@ -1121,13 +1121,286 @@ def run_arm(cdp_client: Optional[CDPConnection] = None, prompt_for_syntax_check:
             cdp.close()
 
 
+def fill_prompt(cdp: CDPConnection, prompt_text: str, timeout_sec: float = 10.0) -> Dict[str, Any]:
+    """
+    Insere o prompt de forma controlada no editor ProseMirror (ou contenteditable/textarea).
+    
+    Etapas:
+    1. Verifica idempotência: se o editor já contém o texto esperado, não duplica.
+    2. Foca o editor e seleciona qualquer conteúdo prévio para substituição limpa.
+    3. Insere o texto preferencialmente via CDP 'Input.insertText' (com fallback para execCommand).
+    4. Realiza handshake com timeout para confirmar que a UI aceitou o texto.
+    
+    Retorna métricas de handshake:
+    - prompt_fill_method
+    - prompt_expected_length
+    - prompt_editor_length
+    - prompt_match (bool)
+    """
+    clean_expected = re.sub(r"\s+", " ", prompt_text).strip()
+    expected_len = len(clean_expected)
+    norm_expected = re.sub(r"\s+", " ", clean_expected.replace("\u00a0", " ")).strip()
+
+    # 1. Localizar exatamente o editor ProseMirror (ou textarea compatível)
+    js_check_current = """
+    (() => {
+        const editor = document.querySelector('div.ProseMirror[contenteditable="true"], div.ProseMirror, textarea:not([class*="recaptcha"])');
+        if (!editor) return { found: false };
+        const text = (editor.innerText || editor.textContent || '').trim().replace(/\\s+/g, ' ');
+        return {
+            found: true,
+            text: text,
+            tag: editor.tagName,
+            isProseMirror: editor.classList && editor.classList.contains('ProseMirror')
+        };
+    })()
+    """
+    current_info = cdp.eval_js(js_check_current) or {}
+    if not current_info.get("found"):
+        logger.error("Nenhum campo de prompt encontrado na UI.")
+        return {
+            "success": False,
+            "error": "NO_PROMPT_INPUT_FOUND",
+            "prompt_fill_method": "NONE",
+            "prompt_expected_length": expected_len,
+            "prompt_editor_length": 0,
+            "prompt_match": False,
+        }
+
+    current_text = current_info.get("text", "")
+    norm_current = re.sub(r"\s+", " ", (current_text or "").replace("\u00a0", " ")).strip()
+
+    # IDEMPOTÊNCIA: se o texto já estiver presente no editor, não reescrever
+    is_already_present = (norm_current == norm_expected) or (
+        len(norm_current) >= len(norm_expected) * 0.95 and norm_expected[:40] in norm_current and norm_expected[-40:] in norm_current
+    )
+    if is_already_present:
+        logger.info("Prompt já preenchido e correspondente no editor (IDEMPOTENTE).")
+        return {
+            "success": True,
+            "error": None,
+            "prompt_fill_method": "IDEMPOTENT_ALREADY_PRESENT",
+            "prompt_expected_length": expected_len,
+            "prompt_editor_length": len(current_text),
+            "prompt_match": True,
+        }
+
+    # 2. Focar e selecionar todo o conteúdo do ProseMirror para substituição limpa
+    js_focus_select = """
+    (() => {
+        const editor = document.querySelector('div.ProseMirror[contenteditable="true"], div.ProseMirror, textarea:not([class*="recaptcha"])');
+        if (!editor) return { found: false };
+        editor.focus();
+        if (editor.tagName === 'TEXTAREA') {
+            editor.select();
+        } else {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+        return { found: true };
+    })()
+    """
+    cdp.eval_js(js_focus_select)
+
+    # 3. Inserir texto via CDP Input.insertText (simula digitação nativa no Blink/V8)
+    method_used = "CDP_INPUT_INSERT_TEXT"
+    inserted_via_cdp = False
+    try:
+        cdp.send("Input.insertText", {"text": clean_expected})
+        inserted_via_cdp = True
+    except Exception as exc:
+        logger.warning(f"Input.insertText encontrou exceção ({exc}). Tentando fallback...")
+
+    # Fallback seguro caso Input.insertText não esteja disponível ou falhe
+    if not inserted_via_cdp:
+        method_used = "FALLBACK_EXEC_COMMAND"
+        escaped_prompt = json.dumps(clean_expected)
+        js_fallback = f"""
+        (() => {{
+            const editor = document.querySelector('div.ProseMirror[contenteditable="true"], div.ProseMirror, textarea:not([class*="recaptcha"])');
+            if (!editor) return false;
+            editor.focus();
+            if (editor.tagName === 'TEXTAREA') {{
+                editor.value = {escaped_prompt};
+                editor.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                editor.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }} else {{
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, {escaped_prompt});
+                editor.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }}
+            return true;
+        }})()
+        """
+        cdp.eval_js(js_fallback)
+
+    # 4. Handshake do prompt: aguardar confirmação de que o editor reteve o texto
+    start_t = time.time()
+    editor_text = ""
+    prompt_match = False
+
+    while time.time() - start_t < timeout_sec:
+        time.sleep(0.5)
+        js_read = """
+        (() => {
+            const editor = document.querySelector('div.ProseMirror[contenteditable="true"], div.ProseMirror, textarea:not([class*="recaptcha"])');
+            if (!editor) return '';
+            return (editor.innerText || editor.textContent || editor.value || '').trim().replace(/\\s+/g, ' ');
+        })()
+        """
+        editor_text = cdp.eval_js(js_read) or ""
+        norm_read = re.sub(r"\s+", " ", editor_text.replace("\u00a0", " ")).strip()
+        # Correspondência textual confiável (sem exigir formatação byte-a-byte)
+        if norm_read == norm_expected or (
+            len(norm_read) >= len(norm_expected) * 0.95 and norm_expected[:40] in norm_read and norm_expected[-40:] in norm_read
+        ):
+            prompt_match = True
+            break
+
+    editor_len = len(editor_text)
+    logger.info(f"Handshake de prompt: esperado={expected_len} chars, editor={editor_len} chars, match={prompt_match}")
+
+    if not prompt_match:
+        return {
+            "success": False,
+            "error": "BLOCKED_PROMPT_NOT_ACCEPTED",
+            "prompt_fill_method": method_used,
+            "prompt_expected_length": expected_len,
+            "prompt_editor_length": editor_len,
+            "prompt_match": False,
+        }
+
+    return {
+        "success": True,
+        "error": None,
+        "prompt_fill_method": method_used,
+        "prompt_expected_length": expected_len,
+        "prompt_editor_length": editor_len,
+        "prompt_match": True,
+    }
+
+
+def wait_until_generation_ready(cdp: CDPConnection, timeout_sec: float = 10.0) -> Dict[str, Any]:
+    """
+    Aguarda a UI do Flow processar o prompt e habilitar o botão de geração.
+    Verifica que:
+    1. O botão Generate é encontrado e unívoco (matchCount == 1).
+    2. O botão NÃO está disabled (disabled == False).
+    """
+    start_t = time.time()
+    last_btn_info = {}
+
+    while time.time() - start_t < timeout_sec:
+        btn_info = find_generate_button(cdp)
+        last_btn_info = btn_info
+
+        if btn_info.get("matchCount", 0) > 1 or btn_info.get("ambiguous"):
+            return {
+                "ready": False,
+                "error": "BLOCK_AMBIGUOUS_GENERATE_BUTTON",
+                "btn_info": btn_info,
+            }
+
+        if btn_info.get("found") and btn_info.get("matchCount") == 1 and not btn_info.get("disabled"):
+            return {
+                "ready": True,
+                "error": None,
+                "btn_info": btn_info,
+            }
+
+        time.sleep(0.5)
+
+    return {
+        "ready": False,
+        "error": "BLOCKED_GENERATE_STILL_DISABLED",
+        "btn_info": last_btn_info,
+    }
+
+
+def click_generate_once(cdp: CDPConnection) -> Dict[str, Any]:
+    """
+    Executa o clique no botão Generate de forma atômica e exatamente UMA vez.
+    Revalida todos os gates de segurança antes de disparar o clique.
+    Retorna baseline e start_marker para acompanhamento do download.
+    """
+    # 1. Revalidação de sessão, CAPTCHA, superfície e concorrência
+    state = check_auth_and_ui_state(cdp)
+    if not state.get("isAuthenticated"):
+        return {"success": False, "clicked": False, "error": "NOT_AUTHENTICATED"}
+    if state.get("hasCaptcha"):
+        return {"success": False, "clicked": False, "error": "CAPTCHA_DETECTED"}
+    if state.get("surface") != FlowSurface.STUDIO:
+        return {"success": False, "clicked": False, "error": "SURFACE_NOT_STUDIO"}
+    if state.get("isGenerating"):
+        return {"success": False, "clicked": False, "error": "GENERATION_IN_PROGRESS"}
+
+    # 2. Revalidação de créditos
+    credits_status = state.get("creditsStatus")
+    if credits_status != CreditsStatus.AVAILABLE:
+        return {"success": False, "clicked": False, "error": "NO_CREDITS_AVAILABLE"}
+
+    # 3. Revalidação do botão Generate
+    btn_info = find_generate_button(cdp)
+    if not btn_info.get("found"):
+        return {"success": False, "clicked": False, "error": "NO_GENERATE_BUTTON_FOUND"}
+    if btn_info.get("matchCount", 0) != 1 or btn_info.get("ambiguous"):
+        return {"success": False, "clicked": False, "error": "BLOCK_AMBIGUOUS_GENERATE_BUTTON"}
+    if btn_info.get("disabled"):
+        return {"success": False, "clicked": False, "error": "GENERATE_BUTTON_DISABLED"}
+
+    # 4. Capturar baseline do estúdio e registrar start_marker antes do clique
+    baseline = capture_studio_baseline(cdp)
+    start_marker = time.time()
+
+    # 5. Clicar exatamente uma vez
+    js_click = """
+    (() => {
+        const btn = document.querySelector('flow-generate-icon-button button, button.generate-button, button[aria-label="Iniciar geração"], button[aria-label="Start generation"]');
+        if (!btn) return { clicked: false, error: "NO_GENERATE_BUTTON_FOUND" };
+        if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') {
+            return { clicked: false, error: "GENERATE_BUTTON_DISABLED" };
+        }
+        btn.click();
+        return { clicked: true };
+    })()
+    """
+    click_res = cdp.eval_js(js_click) or {}
+    if not click_res.get("clicked"):
+        return {
+            "success": False,
+            "clicked": False,
+            "error": click_res.get("error", "CLICK_FAILED"),
+        }
+
+    logger.info("Clique no botão Generate realizado com sucesso (UMA VEZ)!")
+    return {
+        "success": True,
+        "clicked": True,
+        "baseline": baseline,
+        "start_marker": start_marker,
+        "generation_attempts": 1,
+        "generation_click_attempted": True,
+        "generation_click_confirmed": True,
+    }
+
+
 def inject_prompt_and_generate(cdp: CDPConnection, prompt_text: str) -> Dict[str, Any]:
     """
-    Localiza o campo de prompt na UI do Flow, insere o prompt da cena e clica em Gerar.
-    Fail-closed se nenhum input for encontrado ou botão indisponível.
+    Executa preenchimento, espera de ativação do botão e clique de geração em sequência.
+    Mantido para compatibilidade, delegando para as operações desacopladas.
     """
-    js_inject = _build_inject_prompt_js(prompt_text)
-    return cdp.eval_js(js_inject)
+    fill_res = fill_prompt(cdp, prompt_text)
+    if not fill_res.get("success"):
+        return fill_res
+
+    ready_res = wait_until_generation_ready(cdp)
+    if not ready_res.get("ready"):
+        return {"success": False, "error": ready_res.get("error", "GENERATE_BUTTON_DISABLED"), "inputFilled": True}
+
+    return click_generate_once(cdp)
 
 
 def wait_for_generation_and_download(
@@ -1265,6 +1538,126 @@ def wait_for_generation_and_download(
 
     logger.info(f"Download concluído: {downloaded_file} ({os.path.getsize(downloaded_file)} bytes)")
     return downloaded_file
+
+
+def run_fill_check(
+    manifest_path: str,
+    scene_index: int = 1,
+    timeout_sec: float = 10.0,
+    cdp_client: Optional[CDPConnection] = None,
+) -> Dict[str, Any]:
+    """
+    Executa a verificação controlada de preenchimento de prompt (handshake) e ativação do botão Generate.
+    CRÍTICO:
+    - Preenche o prompt no editor ProseMirror.
+    - Confirma aceite pelo editor (PROMPT_MATCH).
+    - Aguarda o botão Generate habilitar.
+    - PROIBIDO CLICAR EM GENERATE.
+    - PROIBIDO GERAR VÍDEO.
+    - ZERO CRÉDITOS CONSUMIDOS.
+    """
+    manifest_path = os.path.abspath(manifest_path)
+    if not os.path.isfile(manifest_path):
+        raise FileNotFoundError(f"Manifesto não encontrado: {manifest_path}")
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    target_scene = None
+    for sc in manifest.get("scenes", []):
+        if sc.get("scene_index") == scene_index:
+            target_scene = sc
+            break
+
+    if not target_scene:
+        raise ValueError(f"Cena {scene_index} não encontrada no manifesto.")
+
+    prompt = target_scene.get("prompt_en")
+    if not prompt:
+        raise ValueError(f"Cena {scene_index} não possui 'prompt_en' definido.")
+
+    should_close_cdp = False
+    cdp = cdp_client
+    if cdp is None:
+        if not is_cdp_ready():
+            launch_browser(headless=False)
+        cdp = CDPConnection()
+        cdp.connect_to_flow_target()
+        should_close_cdp = True
+
+    try:
+        # 1. Navegar se necessário para STUDIO
+        state = check_auth_and_ui_state(cdp)
+        if state.get("surface") == FlowSurface.LANDING:
+            state = navigate_landing_to_studio(cdp)
+
+        authenticated = bool(state.get("isAuthenticated"))
+        surface = state.get("surface")
+
+        # 2. Inspecionar botão ANTES do preenchimento
+        btn_before = find_generate_button(cdp)
+        disabled_before = bool(btn_before.get("disabled", True))
+
+        # 3. Preencher prompt e validar handshake
+        fill_res = fill_prompt(cdp, prompt, timeout_sec=timeout_sec)
+        prompt_match = bool(fill_res.get("prompt_match"))
+        prompt_method = fill_res.get("prompt_fill_method", "NONE")
+        expected_len = fill_res.get("prompt_expected_length", 0)
+        editor_len = fill_res.get("prompt_editor_length", 0)
+
+        # 4. Aguardar habilitação do botão Generate
+        ready_res = wait_until_generation_ready(cdp, timeout_sec=timeout_sec)
+        ready_for_click = bool(ready_res.get("ready"))
+        btn_after = ready_res.get("btn_info", {})
+        disabled_after = bool(btn_after.get("disabled", True))
+        btn_found = bool(btn_after.get("found"))
+        match_count = btn_after.get("matchCount", 0)
+
+        result = {
+            "status": "READY_FOR_CLICK" if (prompt_match and ready_for_click) else "FILL_CHECK_BLOCKED",
+            "authenticated": authenticated,
+            "flow_surface": surface,
+            "prompt_fill_method": prompt_method,
+            "prompt_expected_length": expected_len,
+            "prompt_editor_length": editor_len,
+            "prompt_match": prompt_match,
+            "generate_button_found": btn_found,
+            "generate_button_match_count": match_count,
+            "generate_button_disabled_before_fill": disabled_before,
+            "generate_button_disabled_after_fill": disabled_after,
+            "ready_for_click": ready_for_click,
+            "generation_clicked": False,
+            "generation_attempts": 0,
+            "credits_consumed": 0,
+            "download_attempted": False,
+            "error": fill_res.get("error") or ready_res.get("error"),
+        }
+
+        print("\n" + "=" * 60)
+        print("FLOW AUTONOMOUS WEB — PROMPT FILL HANDSHAKE (READ-ONLY/NO-CLICK)")
+        print("=" * 60)
+        print(f"AUTHENTICATED:                       {'YES' if authenticated else 'NO'}")
+        print(f"FLOW_SURFACE:                        {surface}")
+        print(f"PROMPT_FILL_METHOD:                  {prompt_method}")
+        print(f"PROMPT_EXPECTED_LENGTH:              {expected_len}")
+        print(f"PROMPT_EDITOR_LENGTH:                {editor_len}")
+        print(f"PROMPT_MATCH:                        {'YES' if prompt_match else 'NO'}")
+        print(f"GENERATE_BUTTON_FOUND:               {'YES' if btn_found else 'NO'}")
+        print(f"GENERATE_BUTTON_MATCH_COUNT:         {match_count}")
+        print(f"GENERATE_BUTTON_DISABLED_BEFORE_FILL:{'YES' if disabled_before else 'NO'}")
+        print(f"GENERATE_BUTTON_DISABLED_AFTER_FILL: {'YES' if disabled_after else 'NO'}")
+        print(f"READY_FOR_CLICK:                     {'YES' if ready_for_click else 'NO'}")
+        print()
+        print(f"GENERATION_CLICKED:                  NO")
+        print(f"GENERATION_ATTEMPTS:                 0")
+        print(f"CREDITS_CONSUMED:                    0")
+        print(f"DOWNLOAD_ATTEMPTED:                  NO")
+        print("=" * 60)
+
+        return result
+    finally:
+        if should_close_cdp:
+            cdp.close()
 
 
 def run_single_scene_poc(
@@ -1476,15 +1869,47 @@ def run_single_scene_poc(
         clean_download_dir(temp_download_dir)
         cdp.set_download_path(temp_download_dir)
 
-        # Captura baseline do Studio antes da injeção
-        baseline = capture_studio_baseline(cdp)
-        start_marker = time.time()
+        # 6. Preencher prompt no editor e validar handshake
+        logger.info(f"Preenchendo prompt da Cena {scene_index} no Google Flow...")
+        fill_res = fill_prompt(cdp, prompt, timeout_sec=10.0)
+        if not fill_res.get("success"):
+            logger.error(f"FAIL-CLOSED: Falha no preenchimento do prompt: {fill_res.get('error')}")
+            return {
+                "status": "BLOCKED_PROMPT_NOT_ACCEPTED",
+                "scene_index": scene_index,
+                "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
+                "captcha_status": "NONE",
+                "credits_status": credits_status,
+                "prompt_fill_attempts": 1,
+                "generation_click_attempted": False,
+                "generation_click_confirmed": False,
+                "generation_attempts": 0,
+                "error": fill_res.get("error"),
+            }
 
-        # 6. Injetar prompt e disparar geração uma única vez
-        logger.info(f"Injetando prompt da Cena {scene_index} no Google Flow...")
-        inj_res = inject_prompt_and_generate(cdp, prompt)
-        if not inj_res.get("success"):
-            logger.error(f"FAIL-CLOSED: Falha na injeção ou disparo da geração: {inj_res.get('error')}")
+        # 7. Aguardar ativação do botão Generate
+        ready_res = wait_until_generation_ready(cdp, timeout_sec=10.0)
+        if not ready_res.get("ready"):
+            logger.error(f"FAIL-CLOSED: Botão Generate não habilitou após preenchimento: {ready_res.get('error')}")
+            return {
+                "status": ready_res.get("error", "BLOCKED_GENERATE_STILL_DISABLED"),
+                "scene_index": scene_index,
+                "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
+                "captcha_status": "NONE",
+                "credits_status": credits_status,
+                "prompt_fill_attempts": 1,
+                "generation_click_attempted": False,
+                "generation_click_confirmed": False,
+                "generation_attempts": 0,
+                "error": ready_res.get("error"),
+            }
+
+        # 8. Disparar clique único controlado no botão Generate
+        click_res = click_generate_once(cdp)
+        if not click_res.get("clicked"):
+            logger.error(f"FAIL-CLOSED: Falha no disparo do clique de geração: {click_res.get('error')}")
             return {
                 "status": "FAIL_GENERATE_TRIGGER",
                 "scene_index": scene_index,
@@ -1492,11 +1917,17 @@ def run_single_scene_poc(
                 "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
                 "credits_status": credits_status,
-                "generation_attempts": 1,
-                "error": inj_res.get("error"),
+                "prompt_fill_attempts": 1,
+                "generation_click_attempted": True,
+                "generation_click_confirmed": False,
+                "generation_attempts": 0,
+                "error": click_res.get("error"),
             }
 
-        # 7 & 8. Acompanhar geração e efetuar download com baseline e start_marker
+        baseline = click_res.get("baseline")
+        start_marker = click_res.get("start_marker", time.time())
+
+        # 9. Acompanhar geração e efetuar download com baseline e start_marker
         downloaded_temp_path = wait_for_generation_and_download(
             cdp=cdp,
             download_dir=temp_download_dir,
@@ -1505,7 +1936,7 @@ def run_single_scene_poc(
             timeout_generation_sec=timeout_sec,
         )
 
-        # 9. Validar arquivo baixado
+        # 10. Validar arquivo baixado
         val = validate_clip_file(downloaded_temp_path)
         if not val["valid"]:
             logger.error(f"FAIL-CLOSED: Arquivo baixado é inválido: {val['error']}")
@@ -1515,13 +1946,16 @@ def run_single_scene_poc(
                 "google_session_status": "AUTHENTICATED",
                 "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": state.get("creditsStatus"),
+                "credits_status": credits_status,
+                "prompt_fill_attempts": 1,
+                "generation_click_attempted": True,
+                "generation_click_confirmed": True,
                 "generation_attempts": 1,
                 "download_completed": False,
                 "error": val["error"],
             }
 
-        # 10. Mover atomicamente para o destino canônico da Video Factory
+        # 11. Mover atomicamente para o destino canônico da Video Factory
         shutil.move(downloaded_temp_path, target_clip_path)
         shutil.rmtree(temp_download_dir, ignore_errors=True)
 
@@ -1536,7 +1970,10 @@ def run_single_scene_poc(
             "google_session_status": "AUTHENTICATED",
             "flow_surface": FlowSurface.STUDIO,
             "captcha_status": "NONE",
-            "credits_status": state.get("creditsStatus"),
+            "credits_status": credits_status,
+            "prompt_fill_attempts": 1,
+            "generation_click_attempted": True,
+            "generation_click_confirmed": True,
             "generation_attempts": 1,
             "download_completed": True,
             "clip_path": target_clip_path,
@@ -1647,6 +2084,11 @@ def main():
     gen_p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_GENERATION_SEC, help="Timeout de geração em segundos")
     gen_p.add_argument("--wait-login", type=int, default=0, help="Tempo para aguardar login manual se não autenticado (segundos)")
 
+    fill_p = subparsers.add_parser("fill-check", help="Executa verificação de preenchimento de prompt e ativação do botão Generate (sem clicar nem gerar)")
+    fill_p.add_argument("--manifest", required=True, help="Caminho para manifest.json")
+    fill_p.add_argument("--scene", type=int, default=1, help="Número da cena a verificar (padrão: 1)")
+    fill_p.add_argument("--timeout", type=float, default=10.0, help="Timeout para handshake do prompt e ativação do botão")
+
     args = parser.parse_args()
 
     if args.command == "open":
@@ -1657,6 +2099,14 @@ def main():
         run_preflight()
     elif args.command == "arm":
         run_arm()
+    elif args.command == "fill-check":
+        res = run_fill_check(
+            manifest_path=args.manifest,
+            scene_index=args.scene,
+            timeout_sec=args.timeout,
+        )
+        print("\nResultado:")
+        print(json.dumps(res, indent=2))
     elif args.command == "generate":
         res = run_single_scene_poc(
             manifest_path=args.manifest,

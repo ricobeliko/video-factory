@@ -27,15 +27,19 @@ from scripts.flow_web_automation import (
     capture_studio_baseline,
     check_auth_and_ui_state,
     clean_download_dir,
+    click_generate_once,
+    fill_prompt,
     find_generate_button,
     inspect_credits_menu,
     navigate_landing_to_studio,
     run_arm,
+    run_fill_check,
     run_preflight,
     run_single_scene_poc,
     validate_clip_file,
     verify_injection_js_syntax,
     wait_for_generation_and_download,
+    wait_until_generation_ready,
 )
 from scripts.flow_workflow import get_project_status
 
@@ -730,6 +734,177 @@ class TestFlowWebAutomation(unittest.TestCase):
 
         self.assertEqual(res_file, new_mp4)
 
+    def test_fill_and_click_are_separate_functions(self):
+        """1. fill_prompt, wait_until_generation_ready e click_generate_once são funções desacopladas e invocáveis separadamente."""
+        import inspect
+        self.assertTrue(callable(fill_prompt))
+        self.assertTrue(callable(wait_until_generation_ready))
+        self.assertTrue(callable(click_generate_once))
+        self.assertTrue(callable(run_fill_check))
+
+        # Assinaturas independentes
+        fill_sig = inspect.signature(fill_prompt)
+        self.assertIn("cdp", fill_sig.parameters)
+        self.assertIn("prompt_text", fill_sig.parameters)
+
+        ready_sig = inspect.signature(wait_until_generation_ready)
+        self.assertIn("cdp", ready_sig.parameters)
+
+        click_sig = inspect.signature(click_generate_once)
+        self.assertIn("cdp", click_sig.parameters)
+
+    def test_button_initially_disabled_enables_after_poll(self):
+        """2. Botão Generate inicialmente desabilitado torna-se habilitado após poll UI."""
+        mock_cdp = MagicMock()
+        # Primeira chamada: disabled=True; Segunda chamada: disabled=False
+        mock_cdp.eval_js.side_effect = [
+            {"found": True, "matchCount": 1, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": True, "ambiguous": False},
+            {"found": True, "matchCount": 1, "aria": "Iniciar geração", "text": "arrow_forward", "disabled": False, "ambiguous": False},
+        ]
+
+        ready_res = wait_until_generation_ready(mock_cdp, timeout_sec=2.0)
+        self.assertTrue(ready_res["ready"])
+        self.assertIsNone(ready_res["error"])
+        self.assertFalse(ready_res["btn_info"]["disabled"])
+
+    def test_prompt_confirmed_before_click(self):
+        """3. Prompt deve ser confirmado no editor (handshake) com PROMPT_MATCH=True."""
+        mock_cdp = MagicMock()
+        prompt_text = "Majestic cosmic nebula in deep space"
+        # 1. check_current (vazio)
+        # 2. focus_select
+        # 3. read back no handshake (retorna o texto inserido)
+        mock_cdp.eval_js.side_effect = [
+            {"found": True, "text": "", "tag": "DIV", "isProseMirror": True},
+            {"found": True},
+            prompt_text,
+        ]
+
+        fill_res = fill_prompt(mock_cdp, prompt_text, timeout_sec=1.0)
+        self.assertTrue(fill_res["success"])
+        self.assertTrue(fill_res["prompt_match"])
+        self.assertEqual(fill_res["prompt_fill_method"], "CDP_INPUT_INSERT_TEXT")
+        self.assertEqual(fill_res["prompt_expected_length"], len(prompt_text))
+        self.assertEqual(fill_res["prompt_editor_length"], len(prompt_text))
+        mock_cdp.send.assert_called_with("Input.insertText", {"text": prompt_text})
+
+    def test_prompt_not_confirmed_blocks(self):
+        """4. Prompt não confirmado pelo handshake bloqueia execução (fail-closed)."""
+        mock_cdp = MagicMock()
+        prompt_text = "Majestic cosmic nebula in deep space"
+        # 1. check_current (vazio)
+        # 2. focus_select
+        # 3. read back no handshake retorna texto vazio ou incompatível repetidamente
+        mock_cdp.eval_js.side_effect = [
+            {"found": True, "text": "", "tag": "DIV", "isProseMirror": True},
+            {"found": True},
+            "",
+            "",
+            "",
+        ]
+
+        fill_res = fill_prompt(mock_cdp, prompt_text, timeout_sec=0.2)
+        self.assertFalse(fill_res["success"])
+        self.assertFalse(fill_res["prompt_match"])
+        self.assertEqual(fill_res["error"], "BLOCKED_PROMPT_NOT_ACCEPTED")
+
+    def test_button_still_disabled_blocks(self):
+        """5. Botão que continua disabled após timeout bloqueia com BLOCKED_GENERATE_STILL_DISABLED."""
+        mock_cdp = MagicMock()
+        # Retorna sempre disabled=True
+        mock_cdp.eval_js.return_value = {
+            "found": True,
+            "matchCount": 1,
+            "aria": "Iniciar geração",
+            "text": "arrow_forward",
+            "disabled": True,
+            "ambiguous": False,
+        }
+
+        ready_res = wait_until_generation_ready(mock_cdp, timeout_sec=0.2)
+        self.assertFalse(ready_res["ready"])
+        self.assertEqual(ready_res["error"], "BLOCKED_GENERATE_STILL_DISABLED")
+
+    def test_prompt_already_present_does_not_duplicate(self):
+        """6. Prompt já presente no editor é detectado e não duplicado (idempotência)."""
+        mock_cdp = MagicMock()
+        prompt_text = "Majestic cosmic nebula in deep space"
+        # Editor já contém exatamente o prompt
+        mock_cdp.eval_js.return_value = {
+            "found": True,
+            "text": prompt_text,
+            "tag": "DIV",
+            "isProseMirror": True,
+        }
+
+        fill_res = fill_prompt(mock_cdp, prompt_text, timeout_sec=1.0)
+        self.assertTrue(fill_res["success"])
+        self.assertTrue(fill_res["prompt_match"])
+        self.assertEqual(fill_res["prompt_fill_method"], "IDEMPOTENT_ALREADY_PRESENT")
+        # CDP Input.insertText NÃO deve ser chamado!
+        mock_cdp.send.assert_not_called()
+
+    def test_generation_attempts_zero_when_no_click(self):
+        """7. generation_attempts deve ser 0 quando nenhum clique Generate ocorreu."""
+        mock_cdp = MagicMock()
+        prompt_text = self.manifest_data["scenes"][0]["prompt_en"]
+
+        # Executa run_fill_check (que NUNCA clica)
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {"surface": FlowSurface.STUDIO, "isAuthenticated": True, "hasPromptInput": True},
+            # find_generate_button ANTES
+            {"found": True, "matchCount": 1, "disabled": True, "ambiguous": False},
+            # fill_prompt: check_current
+            {"found": True, "text": "", "tag": "DIV", "isProseMirror": True},
+            # fill_prompt: focus_select
+            {"found": True},
+            # fill_prompt: handshake read
+            prompt_text,
+            # wait_until_generation_ready: find_generate_button DEPOIS
+            {"found": True, "matchCount": 1, "disabled": False, "ambiguous": False},
+        ]
+
+        res = run_fill_check(
+            manifest_path=self.manifest_path,
+            scene_index=1,
+            timeout_sec=1.0,
+            cdp_client=mock_cdp,
+        )
+
+        self.assertEqual(res["status"], "READY_FOR_CLICK")
+        self.assertTrue(res["ready_for_click"])
+        self.assertFalse(res["generation_clicked"])
+        self.assertEqual(res["generation_attempts"], 0)
+        self.assertEqual(res["credits_consumed"], 0)
+
+    def test_generation_attempts_one_only_after_confirmed_click(self):
+        """8. generation_attempts deve ser 1 somente após clique real confirmado."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.side_effect = [
+            # check_auth_and_ui_state
+            {
+                "url": "https://flow.google.com/project/test-uuid",
+                "surface": FlowSurface.STUDIO,
+                "isAuthenticated": True,
+                "hasCaptcha": False,
+                "isGenerating": False,
+                "creditsStatus": CreditsStatus.AVAILABLE,
+            },
+            # find_generate_button
+            {"found": True, "matchCount": 1, "disabled": False, "ambiguous": False},
+            # capture_studio_baseline
+            {"videosCount": 0, "videoSrcs": [], "downloadButtonsCount": 0, "tilesCount": 0, "tileIds": []},
+            # js_click
+            {"clicked": True},
+        ]
+
+        click_res = click_generate_once(mock_cdp)
+        self.assertTrue(click_res["success"])
+        self.assertTrue(click_res["clicked"])
+        self.assertEqual(click_res["generation_attempts"], 1)
+        self.assertTrue(click_res["generation_click_attempted"])
+        self.assertTrue(click_res["generation_click_confirmed"])
 
 
 if __name__ == "__main__":

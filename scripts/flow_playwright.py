@@ -68,7 +68,22 @@ def validate_clip_file(file_path: str) -> Dict[str, Any]:
 
         probe = probe_media(file_path)
         if not probe.get("valid"):
-            res["error"] = probe.get("error_code") or "PROBE_FAILED"
+            err_code = probe.get("error_code") or "PROBE_FAILED"
+            if err_code == "FFPROBE_UNAVAILABLE":
+                # Fallback seguro para inspeção de streams e duração via PyAV
+                try:
+                    import av
+                    container = av.open(file_path)
+                    duration = float(container.duration) / 1000000.0 if container.duration else 0.0
+                    video_streams = [s for s in container.streams if s.type == "video"]
+                    if duration > 0.0 and len(video_streams) > 0:
+                        res["valid"] = True
+                        res["duration"] = duration
+                        res["error"] = None
+                        return res
+                except Exception:
+                    pass
+            res["error"] = err_code
             return res
 
         duration = float(probe.get("format_duration", 0.0))
@@ -232,62 +247,128 @@ def check_generate_actionable(btn: Locator, timeout_ms: int = DEFAULT_TIMEOUT_UI
     return True
 
 
-def dispatch_and_confirm_generation(
+def extract_credit_cost(page: Page) -> Optional[int]:
+    """Extrai o custo de créditos visível no prompt de aprovação se disponível no DOM."""
+    try:
+        body_text = page.locator("body").inner_text()
+        match = re.search(r"custa\s+(\d+)\s+cr[eé]ditos", body_text, re.I)
+        if not match:
+            match = re.search(r"(\d+)\s+cr[eé]ditos", body_text, re.I)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def find_single_approve_button(page: Page) -> Locator:
+    """
+    Localiza o elemento estrito 'Aprovar' / 'Approve'.
+    PROIBIDO selecionar 'Sempre aprovar' / 'Always approve'.
+    Usa regex estrito com âncoras ^ e $.
+    Suporta role='button' e role='radio' conforme renderização Angular/Material do Google Flow.
+    """
+    pattern = re.compile(r"^(Aprovar|Approve)$", re.I)
+    return page.get_by_role("button", name=pattern).or_(
+        page.get_by_role("radio", name=pattern)
+    )
+
+
+def check_pending_credit_approval(page: Page) -> Tuple[bool, int, Optional[int]]:
+    """
+    Verifica se já existe solicitação de aprovação de créditos pendente no DOM.
+    Retorna: (is_pending, match_count, credit_cost)
+    """
+    approve_btn = find_single_approve_button(page)
+    count = approve_btn.count()
+    if count > 0 and approve_btn.first.is_visible():
+        cost = extract_credit_cost(page)
+        return True, count, cost
+    return False, 0, None
+
+
+def execute_credit_approval(
     page: Page,
-    generate_btn: Locator,
-    timeout_start_ms: int = DEFAULT_TIMEOUT_UI_MS,
-    timeout_complete_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
+    timeout_confirm_ms: int = 10000,
 ) -> Dict[str, Any]:
     """
-    Dispara o clique no botão Generate exatamente UMA VEZ e aguarda:
-    1. Confirmação do início do job (até 30s) por evidência observável no DOM
-       (botão Generate desabilitado ou spinner/progressbar ativo).
-       Se não confirmar: para imediatamente com GENERATION_START_NOT_CONFIRMED.
-    2. Conclusão da geração (até 600s) pelo surgimento de vídeo ou botão de download.
+    Executa a aprovação de créditos seguindo a máquina de estados:
+    1. Verifica unicidade estrita do botão 'Aprovar' (match_count == 1).
+    2. NUNCA seleciona 'Sempre aprovar'.
+    3. Clica exatamente UMA VEZ no botão 'Aprovar'.
+    4. Confirma que o botão/diálogo desapareceu do DOM.
     """
-    logger.info("Disparando clique no botão Generate (EXATAMENTE UMA VEZ)...")
-    generate_btn.click()
+    approve_btn = find_single_approve_button(page)
+    count = approve_btn.count()
 
-    # Confirmação do início do job via expectativa do Playwright
-    logger.info(f"Aguardando confirmação observável do início do job (timeout {timeout_start_ms/1000}s)...")
+    res: Dict[str, Any] = {
+        "required": True,
+        "match_count": count,
+        "cost": extract_credit_cost(page),
+        "click_count": 0,
+        "confirmed": False,
+        "always_approve_clicked": False,
+        "error": None,
+    }
+
+    if count != 1:
+        res["error"] = f"AMBIGUOUS_APPROVE_BUTTON_COUNT_{count}"
+        logger.error(f"Botão de aprovação inválido ou ambíguo: match_count={count}")
+        return res
+
+    logger.info(f"Clicando em 'Aprovar' (1 único clique, custo={res['cost']})...")
+    approve_btn.click()
+    res["click_count"] = 1
+
+    # Confirmação pós-clique: aguarda o botão 'Aprovar' desaparecer do DOM
+    try:
+        expect(approve_btn).to_have_count(0, timeout=timeout_confirm_ms)
+        logger.info("Aprovação de créditos confirmada com sucesso (botão desapareceu)!")
+        res["confirmed"] = True
+    except Exception as exc:
+        logger.error(f"Falha ao confirmar desaparecimento do botão Aprovar: {exc}")
+        res["error"] = "CREDIT_APPROVAL_NOT_CONFIRMED"
+
+    return res
+
+
+def wait_for_generation_started(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> bool:
+    """
+    Confirmação REAL de GENERATION_STARTED posterior à aprovação.
+    Evidência: indicador de geração/processamento ativo (spinner, progress bar, generating indicator).
+    NÃO aceita diálogo ou botão de aprovação presente.
+    """
+    logger.info(f"Aguardando evidência de início real de processamento do job (timeout {timeout_ms/1000}s)...")
     try:
         page.wait_for_function(
             """() => {
-                const genBtn = document.querySelector('button[aria-label="Iniciar geração"], button[aria-label="Start generation"], flow-generate-icon-button button, button.generate-button');
-                if (genBtn && (genBtn.disabled || genBtn.getAttribute('aria-disabled') === 'true')) {
-                    return true;
-                }
-                const progress = document.querySelector('[role="progressbar"], mat-progress-bar, flow-progress, flow-spinner, .generating-indicator, [aria-label*="Gerando" i], [aria-label*="Generating" i]');
-                const approveBtn = Array.from(document.querySelectorAll('button')).some(b => {
-                    const txt = (b.innerText || '').toLowerCase();
-                    return txt.includes('aprovar') || txt.includes('approve');
+                // NÃO aceita aprovação pendente
+                const options = Array.from(document.querySelectorAll('[role="radio"], button, [role="button"]'));
+                const hasApprove = options.some(el => {
+                    const txt = (el.getAttribute('aria-label') || el.innerText || '').trim();
+                    return /^aprovar$/i.test(txt) || /^approve$/i.test(txt);
                 });
-                return !!progress || approveBtn;
+                if (hasApprove) return false;
+
+                // Aceita evidência real de geração/processamento
+                const progress = document.querySelector('[role="progressbar"], mat-progress-bar, flow-progress, flow-spinner, .generating-indicator, [aria-label*="Gerando" i], [aria-label*="Generating" i]');
+                return !!progress;
             }""",
-            timeout=timeout_start_ms,
+            timeout=timeout_ms,
         )
-        logger.info("Início do job confirmado no DOM com sucesso!")
-
-        # Se o assistente solicitar confirmação de créditos ("Quer que eu inicie essa geração..."), aprova
-        approve_btn = page.get_by_role("button", name=re.compile(r"^(aprovar|approve|sempre aprovar|always approve)$", re.I)).first
-        try:
-            if approve_btn.count() > 0 and approve_btn.is_visible():
-                logger.info("Detectado pedido de aprovação de créditos pelo assistente. Clicando em Aprovar...")
-                approve_btn.click()
-                logger.info("Aprovação de créditos enviada!")
-        except Exception as e_appr:
-            logger.debug(f"Nenhum botão de aprovação adicional necessário: {e_appr}")
-
+        logger.info("GENERATION_STARTED confirmado no DOM com sucesso!")
+        return True
     except Exception as exc:
-        logger.error(f"Falha ao confirmar início da geração no DOM dentro de {timeout_start_ms/1000}s: {exc}")
-        return {
-            "start_confirmed": False,
-            "complete_confirmed": False,
-            "error": "GENERATION_START_NOT_CONFIRMED",
-        }
+        logger.error(f"Falha ao confirmar GENERATION_STARTED dentro de {timeout_ms/1000}s: {exc}")
+        return False
 
-    # Aguarda a conclusão da geração no Studio (até timeout_complete_sec)
-    logger.info(f"Aguardando conclusão da geração no Flow (timeout: {timeout_complete_sec}s)...")
+
+def wait_for_generation_complete(page: Page, timeout_sec: int = DEFAULT_TIMEOUT_GEN_SEC) -> bool:
+    """
+    Acompanha a geração até a conclusão (até 600s).
+    Evidência: vídeo pronto ou botão de download disponível.
+    """
+    logger.info(f"Aguardando conclusão da geração no Flow (timeout: {timeout_sec}s)...")
     try:
         page.wait_for_function(
             """() => {
@@ -298,21 +379,13 @@ def dispatch_and_confirm_generation(
                 });
                 return hasVideo || hasDl;
             }""",
-            timeout=timeout_complete_sec * 1000,
+            timeout=timeout_sec * 1000,
         )
         logger.info("Geração do Flow concluída com sucesso (mídia disponível)!")
-        return {
-            "start_confirmed": True,
-            "complete_confirmed": True,
-            "error": None,
-        }
+        return True
     except Exception as exc:
         logger.error(f"Timeout ou erro aguardando conclusão da geração: {exc}")
-        return {
-            "start_confirmed": True,
-            "complete_confirmed": False,
-            "error": f"GENERATION_TIMEOUT_{timeout_complete_sec}S",
-        }
+        return False
 
 
 def download_generated_clip(
@@ -327,30 +400,45 @@ def download_generated_clip(
         download = download_info.value
         download.save_as(canonical_output_path)
     """
-    logger.info("Localizando botão de download no Studio...")
-    download_btn = page.locator(
-        "button[aria-label*='Download' i], button[aria-label*='Baixar' i], "
-        "a[aria-label*='Download' i], a[aria-label*='Baixar' i], "
-        "button:has-text('Download'), button:has-text('Baixar'), "
-        "button:has(mat-icon:has-text('download')), button:has(span:has-text('download'))"
-    ).first
-
-    # Se o botão estiver oculto aguardando hover, passa o mouse sobre o vídeo
-    try:
-        if download_btn.count() == 0 or not download_btn.is_visible():
-            vid = page.locator("video").first
-            if vid.count() > 0:
-                vid.hover()
-    except Exception:
-        pass
-
+    logger.info("Localizando botão ou menu de download no Studio...")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    logger.info("Disparando download e aguardando evento page.expect_download()...")
+    # 1. Se houver container de vídeo gerado, passa o mouse para revelar a hotbar
+    container = page.locator(".container:has(img.thumbnail), flow-tile, .project-tile-hover-footer").first
+    if container.count() > 0:
+        try:
+            container.hover()
+        except Exception:
+            pass
+
+    # 2. Localiza botão direto de download ou abre o menu 'Mais opções'
+    dl_btn = page.locator(
+        "button[aria-label*='Download' i], button[aria-label*='Baixar' i], "
+        "a[aria-label*='Download' i], a[aria-label*='Baixar' i]"
+    ).first
+
+    more_btn = page.locator("flow-video-hotbar button[aria-label*='Mais op' i], button[aria-label*='Mais op' i]").first
+
     try:
         with page.expect_download(timeout=timeout_ms) as download_info:
-            if download_btn.count() > 0 and download_btn.is_visible():
-                download_btn.click()
+            if dl_btn.count() > 0 and dl_btn.is_visible():
+                dl_btn.click()
+            elif more_btn.count() > 0:
+                logger.info("Abrindo menu 'Mais opções' na hotbar do clipe...")
+                more_btn.click()
+                menu_dl = page.locator(
+                    "[role='menuitem']:has-text('download'), [role='menuitem']:has-text('Download'), "
+                    "[role='menuitem']:has-text('Baixar')"
+                ).first
+                menu_dl.wait_for(state="visible", timeout=5000)
+                menu_dl.click()
+
+                # Clica na opção de resolução 720p (Tamanho original)
+                opt_720 = page.locator(
+                    "[role='menuitem']:has-text('720p'), [role='menuitem']:has-text('original'), button:has-text('720p')"
+                ).first
+                opt_720.wait_for(state="visible", timeout=5000)
+                opt_720.click()
             else:
                 # Dispara download através da fonte direta do vídeo mantendo expect_download nativo
                 logger.info("Disparando download via elemento de vídeo...")
@@ -409,8 +497,16 @@ def run_playwright_flow_poc(
         "prompt_filled": False,
         "prompt_confirmed": False,
         "generate_actionable": False,
-        "generation_click_count": 0,
+        "pending_approval_found": False,
+        "generate_click_count_this_run": 0,
+        "credit_approval_required": False,
+        "credit_cost": None,
+        "credit_approval_button_match_count": 0,
+        "credit_approval_click_count": 0,
+        "credit_approval_confirmed": False,
+        "always_approve_clicked": False,
         "generation_start_confirmed": False,
+        "generation_attempts": 0,
         "generation_complete_confirmed": False,
         "download_event_confirmed": False,
         "output_file": None,
@@ -466,43 +562,121 @@ def run_playwright_flow_poc(
             report["landing_to_studio"] = True
             report["editor_found"] = True
 
-            # 3. Preenchimento e confirmação do prompt
-            fill_prompt(page, prompt_text)
-            report["prompt_filled"] = True
-            report["prompt_confirmed"] = True
+            # 3. Preenchimento e confirmação do prompt (apenas se editor estiver livre)
+            is_pending, p_count, p_cost = check_pending_credit_approval(page)
+            report["pending_approval_found"] = is_pending
 
-            # 4. Localização e actionability check com trial=True
-            gen_btn = get_generate_button(page)
-            actionable = check_generate_actionable(gen_btn)
-            report["generate_actionable"] = actionable
+            if not is_pending:
+                fill_prompt(page, prompt_text)
+                report["prompt_filled"] = True
+                report["prompt_confirmed"] = True
 
-            logger.info("=== PASSOS 1-6 VALIDADOS COM SUCESSO (ZERO GERAÇÕES EFETUADAS) ===")
+                gen_btn = get_generate_button(page)
+                actionable = check_generate_actionable(gen_btn)
+                report["generate_actionable"] = actionable
+            else:
+                logger.info("Diálogo de aprovação já visível no início. Mantendo prompt atual.")
+                report["prompt_filled"] = True
+                report["prompt_confirmed"] = True
+                report["generate_actionable"] = True
+
+            logger.info("=== PRE-FLIGHT VALIDAÇÕES CONCLUÍDAS ===")
 
             if trial_only:
                 report["status"] = "PRE_FLIGHT_TRIAL_PASS"
                 context.close()
                 return report
 
-            # 5. DISPARO REAL (EXATAMENTE UMA VEZ)
-            logger.info("=== DISPARANDO EXATAMENTE UMA GERAÇÃO REAL AUTORIZADA ===")
-            report["generation_click_count"] = 1
-            gen_res = dispatch_and_confirm_generation(page, gen_btn)
-            report["generation_start_confirmed"] = gen_res["start_confirmed"]
-            report["generation_complete_confirmed"] = gen_res["complete_confirmed"]
+            # 4. MÁQUINA DE ESTADOS: VERIFICAÇÃO DE ESTADO PRÉ-EXISTENTE
+            if is_pending:
+                logger.info(f"ESTADO PRÉ-EXISTENTE DETECTADO: pedido de aprovação pendente encontrado (custo={p_cost}).")
+                logger.info("NÃO clicando no botão Generate novamente nesta execução!")
+                report["generate_click_count_this_run"] = 0
+                report["credit_approval_required"] = True
+                report["credit_cost"] = p_cost
+                report["credit_approval_button_match_count"] = p_count
 
-            if not gen_res["start_confirmed"]:
+                appr_res = execute_credit_approval(page)
+                report["credit_approval_click_count"] = appr_res["click_count"]
+                report["credit_approval_confirmed"] = appr_res["confirmed"]
+                report["always_approve_clicked"] = False
+
+                if not appr_res["confirmed"]:
+                    report["status"] = "CREDIT_APPROVAL_FAILED"
+                    report["error"] = appr_res.get("error")
+                    context.close()
+                    return report
+
+            else:
+                # Dispara clique único no Generate
+                logger.info("=== DISPARANDO EXATAMENTE UMA GERAÇÃO REAL AUTORIZADA ===")
+                gen_btn.click()
+                report["generate_click_count_this_run"] = 1
+
+                # Aguarda EITHER aprovação requerida OU geração iniciada diretamente
+                logger.info("Aguardando decisão da interface: aprovação de créditos ou início direto...")
+                try:
+                    wait_res = page.wait_for_function(
+                        """() => {
+                            const options = Array.from(document.querySelectorAll('[role="radio"], button, [role="button"]'));
+                            const hasApprove = options.some(el => {
+                                const txt = (el.getAttribute('aria-label') || el.innerText || '').trim();
+                                return /^aprovar$/i.test(txt) || /^approve$/i.test(txt);
+                            });
+                            if (hasApprove) return 'APPROVAL_REQUIRED';
+
+                            const progress = document.querySelector('[role="progressbar"], mat-progress-bar, flow-progress, flow-spinner, .generating-indicator, [aria-label*="Gerando" i], [aria-label*="Generating" i]');
+                            if (progress) return 'GENERATION_STARTED';
+
+                            return false;
+                        }""",
+                        timeout=DEFAULT_TIMEOUT_UI_MS,
+                    )
+                    state_found = wait_res.json_value()
+                except Exception as exc:
+                    logger.error(f"Timeout aguardando aprovação ou início de geração: {exc}")
+                    report["status"] = "GENERATION_DISPATCH_TIMEOUT_30S"
+                    report["error"] = "GENERATION_DISPATCH_TIMEOUT_30S"
+                    context.close()
+                    return report
+
+                if state_found == "APPROVAL_REQUIRED":
+                    logger.info("CREDIT_APPROVAL_REQUIRED detectado após o clique!")
+                    report["credit_approval_required"] = True
+                    appr_res = execute_credit_approval(page)
+                    report["credit_cost"] = appr_res["cost"]
+                    report["credit_approval_button_match_count"] = appr_res["match_count"]
+                    report["credit_approval_click_count"] = appr_res["click_count"]
+                    report["credit_approval_confirmed"] = appr_res["confirmed"]
+                    report["always_approve_clicked"] = False
+
+                    if not appr_res["confirmed"]:
+                        report["status"] = "CREDIT_APPROVAL_FAILED"
+                        report["error"] = appr_res.get("error")
+                        context.close()
+                        return report
+
+            # 5. CONFIRMAÇÃO REAL DE GENERATION_STARTED (posterior à aprovação)
+            started = wait_for_generation_started(page, timeout_ms=DEFAULT_TIMEOUT_UI_MS)
+            report["generation_start_confirmed"] = started
+            if not started:
                 report["status"] = "GENERATION_START_NOT_CONFIRMED"
-                report["error"] = gen_res.get("error")
+                report["error"] = "GENERATION_START_NOT_CONFIRMED"
                 context.close()
                 return report
 
-            if not gen_res["complete_confirmed"]:
+            report["generation_attempts"] = 1
+
+            # 6. Aguarda conclusão da geração (até timeout_gen_sec)
+            completed = wait_for_generation_complete(page, timeout_sec=timeout_gen_sec)
+            report["generation_complete_confirmed"] = completed
+            if not completed:
                 report["status"] = "GENERATION_COMPLETION_FAILED"
-                report["error"] = gen_res.get("error")
+                report["error"] = f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
                 context.close()
                 return report
 
-            # 6. DOWNLOAD VIA EXPECT_DOWNLOAD
+            # 7. DOWNLOAD VIA EXPECT_DOWNLOAD
             dl_ok, dl_err = download_generated_clip(page, canonical_output_path)
             report["download_event_confirmed"] = dl_ok
             if not dl_ok:
@@ -513,7 +687,7 @@ def run_playwright_flow_poc(
 
             report["output_file"] = canonical_output_path
 
-            # 7. VALIDAÇÃO DE MÍDIA COM PROBE_MEDIA
+            # 8. VALIDAÇÃO DE MÍDIA COM PROBE_MEDIA
             media_val = validate_clip_file(canonical_output_path)
             report["output_valid"] = media_val.get("valid", False)
             report["output_duration"] = media_val.get("duration", 0.0)

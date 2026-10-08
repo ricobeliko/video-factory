@@ -13,11 +13,15 @@ from unittest.mock import MagicMock, patch
 from scripts.flow_playwright import (
     check_generate_actionable,
     check_login_state,
+    check_pending_credit_approval,
     download_generated_clip,
+    execute_credit_approval,
     fill_prompt,
+    find_single_approve_button,
     launch_flow_context,
     navigate_landing_to_studio,
     validate_clip_file,
+    wait_for_generation_started,
 )
 
 
@@ -154,6 +158,88 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertIsNone(err)
         mock_btn.click.assert_called_once()
         mock_download.save_as.assert_called_once_with("storage/output.mp4")
+
+    def test_approval_present_does_not_mean_generation_started(self):
+        """1. A presença de Aprovar significa apenas aprovação requerida, NÃO geração iniciada."""
+        mock_page = MagicMock()
+        # Simula wait_for_function falhando porque há botão aprovar pendente
+        mock_page.wait_for_function.side_effect = Exception("Timeout: approval pending")
+        started = wait_for_generation_started(mock_page, timeout_ms=100)
+        self.assertFalse(started)
+
+    def test_find_single_approve_button_matches_aprovar(self):
+        """2. Aprovar único é selecionado estritamente por regex ^(Aprovar|Approve)$."""
+        mock_page = MagicMock()
+        find_single_approve_button(mock_page)
+        self.assertEqual(mock_page.get_by_role.call_count, 2)
+        args, kwargs = mock_page.get_by_role.call_args_list[0]
+        self.assertEqual(args[0], "button")
+        pattern = kwargs["name"]
+        self.assertTrue(pattern.match("Aprovar"))
+        self.assertTrue(pattern.match("Approve"))
+        self.assertTrue(pattern.match("aprovar"))
+
+    def test_always_approve_never_selected(self):
+        """3. Sempre aprovar NUNCA é selecionado pelo locator de aprovação única."""
+        mock_page = MagicMock()
+        find_single_approve_button(mock_page)
+        args, kwargs = mock_page.get_by_role.call_args_list[0]
+        pattern = kwargs["name"]
+        self.assertIsNone(pattern.match("Sempre aprovar"))
+        self.assertIsNone(pattern.match("Always approve"))
+        self.assertIsNone(pattern.match("sempre aprovar"))
+
+    def test_execute_credit_approval_click_and_confirmation(self):
+        """5. Approval click dispara exatamente 1 clique e confirma desaparecimento do botão."""
+        mock_page = MagicMock()
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_page.get_by_role.return_value.or_.return_value = mock_btn
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            res = execute_credit_approval(mock_page, timeout_confirm_ms=1000)
+            self.assertTrue(res["required"])
+            self.assertEqual(res["click_count"], 1)
+            self.assertTrue(res["confirmed"])
+            self.assertFalse(res["always_approve_clicked"])
+            mock_btn.click.assert_called_once()
+            mock_expect.assert_called_once_with(mock_btn)
+
+    def test_execute_credit_approval_timeout_fails_closed_no_retry(self):
+        """6. Approval timeout falha fechado com CREDIT_APPROVAL_NOT_CONFIRMED e sem segundo clique."""
+        mock_page = MagicMock()
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_page.get_by_role.return_value.or_.return_value = mock_btn
+
+        with patch("scripts.flow_playwright.expect", side_effect=Exception("Timeout waiting for hidden")):
+            res = execute_credit_approval(mock_page, timeout_confirm_ms=100)
+            self.assertFalse(res["confirmed"])
+            self.assertEqual(res["error"], "CREDIT_APPROVAL_NOT_CONFIRMED")
+            self.assertEqual(res["click_count"], 1)
+            # Garantia mandatória: disparado estritamente UMA vez
+            mock_btn.click.assert_called_once()
+
+    def test_check_pending_approval_found(self):
+        """4. Approval pendente no início é detectado com contagem e custo."""
+        mock_page = MagicMock()
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_btn.first.is_visible.return_value = True
+        mock_page.get_by_role.return_value.or_.return_value = mock_btn
+        mock_page.locator.return_value.inner_text.return_value = "custa 15 créditos para gerar"
+
+        is_pending, count, cost = check_pending_credit_approval(mock_page)
+        self.assertTrue(is_pending)
+        self.assertEqual(count, 1)
+        self.assertEqual(cost, 15)
+
+    def test_generation_started_success_contract(self):
+        """7. Generation start real bem-sucedido retorna True permitindo attempts = 1."""
+        mock_page = MagicMock()
+        mock_page.wait_for_function.return_value = True
+        started = wait_for_generation_started(mock_page, timeout_ms=500)
+        self.assertTrue(started)
 
 
 if __name__ == "__main__":

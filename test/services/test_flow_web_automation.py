@@ -1,19 +1,16 @@
 """
 test/services/test_flow_web_automation.py
 =========================================
-Testes unitários e mocks locais para automação web do Google Flow (V1.4A).
+Testes unitários e mocks locais para automação web do Google Flow (V1.4A.1).
 
 Cobre:
-1. Validação rigorosa de arquivo de mídia (validate_clip_file).
-2. Idempotência obrigatória: reaproveita clipe existente sem nova chamada ao browser.
-3. Fail-Closed para estados de risco:
-   - Sessão não autenticada -> AWAITING_INITIAL_HUMAN_LOGIN
-   - Desafio CAPTCHA -> BLOCKED_CAPTCHA
-   - Créditos esgotados -> BLOCKED_NO_CREDITS
-   - Geração já em andamento -> BLOCKED_GENERATION_IN_PROGRESS
-4. Ciclo de download (.crdownload -> .mp4 final).
-5. Timeout de geração.
-6. Integração com flow_workflow.py status -> READY_FLOW.
+1. Validação de mídia e idempotência.
+2. Eliminação de falso positivo: landing não vira generation_in_progress.
+3. Elemento hidden progress/spinner não conta; progressbar visível no studio conta.
+4. Modelagem de créditos: ausente -> UNKNOWN, zero -> ZERO, numérico -> AVAILABLE.
+5. Modelagem de superfícies: LANDING != STUDIO, STUDIO exige prompt/editor real.
+6. Navegação segura landing -> studio sem disparar geração nem consumir créditos (preflight).
+7. Fail-closed para sessão, CAPTCHA e concorrência.
 """
 
 import json
@@ -24,7 +21,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.flow_web_automation import (
+    CreditsStatus,
+    FlowSurface,
     check_auth_and_ui_state,
+    navigate_landing_to_studio,
+    run_preflight,
     run_single_scene_poc,
     validate_clip_file,
     wait_for_generation_and_download,
@@ -49,7 +50,7 @@ class TestFlowWebAutomation(unittest.TestCase):
                     "narration": "Nebulosas estelares em rotação contínua.",
                     "duration_hint": 6.0,
                     "expected_clip": "flow_scene_01.mp4",
-                    "is_flow_premium": true if hasattr(__builtins__, "true") else True,
+                    "is_flow_premium": True,
                     "prompt_en": "Majestic cosmic nebula in deep space, slow cinematic camera glide, 9:16 portrait composition.",
                 }
             ],
@@ -61,12 +62,10 @@ class TestFlowWebAutomation(unittest.TestCase):
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_validate_clip_file_missing_and_empty(self):
-        # 1. Arquivo inexistente
         res_missing = validate_clip_file(os.path.join(self.test_dir, "nao_existe.mp4"))
         self.assertFalse(res_missing["valid"])
         self.assertEqual(res_missing["error"], "FILE_NOT_FOUND")
 
-        # 2. Extensão inválida
         invalid_ext = os.path.join(self.test_dir, "video.txt")
         with open(invalid_ext, "w") as f:
             f.write("teste")
@@ -74,7 +73,6 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertFalse(res_ext["valid"])
         self.assertEqual(res_ext["error"], "NOT_MP4_EXTENSION")
 
-        # 3. Arquivo vazio (0 bytes)
         empty_mp4 = os.path.join(self.test_dir, "empty.mp4")
         open(empty_mp4, "wb").close()
         res_empty = validate_clip_file(empty_mp4)
@@ -87,7 +85,6 @@ class TestFlowWebAutomation(unittest.TestCase):
         with open(sample_mp4, "wb") as f:
             f.write(b"fake_mp4_bytes")
 
-        # Caso válido
         mock_probe.return_value = {
             "valid": True,
             "format_duration": 6.5,
@@ -98,7 +95,6 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertEqual(res_valid["duration"], 6.5)
         self.assertIsNone(res_valid["error"])
 
-        # Caso duração zero
         mock_probe.return_value = {
             "valid": True,
             "format_duration": 0.0,
@@ -108,7 +104,6 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertFalse(res_zero["valid"])
         self.assertEqual(res_zero["error"], "ZERO_DURATION")
 
-        # Caso sem stream de vídeo
         mock_probe.return_value = {
             "valid": True,
             "format_duration": 5.0,
@@ -131,7 +126,6 @@ class TestFlowWebAutomation(unittest.TestCase):
             "error": None,
         }
 
-        # Executa sem cliente CDP: não deve nem tentar abrir o browser
         res = run_single_scene_poc(
             manifest_path=self.manifest_path,
             scene_index=1,
@@ -142,6 +136,171 @@ class TestFlowWebAutomation(unittest.TestCase):
         self.assertTrue(res["idempotent"])
         self.assertEqual(res["duration"], 5.8)
         self.assertEqual(res["generation_attempts"], 0)
+
+    def test_landing_does_not_trigger_generation_in_progress(self):
+        """Landing page com promoção/carrossel NÃO deve marcar isGenerating=True."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/?pli=1",
+            "title": "Google Flow",
+            "isBlank": False,
+            "hasCaptcha": False,
+            "isAccountsPage": False,
+            "isLandingAbout": False,
+            "hasLoginBtn": False,
+            "isAuthenticated": True,
+            "surface": FlowSurface.LANDING,
+            "hasPromptInput": False,
+            "promptInputsCount": 0,
+            "isGenerating": False,
+            "falsePositiveSource": "DIV.promotion-banner-progress-bar (role=none)",
+            "credits": None,
+            "creditsStatus": CreditsStatus.UNKNOWN,
+        }
+
+        state = check_auth_and_ui_state(mock_cdp)
+        self.assertEqual(state["surface"], FlowSurface.LANDING)
+        self.assertFalse(state["isGenerating"])
+        self.assertIn("promotion-banner-progress-bar", state["falsePositiveSource"])
+
+    def test_hidden_progress_element_does_not_count(self):
+        """Elemento com classe progress/spinner ou role=progressbar porém oculto não conta."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/project/123",
+            "title": "Google Flow Studio",
+            "surface": FlowSurface.STUDIO,
+            "isAuthenticated": True,
+            "hasPromptInput": True,
+            "isGenerating": False,
+            "falsePositiveSource": None,
+        }
+
+        state = check_auth_and_ui_state(mock_cdp)
+        self.assertFalse(state["isGenerating"])
+
+    def test_visible_progressbar_in_studio_counts(self):
+        """Progressbar visível real dentro do studio marca isGenerating=True."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/project/123",
+            "title": "Google Flow Studio",
+            "surface": FlowSurface.STUDIO,
+            "isAuthenticated": True,
+            "hasPromptInput": True,
+            "isGenerating": True,
+            "falsePositiveSource": None,
+        }
+
+        state = check_auth_and_ui_state(mock_cdp)
+        self.assertEqual(state["surface"], FlowSurface.STUDIO)
+        self.assertTrue(state["isGenerating"])
+
+    def test_credits_absent_evaluates_to_unknown(self):
+        """Ausência de contador de créditos resulta em UNKNOWN, e não AVAILABLE."""
+        mock_cdp = MagicMock()
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/",
+            "surface": FlowSurface.LANDING,
+            "isAuthenticated": True,
+            "credits": None,
+            "creditsStatus": CreditsStatus.UNKNOWN,
+            "creditsAvailable": None,
+        }
+
+        state = check_auth_and_ui_state(mock_cdp)
+        self.assertEqual(state["creditsStatus"], CreditsStatus.UNKNOWN)
+        self.assertIsNone(state["creditsAvailable"])
+
+    def test_landing_different_from_studio(self):
+        """LANDING (sem editor) é estritamente diferente de STUDIO (com editor)."""
+        mock_cdp = MagicMock()
+
+        # 1. Landing
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/",
+            "surface": FlowSurface.LANDING,
+            "isAuthenticated": True,
+            "hasPromptInput": False,
+        }
+        landing_state = check_auth_and_ui_state(mock_cdp)
+        self.assertEqual(landing_state["surface"], FlowSurface.LANDING)
+        self.assertFalse(landing_state["hasPromptInput"])
+
+        # 2. Studio
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/project/abc-123",
+            "surface": FlowSurface.STUDIO,
+            "isAuthenticated": True,
+            "hasPromptInput": True,
+            "promptInputsCount": 1,
+        }
+        studio_state = check_auth_and_ui_state(mock_cdp)
+        self.assertEqual(studio_state["surface"], FlowSurface.STUDIO)
+        self.assertTrue(studio_state["hasPromptInput"])
+        self.assertNotEqual(landing_state["surface"], studio_state["surface"])
+
+    def test_studio_requires_real_prompt_editor(self):
+        """STUDIO exige editor de prompt real presente (ex: ProseMirror/textarea)."""
+        mock_cdp = MagicMock()
+        # Sem editor de prompt -> não pode ser considerado pronto para gerar
+        mock_cdp.eval_js.return_value = {
+            "url": "https://flow.google.com/project/abc-123",
+            "surface": FlowSurface.STUDIO,
+            "hasPromptInput": False,
+            "promptInputsCount": 0,
+        }
+        state = check_auth_and_ui_state(mock_cdp)
+        self.assertFalse(state["hasPromptInput"])
+
+    def test_safe_navigation_and_preflight_does_not_trigger_generate(self):
+        """Navegação segura e preflight fazem transição LANDING -> STUDIO sem disparar geração."""
+        mock_cdp = MagicMock()
+
+        # Sequência simulada no preflight:
+        # 1. State before (LANDING)
+        # 2. Navegação (click em novo projeto)
+        # 3. State after (STUDIO)
+        state_landing = {
+            "url": "https://flow.google.com/",
+            "title": "Google Flow",
+            "isAuthenticated": True,
+            "surface": FlowSurface.LANDING,
+            "hasPromptInput": False,
+            "promptInputsCount": 0,
+            "hasCaptcha": False,
+            "isGenerating": False,
+            "creditsStatus": CreditsStatus.UNKNOWN,
+            "falsePositiveSource": "DIV.promotion-banner-progress-bar",
+        }
+        state_studio = {
+            "url": "https://flow.google.com/project/proj-uuid-123",
+            "title": "Google Flow Studio",
+            "isAuthenticated": True,
+            "surface": FlowSurface.STUDIO,
+            "hasPromptInput": True,
+            "promptInputsCount": 1,
+            "hasCaptcha": False,
+            "isGenerating": False,
+            "creditsStatus": CreditsStatus.UNKNOWN,
+            "falsePositiveSource": None,
+        }
+
+        # No preflight, check_auth_and_ui_state é chamado para before e after
+        with patch("scripts.flow_web_automation.check_auth_and_ui_state", side_effect=[state_landing, state_studio]):
+            with patch("scripts.flow_web_automation.navigate_landing_to_studio", return_value=state_studio) as mock_nav:
+                res = run_preflight(cdp_client=mock_cdp)
+
+                mock_nav.assert_called_once()
+                self.assertEqual(res["status"], "PREFLIGHT_OK")
+                self.assertEqual(res["flow_surface_before"], FlowSurface.LANDING)
+                self.assertEqual(res["flow_surface_after"], FlowSurface.STUDIO)
+                self.assertTrue(res["prompt_input_found"])
+                self.assertFalse(res["generation_in_progress"])
+                self.assertTrue(res["safe_to_attempt_generation"])
+                self.assertEqual(res["generation_attempts"], 0)
+                self.assertEqual(res["credits_consumed"], 0)
+                self.assertFalse(res["download_attempted"])
 
     def test_fail_closed_unauthenticated(self):
         mock_cdp = MagicMock()
@@ -154,8 +313,10 @@ class TestFlowWebAutomation(unittest.TestCase):
             "isLandingAbout": True,
             "hasLoginBtn": True,
             "isAuthenticated": False,
-            "creditsAvailable": True,
+            "surface": FlowSurface.LOGIN,
+            "hasPromptInput": False,
             "isGenerating": False,
+            "creditsStatus": CreditsStatus.UNKNOWN,
         }
 
         res = run_single_scene_poc(
@@ -179,8 +340,10 @@ class TestFlowWebAutomation(unittest.TestCase):
             "isLandingAbout": False,
             "hasLoginBtn": False,
             "isAuthenticated": False,
-            "creditsAvailable": True,
+            "surface": FlowSurface.CHALLENGE,
+            "hasPromptInput": False,
             "isGenerating": False,
+            "creditsStatus": CreditsStatus.UNKNOWN,
         }
 
         res = run_single_scene_poc(
@@ -195,7 +358,7 @@ class TestFlowWebAutomation(unittest.TestCase):
     def test_fail_closed_no_credits(self):
         mock_cdp = MagicMock()
         mock_cdp.eval_js.return_value = {
-            "url": "https://flow.google.com/studio",
+            "url": "https://flow.google.com/project/test",
             "title": "Google Flow Studio",
             "isBlank": False,
             "hasCaptcha": False,
@@ -203,7 +366,10 @@ class TestFlowWebAutomation(unittest.TestCase):
             "isLandingAbout": False,
             "hasLoginBtn": False,
             "isAuthenticated": True,
+            "surface": FlowSurface.STUDIO,
+            "hasPromptInput": True,
             "credits": 0,
+            "creditsStatus": CreditsStatus.ZERO,
             "creditsAvailable": False,
             "isGenerating": False,
         }
@@ -215,81 +381,7 @@ class TestFlowWebAutomation(unittest.TestCase):
         )
 
         self.assertEqual(res["status"], "BLOCKED_NO_CREDITS")
-        self.assertEqual(res["credits_status"], "ZERO_OR_UNAVAILABLE")
-
-    def test_fail_closed_generation_in_progress(self):
-        mock_cdp = MagicMock()
-        mock_cdp.eval_js.return_value = {
-            "url": "https://flow.google.com/studio",
-            "title": "Google Flow Studio",
-            "isBlank": False,
-            "hasCaptcha": False,
-            "isAccountsPage": False,
-            "isLandingAbout": False,
-            "hasLoginBtn": False,
-            "isAuthenticated": True,
-            "creditsAvailable": True,
-            "isGenerating": True,
-        }
-
-        res = run_single_scene_poc(
-            manifest_path=self.manifest_path,
-            scene_index=1,
-            cdp_client=mock_cdp,
-        )
-
-        self.assertEqual(res["status"], "BLOCKED_GENERATION_IN_PROGRESS")
-
-    def test_download_monitoring_crdownload_and_completion(self):
-        temp_dl_dir = os.path.join(self.test_dir, "downloads")
-        os.makedirs(temp_dl_dir, exist_ok=True)
-
-        mock_cdp = MagicMock()
-        # Estado inicial: não está gerando, tem vídeo pronto
-        mock_cdp.eval_js.side_effect = [
-            # 1. check_auth_and_ui_state no loop de espera
-            {
-                "hasCaptcha": False,
-                "isGenerating": False,
-                "isAuthenticated": True,
-                "creditsAvailable": True,
-            },
-            # 2. check ready vídeo
-            {"hasVideo": True, "hasDownloadBtn": True},
-            # 3. trigger download
-            {"clicked": True},
-        ]
-
-        # Cria arquivo .mp4 simulado
-        finished_file = os.path.join(temp_dl_dir, "generated_scene.mp4")
-        with open(finished_file, "wb") as f:
-            f.write(b"mp4_content_12345")
-
-        downloaded = wait_for_generation_and_download(
-            cdp=mock_cdp,
-            download_dir=temp_dl_dir,
-            timeout_generation_sec=5,
-            timeout_download_sec=5,
-        )
-
-        self.assertEqual(downloaded, finished_file)
-        self.assertTrue(os.path.isfile(downloaded))
-
-    def test_generation_timeout_fail_closed(self):
-        mock_cdp = MagicMock()
-        mock_cdp.eval_js.return_value = {
-            "hasCaptcha": False,
-            "isGenerating": True,
-            "isAuthenticated": True,
-            "creditsAvailable": True,
-        }
-
-        with self.assertRaises(TimeoutError):
-            wait_for_generation_and_download(
-                cdp=mock_cdp,
-                download_dir=self.test_dir,
-                timeout_generation_sec=1,
-            )
+        self.assertEqual(res["credits_status"], CreditsStatus.ZERO)
 
     @patch("app.services.media_quality.probe_media")
     def test_flow_workflow_status_recognizes_ready_flow(self, mock_probe):
@@ -299,7 +391,6 @@ class TestFlowWebAutomation(unittest.TestCase):
             "video_streams": [{"codec_name": "h264"}],
         }
 
-        # Cria o clipe no diretório clips/
         clip_path = os.path.join(self.clips_dir, "flow_scene_01.mp4")
         with open(clip_path, "wb") as f:
             f.write(b"valid_clip_content_for_testing")

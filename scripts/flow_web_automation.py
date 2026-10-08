@@ -1,26 +1,18 @@
 """
 scripts/flow_web_automation.py
 ==============================
-Fase V1.4A — Automação Web Autônoma do Google Flow via Chromium DevTools Protocol (CDP).
+Fase V1.4A.1 — Automação Web Autônoma do Google Flow via Chromium DevTools Protocol (CDP).
 
 Objetivo:
 Automação pontual, resiliente e segura da interface web do Google Flow (flow.google.com)
 utilizando créditos existentes da assinatura Google AI Pro sem custos de API por vídeo.
 
-Princípios Mandatórios:
-1. Sem Playwright/Selenium: Utiliza Chromium/Edge nativo do sistema via CDP com websocket-client==1.9.0.
-2. Sessão Persistente: Perfil seguro isolado em storage/flow_browser_profile (ignorado no git).
-3. Sem Secrets no Código: Senhas Google NUNCA são manipuladas, pedidas ou registradas pelo código.
-4. Fail-Closed Obrigatório:
-   - Login expirado / não autenticado -> AWAITING_INITIAL_HUMAN_LOGIN (STOP).
-   - CAPTCHA / desafio Google -> BLOCKED_CAPTCHA (STOP).
-   - Créditos zero ou indisponíveis -> BLOCKED_NO_CREDITS (STOP).
-   - Geração já em andamento -> BLOCKED_GENERATION_IN_PROGRESS (STOP).
-   - Timeout de geração / UI ambígua -> STOP / FAIL-CLOSED.
-5. Idempotência Rigorosa: Se o clipe (flow_scene_01.mp4) já existir e for válido, NÃO gera novamente.
-   Retorna ALREADY_COMPLETE sem consumir novos créditos.
-6. Validação Completa de Download: O clipe final deve ser validado via probe_media / ffprobe
-   (existência, extensão .mp4, tamanho > 0, duração > 0 e presença de stream de vídeo).
+Melhorias V1.4A.1:
+1. Eliminação de falso positivo de isGenerating na landing page (ignora banners/carrosséis).
+2. Modelagem explícita de superfícies da UI (FLOW_SURFACE: LANDING, STUDIO, LOGIN, CHALLENGE, UNKNOWN).
+3. Detecção real de créditos (CREDITS_STATUS: AVAILABLE, ZERO, UNKNOWN).
+4. Navegação segura da LANDING para o STUDIO (abertura de projeto / novo projeto).
+5. Comando read-only preflight para validação prévia sem consumo de créditos nem geração.
 """
 
 from __future__ import annotations
@@ -59,6 +51,23 @@ LOGIN_URL = "https://accounts.google.com/ServiceLogin?continue=https://flow.goog
 # Timeout padrão
 DEFAULT_TIMEOUT_GENERATION_SEC = 300
 DEFAULT_DOWNLOAD_WAIT_SEC = 90
+
+
+class FlowSurface:
+    """Superfícies de interface do Google Flow."""
+    LANDING = "LANDING"
+    STUDIO = "STUDIO"
+    LOGIN = "LOGIN"
+    CHALLENGE = "CHALLENGE"
+    UNKNOWN = "UNKNOWN"
+
+
+class CreditsStatus:
+    """Status operacional de créditos de IA."""
+    AVAILABLE = "AVAILABLE"
+    ZERO = "ZERO"
+    UNKNOWN = "UNKNOWN"
+
 
 # Candidatos executáveis Chromium no Windows
 CHROME_CANDIDATES = [
@@ -309,9 +318,18 @@ class CDPConnection:
 
 
 def check_auth_and_ui_state(cdp: CDPConnection) -> Dict[str, Any]:
-    """Inspeciona o estado da página para detectar autenticação, captcha, créditos e UI."""
+    """Inspeciona o estado da página para detectar autenticação, captcha, créditos, superfície e UI."""
     js_detect = """
     (() => {
+        function isElementVisible(el) {
+            if (!el) return false;
+            if (el.getAttribute('aria-hidden') === 'true') return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }
+
         const url = document.location.href || '';
         const title = document.title || '';
         const bodyText = document.body ? document.body.innerText : '';
@@ -329,55 +347,107 @@ def check_auth_and_ui_state(cdp: CDPConnection) -> Dict[str, Any]:
         const isAccountsPage = url.includes('accounts.google.com');
         const isLandingAbout = url.includes('/about');
         const hasLoginBtn = Array.from(document.querySelectorAll('button, a')).some(el => {
+            if (!isElementVisible(el)) return false;
             const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase().trim();
             return txt === 'fazer login' || txt === 'sign in' || txt === 'login' || txt.includes('fazer login');
         });
 
-        // 3. Detecção de créditos ou assinatura
-        const creditsMatch = bodyText.match(/(\\d+)\\s*(?:créditos|credits|AI credits)/i);
-        const credits = creditsMatch ? parseInt(creditsMatch[1], 10) : null;
-        const noCreditsDetected = bodyText.includes('0 créditos') ||
-                                  bodyText.includes('0 credits') ||
-                                  bodyText.includes('sem créditos') ||
-                                  bodyText.includes('no credits left');
-
-        // Se créditos forem explicitamente 0 ou acusarem esgotamento
-        const creditsAvailable = noCreditsDetected ? false : (credits === 0 ? false : true);
-
-        // 4. Detecção de geração em andamento
-        const isGenerating = Array.from(document.querySelectorAll('*')).some(el => {
-            const role = el.getAttribute('role') || '';
-            const cls = (el.className || '').toString();
-            const txt = (el.innerText || '').toLowerCase();
-            return role === 'progressbar' ||
-                   cls.includes('spinner') ||
-                   cls.includes('progress') ||
-                   txt.includes('gerando...') ||
-                   txt.includes('generating...') ||
-                   txt.includes('criando...') ||
-                   txt.includes('creating...');
-        });
-
-        // 5. Detecção de campos de prompt e botões
-        const inputs = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]')).map(el => {
-            return {
-                tag: el.tagName,
-                placeholder: el.placeholder || '',
-                aria: el.getAttribute('aria-label') || '',
-                id: el.id || '',
-                className: (el.className || '').toString()
-            };
-        });
-
-        const buttons = Array.from(document.querySelectorAll('button')).map(b => (b.innerText || b.getAttribute('aria-label') || '').trim()).filter(Boolean);
-
-        // Vídeos prontos na página
-        const videoElements = Array.from(document.querySelectorAll('video')).map(v => ({
-            src: v.src || '',
-            currentSrc: v.currentSrc || ''
-        }));
-
         const isAuthenticated = !isBlank && !isAccountsPage && !isLandingAbout && !hasLoginBtn && !hasCaptcha && (url.includes('flow.google') || url.includes('labs.google'));
+
+        // 3. Detecção de campos reais de prompt / editor
+        const allInputs = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]'));
+        const promptInputs = allInputs.filter(el => {
+            if (!isElementVisible(el)) return false;
+            const isContentEditable = el.getAttribute('contenteditable') === 'true';
+            const isTextarea = el.tagName === 'TEXTAREA';
+            const isProseMirror = el.classList && el.classList.contains('ProseMirror');
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            const placeholder = (el.getAttribute('placeholder') || '').toLowerCase();
+            const isSearch = el.type === 'search' || aria.includes('pesquisar') || placeholder.includes('pesquisar') || (el.className && el.className.toString().includes('search'));
+            const isTitle = aria.includes('editável') || (el.className && el.className.toString().includes('editable-text-input'));
+            if (isSearch || isTitle) return false;
+            return isProseMirror || isContentEditable || isTextarea || aria.includes('prompt') || aria.includes('comando') || placeholder.includes('prompt') || placeholder.includes('comando');
+        });
+
+        const hasPromptInput = promptInputs.length > 0;
+
+        // 4. Modelagem explícita de superfície (FLOW_SURFACE)
+        let surface = 'UNKNOWN';
+        if (hasCaptcha) {
+            surface = 'CHALLENGE';
+        } else if (isAccountsPage || isLandingAbout || hasLoginBtn || !isAuthenticated) {
+            surface = 'LOGIN';
+        } else if ((url.includes('/project/') || url.includes('/tools/flow')) && hasPromptInput) {
+            surface = 'STUDIO';
+        } else if (hasPromptInput) {
+            surface = 'STUDIO';
+        } else if (url.includes('flow.google.com') || url.includes('labs.google')) {
+            surface = 'LANDING';
+        }
+
+        // 5. Detecção de geração ativa (Eliminação rigorosa de falsos positivos)
+        let isGenerating = false;
+        let falsePositiveSource = null;
+
+        const suspectElements = Array.from(document.querySelectorAll('*')).filter(el => {
+            const role = el.getAttribute('role') || '';
+            const cls = (el.className || '').toString().toLowerCase();
+            const txt = (el.innerText || '').toLowerCase();
+            return role === 'progressbar' || cls.includes('spinner') || cls.includes('progress') ||
+                   txt.includes('gerando...') || txt.includes('generating...') || txt.includes('criando...') || txt.includes('creating...');
+        });
+
+        if (surface === 'LANDING') {
+            // Na LANDING é impossível ter geração ativa de clipe
+            isGenerating = false;
+            if (suspectElements.length > 0) {
+                const fp = suspectElements[0];
+                falsePositiveSource = `${fp.tagName}.${fp.className || 'no-class'} (role=${fp.getAttribute('role') || 'none'})`;
+            }
+        } else if (surface === 'STUDIO') {
+            // No STUDIO, exige elemento VISÍVEL e semântico de geração
+            for (const el of suspectElements) {
+                if (!isElementVisible(el)) continue;
+                const cls = (el.className || '').toString().toLowerCase();
+                if (cls.includes('banner') || cls.includes('promotion') || cls.includes('dash')) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 15 || rect.height < 6) continue;
+
+                const txt = (el.innerText || '').toLowerCase();
+                const role = el.getAttribute('role') || '';
+                if (role === 'progressbar' || txt.includes('gerando...') || txt.includes('generating...') || txt.includes('criando...') || txt.includes('creating...')) {
+                    isGenerating = true;
+                    break;
+                }
+            }
+        }
+
+        // 6. Detecção de créditos (Fail-Closed Real: AVAILABLE, ZERO, UNKNOWN)
+        const creditsMatch = bodyText.match(/(\\d+)\\s*(?:créditos|credits|AI credits)/i);
+        const numericCredits = creditsMatch ? parseInt(creditsMatch[1], 10) : null;
+        const zeroCreditsDetected = bodyText.includes('0 créditos') ||
+                                    bodyText.includes('0 credits') ||
+                                    bodyText.includes('sem créditos') ||
+                                    bodyText.includes('no credits left');
+
+        let creditsStatus = 'UNKNOWN';
+        let creditsAvailable = null;
+
+        if (zeroCreditsDetected || numericCredits === 0) {
+            creditsStatus = 'ZERO';
+            creditsAvailable = false;
+        } else if (numericCredits !== null && numericCredits > 0) {
+            creditsStatus = 'AVAILABLE';
+            creditsAvailable = true;
+        } else {
+            creditsStatus = 'UNKNOWN';
+            creditsAvailable = null;
+        }
+
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'))
+            .filter(el => isElementVisible(el))
+            .map(b => (b.innerText || b.getAttribute('aria-label') || '').trim())
+            .filter(Boolean);
 
         return {
             url,
@@ -388,12 +458,15 @@ def check_auth_and_ui_state(cdp: CDPConnection) -> Dict[str, Any]:
             isLandingAbout,
             hasLoginBtn,
             isAuthenticated,
-            credits,
-            creditsAvailable,
+            surface,
+            hasPromptInput,
+            promptInputsCount: promptInputs.length,
             isGenerating,
-            inputCandidatesCount: inputs.length,
-            buttonsSample: buttons.slice(0, 15),
-            videoElementsCount: videoElements.length
+            falsePositiveSource,
+            credits: numericCredits,
+            creditsStatus,
+            creditsAvailable,
+            buttonsSample: buttons.slice(0, 15)
         };
     })()
     """
@@ -406,6 +479,165 @@ def navigate_to_login(cdp: CDPConnection):
     cdp.send("Page.navigate", {"url": LOGIN_URL})
 
 
+def navigate_landing_to_studio(cdp: CDPConnection, timeout_sec: int = 15) -> Dict[str, Any]:
+    """
+    Navega com segurança da landing page do Flow para a superfície do Studio (editor).
+    Não insere prompt e não consome créditos.
+    """
+    state = check_auth_and_ui_state(cdp)
+    if state.get("surface") == FlowSurface.STUDIO and state.get("hasPromptInput"):
+        logger.info("Já na superfície STUDIO com editor pronto.")
+        return state
+
+    if state.get("surface") != FlowSurface.LANDING:
+        logger.warning(f"Tentativa de navegar ao Studio a partir de superfície não-LANDING: {state.get('surface')}")
+        return state
+
+    logger.info("Navegando da LANDING para o STUDIO (clicando em Novo projeto)...")
+    nav_js = """
+    (() => {
+        function isElementVisible(el) {
+            if (!el) return false;
+            if (el.getAttribute('aria-hidden') === 'true') return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }
+
+        const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+        const newProjBtn = btns.find(b => {
+            if (!isElementVisible(b)) return false;
+            const txt = (b.innerText || '').toLowerCase().trim();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+            const cls = (b.className || '').toString().toLowerCase();
+            return txt.includes('novo projeto') || txt.includes('new project') ||
+                   aria.includes('novo projeto') || aria.includes('new project') ||
+                   cls.includes('new-project');
+        });
+
+        if (newProjBtn) {
+            newProjBtn.click();
+            return { clicked: true, text: newProjBtn.innerText };
+        }
+
+        const projectLink = Array.from(document.querySelectorAll('a[href*="/project/"]')).find(a => isElementVisible(a));
+        if (projectLink) {
+            projectLink.click();
+            return { clicked: true, text: 'existing-project', href: projectLink.href };
+        }
+
+        return { clicked: false };
+    })()
+    """
+
+    start_t = time.time()
+    clicked = False
+    while time.time() - start_t < timeout_sec:
+        click_res = cdp.eval_js(nav_js)
+        if click_res and click_res.get("clicked"):
+            clicked = True
+            logger.info(f"CTA de criação de projeto acionado com sucesso: {click_res.get('text')}")
+            break
+        time.sleep(1)
+
+    if not clicked:
+        logger.warning("Nenhum botão de Novo Projeto ou link de projeto encontrado na LANDING.")
+        return check_auth_and_ui_state(cdp)
+
+    # Aguarda estabilização da SPA e aparição do ProseMirror / editor
+    studio_start = time.time()
+    while time.time() - studio_start < timeout_sec:
+        time.sleep(1)
+        new_state = check_auth_and_ui_state(cdp)
+        if new_state.get("surface") == FlowSurface.STUDIO and new_state.get("hasPromptInput"):
+            logger.info(f"Superfície STUDIO confirmada com editor de prompt pronto! ({new_state.get('url')})")
+            return new_state
+
+    return check_auth_and_ui_state(cdp)
+
+
+def run_preflight(cdp_client: Optional[CDPConnection] = None) -> Dict[str, Any]:
+    """
+    Executa verificação read-only preflight da UI do Flow.
+    CRÍTICO:
+    - NÃO preenche prompt.
+    - NÃO clica em Generate.
+    - NÃO consome créditos.
+    """
+    should_close_cdp = False
+    cdp = cdp_client
+    if cdp is None:
+        if not is_cdp_ready():
+            launch_browser(headless=False)
+        cdp = CDPConnection()
+        cdp.connect_to_flow_target()
+        should_close_cdp = True
+
+    try:
+        state_before = check_auth_and_ui_state(cdp)
+        surface_before = state_before.get("surface", FlowSurface.UNKNOWN)
+
+        # Se estiver na LANDING, transiciona com segurança para o STUDIO
+        state_after = state_before
+        if surface_before == FlowSurface.LANDING:
+            state_after = navigate_landing_to_studio(cdp)
+
+        surface_after = state_after.get("surface", FlowSurface.UNKNOWN)
+        authenticated = bool(state_after.get("isAuthenticated"))
+        prompt_input_found = bool(state_after.get("hasPromptInput"))
+        has_captcha = bool(state_after.get("hasCaptcha"))
+        is_generating = bool(state_after.get("isGenerating"))
+        credits_status = state_after.get("creditsStatus", CreditsStatus.UNKNOWN)
+
+        safe_to_attempt = (
+            authenticated and
+            surface_after == FlowSurface.STUDIO and
+            prompt_input_found and
+            not has_captcha and
+            not is_generating and
+            credits_status != CreditsStatus.ZERO
+        )
+
+        result = {
+            "status": "PREFLIGHT_OK" if safe_to_attempt else "PREFLIGHT_BLOCKED",
+            "authenticated": authenticated,
+            "flow_surface_before": surface_before,
+            "flow_surface_after": surface_after,
+            "prompt_input_found": prompt_input_found,
+            "captcha_status": "BLOCKED" if has_captcha else "NONE",
+            "generation_in_progress": is_generating,
+            "credits_status": credits_status,
+            "safe_to_attempt_generation": safe_to_attempt,
+            "false_positive_source": state_before.get("falsePositiveSource") or state_after.get("falsePositiveSource"),
+            "generation_attempts": 0,
+            "credits_consumed": 0,
+            "download_attempted": False,
+            "url": state_after.get("url"),
+        }
+
+        print("\n" + "=" * 60)
+        print("FLOW AUTONOMOUS WEB — PREFLIGHT AUDIT (READ-ONLY)")
+        print("=" * 60)
+        print(f"AUTHENTICATED:              {'YES' if authenticated else 'NO'}")
+        print(f"FLOW_SURFACE_BEFORE:        {surface_before}")
+        print(f"FLOW_SURFACE_AFTER:         {surface_after}")
+        print(f"PROMPT_INPUT_FOUND:         {'YES' if prompt_input_found else 'NO'}")
+        print(f"CAPTCHA_STATUS:             {result['captcha_status']}")
+        print(f"GENERATION_IN_PROGRESS:     {'YES' if is_generating else 'NO'}")
+        print(f"CREDITS_STATUS:             {credits_status}")
+        print(f"SAFE_TO_ATTEMPT_GENERATION: {'YES' if safe_to_attempt else 'NO'}")
+        print(f"GENERATION_ATTEMPTS:        0")
+        print(f"CREDITS_CONSUMED:           0")
+        print(f"DOWNLOAD_ATTEMPTED:         NO")
+        print("=" * 60)
+
+        return result
+    finally:
+        if should_close_cdp:
+            cdp.close()
+
+
 def inject_prompt_and_generate(cdp: CDPConnection, prompt_text: str) -> Dict[str, Any]:
     """
     Localiza o campo de prompt na UI do Flow, insere o prompt da cena e clica em Gerar.
@@ -414,35 +646,42 @@ def inject_prompt_and_generate(cdp: CDPConnection, prompt_text: str) -> Dict[str
     js_inject = f"""
     (() => {{
         const prompt = {json.dumps(prompt_text)};
-        // Localiza campo de prompt
-        const input = document.querySelector('textarea, [contenteditable="true"], input[type="text"]');
+        // Localiza ProseMirror (editor oficial do Google Flow) ou textarea/contenteditable
+        const input = document.querySelector('div.ProseMirror[contenteditable="true"], textarea, [contenteditable="true"], input[type="text"]');
         if (!input) {{
             return {{ success: false, error: "NO_PROMPT_INPUT_FOUND" }};
         }}
 
         // Foca e preenche
         input.focus();
-        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {{
+        if (input.classList && input.classList.contains('ProseMirror')) {{{{
+            input.textContent = prompt;
+            input.dispatchEvent(new Event('input', {{{{ bubbles: true }}}}));
+        }}}} else if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {{{{
             input.value = prompt;
-            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-        }} else {{
+            input.dispatchEvent(new Event('input', {{{{ bubbles: true }}}}));
+            input.dispatchEvent(new Event('change', {{{{ bubbles: true }}}}));
+        }}}} else {{{{
             input.innerText = prompt;
-            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        }}
+            input.dispatchEvent(new Event('input', {{{{ bubbles: true }}}}));
+        }}}}
 
         // Localiza botão de submissão/geração
-        const buttons = Array.from(document.querySelectorAll('button'));
-        const genBtn = buttons.find(b => {{
-            const txt = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase();
-            return txt.includes('gerar') || txt.includes('generate') || txt.includes('criar') || txt.includes('create') || txt.includes('submit');
-        }});
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+        const genBtn = buttons.find(b => {{{{
+            const txt = (b.innerText || '').toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            const cls = (b.className || '').toString().toLowerCase();
+            return aria.includes('iniciar geração') || aria.includes('start generation') ||
+                   cls.includes('generate-button') ||
+                   txt.includes('gerar') || txt.includes('generate') || txt.includes('criar') || txt.includes('create');
+        }}}});
 
         if (!genBtn) {{
             return {{ success: false, error: "NO_GENERATE_BUTTON_FOUND", inputFilled: true }};
         }}
 
-        if (genBtn.disabled) {{
+        if (genBtn.disabled || genBtn.getAttribute('aria-disabled') === 'true') {{
             return {{ success: false, error: "GENERATE_BUTTON_DISABLED", inputFilled: true }};
         }}
 
@@ -510,7 +749,6 @@ def wait_for_generation_and_download(
             dlBtn.click();
             return { clicked: true };
         }
-        // Se houver vídeo com src direto, tenta disparar download programático
         const vid = document.querySelector('video');
         if (vid && (vid.src || vid.currentSrc)) {
             const a = document.createElement('a');
@@ -538,9 +776,7 @@ def wait_for_generation_and_download(
         crdownloads = glob.glob(os.path.join(download_dir, "*.crdownload"))
         mp4_files = glob.glob(os.path.join(download_dir, "*.mp4"))
 
-        # Se não há mais download pendente e há pelo menos um mp4
         if not crdownloads and mp4_files:
-            # Pega o arquivo mp4 mais recente
             latest_mp4 = max(mp4_files, key=os.path.getmtime)
             if os.path.getsize(latest_mp4) > 0:
                 downloaded_file = latest_mp4
@@ -568,6 +804,7 @@ def run_single_scene_poc(
     4. Valida sessão Google:
        - Se não autenticado -> retorna AWAITING_INITIAL_HUMAN_LOGIN e abre página de login.
        - Se CAPTCHA -> BLOCKED_CAPTCHA (STOP).
+       - Se LANDING -> navega com segurança para STUDIO.
        - Se créditos zero -> BLOCKED_NO_CREDITS (STOP).
        - Se geração ativa -> BLOCKED_GENERATION_IN_PROGRESS (STOP).
     5. Configura diretório de download.
@@ -677,20 +914,37 @@ def run_single_scene_poc(
                     "scene_index": scene_index,
                     "google_session_status": "AWAITING_INITIAL_HUMAN_LOGIN",
                     "captcha_status": "NONE",
-                    "credits_status": "UNKNOWN",
+                    "credits_status": CreditsStatus.UNKNOWN,
                     "error": "Sessão Google não autenticada. Operador deve fazer login manualmente.",
                 }
 
-        # Sessão autenticada: verificar créditos
-        if state.get("creditsAvailable") is False or state.get("credits") == 0:
-            logger.error("FAIL-CLOSED: Créditos de IA da assinatura esgotados ou indisponíveis.")
+        # Transição da LANDING para o STUDIO se necessário
+        if state.get("surface") == FlowSurface.LANDING:
+            logger.info("Sessão autenticada na LANDING. Navegando para a superfície STUDIO...")
+            state = navigate_landing_to_studio(cdp)
+
+        if state.get("surface") != FlowSurface.STUDIO or not state.get("hasPromptInput"):
+            logger.error(f"FAIL-CLOSED: Não foi possível alcançar o STUDIO com editor de prompt. Superfície atual: {state.get('surface')}")
+            return {
+                "status": "BLOCKED_SURFACE_NOT_STUDIO",
+                "scene_index": scene_index,
+                "google_session_status": "AUTHENTICATED",
+                "flow_surface": state.get("surface"),
+                "prompt_input_found": state.get("hasPromptInput", False),
+                "error": "Superfície STUDIO não disponível.",
+            }
+
+        # Sessão autenticada no Studio: verificar créditos
+        if state.get("creditsStatus") == CreditsStatus.ZERO:
+            logger.error("FAIL-CLOSED: Créditos de IA da assinatura esgotados ou zerados.")
             return {
                 "status": "BLOCKED_NO_CREDITS",
                 "scene_index": scene_index,
                 "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": "ZERO_OR_UNAVAILABLE",
-                "error": "Créditos indisponíveis. FAIL-CLOSED.",
+                "credits_status": CreditsStatus.ZERO,
+                "error": "Créditos indisponíveis (ZERO). FAIL-CLOSED.",
             }
 
         # Verificar se já há geração ativa
@@ -700,8 +954,9 @@ def run_single_scene_poc(
                 "status": "BLOCKED_GENERATION_IN_PROGRESS",
                 "scene_index": scene_index,
                 "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": "AVAILABLE",
+                "credits_status": state.get("creditsStatus"),
                 "error": "Geração ativa detectada. Evitando duplicidade.",
             }
 
@@ -719,8 +974,9 @@ def run_single_scene_poc(
                 "status": "FAIL_GENERATE_TRIGGER",
                 "scene_index": scene_index,
                 "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": "AVAILABLE",
+                "credits_status": state.get("creditsStatus"),
                 "generation_attempts": 1,
                 "error": inj_res.get("error"),
             }
@@ -740,8 +996,9 @@ def run_single_scene_poc(
                 "status": "FAIL_INVALID_DOWNLOAD",
                 "scene_index": scene_index,
                 "google_session_status": "AUTHENTICATED",
+                "flow_surface": FlowSurface.STUDIO,
                 "captcha_status": "NONE",
-                "credits_status": "AVAILABLE",
+                "credits_status": state.get("creditsStatus"),
                 "generation_attempts": 1,
                 "download_completed": False,
                 "error": val["error"],
@@ -760,8 +1017,9 @@ def run_single_scene_poc(
             "status": "SUCCESS",
             "scene_index": scene_index,
             "google_session_status": "AUTHENTICATED",
+            "flow_surface": FlowSurface.STUDIO,
             "captcha_status": "NONE",
-            "credits_status": "AVAILABLE",
+            "credits_status": state.get("creditsStatus"),
             "generation_attempts": 1,
             "download_completed": True,
             "clip_path": target_clip_path,
@@ -803,6 +1061,7 @@ def open_browser_for_user(timeout_sec: int = 300):
             state = check_auth_and_ui_state(cdp)
             if state.get("isAuthenticated"):
                 print("\n[OK] Autenticação detectada com sucesso no Google Flow!")
+                print(f"Superfície inicial detectada: {state.get('surface')}")
                 print("Sessão salva com sucesso no perfil persistente storage/flow_browser_profile.")
                 return True
             if state.get("hasCaptcha") and (time.time() - last_logged > 15):
@@ -835,11 +1094,13 @@ def check_flow_status():
         print(f"URL Atual:             {state.get('url')}")
         print(f"Título da Página:      {state.get('title')}")
         print(f"Autenticado:           {state.get('isAuthenticated')}")
-        print(f"Login Pendente:        {state.get('hasLoginBtn') or state.get('isLandingAbout') or state.get('isAccountsPage')}")
+        print(f"Superfície UI:         {state.get('surface')}")
+        print(f"Editor de Prompt:      {state.get('hasPromptInput')} ({state.get('promptInputsCount')} inputs)")
         print(f"Desafio CAPTCHA:       {state.get('hasCaptcha')}")
-        print(f"Créditos Disponíveis:  {state.get('creditsAvailable')}")
+        print(f"Status de Créditos:    {state.get('creditsStatus')}")
         print(f"Geração em Andamento:  {state.get('isGenerating')}")
-        print(f"Inputs de Prompt:      {state.get('inputCandidatesCount')}")
+        if state.get("falsePositiveSource"):
+            print(f"Falso Positivo Evitado:{state.get('falsePositiveSource')}")
         print(f"Amostra de Botões:     {state.get('buttonsSample')}")
 
         if state.get("hasCaptcha"):
@@ -849,17 +1110,18 @@ def check_flow_status():
             print("Estado: AWAITING_INITIAL_HUMAN_LOGIN")
             print("Execute: python scripts/flow_web_automation.py open para fazer login manual.")
         else:
-            print("\n[OK] Sessão autenticada e pronta para automação no Google Flow!")
+            print(f"\n[OK] Sessão autenticada! Superfície atual: {state.get('surface')}")
     finally:
         cdp.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Google Flow Web Automation Helper (V1.4A POC)")
+    parser = argparse.ArgumentParser(description="Google Flow Web Automation Helper (V1.4A.1 POC)")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("open", help="Abre o navegador com o perfil persistente para login manual")
     subparsers.add_parser("status", help="Verifica autenticação e estado da UI do Flow")
+    subparsers.add_parser("preflight", help="Executa auditoria read-only da interface (sem preencher prompt nem gerar)")
 
     gen_p = subparsers.add_parser("generate", help="Executa POC de geração para uma única cena")
     gen_p.add_argument("--manifest", required=True, help="Caminho para manifest.json")
@@ -873,6 +1135,8 @@ def main():
         open_browser_for_user()
     elif args.command == "status":
         check_flow_status()
+    elif args.command == "preflight":
+        run_preflight()
     elif args.command == "generate":
         res = run_single_scene_poc(
             manifest_path=args.manifest,

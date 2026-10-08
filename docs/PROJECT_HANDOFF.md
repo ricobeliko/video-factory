@@ -1,16 +1,19 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 07/10/2026
+## Estado Atual Canônico — 08/10/2026
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
-- **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **CURRENT_PHASE** = `V1.5_VISUAL_DIRECTOR`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4_CONCLUDED`
+- **ACTIVE_BRANCH** = `feat/v1-4c-flow-pipeline-integration`
+- **NEXT_GATE** = `V1.5_VISUAL_DIRECTOR`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **BLOCKED_BY** = `NONE`
 
 ### Destaque da Frente Google Flow / Qualidade Visual:
+- **V1.4_FLOW_AUTOMATION** = CONCLUÍDA / HOMOLOGADA
+  - Engine Flow: `Playwright Python 1.63.0` + Edge `msedge`.
+  - Capacidades: single-flight sequencial, idempotência estrita com zero browser em clipes válidos, resume de cenas pendentes, checkpoints atômicos (`atomic_write_json`), recovery pós-consumo (`FLOW_GENERATION_NEEDS_RECOVERY`), isolamento multi-tile com identificador seguro ASB hash SHA-256, pipeline source-aware Flow/stock, fallback configurável (strict por padrão / fallback_stock).
 - **V1.3_AGENT_DIRECTOR** = CONCLUÍDA
   - Vídeo real validado: `storage/manual_media/terra_parou_5s/final/terra_parou_5s_final.mp4` (69s, 25.28 MB).
   - Nicho `curiosidades_ciencia` validado com sucesso (expansão multi-nicho).
@@ -29,8 +32,8 @@
 - **QUALITY_BASELINE** = APROVADA
 - **PUBLICÁVEL** = SIM
 - **DURATION** = 90.50s
-- **Próxima Fase:** `V1.4_FLOW_AUTOMATION_EVALUATION`
-  - Avaliação de viabilidade de automação e integração de API do Google Flow.
+- **Próxima Fase:** `V1.5_VISUAL_DIRECTOR`
+  - Direção visual contextual e planejamento autônomo de cenas Flow.
 - **Visão Futura:**
   - `FUTURE_MULTI_CHANNEL_MULTI_NICHE = planned` (uma única Video Factory atendendo múltiplos canais/nichos, sem forks por canal).
   - `FUTURE_LONG_FORM_VIDEO = planned`
@@ -45,7 +48,8 @@
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA (Commit `65ff981`, 90.50s)
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
 - **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia`; padrão de 6 cenas Flow por Short estabelecido)
-- **V1.4 Flow Automation Evaluation** = ACTIVE (CURRENT_PHASE)
+- **V1.4 Autonomous Flow Pipeline** = CONCLUÍDA / HOMOLOGADA (Playwright 1.63.0 + Edge `msedge`)
+- **V1.5 Visual Director** = PLANNED (NEXT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)

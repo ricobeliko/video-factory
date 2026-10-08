@@ -340,7 +340,7 @@ def generate_pending_flow_scenes(
     """
     Processa sequencialmente (FLOW_BROWSER_CONCURRENCY = 1) todas as cenas marcadas
     com is_flow_premium == True pendentes de geração.
-    
+
     Idempotência: Se expected_clip já existir e for válido, pula imediatamente com zero browser.
     Resume: Pula cenas já prontas e continua da primeira pendente.
     Checkpoint: Persiste status, project_url e completed_scenes após cada cena.

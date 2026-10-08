@@ -10,13 +10,13 @@
 
 ---
 
-# Estado Atual Canônico — 07/10/2026
+# Estado Atual Canônico — 08/10/2026
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
-- **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **CURRENT_PHASE** = `V1.5_VISUAL_DIRECTOR`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4_CONCLUDED`
+- **ACTIVE_BRANCH** = `feat/v1-4c-flow-pipeline-integration`
+- **NEXT_GATE** = `V1.5_VISUAL_DIRECTOR`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **BLOCKED_BY** = `NONE`
@@ -30,7 +30,8 @@
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
 - **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia` com 4 clipes Flow + fallback Coverr; novo padrão estabelecido para 6 cenas Flow por Short)
-- **V1.4 Flow Automation Evaluation** = ACTIVE (CURRENT_PHASE)
+- **V1.4 Autonomous Flow Pipeline** = CONCLUÍDA / HOMOLOGADA (Playwright 1.63.0 + Edge `msedge`, single-flight, idempotência, resume, checkpoint atômico, recovery pós-consumo, multi-tile isolation, source-aware Flow/stock, fallback configurável)
+- **V1.5 Visual Director** = PLANNED (NEXT_PHASE)
 - **V16.0 Quality Audit** = DONE
 - **V16.1 Brazilian Content Contract** = PRODUCTION HOMOLOGATED (Deploy SHA: `3983d37a29d1f169e513f19bd7186348a74ad5e9`)
 - **V16.2 Subtitle Reliability Gate** = PRODUCTION HOMOLOGATED (Deploy SHA: `0744fd2b8593fa276a2d3117d88b270475b5b05c`)

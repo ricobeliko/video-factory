@@ -23,7 +23,11 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
     is_auto_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=db_path)
     target_stock = autonomous_production.get_target_ready_stock(pid, db_path=db_path)
     try:
-        ready_stock = operator_console.get_canonical_ready_stock(profile_id=pid, db_path=db_path)
+        raw_ready = operator_console.get_canonical_ready_stock(profile_id=pid, db_path=db_path)
+        if isinstance(raw_ready, dict):
+            ready_stock = int(raw_ready.get("total_ready", 0))
+        else:
+            ready_stock = int(raw_ready or 0)
     except Exception:
         ready_stock = 0
 
@@ -98,7 +102,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         with c_stock:
             stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="cf_new_ch_stock")
 
-        st.caption("ℹ️ Visual Director / Flow: Configuração preparada — aguardando integração ao pipeline")
+        st.caption("ℹ️ Visual Director e Google Flow integrados ao pipeline.")
         c_vd, c_flow, c_fallback = st.columns(3)
         with c_vd:
             vd_enabled = st.checkbox("Visual Director Ativo", value=True, key="cf_new_ch_vd")
@@ -259,7 +263,8 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
 
                 auto_badge = "🟢 Produção ON" if is_auto else "⏸️ Produção PAUSADA"
                 st.markdown(f"⚙️ **Status:** **{auto_badge}**")
-                st.caption(f"📦 Estoque: **{card['ready_stock']}** / Meta: **{card['target_stock']}** vídeos")
+                ready_val = card["ready_stock"].get("total_ready", 0) if isinstance(card.get("ready_stock"), dict) else (card.get("ready_stock") or 0)
+                st.caption(f"📦 Estoque: **{ready_val}** / Meta: **{card['target_stock']}** vídeos")
 
             with col_actions:
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
@@ -293,7 +298,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 with c_m_stk:
                     m_target_stock = st.number_input("Meta de Estoque", min_value=1, max_value=10, value=int(settings.automation.target_ready_stock or 3), key=f"m_stock_{p_id}", disabled=not is_primary)
 
-                st.caption("ℹ️ Visual Director / Flow: Configuração preparada — aguardando integração ao pipeline")
+                st.caption("ℹ️ Visual Director e Google Flow integrados ao pipeline.")
                 c_m_vd, c_m_flow, c_m_scenes = st.columns(3)
                 with c_m_vd:
                     m_vd = st.checkbox("Visual Director", value=bool(settings.visual.visual_director_enabled), key=f"m_vd_{p_id}", disabled=not is_primary)

@@ -101,6 +101,8 @@ def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
         "is_paused": False,
         "generation_worker": "ACTIVE",
         "scheduler_worker": "ACTIVE",
+        "scheduler_enabled": True if scenario == "Factory RUNNING" else False,
+        "auto_publish_enabled": False,
         "auto_publish": "OFF",
         "dry_run": "ON",
         "growth_mode": "Aquecimento",
@@ -388,6 +390,8 @@ def _load_telemetry_data(demo_enabled: bool, scenario_choice: str) -> Dict[str, 
         "is_paused": sys_status["is_paused"],
         "generation_worker": sys_status["generation_worker"],
         "scheduler_worker": sys_status["scheduler_worker"],
+        "scheduler_enabled": sys_status.get("scheduler_enabled", False),
+        "auto_publish_enabled": sys_status.get("auto_publish_enabled", sys_status.get("auto_publish") == "ON"),
         "auto_publish": sys_status["auto_publish"],
         "dry_run": sys_status["dry_run"],
         "growth_mode": growth_mode,
@@ -557,10 +561,10 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
     }.get(factory_state, "op-status-pill-running")
 
     state_label = {
-        "RUNNING": "🟢 FACTORY RUNNING",
-        "PAUSED": "🟡 FACTORY PAUSED",
-        "DEGRADED": "🟠 FACTORY DEGRADED",
-        "ERROR": "🔴 FACTORY ERROR",
+        "RUNNING": "🟢 SERVIÇO ONLINE",
+        "PAUSED": "🟡 FÁBRICA PAUSADA",
+        "DEGRADED": "🟠 SERVIÇO DEGRADADO",
+        "ERROR": "🔴 ERRO NO SERVIÇO",
     }.get(factory_state, factory_state)
 
     col_title, col_prof_sel, col_actions = st.columns([0.46, 0.28, 0.26])
@@ -576,10 +580,16 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
         )
 
         now_time = datetime.now().strftime("%H:%M:%S")
+        sched_enabled = bool(data.get("scheduler_enabled", False))
+        auto_pub = bool(data.get("auto_publish_enabled", data.get("auto_publish") == "ON"))
+        auto_summary = "ON" if (sched_enabled or auto_pub) else "OFF"
+        gen_active = data.get("generation_worker") == "ACTIVE"
+        gen_str = "geração ativa" if gen_active else "nenhuma geração em andamento"
         st.markdown(
             f"""
-            <div style="font-size: 0.84rem; opacity: 0.8; display: flex; gap: 16px; margin-top: 4px;">
+            <div style="font-size: 0.84rem; opacity: 0.8; display: flex; gap: 16px; margin-top: 4px; flex-wrap: wrap;">
                 <span>🕒 <b>Última atualização:</b> {now_time}</span>
+                <span>🤖 <b>Automação:</b> {auto_summary} ({gen_str})</span>
                 <span>🌱 <b>Modo:</b> {data['growth_mode']}</span>
                 <span>🧪 <b>Dry Run:</b> {data['dry_run']}</span>
                 <span>🚀 <b>Auto Publish:</b> {data['auto_publish']}</span>
@@ -673,14 +683,17 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
                         st.toast("Parada de emergência simulada.", icon="🛑")
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    _render_health_cards_row(data)
 
+
+def _render_health_cards_row(data: Dict[str, Any]):
     # Health Cards
     h_col1, h_col2, h_col3, h_col4, h_col5, h_col6 = st.columns(6)
 
     # Card 1: Generation Worker
     with h_col1:
-        gen_active = data["generation_worker"] == "ACTIVE"
-        hb_gen = data["heartbeats"]["generation_seconds_ago"]
+        gen_active = data.get("generation_worker") == "ACTIVE"
+        hb_gen = data.get("heartbeats", {}).get("generation_seconds_ago")
         hb_gen_str = f"heartbeat {hb_gen}s" if hb_gen is not None else "sem telemetria"
         badge_cls = "op-badge-green" if gen_active else "op-badge-gray"
         badge_txt = "🟢 ACTIVE" if gen_active else "⚪ IDLE"
@@ -697,18 +710,29 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
 
     # Card 2: Scheduler
     with h_col2:
-        sched_st = data["scheduler_worker"]
-        sched_ok = sched_st == "ACTIVE"
-        hb_sched = data["heartbeats"]["scheduler_seconds_ago"]
-        hb_sched_str = f"heartbeat {hb_sched}s" if hb_sched is not None else "sem telemetria"
-        b_cls = "op-badge-green" if sched_ok else ("op-badge-red" if sched_st == "ERROR" else "op-badge-gray")
-        b_txt = "🟢 ACTIVE" if sched_ok else ("🔴 ERROR" if sched_st == "ERROR" else "⚪ IDLE")
+        sched_enabled = bool(data.get("scheduler_enabled", False))
+        sched_st = data.get("scheduler_worker", "IDLE")
+        worker_online = sched_st == "ACTIVE"
+        hb_sched = data.get("heartbeats", {}).get("scheduler_seconds_ago")
+        hb_str = f" · heartbeat {hb_sched}s" if hb_sched is not None else ""
+        worker_health = "worker online" if worker_online else ("worker com erro" if sched_st == "ERROR" else "worker parado")
+
+        if sched_st == "ERROR":
+            b_cls = "op-badge-red"
+            b_txt = "🔴 ERROR"
+        elif sched_enabled:
+            b_cls = "op-badge-green"
+            b_txt = "🟢 ON"
+        else:
+            b_cls = "op-badge-gray"
+            b_txt = "⚪ OFF"
+
         st.markdown(
             f"""
             <div class="op-health-card">
                 <div class="op-health-card-header">Scheduler</div>
                 <div class="op-health-card-value"><span class="op-badge {b_cls}">{b_txt}</span></div>
-                <div class="op-health-card-sub">{hb_sched_str}</div>
+                <div class="op-health-card-sub">{worker_health}{hb_str}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -716,7 +740,7 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
 
     # Card 3: Ready Stock
     with h_col3:
-        stk = data["stock"]
+        stk = data.get("stock", {})
         is_low = stk.get("is_below_minimum", False)
         tot_ready = stk.get("total_ready", 0)
         min_th = stk.get("minimum_threshold", 3)
@@ -735,15 +759,28 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
 
     # Card 4: Publication
     with h_col4:
-        dry_run = data["dry_run"] == "ON"
-        pub_cls = "op-badge-gray" if dry_run else "op-badge-green"
-        pub_txt = "⚪ DRY RUN" if dry_run else "🟢 LIVE"
+        dry_run = (data.get("dry_run") == "ON") or (data.get("dry_run") is True)
+        auto_pub = (data.get("auto_publish") == "ON") or bool(data.get("auto_publish_enabled", False))
+
+        if not auto_pub:
+            pub_cls = "op-badge-gray"
+            pub_txt = "⚪ AUTO OFF"
+            pub_sub = "real mode ready" if not dry_run else "dry run ready"
+        elif dry_run:
+            pub_cls = "op-badge-yellow"
+            pub_txt = "🟡 DRY RUN"
+            pub_sub = "auto ON"
+        else:
+            pub_cls = "op-badge-green"
+            pub_txt = "🟢 LIVE"
+            pub_sub = "auto ON"
+
         st.markdown(
             f"""
             <div class="op-health-card">
                 <div class="op-health-card-header">Publication</div>
                 <div class="op-health-card-value"><span class="op-badge {pub_cls}">{pub_txt}</span></div>
-                <div class="op-health-card-sub">auto: {data['auto_publish']}</div>
+                <div class="op-health-card-sub">{pub_sub}</div>
             </div>
             """,
             unsafe_allow_html=True,

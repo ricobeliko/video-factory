@@ -1966,6 +1966,8 @@ def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] =
         "is_paused": factory_state == FACTORY_STATE_PAUSED,
         "generation_worker": gen_worker_state,
         "scheduler_worker": sched_worker_state,
+        "scheduler_enabled": bool(sched_settings.get("scheduler_enabled", False)),
+        "auto_publish_enabled": bool(sched_settings.get("auto_publish_enabled", False)),
         "auto_publish": "ON" if sched_settings.get("auto_publish_enabled") else "OFF",
         "dry_run": "ON" if sched_settings.get("dry_run") else "OFF",
         "growth_mode": growth_mode.upper(),

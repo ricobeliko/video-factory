@@ -476,6 +476,39 @@ def generate_pending_flow_scenes(
                 completed_scenes=completed_scenes,
             )
             break
+        elif res.status == "FLOW_CONTENT_POLICY_BLOCKED":
+            refund_confirmed = bool(res.details.get("policy_refund_confirmed"))
+            logger.warning(
+                f"[POLICY_BLOCK] Cena {s_idx} bloqueada por política no Flow. "
+                f"Reembolso confirmado={refund_confirmed}. Zero retry da mesma cena."
+            )
+            if refund_confirmed and failure_policy != "strict":
+                logger.info(
+                    f"[POLICY_FALLBACK] Roteando Cena {s_idx} para STOCK (fallback permitido, refund confirmado)."
+                )
+                sc["is_flow_premium"] = False
+                sc["fallback_used"] = True
+                sc["fallback_reason"] = "FLOW_CONTENT_POLICY_BLOCKED"
+                sc["visual_source"] = "stock"
+                atomic_write_json(manifest_path, manifest)
+                update_manifest_flow_checkpoint(
+                    manifest_path=manifest_path,
+                    project_url=effective_project_url,
+                    last_scene=s_idx,
+                    status=f"FALLBACK_STOCK_SCENE_{s_idx}",
+                    completed_scenes=completed_scenes,
+                )
+                continue
+            else:
+                overall_status = "FLOW_CONTENT_POLICY_BLOCKED" if refund_confirmed else "FLOW_GENERATION_NEEDS_RECOVERY"
+                update_manifest_flow_checkpoint(
+                    manifest_path=manifest_path,
+                    project_url=effective_project_url,
+                    last_scene=s_idx,
+                    status=overall_status,
+                    completed_scenes=completed_scenes,
+                )
+                break
         elif res.status in ("FLOW_BROWSER_BUSY", "AWAITING_FLOW_EDGE_PROFILE_CLOSE"):
             overall_status = "FLOW_BROWSER_BUSY"
             update_manifest_flow_checkpoint(

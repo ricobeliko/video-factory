@@ -214,9 +214,6 @@ def navigate_landing_to_studio(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_
     return page.url
 
 
-FORBIDDEN_PROJECT_IDS = ["231bb713", "9635d727"]
-
-
 def ensure_studio_surface(
     page: Page,
     project_url: Optional[str] = None,
@@ -227,7 +224,7 @@ def ensure_studio_surface(
     Garante que o navegador está na superfície Studio com o editor ProseMirror pronto.
     Precedência mandatória:
     1. project_url explícita (via CLI ou manifest) -> page.goto(project_url)
-    2. force_new_project ou projeto proibido/deprecado -> navega para landing e cria novo projeto
+    2. force_new_project -> navega para landing e cria novo projeto
     3. URL atual já contém /project/ -> reutiliza sessão atual
     4. Landing page sem project_url -> clica 'Novo projeto' exatamente uma vez
 
@@ -246,12 +243,8 @@ def ensure_studio_surface(
         logger.info(f"Superfície Studio confirmada no projeto alvo: {project_url}")
         return project_url
 
-    is_forbidden = any(pid in page.url for pid in FORBIDDEN_PROJECT_IDS)
-    if force_new_project or is_forbidden:
-        if is_forbidden:
-            logger.warning(f"URL atual contém projeto proibido/deprecado ({page.url}). Forçando criação de novo projeto limpo.")
-        else:
-            logger.info("force_new_project ativo: navegando para landing para criar novo projeto limpo.")
+    if force_new_project:
+        logger.info("force_new_project ativo: navegando para landing para criar novo projeto limpo.")
         page.goto(DEFAULT_FLOW_URL)
         page.wait_for_load_state("domcontentloaded")
         return navigate_landing_to_studio(page, timeout_ms=timeout_ms)

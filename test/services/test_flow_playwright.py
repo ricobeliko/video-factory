@@ -26,6 +26,7 @@ from scripts.flow_playwright import (
     generate_flow_scene,
     launch_flow_context,
     navigate_landing_to_studio,
+    resolve_flow_headless,
     run_playwright_flow_poc,
     validate_clip_file,
     wait_for_generation_complete,
@@ -759,6 +760,67 @@ class TestFlowPlaywright(unittest.TestCase):
         )
         self.assertFalse(started)
         mock_page.wait_for_function.assert_not_called()
+
+    def test_flow_headless_canonical_default_true(self):
+        """Automação canônica do Flow usa headless=True por padrão."""
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(resolve_flow_headless())
+            self.assertTrue(resolve_flow_headless(None))
+            self.assertTrue(resolve_flow_headless(True))
+
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value=set()), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))):
+            mock_ctx = MagicMock()
+            mock_launch.return_value = (mock_ctx, None)
+            res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=1, trial_only=True)
+            self.assertEqual(res["status"], "PRE_FLIGHT_TRIAL_PASS")
+            mock_launch.assert_called_once()
+            _, kwargs = mock_launch.call_args
+            self.assertTrue(kwargs.get("headless"))
+
+    def test_flow_headless_explicit_false_diagnostic(self):
+        """Modo explícito de diagnóstico pode usar headless=False."""
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(resolve_flow_headless(False))
+
+        with patch.dict(os.environ, {"FLOW_HEADLESS": "false"}):
+            self.assertFalse(resolve_flow_headless())
+        with patch.dict(os.environ, {"FLOW_HEADLESS": "0"}):
+            self.assertFalse(resolve_flow_headless())
+
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value=set()), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))):
+            mock_ctx = MagicMock()
+            mock_launch.return_value = (mock_ctx, None)
+            res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=1, trial_only=True, headless=False)
+            self.assertEqual(res["status"], "PRE_FLIGHT_TRIAL_PASS")
+            mock_launch.assert_called_once()
+            _, kwargs = mock_launch.call_args
+            self.assertFalse(kwargs.get("headless"))
 
 
 if __name__ == "__main__":

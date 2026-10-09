@@ -1,5 +1,23 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
+## PC Forte Production Runtime Contract — 09/10/2026
+
+Contrato operacional mandatório validado e endurecido para o PC Forte:
+
+- **Python via .venv**: O runtime de produção opera estritamente dentro do `.venv` do projeto. Não utilizar Python global;
+- **Dependências sincronizadas**: O `scripts/update_production.ps1` detecta divergências de dependências declaradas (`requirements.txt`) contra o `.venv` no preflight e sincroniza determinísticamente via `uv pip` ou `pip` pós-merge;
+- **Playwright obrigatório quando Flow ON**: A presença e compatibilidade exata do Playwright com `requirements.txt` (`playwright==1.63.0`) são validadas passivamente pelo Production Readiness sempre que houver perfil ativo com Flow;
+- **Microsoft Edge msedge obrigatório**: Presença do executável `msedge.exe` validada passivamente no Windows pelo readiness;
+- **Flow headless canônico obrigatório em produção**: A automação do Flow utiliza `headless=True` como padrão canônico, permitindo operação estável em background sem display gráfico. O modo `headless=False` permanece disponível exclusivamente para diagnóstico/manual DEV via CLI `--headful` ou `FLOW_HEADLESS=false`;
+- **Perfil Flow persistente**: Perfil do navegador mantido em `storage/flow_browser_profile` preservando cookies e autenticação Google;
+- **Execução Windows e Scheduled Task (`VideoFactory Production`):**
+  - **VALIDADO EM PRODUÇÃO:** `User = DESKTOP-21KQ4RJ\bob`, `LogonType = Interactive`, `headless=True`, `Flow AUTHENTICATED` = **PASS** (comprova que o Flow opera headless sob o perfil do bob quando há sessão interativa aberta);
+  - **TARGET PENDENTE DE HOMOLOGAÇÃO (Autonomia Pós-Reboot):** `User = DESKTOP-21KQ4RJ\bob`, *Run whether user is logged on or not*, `LogonType = Password` com credencial protegida pelo Windows Task Scheduler, zero senhas em arquivos/scripts/repositório, `Flow headless=True`. **IMPORTANTE:** Este modo non-interactive ainda NÃO foi homologado no PC Forte; não declarar autonomia pós-reboot como homologada;
+- **Políticas de publicação**:
+  - `auto_publish_enabled` = OFF;
+  - `scheduler_enabled` = OFF durante homologação de runtime;
+  - `tiktok` = OFF.
+
 ## V12-E.3 — contrato DEV, sem rollout autorizado
 
 Esta etapa não acessou produção e não autoriza deploy, commit ou push.

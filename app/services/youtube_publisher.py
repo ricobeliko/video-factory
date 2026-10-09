@@ -122,6 +122,7 @@ def publish_youtube_video(
             tags=tags,
             contains_synthetic_media=contains_synthetic_media,
             profile_id=profile_id,
+            db_path=db_path,
         )
 
     elif provider == PROVIDER_UPLOAD_POST:

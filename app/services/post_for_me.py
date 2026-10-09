@@ -1458,12 +1458,13 @@ class PostForMeClient:
         profile_id: Optional[str] = None,
         timeout_sec: int = 120,
         poll_interval_sec: float = 2.0,
+        db_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fluxo completo de publicação no YouTube via Post for Me com proteção de idempotência."""
         # 0. Guard JIT pré-provider (Camada 3 - V16.4.2B)
         try:
             from app.services import publishing_idempotency
-            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube")
+            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube", db_path=db_path)
             if not is_safe and canon:
                 logger.info(
                     f"[POST_FOR_ME][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "
@@ -1497,7 +1498,7 @@ class PostForMeClient:
             }
 
         # 2. Resolução do canal nativo do YouTube
-        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=profile_id)
+        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=profile_id, db_path=db_path)
         if not expected_yt_id:
             msg = f"Canal do YouTube não pôde ser resolvido para channel_id='{channel_id}', profile_id='{profile_id}'."
             logger.error(f"[POST_FOR_ME] {msg}")
@@ -2368,7 +2369,7 @@ def reconcile_post_for_me_status(
         if not post_for_me_client.is_configured():
             return {"status": "skipped", "reason": "client_not_configured"}
 
-        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=prof_id)
+        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=prof_id, db_path=db_path)
         if not expected_yt_id:
             return {"status": "skipped", "reason": "channel_resolution_failed"}
 

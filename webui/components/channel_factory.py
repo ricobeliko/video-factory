@@ -38,134 +38,144 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
 
 
 def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
-    """Renderiza os 4 blocos do formulário de criação de novo canal."""
+    """Renderiza os 4 blocos do formulário de criação de novo canal com st.form e fail-closed accounts."""
     st.markdown("#### 🚀 Configurar Novo Canal")
     st.caption("Cadastre um novo canal editorial sem necessidade de alterações no código.")
 
-    # 1. Identidade
-    st.markdown("##### 1. Identidade do Canal")
-    c_name, c_niche = st.columns(2)
-    with c_name:
-        name_val = st.text_input("Nome do Canal *", placeholder="Ex: GTA Daily DEV", key="new_ch_name")
-    with c_niche:
-        niche_val = st.text_input("Nicho *", placeholder="Ex: games", key="new_ch_niche")
-
-    c_topic, c_lang = st.columns([2, 1])
-    with c_topic:
-        topic_brief_val = st.text_area(
-            "Tema / Descrição Editorial *",
-            placeholder="Ex: GTA VI: novidades, notícias oficiais, análises e teorias",
-            key="new_ch_topic",
-            height=68,
-        )
-    with c_lang:
-        lang_val = st.selectbox("Idioma", options=["pt-BR", "en-US", "es-ES"], index=0, key="new_ch_lang")
-
-    # 2. Publicação (Post for Me / YouTube)
-    st.markdown("##### 2. Publicação e Destino")
-    st.caption("MVP: YouTube via Post for Me")
-
-    accounts = []
-    try:
-        accounts = post_for_me.list_connected_publishing_accounts(platform="youtube")
-    except Exception:
-        pass
-
-    ext_account_id = None
-    if accounts:
-        acc_labels = [f"{acc['display_name']} ({acc['external_account_id']})" for acc in accounts]
-        sel_idx = st.selectbox(
-            "Conta YouTube Conectada *",
-            options=range(len(accounts)),
-            format_func=lambda i: acc_labels[i],
-            key="new_ch_yt_acc_sel",
-        )
-        ext_account_id = accounts[sel_idx]["external_account_id"]
-    else:
-        st.info("ℹ️ Nenhuma conta YouTube conectada encontrada no Post for Me. Insira o YouTube Channel ID (UC...):")
-        manual_uc = st.text_input("YouTube Channel ID (UC...)", placeholder="UC...", key="new_ch_manual_uc")
-        if manual_uc:
-            ext_account_id = manual_uc.strip()
-
-    # 3. Produção & Visual
-    st.markdown("##### 3. Produção & Visual")
-    c_voice, c_stock = st.columns(2)
-    with c_voice:
-        voice_val = st.text_input("Voz (TTS)", value="pt-BR-FranciscaNeural", key="new_ch_voice")
-    with c_stock:
-        stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="new_ch_stock")
-
-    c_vd, c_flow, c_fallback = st.columns(3)
-    with c_vd:
-        vd_enabled = st.checkbox("Visual Director Ativo", value=True, key="new_ch_vd")
-    with c_flow:
-        flow_enabled = st.checkbox("Google Flow Ativo", value=True, key="new_ch_flow")
-    with c_fallback:
-        fallback_enabled = st.checkbox("Stock Fallback Ativo", value=True, key="new_ch_fallback")
-
-    flow_scenes = 5
-    if flow_enabled:
-        flow_scenes = st.slider("Cenas Flow por Vídeo", min_value=1, max_value=10, value=5, key="new_ch_scenes")
-
-    # 4. Ativação (Default Seguro: Pausado)
-    st.markdown("##### 4. Ativação")
-    st.warning("⚠️ **Recomendado:** Deixar a produção autônoma pausada inicialmente para validação do canal antes da ativação contínua.")
-    autonomous_start = st.checkbox("Ativar produção automática imediatamente", value=False, key="new_ch_auto_start")
-
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-    if st.button("🚀 Criar Canal", type="primary", use_container_width=True, key="new_ch_submit_btn"):
-        if not is_primary:
-            st.error("Apenas o nó PRIMARY pode cadastrar canais.")
-            return
-
-        clean_name = str(name_val or "").strip()
-        clean_niche = str(niche_val or "").strip()
-        clean_topic = str(topic_brief_val or "").strip()
-
-        if not clean_name:
-            st.error("Informe o Nome do Canal.")
-            return
-        if not clean_niche:
-            st.error("Informe o Nicho.")
-            return
-        if not clean_topic:
-            st.error("Informe o Tema / Linha Editorial.")
-            return
-        if ext_account_id and not ext_account_id.startswith("UC"):
-            st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{ext_account_id}').")
-            return
-
-        settings_obj = profile_manager.ChannelWorkspaceSettings()
-        settings_obj.editorial.topic_brief = clean_topic
-        settings_obj.voice.voice_name = str(voice_val or "pt-BR-FranciscaNeural").strip()
-        settings_obj.visual.visual_director_enabled = bool(vd_enabled)
-        settings_obj.visual.flow_enabled = bool(flow_enabled)
-        settings_obj.visual.flow_scene_count = int(flow_scenes)
-        settings_obj.visual.stock_fallback_enabled = bool(fallback_enabled)
-        settings_obj.automation.autonomous_enabled = bool(autonomous_start)
-        settings_obj.automation.target_ready_stock = int(stock_target)
-
+    if "cf_connected_accounts" not in st.session_state:
         try:
-            res = profile_manager.onboard_channel_workspace(
-                name=clean_name,
-                niche=clean_niche,
-                topic_brief=clean_topic,
-                language=lang_val,
-                external_account_id=ext_account_id,
-                settings=settings_obj,
-                autonomous_enabled=autonomous_start,
-                db_path=db_path,
+            st.session_state["cf_connected_accounts"] = post_for_me.list_connected_publishing_accounts(platform="youtube")
+        except Exception:
+            st.session_state["cf_connected_accounts"] = []
+
+    accounts = st.session_state.get("cf_connected_accounts", [])
+
+    if not accounts:
+        st.warning("⚠️ Nenhuma conta YouTube conectada encontrada no Post for Me. Conecte uma conta antes de cadastrar um canal operacional.")
+
+    with st.form("new_channel_onboarding_form"):
+        # 1. Identidade
+        st.markdown("##### 1. Identidade do Canal")
+        c_name, c_niche = st.columns(2)
+        with c_name:
+            name_val = st.text_input("Nome do Canal *", placeholder="Ex: GTA Daily DEV", key="new_ch_name")
+        with c_niche:
+            niche_val = st.text_input("Nicho *", placeholder="Ex: games", key="new_ch_niche")
+
+        c_topic, c_lang = st.columns([2, 1])
+        with c_topic:
+            topic_brief_val = st.text_area(
+                "Tema / Descrição Editorial *",
+                placeholder="Ex: GTA VI: novidades, notícias oficiais, análises e teorias",
+                key="new_ch_topic",
+                height=68,
             )
-            new_p = res.get("profile", {})
-            st.session_state["channel_factory_feedback"] = {
-                "type": "success",
-                "message": f"Canal '{new_p.get('name')}' criado com sucesso! Status inicial: {'Produção Ativa' if autonomous_start else 'Pausado (Recomendado)'}.",
-                "profile_id": new_p.get("id"),
-            }
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Falha ao cadastrar canal: {exc}")
+        with c_lang:
+            lang_val = st.selectbox("Idioma", options=["pt-BR"], index=0, key="new_ch_lang", disabled=True)
+
+        # 2. Publicação (Post for Me / YouTube) - Fail-Closed
+        st.markdown("##### 2. Publicação e Destino")
+        st.caption("MVP: YouTube via Post for Me (conta conectada obrigatória)")
+
+        ext_account_id = None
+        if accounts:
+            acc_labels = [f"{acc['display_name']} ({acc['external_account_id']})" for acc in accounts]
+            sel_idx = st.selectbox(
+                "Conta YouTube Conectada *",
+                options=range(len(accounts)),
+                format_func=lambda i: acc_labels[i],
+                key="new_ch_yt_acc_sel",
+            )
+            ext_account_id = accounts[sel_idx]["external_account_id"]
+        else:
+            st.error("Nenhuma conta YouTube disponível. Conexão obrigatória no Post for Me para habilitar o destino.")
+
+        # 3. Produção & Visual
+        st.markdown("##### 3. Produção & Visual")
+        c_voice, c_stock = st.columns(2)
+        with c_voice:
+            voice_val = st.text_input("Voz (TTS)", value="pt-BR-FranciscaNeural", key="new_ch_voice")
+        with c_stock:
+            stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="new_ch_stock")
+
+        st.caption("ℹ️ Visual Director / Flow: Configuração preparada — aguardando integração ao pipeline")
+        c_vd, c_flow, c_fallback = st.columns(3)
+        with c_vd:
+            vd_enabled = st.checkbox("Visual Director Ativo", value=True, key="new_ch_vd")
+        with c_flow:
+            flow_enabled = st.checkbox("Google Flow Ativo", value=True, key="new_ch_flow")
+        with c_fallback:
+            fallback_enabled = st.checkbox("Stock Fallback Ativo", value=True, key="new_ch_fallback")
+
+        flow_scenes = profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
+        if flow_enabled:
+            flow_scenes = st.slider("Cenas Flow por Vídeo", min_value=1, max_value=10, value=profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, key="new_ch_scenes")
+
+        # 4. Ativação (Default Seguro: Pausado)
+        st.markdown("##### 4. Ativação")
+        st.warning("⚠️ **Recomendado:** Deixar a produção autônoma pausada inicialmente para validação do canal antes da ativação contínua.")
+        autonomous_start = st.checkbox("Ativar produção automática imediatamente", value=False, key="new_ch_auto_start")
+
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+        submitted = st.form_submit_button("🚀 Criar Canal", type="primary", use_container_width=True)
+
+        if submitted:
+            if not is_primary:
+                st.error("Apenas o nó PRIMARY pode cadastrar canais.")
+                return
+
+            if not accounts or not ext_account_id:
+                st.error("Onboarding fail-closed: uma conta YouTube conectada é obrigatória para criar o canal.")
+                return
+
+            clean_name = str(name_val or "").strip()
+            clean_niche = str(niche_val or "").strip()
+            clean_topic = str(topic_brief_val or "").strip()
+
+            if not clean_name:
+                st.error("Informe o Nome do Canal.")
+                return
+            if not clean_niche:
+                st.error("Informe o Nicho.")
+                return
+            if not clean_topic:
+                st.error("Informe o Tema / Linha Editorial.")
+                return
+            if not ext_account_id or not ext_account_id.startswith("UC"):
+                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{ext_account_id}').")
+                return
+
+            settings_obj = profile_manager.ChannelWorkspaceSettings()
+            settings_obj.editorial.topic_brief = clean_topic
+            settings_obj.voice.voice_name = str(voice_val or "pt-BR-FranciscaNeural").strip()
+            settings_obj.visual.visual_director_enabled = bool(vd_enabled)
+            settings_obj.visual.flow_enabled = bool(flow_enabled)
+            settings_obj.visual.flow_scene_count = int(flow_scenes)
+            settings_obj.visual.stock_fallback_enabled = bool(fallback_enabled)
+            settings_obj.automation.autonomous_enabled = bool(autonomous_start)
+            settings_obj.automation.target_ready_stock = int(stock_target)
+
+            try:
+                res = profile_manager.onboard_channel_workspace(
+                    name=clean_name,
+                    niche=clean_niche,
+                    topic_brief=clean_topic,
+                    language="pt-BR",
+                    external_account_id=ext_account_id,
+                    settings=settings_obj,
+                    autonomous_enabled=autonomous_start,
+                    db_path=db_path,
+                )
+                new_p = res.get("profile", {})
+                st.session_state["channel_factory_feedback"] = {
+                    "type": "success",
+                    "message": f"Canal '{new_p.get('name')}' criado com sucesso! Status inicial: {'Produção Ativa' if autonomous_start else 'Pausado (Recomendado)'}.",
+                    "profile_id": new_p.get("id"),
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Falha ao cadastrar canal: {exc}")
 
 
 if hasattr(st, "dialog"):
@@ -283,13 +293,14 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 with c_m_stk:
                     m_target_stock = st.number_input("Meta de Estoque", min_value=1, max_value=10, value=int(settings.automation.target_ready_stock or 3), key=f"m_stock_{p_id}", disabled=not is_primary)
 
+                st.caption("ℹ️ Visual Director / Flow: Configuração preparada — aguardando integração ao pipeline")
                 c_m_vd, c_m_flow, c_m_scenes = st.columns(3)
                 with c_m_vd:
                     m_vd = st.checkbox("Visual Director", value=bool(settings.visual.visual_director_enabled), key=f"m_vd_{p_id}", disabled=not is_primary)
                 with c_m_flow:
                     m_flow = st.checkbox("Google Flow", value=bool(settings.visual.flow_enabled), key=f"m_flow_{p_id}", disabled=not is_primary)
                 with c_m_scenes:
-                    m_scenes = st.number_input("Cenas Flow", min_value=1, max_value=10, value=int(settings.visual.flow_scene_count or 5), key=f"m_scenes_{p_id}", disabled=not is_primary)
+                    m_scenes = st.number_input("Cenas Flow", min_value=1, max_value=10, value=int(settings.visual.flow_scene_count or profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT), key=f"m_scenes_{p_id}", disabled=not is_primary)
 
                 m_fallback = st.checkbox("Fallback para Stock", value=bool(settings.visual.stock_fallback_enabled), key=f"m_fallback_{p_id}", disabled=not is_primary)
 

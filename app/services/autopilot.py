@@ -71,7 +71,7 @@ def _clean_idea_line(line: str) -> str:
     return line
 
 
-def build_ideas_prompt(niche: str, count: int, language: str = "") -> str:
+def build_ideas_prompt(niche: str, count: int, language: str = "", topic_brief: Optional[str] = None) -> str:
     """Constrói o prompt curto para geração de ideias em uma única chamada ao LLM."""
     count = max(MIN_IDEAS_COUNT, min(MAX_IDEAS_COUNT, int(count)))
     normalized_lang = (language or "").strip().lower().replace("_", "-")
@@ -85,10 +85,15 @@ def build_ideas_prompt(niche: str, count: int, language: str = "") -> str:
         "portuguese (brazil)",
     }
 
+    brief_clause = ""
+    if topic_brief and str(topic_brief).strip():
+        brief_clean = str(topic_brief).strip()
+        brief_clause = f'\n\nDiretriz editorial e foco temático obrigatório: "{brief_clean}". Todos os temas gerados DEVEM se ater estritamente a este foco editorial.'
+
     if is_pt:
         return f"""Você é um especialista em criação de conteúdo viral para vídeos curtos (Shorts, TikTok, Reels).
 
-Gere exatamente {count} ideias de temas para vídeos no nicho: "{niche}".
+Gere exatamente {count} ideias de temas para vídeos no nicho: "{niche}".{brief_clause}
 
 Regras obrigatórias:
 1. Gere APENAS temas/títulos conceituais, NÃO gere roteiros.
@@ -109,7 +114,7 @@ Regras obrigatórias:
 
     return f"""You are an expert short-form viral content creator (Shorts, TikTok, Reels).
 
-Generate exactly {count} video topic ideas for the niche: "{niche}".
+Generate exactly {count} video topic ideas for the niche: "{niche}".{brief_clause}
 
 Mandatory rules:
 1. Generate ONLY topic titles/themes, DO NOT generate scripts.
@@ -134,6 +139,7 @@ def generate_ideas(
     count: int = DEFAULT_IDEAS_COUNT,
     language: str = "pt-BR",
     app_config: Optional[Any] = None,
+    topic_brief: Optional[str] = None,
 ) -> List[str]:
     """Gera ideias de temas usando o LLM configurado, deduplica e retorna a lista."""
     niche = (niche or "").strip()
@@ -141,7 +147,7 @@ def generate_ideas(
         return []
 
     count = max(MIN_IDEAS_COUNT, min(MAX_IDEAS_COUNT, int(count)))
-    prompt = build_ideas_prompt(niche=niche, count=count, language=language)
+    prompt = build_ideas_prompt(niche=niche, count=count, language=language, topic_brief=topic_brief)
 
     logger.info(f"[Autopilot] Generating {count} ideas for niche='{niche}', lang='{language}'")
     try:

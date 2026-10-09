@@ -104,22 +104,23 @@ class TestChannelFactory(unittest.TestCase):
             self.assertEqual(row["settings_json"], "{}")
 
     def test_b_empty_settings_json_preserves_legacy_behavior(self):
-        """B. settings_json vazio ou ausente mantém defaults e comportamento legado."""
+        """B. settings_json vazio ou ausente mantém comportamento legado (sem Flow e sem overrides forçados)."""
         p = profile_manager.create_profile(name="Canal Antigo", niche="curiosidades", db_path=self.db_path)
         pid = p["id"]
 
         settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
         self.assertEqual(settings.schema_version, 1)
-        self.assertEqual(settings.automation.autonomous_enabled, False)
-        self.assertTrue(settings.visual.flow_enabled)
-        self.assertEqual(settings.visual.flow_scene_count, 5)
+        self.assertIsNone(settings.automation.autonomous_enabled)
+        self.assertIsNone(settings.visual.flow_enabled)
 
         ctx = profile_manager.get_generation_profile_context(pid, db_path=self.db_path)
         self.assertEqual(ctx["profile_id"], pid)
         self.assertEqual(ctx["niche"], "curiosidades")
-        self.assertEqual(ctx["voice_name"], "pt-BR-FranciscaNeural")
-        self.assertEqual(ctx["visual_director_enabled"], True)
-        self.assertEqual(ctx["flow_enabled"], True)
+        from app.config import config
+        expected_global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "pt-BR-FranciscaNeural"
+        self.assertEqual(ctx["voice_name"], expected_global_voice)
+        self.assertFalse(ctx["visual_director_enabled"])
+        self.assertFalse(ctx["flow_enabled"])
 
     def test_c_typed_settings_serialize_deserialize(self):
         """C. ChannelWorkspaceSettings serialize e deserialize com validação tipada."""
@@ -141,10 +142,10 @@ class TestChannelFactory(unittest.TestCase):
         self.assertEqual(loaded.automation.autonomous_enabled, True)
         self.assertEqual(loaded.automation.target_ready_stock, 5)
 
-        # Resiliência a entradas vazias
+        # Resiliência a entradas vazias: fields opcionais permanecem None para herança
         empty_loaded = profile_manager.ChannelWorkspaceSettings.from_json("{}")
         self.assertEqual(empty_loaded.schema_version, 1)
-        self.assertEqual(empty_loaded.automation.autonomous_enabled, False)
+        self.assertIsNone(empty_loaded.automation.autonomous_enabled)
 
     def test_d_onboarding_creates_profile_channel_settings(self):
         """D. Onboarding atômico cria profile, destination e settings tipados."""
@@ -455,6 +456,207 @@ class TestChannelFactory(unittest.TestCase):
         self.assertEqual(acc["username"], "@canalvalido")
         self.assertNotIn("token", acc)
         self.assertNotIn("id", acc)
+
+    def test_legacy_empty_settings_uses_existing_global_voice(self):
+        """Settings vazio/legado herda global config da UI mesmo se diferente de Francisca."""
+        from app.config import config
+        p = profile_manager.create_profile(name="Canal Voz Legada", niche="curiosidades", db_path=self.db_path)
+        pid = p["id"]
+
+        orig_voice = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "pt-BR-AntonioNeural"
+            ctx = profile_manager.get_generation_profile_context(pid, db_path=self.db_path)
+            self.assertEqual(ctx["voice_name"], "pt-BR-AntonioNeural")
+
+            params = autonomous_production.build_autonomous_video_params(
+                topic="Tema Teste",
+                profile_id=pid,
+                db_path=self.db_path,
+            )
+            self.assertEqual(params.voice_name, "pt-BR-AntonioNeural")
+        finally:
+            if orig_voice is not None:
+                config.ui["voice_name"] = orig_voice
+
+    def test_legacy_empty_settings_does_not_enable_flow_implicitly(self):
+        """Canais legados com settings_json vazio NÃO ligam Flow nem Visual Director implicitamente."""
+        p = profile_manager.create_profile(name="Canal Legado Sem Flow", niche="curiosidades", db_path=self.db_path)
+        pid = p["id"]
+
+        ctx = profile_manager.get_generation_profile_context(pid, db_path=self.db_path)
+        self.assertFalse(ctx["flow_enabled"])
+        self.assertFalse(ctx["visual_director_enabled"])
+        self.assertEqual(ctx["flow_scene_count"], profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT)
+
+    def test_edit_does_not_toggle_autonomous_state(self):
+        """Edição de configurações operacionais (voz/visual) NÃO altera status de ativação do canal."""
+        res = profile_manager.onboard_channel_workspace(
+            name="Canal Toggle Guard",
+            niche="games",
+            external_account_id="UCtoggle_guard_1234567890",
+            db_path=self.db_path,
+        )
+        pid = res["profile"]["id"]
+
+        # 1. Ativar canal -> editar voz -> salvar -> canal permanece ACTIVE
+        autonomous_production.set_profile_autonomous_mode_enabled(pid, True, db_path=self.db_path)
+        self.assertTrue(autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=self.db_path))
+
+        current_settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        current_settings.voice.voice_name = "pt-BR-AntonioNeural"
+        profile_manager.update_profile_settings(pid, current_settings, db_path=self.db_path)
+
+        self.assertTrue(autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=self.db_path))
+
+        # 2. Pausar canal -> editar visual -> salvar -> canal permanece PAUSED
+        autonomous_production.set_profile_autonomous_mode_enabled(pid, False, db_path=self.db_path)
+        self.assertFalse(autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=self.db_path))
+
+        current_settings.visual.flow_scene_count = 8
+        profile_manager.update_profile_settings(pid, current_settings, db_path=self.db_path)
+
+        self.assertFalse(autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=self.db_path))
+
+    def test_onboarding_requires_connected_external_account(self):
+        """Onboarding fail-closed: exige external_account_id válido iniciando com UC para YouTube."""
+        # Sem account_id
+        with self.assertRaises(ValueError):
+            profile_manager.onboard_channel_workspace(
+                name="Canal Sem Conta",
+                niche="teste",
+                external_account_id=None,
+                platform="youtube",
+                db_path=self.db_path,
+            )
+
+        # Com account_id vazio
+        with self.assertRaises(ValueError):
+            profile_manager.onboard_channel_workspace(
+                name="Canal Conta Vazia",
+                niche="teste",
+                external_account_id="",
+                platform="youtube",
+                db_path=self.db_path,
+            )
+
+        # Com account_id que não inicia com UC
+        with self.assertRaises(ValueError):
+            profile_manager.onboard_channel_workspace(
+                name="Canal Conta Invalida",
+                niche="teste",
+                external_account_id="INVALID_ID_123",
+                platform="youtube",
+                db_path=self.db_path,
+            )
+
+    def test_db_path_propagates_to_publish_resolver(self):
+        """youtube_publisher propaga db_path até PostForMeClient e resolve external_account_id do banco temporário."""
+        from app.services import youtube_publisher
+        youtube_publisher.set_youtube_publish_provider("post_for_me", db_path=self.db_path)
+        custom_uc = "UCresolved_temp_db_1234567890"
+
+        res = profile_manager.onboard_channel_workspace(
+            name="Canal Temp DB Publish",
+            niche="tecnologia",
+            external_account_id=custom_uc,
+            db_path=self.db_path,
+        )
+        chan_id = res["channel"]["id"]
+        prof_id = res["profile"]["id"]
+
+        fake_classification = {
+            "success_posts": [{
+                "post_id": "post_12345",
+                "result_info": {
+                    "youtube_video_id": "yt_video_123",
+                    "url": "https://www.youtube.com/watch?v=yt_video_123",
+                    "privacy_status": "public",
+                },
+            }],
+            "active_posts": [],
+            "failed_posts": [],
+            "inconsistent_posts": [],
+        }
+
+        # Mock das chamadas externas de rede
+        with patch.object(post_for_me.post_for_me_client, "is_configured", return_value=True), \
+             patch.object(post_for_me.post_for_me_client, "resolve_youtube_account", return_value={"id": "acc_1", "external_id": custom_uc}) as mock_resolve, \
+             patch.object(post_for_me.post_for_me_client, "classify_existing_posts", return_value=fake_classification), \
+             patch("os.path.exists", return_value=True), \
+             patch("os.path.getsize", return_value=1024 * 1024):
+
+            pub_res = youtube_publisher.publish_youtube_video(
+                video_path=os.path.join(self.test_dir, "fake.mp4"),
+                title="Título Teste",
+                caption="Legenda Teste",
+                task_id="task_test_db_propagation",
+                channel_id=chan_id,
+                profile_id=prof_id,
+                db_path=self.db_path,
+            )
+
+            self.assertTrue(pub_res["success"])
+            # Prova que resolve_youtube_account foi chamado com o canal resolvido da base temporária (self.db_path)
+            mock_resolve.assert_called_once_with(custom_uc)
+
+    def test_topic_brief_reaches_topic_discovery_context(self):
+        """Editorial brief chega à descoberta de temas e geração de prompts sem ramificação específica de nicho."""
+        from app.services import autopilot
+
+        # 1. GTA workspace -> prompt contém GTA VI
+        gta_prompt = autopilot.build_ideas_prompt(
+            niche="games",
+            count=5,
+            language="pt-BR",
+            topic_brief="GTA VI: novidades, análises e especulações",
+        )
+        self.assertIn("games", gta_prompt)
+        self.assertIn("GTA VI: novidades, análises e especulações", gta_prompt)
+
+        # 2. Tech workspace -> mesmo caminho contém briefing Tech
+        tech_prompt = autopilot.build_ideas_prompt(
+            niche="tecnologia",
+            count=5,
+            language="pt-BR",
+            topic_brief="IA generativa e hardware",
+        )
+        self.assertIn("tecnologia", tech_prompt)
+        self.assertIn("IA generativa e hardware", tech_prompt)
+
+        # 3. Teste em discover_candidate_topic com mock de autopilot.generate_ideas
+        with patch("app.services.trend_radar.get_trend_items", return_value=[]), \
+             patch("app.services.autopilot.generate_ideas", return_value=["Ideia GTA 1"]) as mock_ideas:
+            cand = autonomous_production.discover_candidate_topic(
+                niche="games",
+                language="pt-BR",
+                db_path=self.db_path,
+                topic_brief="GTA VI: novidades, análises e especulações",
+            )
+            self.assertIsNotNone(cand)
+            self.assertEqual(cand["topic"], "Ideia GTA 1")
+            mock_ideas.assert_called_once_with(
+                niche="games",
+                count=10,
+                language="pt-BR",
+                topic_brief="GTA VI: novidades, análises e especulações",
+            )
+
+    def test_current_two_legacy_channels_preserved(self):
+        """Preserva 100% dos dois canais legados homologados e suas identidades."""
+        profile_manager.backfill_legacy_channels_external_ids(db_path=self.db_path)
+
+        def_ext = post_for_me.resolve_target_youtube_channel_id(
+            channel_id="channel-default-youtube",
+            db_path=self.db_path,
+        )
+        self.assertEqual(def_ext, "UCss-ng7mkGuB2v-5KKtIN9A")
+
+        myst_ext = post_for_me.resolve_target_youtube_channel_id(
+            channel_id="channel-historias-misterio-youtube",
+            db_path=self.db_path,
+        )
+        self.assertEqual(myst_ext, "UCGJaC83EuaOwiZ0a3-KqUZA")
 
 
 if __name__ == "__main__":

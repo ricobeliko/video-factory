@@ -183,6 +183,7 @@ class VideoParams(BaseModel):
     profile_id: Optional[str] = None
     niche: Optional[str] = None
     region: Optional[str] = None
+    topic_brief: Optional[str] = None
 
     # Virtual Presenter / Character Overlay (Fase V14-C)
     avatar_mode: str = Field(default=const.DEFAULT_AVATAR_MODE)

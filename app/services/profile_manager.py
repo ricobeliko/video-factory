@@ -33,39 +33,41 @@ SECOND_CHANNEL_DISPLAY = "Dose Diária de Histórias e Mistério (YouTube)"
 SECOND_CHANNEL_HANDLE = "@DoseDiáriadeHistóriasemistério"
 SECOND_PROFILE_NICHE = "historias_misterio"
 
+DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6
+
 
 # ---------------------------------------------------------------------------
-# Modelos Pydantic de Configuração Tipada (Fase V1.5E-B)
+# Modelos Pydantic de Configuração Tipada (Fase V1.5E-B / V1.5E-B.1)
 # ---------------------------------------------------------------------------
 
 class EditorialSettings(BaseModel):
-    topic_brief: str = ""
-    content_style: str = ""
+    topic_brief: Optional[str] = None
+    content_style: Optional[str] = None
 
 
 class VoiceSettings(BaseModel):
-    voice_name: str = "pt-BR-FranciscaNeural"
-    voice_rate: float = 1.0
-    voice_volume: float = 1.0
+    voice_name: Optional[str] = None
+    voice_rate: Optional[float] = None
+    voice_volume: Optional[float] = None
 
 
 class VisualSettings(BaseModel):
-    visual_director_enabled: bool = True
-    flow_enabled: bool = True
-    flow_scene_count: int = 5
-    stock_fallback_enabled: bool = True
-    visual_style_brief: str = ""
+    visual_director_enabled: Optional[bool] = None
+    flow_enabled: Optional[bool] = None
+    flow_scene_count: Optional[int] = None
+    stock_fallback_enabled: Optional[bool] = None
+    visual_style_brief: Optional[str] = None
 
 
 class SubtitleSettings(BaseModel):
-    position: str = "bottom"
-    font_size: int = 16
+    position: Optional[str] = None
+    font_size: Optional[int] = None
 
 
 class AutomationSettings(BaseModel):
-    autonomous_enabled: bool = False
-    target_ready_stock: int = 3
-    posts_per_day: int = 1
+    autonomous_enabled: Optional[bool] = None
+    target_ready_stock: Optional[int] = None
+    posts_per_day: Optional[int] = None
 
 
 class ChannelWorkspaceSettings(BaseModel):
@@ -884,30 +886,23 @@ def update_profile_settings(
             "UPDATE content_profiles SET settings_json = ?, updated_at = ? WHERE id = ?;",
             (json_str, now_iso, clean_id),
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS autopilot_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO autopilot_settings (key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-            """,
-            (f"autonomous_mode_enabled:{clean_id}", "True" if settings_model.automation.autonomous_enabled else "False"),
-        )
-        conn.execute(
-            """
-            INSERT INTO autopilot_settings (key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-            """,
-            (f"autonomous_target_ready_stock:{clean_id}", str(settings_model.automation.target_ready_stock)),
-        )
+        if settings_model.automation.target_ready_stock is not None:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS autopilot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO autopilot_settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """,
+                (f"autonomous_target_ready_stock:{clean_id}", str(settings_model.automation.target_ready_stock)),
+            )
 
     return settings_model
 
@@ -953,7 +948,7 @@ def onboard_channel_workspace(
     """Onboarding atômico de novo workspace/canal.
 
     Executa em UMA ÚNICA transação SQLite:
-    1. Validações preliminares antes da transação.
+    1. Validações preliminares antes da transação (fail-closed: external_account_id obrigatório para YouTube).
     2. INSERT em content_profiles com settings_json tipado.
     3. INSERT em publishing_channels com external_account_id.
     4. Inicialização de autopilot_settings (autonomous_mode_enabled=False por padrão seguro).
@@ -972,19 +967,32 @@ def onboard_channel_workspace(
         raise ValueError("Nicho não pode ser vazio.")
 
     clean_plat = _validate_platform(platform)
-    clean_lang = str(language or "pt-BR").strip()
-    clean_reg = str(region or "BR").strip().upper()
+    clean_lang = "pt-BR"
+    clean_reg = "BR"
 
     clean_ext_id = None
-    if external_account_id:
+    if clean_plat == "youtube":
+        if not external_account_id or not str(external_account_id).strip().startswith("UC"):
+            raise ValueError(
+                "Onboarding de canal YouTube exige conta conectada com external_account_id válido iniciando com 'UC'."
+            )
         clean_ext_id = str(external_account_id).strip()
-        if clean_plat == "youtube" and not clean_ext_id.startswith("UC"):
-            raise ValueError(f"external_account_id do YouTube deve iniciar com 'UC': '{clean_ext_id}'")
+    else:
+        clean_ext_id = str(external_account_id).strip() if external_account_id else None
 
     clean_ch_display = str(channel_display_name or f"{clean_name} ({clean_plat.capitalize()})").strip()
 
     if settings is None:
         settings_model = ChannelWorkspaceSettings()
+        # Novos canais criados pelo onboarding recebem defaults operacionais explícitos
+        settings_model.voice.voice_name = "pt-BR-FranciscaNeural"
+        settings_model.voice.voice_rate = 1.0
+        settings_model.voice.voice_volume = 1.0
+        settings_model.visual.visual_director_enabled = True
+        settings_model.visual.flow_enabled = True
+        settings_model.visual.flow_scene_count = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
+        settings_model.visual.stock_fallback_enabled = True
+        settings_model.automation.target_ready_stock = 3
     elif isinstance(settings, dict):
         settings_model = ChannelWorkspaceSettings.model_validate(settings)
     elif isinstance(settings, ChannelWorkspaceSettings):
@@ -994,6 +1002,9 @@ def onboard_channel_workspace(
 
     if topic_brief:
         settings_model.editorial.topic_brief = str(topic_brief).strip()
+
+    if settings_model.visual.flow_scene_count is None:
+        settings_model.visual.flow_scene_count = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
 
     settings_model.automation.autonomous_enabled = bool(autonomous_enabled)
     settings_json_str = settings_model.to_json()
@@ -1069,7 +1080,7 @@ def onboard_channel_workspace(
             VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
             """,
-            (f"autonomous_target_ready_stock:{new_pid}", str(settings_model.automation.target_ready_stock)),
+            (f"autonomous_target_ready_stock:{new_pid}", str(settings_model.automation.target_ready_stock or 3)),
         )
 
         p_row = conn.execute("SELECT * FROM content_profiles WHERE id = ?;", (new_pid,)).fetchone()
@@ -1100,23 +1111,44 @@ def get_generation_profile_context(
 
     # Fallbacks da aplicação / config.toml
     fallback_niche = config.app.get("default_niche") or "curiosidades"
-    fallback_language = config.app.get("video_language") or "pt-BR"
-    fallback_region = config.app.get("default_region") or "BR"
+    fallback_language = "pt-BR"
+    fallback_region = "BR"
     fallback_preset = const.DEFAULT_MONETIZATION_PRESET
     fallback_growth = const.DEFAULT_GROWTH_MODE
 
-    # Precedência: Profile Settings -> Global Config -> Safe Default
-    voice_name = settings.voice.voice_name or config.app.get("voice_name") or "pt-BR-FranciscaNeural"
-    voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else (config.app.get("voice_rate") or 1.0)
-    voice_volume = settings.voice.voice_volume if settings.voice.voice_volume is not None else (config.app.get("voice_volume") or 1.0)
+    # Precedência: Profile Settings explícito -> Global Config -> Safe Default
+    # 1. Voice
+    global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "pt-BR-FranciscaNeural"
+    voice_name = settings.voice.voice_name if settings.voice.voice_name else global_voice
+
+    global_rate = config.ui.get("voice_rate") or config.app.get("voice_rate") or 1.0
+    voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else float(global_rate)
+
+    global_volume = config.ui.get("voice_volume") or config.app.get("voice_volume") or 1.0
+    voice_volume = settings.voice.voice_volume if settings.voice.voice_volume is not None else float(global_volume)
+
+    # 2. Visual / Flow (canais legados com settings_json vazio NÃO habilitam Flow nem Visual Director implicitamente)
+    flow_enabled = bool(settings.visual.flow_enabled) if settings.visual.flow_enabled is not None else False
+    visual_director_enabled = bool(settings.visual.visual_director_enabled) if settings.visual.visual_director_enabled is not None else False
+    flow_scene_count = int(settings.visual.flow_scene_count) if settings.visual.flow_scene_count is not None else DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
+    stock_fallback_enabled = bool(settings.visual.stock_fallback_enabled) if settings.visual.stock_fallback_enabled is not None else True
+
+    # 3. Subtitles
+    subtitle_position = settings.subtitle.position if settings.subtitle.position else (config.ui.get("subtitle_position") or "bottom")
+    subtitle_font_size = settings.subtitle.font_size if settings.subtitle.font_size is not None else int(config.ui.get("font_size") or 16)
+
+    # 4. Automation (fonte canônica de status é autopilot_settings)
+    from app.services import autonomous_production
+    canonical_auto_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=db_path)
+    canonical_target_stock = autonomous_production.get_target_ready_stock(pid, db_path=db_path)
 
     return {
         "profile_id": pid,
         "profile_name": profile.get("name") or DEFAULT_PROFILE_NAME,
         "profile_slug": profile.get("slug") or DEFAULT_PROFILE_SLUG,
         "niche": profile.get("niche") or fallback_niche,
-        "language": profile.get("language") or fallback_language,
-        "region": profile.get("region") or fallback_region,
+        "language": fallback_language,
+        "region": fallback_region,
         "default_preset": profile.get("default_preset") or fallback_preset,
         "growth_mode": profile.get("growth_mode") or fallback_growth,
         # Settings incorporados com precedência: Profile Settings -> Global Config -> Safe Default
@@ -1125,16 +1157,16 @@ def get_generation_profile_context(
         "voice_name": voice_name,
         "voice_rate": voice_rate,
         "voice_volume": voice_volume,
-        "visual_director_enabled": settings.visual.visual_director_enabled,
-        "flow_enabled": settings.visual.flow_enabled,
-        "flow_scene_count": settings.visual.flow_scene_count,
-        "stock_fallback_enabled": settings.visual.stock_fallback_enabled,
+        "visual_director_enabled": visual_director_enabled,
+        "flow_enabled": flow_enabled,
+        "flow_scene_count": flow_scene_count,
+        "stock_fallback_enabled": stock_fallback_enabled,
         "visual_style_brief": settings.visual.visual_style_brief or "",
-        "subtitle_position": settings.subtitle.position or "bottom",
-        "subtitle_font_size": settings.subtitle.font_size or 16,
-        "autonomous_enabled": settings.automation.autonomous_enabled,
-        "target_ready_stock": settings.automation.target_ready_stock,
-        "posts_per_day": settings.automation.posts_per_day,
+        "subtitle_position": subtitle_position,
+        "subtitle_font_size": subtitle_font_size,
+        "autonomous_enabled": canonical_auto_enabled,
+        "target_ready_stock": canonical_target_stock,
+        "posts_per_day": settings.automation.posts_per_day or 1,
         "settings": settings.model_dump(),
     }
 

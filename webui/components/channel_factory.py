@@ -58,20 +58,20 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         st.markdown("##### 1. Identidade do Canal")
         c_name, c_niche = st.columns(2)
         with c_name:
-            name_val = st.text_input("Nome do Canal *", placeholder="Ex: GTA Daily DEV", key="new_ch_name")
+            name_val = st.text_input("Nome do Canal *", placeholder="Ex: GTA Daily DEV", key="cf_new_ch_name")
         with c_niche:
-            niche_val = st.text_input("Nicho *", placeholder="Ex: games", key="new_ch_niche")
+            niche_val = st.text_input("Nicho *", placeholder="Ex: games", key="cf_new_ch_niche")
 
         c_topic, c_lang = st.columns([2, 1])
         with c_topic:
             topic_brief_val = st.text_area(
                 "Tema / Descrição Editorial *",
                 placeholder="Ex: GTA VI: novidades, notícias oficiais, análises e teorias",
-                key="new_ch_topic",
+                key="cf_new_ch_topic",
                 height=68,
             )
         with c_lang:
-            lang_val = st.selectbox("Idioma", options=["pt-BR"], index=0, key="new_ch_lang", disabled=True)
+            lang_val = st.selectbox("Idioma", options=["pt-BR"], index=0, key="cf_new_ch_lang", disabled=True)
 
         # 2. Publicação (Post for Me / YouTube) - Fail-Closed
         st.markdown("##### 2. Publicação e Destino")
@@ -84,7 +84,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                 "Conta YouTube Conectada *",
                 options=range(len(accounts)),
                 format_func=lambda i: acc_labels[i],
-                key="new_ch_yt_acc_sel",
+                key="cf_new_ch_yt_acc_sel",
             )
             ext_account_id = accounts[sel_idx]["external_account_id"]
         else:
@@ -94,27 +94,27 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         st.markdown("##### 3. Produção & Visual")
         c_voice, c_stock = st.columns(2)
         with c_voice:
-            voice_val = st.text_input("Voz (TTS)", value="pt-BR-FranciscaNeural", key="new_ch_voice")
+            voice_val = st.text_input("Voz (TTS)", value="pt-BR-FranciscaNeural", key="cf_new_ch_voice")
         with c_stock:
-            stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="new_ch_stock")
+            stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="cf_new_ch_stock")
 
         st.caption("ℹ️ Visual Director / Flow: Configuração preparada — aguardando integração ao pipeline")
         c_vd, c_flow, c_fallback = st.columns(3)
         with c_vd:
-            vd_enabled = st.checkbox("Visual Director Ativo", value=True, key="new_ch_vd")
+            vd_enabled = st.checkbox("Visual Director Ativo", value=True, key="cf_new_ch_vd")
         with c_flow:
-            flow_enabled = st.checkbox("Google Flow Ativo", value=True, key="new_ch_flow")
+            flow_enabled = st.checkbox("Google Flow Ativo", value=True, key="cf_new_ch_flow")
         with c_fallback:
-            fallback_enabled = st.checkbox("Stock Fallback Ativo", value=True, key="new_ch_fallback")
+            fallback_enabled = st.checkbox("Stock Fallback Ativo", value=True, key="cf_new_ch_fallback")
 
         flow_scenes = profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
         if flow_enabled:
-            flow_scenes = st.slider("Cenas Flow por Vídeo", min_value=1, max_value=10, value=profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, key="new_ch_scenes")
+            flow_scenes = st.slider("Cenas Flow por Vídeo", min_value=1, max_value=10, value=profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, key="cf_new_ch_scenes")
 
         # 4. Ativação (Default Seguro: Pausado)
         st.markdown("##### 4. Ativação")
         st.warning("⚠️ **Recomendado:** Deixar a produção autônoma pausada inicialmente para validação do canal antes da ativação contínua.")
-        autonomous_start = st.checkbox("Ativar produção automática imediatamente", value=False, key="new_ch_auto_start")
+        autonomous_start = st.checkbox("Ativar produção automática imediatamente", value=False, key="cf_new_ch_auto_start")
 
         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 

@@ -658,6 +658,31 @@ class TestChannelFactory(unittest.TestCase):
         )
         self.assertEqual(myst_ext, "UCGJaC83EuaOwiZ0a3-KqUZA")
 
+    def test_channel_factory_widget_keys_do_not_collide_with_operator_console(self):
+        """Valida que as keys de widgets do formulário Channel Factory são isoladas e não colidem com Operator Console."""
+        import re
+        from pathlib import Path
+
+        cf_path = Path("webui/components/channel_factory.py")
+        op_path = Path("webui/components/operator_console.py")
+        self.assertTrue(cf_path.exists())
+        self.assertTrue(op_path.exists())
+
+        cf_content = cf_path.read_text(encoding="utf-8")
+        op_content = op_path.read_text(encoding="utf-8")
+
+        # Extrai keys literais key="..."
+        cf_keys = set(re.findall(r'key=["\']([^"\']+)["\']', cf_content))
+        op_keys = set(re.findall(r'key=["\']([^"\']+)["\']', op_content))
+
+        # Apenas keys estáticas (não dinâmicas com interpolação que já foram avaliadas)
+        static_cf_keys = {k for k in cf_keys if "{" not in k}
+        static_op_keys = {k for k in op_keys if "{" not in k}
+
+        overlap = static_cf_keys.intersection(static_op_keys)
+        self.assertEqual(overlap, set(), f"Colisão detectada entre chaves de widgets do Streamlit: {overlap}")
+
 
 if __name__ == "__main__":
     unittest.main()
+

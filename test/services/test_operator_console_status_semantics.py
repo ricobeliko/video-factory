@@ -200,12 +200,52 @@ class TestOperatorConsoleStatusSemantics(unittest.TestCase):
         self.assertEqual(default_po_after["scheduled"], 0, "Quando todos os posts são cancelled, scheduled deve ser 0")
 
     def test_06_factory_state_label_presentation(self):
-        """Verifica que RUNNING é apresentado como 'SERVIÇO ONLINE' e PAUSED como 'FÁBRICA PAUSADA'."""
-        state_labels = {
-            "RUNNING": "🟢 SERVIÇO ONLINE",
-            "PAUSED": "🟡 FÁBRICA PAUSADA",
-            "DEGRADED": "🟠 SERVIÇO DEGRADADO",
-            "ERROR": "🔴 ERRO NO SERVIÇO",
+        """Verifica que a função real da UI retorna 'SERVIÇO ONLINE' para RUNNING e 'FÁBRICA PAUSADA' para PAUSED."""
+        label_running = op_console_component._get_factory_state_label("RUNNING")
+        label_paused = op_console_component._get_factory_state_label("PAUSED")
+        self.assertIn("SERVIÇO ONLINE", label_running)
+        self.assertIn("FÁBRICA PAUSADA", label_paused)
+
+    def test_07_autonomous_enabled_separated_from_scheduler_and_publish(self):
+        """7. autonomous_enabled=True, scheduler_enabled=False, auto_publish_enabled=False -> UI mostra 'Autônomo: ON' e NÃO 'Autônomo: OFF'."""
+        telemetry_data = {
+            "autonomous_enabled": True,
+            "scheduler_enabled": False,
+            "auto_publish_enabled": False,
+            "auto_publish": "OFF",
+            "dry_run": "ON",
+            "growth_mode": "Normal",
+            "generation_worker": "IDLE",
         }
-        self.assertEqual(state_labels["RUNNING"], "🟢 SERVIÇO ONLINE")
-        self.assertEqual(state_labels["PAUSED"], "🟡 FÁBRICA PAUSADA")
+
+        mock_st = MagicMock()
+        with patch.object(op_console_component, "st", mock_st):
+            op_console_component._render_macro_meta_bar(telemetry_data)
+
+        rendered_texts = [call_args[0][0] for call_args in mock_st.markdown.call_args_list]
+        meta_bars = [t for t in rendered_texts if "Autônomo:" in t]
+        self.assertTrue(len(meta_bars) > 0, "Barra meta com status Autônomo não foi renderizada")
+
+        meta_bar = meta_bars[0]
+        self.assertIn("Autônomo:</b> ON", meta_bar, "Com autonomous_enabled=True, deve exibir 'Autônomo: ON'")
+        self.assertNotIn("Autônomo:</b> OFF", meta_bar, "Com autonomous_enabled=True, NÃO pode exibir 'Autônomo: OFF'")
+        self.assertIn("nenhuma geração em andamento", meta_bar)
+
+        # Caso reverso: autonomous_enabled=False
+        telemetry_data_off = {
+            "autonomous_enabled": False,
+            "scheduler_enabled": True,
+            "auto_publish_enabled": True,
+            "auto_publish": "ON",
+            "dry_run": "OFF",
+            "growth_mode": "Normal",
+            "generation_worker": "ACTIVE",
+        }
+        mock_st.reset_mock()
+        with patch.object(op_console_component, "st", mock_st):
+            op_console_component._render_macro_meta_bar(telemetry_data_off)
+
+        rendered_texts_off = [call_args[0][0] for call_args in mock_st.markdown.call_args_list]
+        meta_bar_off = [t for t in rendered_texts_off if "Autônomo:" in t][0]
+        self.assertIn("Autônomo:</b> OFF", meta_bar_off)
+        self.assertIn("geração ativa", meta_bar_off)

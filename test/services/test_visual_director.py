@@ -394,6 +394,32 @@ class TestVisualDirectorWorkflowIntegration(unittest.TestCase):
         self.assertTrue(len(prompt) > 20)
         mock_playwright.assert_not_called()
 
+    def test_football_prompt_contains_non_identifiable_fictional_guidance(self):
+        """22. Prompt para nicho futebol contém diretrizes explícitas de atletas fictícios e não identificáveis."""
+        scenes = [{"scene_index": 1, "narration": "O atacante cabeceou a bola para o gol."}]
+        prompt = build_director_prompt(scenes, video_subject="Gol de Placa", niche="futebol")
+        p_lower = prompt.lower()
+        self.assertIn("fictional, non-identifiable football", p_lower)
+        self.assertIn("no resemblance to real or famous", p_lower)
+        self.assertIn("no real club logos", p_lower)
+        self.assertIn("prioritize athletic action over facial identity", p_lower)
+
+    def test_generic_football_prompt_contains_no_forced_real_player_club(self):
+        """23. Prompt genérico de futebol não força nem cita nenhum jogador ou clube real específico."""
+        scenes = [{"scene_index": 1, "narration": "A bola cruzou a grande área."}]
+        prompt = build_director_prompt(scenes, video_subject="Cruzamento Perfeito", niche="futebol")
+        # Confirma que não menciona nomes de celebridades esportivas reais
+        for famous in ["Neymar", "Messi", "Cristiano Ronaldo", "Pelé", "Mbappé", "Flamengo", "Real Madrid"]:
+            self.assertNotIn(famous, prompt)
+
+    def test_non_football_niches_unchanged(self):
+        """24. Nichos não-futebol preservam suas diretrizes específicas sem injetar regras de futebol."""
+        scenes = [{"scene_index": 1, "narration": "O acelerador de partículas detectou a anomalia."}]
+        prompt = build_director_prompt(scenes, video_subject="Física Quântica", niche="curiosidades_ciencia")
+        self.assertNotIn("SPECIAL DIRECTIVE FOR FOOTBALL NICHE", prompt)
+        self.assertIn("curiosidades_ciencia", prompt)
+        self.assertIn("scientific/macro imagery", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

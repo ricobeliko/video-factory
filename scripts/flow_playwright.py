@@ -214,17 +214,22 @@ def navigate_landing_to_studio(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_
     return page.url
 
 
+FORBIDDEN_PROJECT_IDS = ["231bb713", "9635d727"]
+
+
 def ensure_studio_surface(
     page: Page,
     project_url: Optional[str] = None,
     timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
+    force_new_project: bool = False,
 ) -> str:
     """
     Garante que o navegador está na superfície Studio com o editor ProseMirror pronto.
     Precedência mandatória:
     1. project_url explícita (via CLI ou manifest) -> page.goto(project_url)
-    2. URL atual já contém /project/ -> reutiliza sessão atual
-    3. Landing page sem project_url -> clica 'Novo projeto' exatamente uma vez
+    2. force_new_project ou projeto proibido/deprecado -> navega para landing e cria novo projeto
+    3. URL atual já contém /project/ -> reutiliza sessão atual
+    4. Landing page sem project_url -> clica 'Novo projeto' exatamente uma vez
 
     NUNCA clica em 'Novo projeto' quando project_url for fornecida.
     """
@@ -240,6 +245,16 @@ def ensure_studio_surface(
         expect(editor).to_be_visible(timeout=timeout_ms)
         logger.info(f"Superfície Studio confirmada no projeto alvo: {project_url}")
         return project_url
+
+    is_forbidden = any(pid in page.url for pid in FORBIDDEN_PROJECT_IDS)
+    if force_new_project or is_forbidden:
+        if is_forbidden:
+            logger.warning(f"URL atual contém projeto proibido/deprecado ({page.url}). Forçando criação de novo projeto limpo.")
+        else:
+            logger.info("force_new_project ativo: navegando para landing para criar novo projeto limpo.")
+        page.goto(DEFAULT_FLOW_URL)
+        page.wait_for_load_state("domcontentloaded")
+        return navigate_landing_to_studio(page, timeout_ms=timeout_ms)
 
     if "/project/" in page.url:
         logger.info(f"Página atual já está na superfície Studio: {page.url}")
@@ -529,7 +544,12 @@ def execute_credit_approval(
         logger.error(f"Botão de aprovação inválido ou ambíguo: match_count={count}")
         return res
 
-    if res["cost"] is not None and res["cost"] > 15:
+    if res["cost"] is None:
+        res["error"] = "CREDIT_COST_UNKNOWN"
+        logger.error("FAIL CLOSED: custo de créditos desconhecido (None). Abortando sem aprovação.")
+        return res
+
+    if res["cost"] > 15:
         res["error"] = f"CREDIT_COST_EXCEEDS_CAP_{res['cost']}"
         logger.error(f"FAIL CLOSED: custo de créditos ({res['cost']}) excede o teto permitido (15). Abortando sem aprovação.")
         return res
@@ -705,8 +725,27 @@ def wait_for_generation_complete(
             timeout=timeout_sec * 1000,
         )
         if wait_res.json_value() == "FAILED_BY_POLICY_OR_ERROR":
-            logger.error("Novo tile de geração detectado com falha de política de conteúdo ou erro do Flow.")
-            return False, None, "GENERATION_POLICY_OR_BACKEND_FAILURE"
+            err_text = ""
+            try:
+                error_tiles = page.locator("flow-grid-tile-container").filter(
+                    has_text=re.compile(r"falha|violar|pol[íi]tica|refund|error", re.I)
+                )
+                if error_tiles.count() > 0:
+                    err_text = error_tiles.first.inner_text().strip().replace('\n', ' ')
+            except Exception:
+                pass
+            if not err_text:
+                try:
+                    # Fallback para verificar no corpo da página se a notificação estiver fora do container
+                    for el in page.locator("div, p, span").filter(has_text=re.compile(r"violar|pol[íi]tica|refund", re.I)).all():
+                        t_str = el.inner_text().strip().replace('\n', ' ')
+                        if "violar" in t_str.lower() or "política" in t_str.lower() or "refund" in t_str.lower():
+                            err_text = t_str
+                            break
+                except Exception:
+                    pass
+            logger.error(f"Novo tile de geração detectado com falha de política/erro: {err_text}")
+            return False, None, f"FLOW_POLICY_FAILURE: {err_text}" if err_text else "GENERATION_POLICY_OR_BACKEND_FAILURE"
     except Exception as exc:
         logger.error(f"Timeout aguardando novo resultado de geração: {exc}")
         try:
@@ -716,7 +755,7 @@ def wait_for_generation_complete(
             if error_tiles.count() > 0:
                 err_text = error_tiles.first.inner_text().strip().replace('\n', ' ')
                 logger.error(f"Tile com falha/política detectado no DOM: {err_text}")
-                return False, None, f"FLOW_POLICY_FAILURE: {err_text[:100]}"
+                return False, None, f"FLOW_POLICY_FAILURE: {err_text}"
         except Exception:
             pass
         return False, None, "GENERATION_RESULT_NOT_FOUND"
@@ -873,6 +912,7 @@ def run_playwright_flow_poc(
     timeout_gen_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
     project_url: Optional[str] = None,
     download_only: bool = False,
+    force_new_project: bool = False,
 ) -> Dict[str, Any]:
     """
     Executa o ciclo completo de validação do Playwright com isolamento de resultado:
@@ -938,6 +978,9 @@ def run_playwright_flow_poc(
         "output_file": None,
         "output_valid": False,
         "output_duration": 0.0,
+        "content_policy_blocked": False,
+        "policy_refund_confirmed": False,
+        "policy_message": None,
         "project_url": project_url,
         "error": None,
     }
@@ -949,7 +992,7 @@ def run_playwright_flow_poc(
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
-    target_project_url = project_url or manifest.get("flow_project_url")
+    target_project_url = None if force_new_project else (project_url or manifest.get("flow_project_url"))
 
     scenes = manifest.get("scenes", [])
     target_scene = next((s for s in scenes if s.get("scene_index") == scene_index), None)
@@ -1040,7 +1083,7 @@ def run_playwright_flow_poc(
                 return report
 
             # 2. Navegação para Studio (com precedência mandatória para target_project_url)
-            ensure_studio_surface(page, project_url=target_project_url)
+            ensure_studio_surface(page, project_url=target_project_url, force_new_project=force_new_project)
             report["landing_to_studio"] = True
             report["editor_found"] = True
             report["project_url_confirmed"] = True
@@ -1255,8 +1298,16 @@ def run_playwright_flow_poc(
                 )
                 report["generation_complete_confirmed"] = completed
                 if not completed:
-                    report["status"] = comp_err or "GENERATION_COMPLETION_FAILED"
-                    report["error"] = comp_err or f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
+                    is_policy = bool(comp_err and ("POLICY" in comp_err or "política" in comp_err.lower() or "violar" in comp_err.lower()))
+                    if is_policy:
+                        report["content_policy_blocked"] = True
+                        report["policy_refund_confirmed"] = bool(comp_err and ("refund" in comp_err.lower() or "restitu" in comp_err.lower() or "reembols" in comp_err.lower()))
+                        report["policy_message"] = comp_err
+                        report["status"] = "FLOW_CONTENT_POLICY_BLOCKED" if report["policy_refund_confirmed"] else "FLOW_GENERATION_NEEDS_RECOVERY"
+                        report["error"] = comp_err
+                    else:
+                        report["status"] = comp_err or "GENERATION_COMPLETION_FAILED"
+                        report["error"] = comp_err or f"GENERATION_TIMEOUT_{timeout_gen_sec}S"
                     _stop_tracing(report["status"])
                     context.close()
                     return report
@@ -1462,12 +1513,18 @@ def generate_flow_scene(
         or raw_res.get("credit_approval_confirmed")
     )
 
-    # Cálculo de créditos
+    # Cálculo de créditos e status de política
+    policy_blocked = bool(raw_res.get("content_policy_blocked") or raw_status == "FLOW_CONTENT_POLICY_BLOCKED")
+    refund_confirmed = bool(raw_res.get("policy_refund_confirmed"))
+
     credits_consumed = 0
     if raw_status == "ALREADY_COMPLETE":
         credits_consumed = 0
     elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED" or raw_res.get("generation_type") == "IMAGE":
         # Modo não confirmado como VIDEO ou mode mismatch: zero créditos de vídeo inferidos
+        credits_consumed = 0
+    elif policy_blocked and refund_confirmed:
+        # Recusa explícita de política com reembolso confirmado pelo provedor: zero crédito
         credits_consumed = 0
     elif raw_res.get("credit_approval_confirmed") or raw_res.get("generation_start_confirmed"):
         credits_consumed = raw_res.get("credit_cost") or 15
@@ -1479,6 +1536,11 @@ def generate_flow_scene(
         final_status = "FLOW_BROWSER_BUSY"
     elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED":
         final_status = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+    elif policy_blocked:
+        if refund_confirmed:
+            final_status = "FLOW_CONTENT_POLICY_BLOCKED"
+        else:
+            final_status = "FLOW_GENERATION_NEEDS_RECOVERY"
     elif confirmed_dispatch and raw_status != "SUCCESS":
         # Crédito despachado / aprovação confirmada: não regenerar e não cair para stock cegamente
         final_status = "FLOW_GENERATION_NEEDS_RECOVERY"
@@ -1495,6 +1557,11 @@ def generate_flow_scene(
         except Exception as p_exc:
             logger.warning(f"Não foi possível persistir flow_project_url no manifest: {p_exc}")
 
+    details = dict(raw_res)
+    details["content_policy_blocked"] = policy_blocked
+    details["policy_refund_confirmed"] = refund_confirmed
+    details["needs_recovery"] = True if final_status == "FLOW_GENERATION_NEEDS_RECOVERY" else False
+
     return FlowSceneResult(
         status=final_status,
         scene_index=scene_index,
@@ -1504,7 +1571,7 @@ def generate_flow_scene(
         credits_consumed=credits_consumed,
         project_url=effective_url,
         error=raw_res.get("error"),
-        details=raw_res,
+        details=details,
     )
 
 
@@ -1516,6 +1583,7 @@ def main():
     parser.add_argument("--timeout-gen", type=int, default=DEFAULT_TIMEOUT_GEN_SEC, help="Timeout de geração em segundos")
     parser.add_argument("--project-url", default=None, help="URL explícita do projeto Flow existente")
     parser.add_argument("--download-only", action="store_true", help="Executa apenas isolamento, download e validação do novo tile já gerado")
+    parser.add_argument("--new-project", action="store_true", help="Força a criação de um novo projeto limpo no Flow")
 
     args = parser.parse_args()
 
@@ -1526,6 +1594,7 @@ def main():
         timeout_gen_sec=args.timeout_gen,
         project_url=args.project_url,
         download_only=args.download_only,
+        force_new_project=args.new_project,
     )
 
     print("\n" + "=" * 50)

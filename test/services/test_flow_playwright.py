@@ -23,6 +23,7 @@ from scripts.flow_playwright import (
     extract_tile_identifier_from_src,
     fill_prompt,
     find_single_approve_button,
+    generate_flow_scene,
     launch_flow_context,
     navigate_landing_to_studio,
     run_playwright_flow_poc,
@@ -222,7 +223,8 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_btn.count.return_value = 1
         mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
 
-        with patch("scripts.flow_playwright.expect") as mock_expect:
+        with patch("scripts.flow_playwright.expect") as mock_expect, \
+             patch("scripts.flow_playwright.extract_credit_cost", return_value=15):
             res = execute_credit_approval(mock_page, timeout_confirm_ms=1000)
             self.assertTrue(res["required"])
             self.assertEqual(res["click_count"], 1)
@@ -238,13 +240,72 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_btn.count.return_value = 1
         mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
 
-        with patch("scripts.flow_playwright.expect", side_effect=Exception("Timeout waiting for hidden")):
+        with patch("scripts.flow_playwright.expect", side_effect=Exception("Timeout waiting for hidden")), \
+             patch("scripts.flow_playwright.extract_credit_cost", return_value=15):
             res = execute_credit_approval(mock_page, timeout_confirm_ms=100)
             self.assertFalse(res["confirmed"])
             self.assertEqual(res["error"], "CREDIT_APPROVAL_NOT_CONFIRMED")
             self.assertEqual(res["click_count"], 1)
             # Garantia mandatória: disparado estritamente UMA vez
             mock_btn.click.assert_called_once()
+
+    def test_unknown_credit_cost_blocks_approval(self):
+        """1. Custo de crédito desconhecido (None) bloqueia aprovação fail-closed com zero cliques."""
+        mock_page = MagicMock()
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
+
+        with patch("scripts.flow_playwright.extract_credit_cost", return_value=None):
+            res = execute_credit_approval(mock_page)
+            self.assertEqual(res["error"], "CREDIT_COST_UNKNOWN")
+            self.assertEqual(res["click_count"], 0)
+            self.assertFalse(res["confirmed"])
+            mock_btn.click.assert_not_called()
+
+    def test_explicit_policy_refund_maps_terminal(self):
+        """2. Recusa explícita de política com reembolso confirmado mapeia para FLOW_CONTENT_POLICY_BLOCKED, créditos=0 e needs_recovery=False."""
+        raw_res = {
+            "status": "FLOW_CONTENT_POLICY_BLOCKED",
+            "content_policy_blocked": True,
+            "policy_refund_confirmed": True,
+            "policy_message": "Falha: Esse comando pode violar nossas políticas. You will be refunded for this generation.",
+            "error": "FLOW_POLICY_FAILURE",
+            "generation_start_confirmed": True,
+            "credit_cost": 15,
+        }
+        with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))):
+            res = generate_flow_scene("dummy_manifest.json", scene_index=1)
+            self.assertEqual(res.status, "FLOW_CONTENT_POLICY_BLOCKED")
+            self.assertEqual(res.credits_consumed, 0)
+            self.assertFalse(res.details.get("needs_recovery"))
+            self.assertTrue(res.details.get("content_policy_blocked"))
+            self.assertTrue(res.details.get("policy_refund_confirmed"))
+
+    def test_policy_block_without_refund_stays_recovery(self):
+        """3. Bloqueio de política sem confirmação segura de reembolso mantém comportamento conservador FLOW_GENERATION_NEEDS_RECOVERY."""
+        raw_res = {
+            "status": "FLOW_GENERATION_NEEDS_RECOVERY",
+            "content_policy_blocked": True,
+            "policy_refund_confirmed": False,
+            "policy_message": "Falha: Esse comando pode violar políticas.",
+            "error": "FLOW_POLICY_FAILURE",
+            "generation_start_confirmed": True,
+            "credit_cost": 15,
+        }
+        with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))):
+            res = generate_flow_scene("dummy_manifest.json", scene_index=1)
+            self.assertEqual(res.status, "FLOW_GENERATION_NEEDS_RECOVERY")
+            self.assertEqual(res.credits_consumed, 15)
+            self.assertTrue(res.details.get("needs_recovery"))
 
     def test_check_pending_approval_found(self):
         """4. Approval pendente no início é detectado com contagem e custo."""

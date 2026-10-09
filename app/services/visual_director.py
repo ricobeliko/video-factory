@@ -252,7 +252,17 @@ CORE SEMANTIC RULES:
 6. NICHE ADAPTATION: Tailor the style and camera language to the niche:
    - "curiosidades_ciencia": visual clarity, scientific/macro imagery, scale visualization, realistic cinematic science.
    - "historias_misterios": suspense, controlled shadows, atmospheric environments, restrained camera movement.
-   - "futebol": energy, stadium/training/crowd context, faster motion language, sports documentary framing.
+   - "futebol": energy, stadium/training/pitch context, dynamic sports cinematography.
+     POLICY-SAFE SPORTS GUIDANCE (CRITICAL FOR FOOTBALL):
+     When the script does NOT explicitly cite a specific real person, famous athlete, or real club:
+     * Use fictional, non-identifiable football players.
+     * No resemblance to real or famous athletes.
+     * No real club logos, no sponsor emblems, no branded uniforms, no famous jersey numbers.
+     * Use generic unbranded athletic kits (e.g. solid color jersey or simple athletic stripes).
+     * No recognizable celebrity likeness.
+     * Prioritize athletic action over facial identity (focus on physical momentum, ball trajectory, and body movement).
+     * Camera framing must favor action: medium sports shots, wide pitch views, side or rear three-quarter tracking, dynamic ball follow. Faces may exist naturally and incidentally, but must NEVER be the central recognizable identity or close-up portrait feature.
+     * Do NOT describe athletes as mannequins or hide faces artificially; preserve high-end natural cinematic sports quality.
    - other niches: strictly respect the topic and genre tone.
 7. PREVENT REPETITION: Differentiate angles, focal lengths, and camera movements across sequential scenes to keep viewer retention high.
 8. STOCK SEARCH TERMS: For each scene, generate 2 to 5 concrete English search terms (objects, locations, environments) suitable for stock video fallback (e.g. "ancient stone ruin", "deep space nebula", "vintage laboratory microscope").
@@ -273,10 +283,21 @@ def build_director_prompt(
         "total_scenes": len(normalized_scenes),
         "scenes": normalized_scenes,
     }
+    futebol_directive = ""
+    is_futebol = (niche.lower() == "futebol") or ("futebol" in video_subject.lower()) or ("football" in niche.lower())
+    if is_futebol:
+        futebol_directive = (
+            "\n\nSPECIAL DIRECTIVE FOR FOOTBALL NICHE:\n"
+            "This video depicts fictional football moments. Ensure all generated scene specs depict fictional, "
+            "non-identifiable players with no resemblance to famous real athletes, no real club logos, no branded jerseys, "
+            "and prioritize athletic action over facial identity (focusing on sports action, movement, and ball trajectory)."
+        )
+
     return (
         f"{SYSTEM_DIRECTOR_PROMPT}\n\n"
         f"Input ScenePlan data:\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        f"{futebol_directive}\n\n"
         f"Generate the complete VisualDirectionPlan for all {len(normalized_scenes)} scenes."
     )
 

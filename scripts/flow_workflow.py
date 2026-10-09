@@ -32,6 +32,12 @@ from scripts.flow_playwright import (  # noqa: E402
     generate_flow_scene,
     validate_clip_file,
 )
+from app.services.visual_director import (  # noqa: E402
+    compile_flow_prompt,
+    direct_scenes,
+    get_gemini_config,
+    preview_visual_direction,
+)
 
 from app.config import config  # noqa: E402
 from app.models import const  # noqa: E402
@@ -159,10 +165,14 @@ def prepare_project(
     custom_prompts: Optional[Dict[int, str]] = None,
     niche: str = "",
     target_flow_scenes: int = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
+    visual_director_enabled: bool = False,
+    visual_style_brief: str = "",
 ) -> Dict[str, Any]:
     """
     Passo 1 & 2: Divide o roteiro em cenas temporizadas e gera prompts para o Flow.
     Cria a estrutura de pastas e o manifesto estruturado.
+    Quando visual_director_enabled=True, utiliza o Gemini Visual Director para
+    gerar especificações visuais cinematográficas estruturadas.
     """
     if not script_text or not script_text.strip():
         raise ValueError("script_text não pode ser vazio")
@@ -188,6 +198,27 @@ def prepare_project(
     else:
         flow_indices = set(select_default_flow_scenes(scene_plan.scenes, target_count=target_flow_scenes))
     custom_map = custom_prompts or {}
+
+    visual_direction_plan = None
+    visual_director_meta = None
+    if visual_director_enabled:
+        logger.info(
+            f"[VisualDirector] Solicitando direção visual estruturada para {len(scene_plan.scenes)} cenas..."
+        )
+        visual_direction_plan = direct_scenes(
+            scenes=scene_plan.scenes,
+            video_subject=video_subject,
+            niche=niche,
+            visual_style_brief=visual_style_brief,
+        )
+        gemini_cfg = get_gemini_config()
+        visual_director_meta = {
+            "enabled": True,
+            "provider": "gemini",
+            "model": gemini_cfg["model_name"],
+            "global_style": visual_direction_plan.global_style,
+            "continuity_rules": visual_direction_plan.continuity_rules,
+        }
 
     scenes_data = []
     prompts_md_lines = [
@@ -215,10 +246,21 @@ def prepare_project(
         is_flow = s_idx in flow_indices
         clip_filename = f"flow_scene_{s_idx:02d}.mp4"
 
-        if is_flow and s_idx in custom_map:
+        if visual_direction_plan is not None:
+            spec = next((s for s in visual_direction_plan.scenes if s.scene_index == s_idx), None)
+            if not spec:
+                raise RuntimeError(f"VISUAL_DIRECTOR_FAILED: Cena {s_idx} ausente do plano visual")
+            prompt_en = compile_flow_prompt(spec)
+            prompt_pt = f"Cena {s_idx}: {spec.subject} — {spec.action}"
+            visual_intent = spec.style
+            search_terms = spec.stock_search_terms
+            visual_direction_dict = spec.model_dump()
+        elif is_flow and s_idx in custom_map:
             prompt_en = custom_map[s_idx]
             prompt_pt = f"Cena {s_idx} personalizada para {video_subject}."
             visual_intent = "custom visual"
+            search_terms = scene.search_terms
+            visual_direction_dict = None
         else:
             prompt_info = build_flow_prompt(
                 narration=scene.narration,
@@ -228,6 +270,8 @@ def prepare_project(
             prompt_en = prompt_info["prompt_en"]
             prompt_pt = prompt_info["prompt_pt"]
             visual_intent = prompt_info["visual_intent"]
+            search_terms = scene.search_terms
+            visual_direction_dict = None
 
         scene_dict = {
             "scene_index": s_idx,
@@ -238,8 +282,10 @@ def prepare_project(
             "prompt_en": prompt_en,
             "prompt_pt": prompt_pt,
             "visual_intent": visual_intent,
-            "search_terms": scene.search_terms,
+            "search_terms": search_terms,
         }
+        if visual_direction_dict is not None:
+            scene_dict["visual_direction"] = visual_direction_dict
         scenes_data.append(scene_dict)
 
         if is_flow:
@@ -272,6 +318,8 @@ def prepare_project(
         "flow_scenes": sorted(list(flow_indices)),
         "scenes": scenes_data,
     }
+    if visual_director_meta is not None:
+        manifest_data["visual_director"] = visual_director_meta
 
     manifest_path = os.path.join(project_dir, "manifest.json")
     atomic_write_json(manifest_path, manifest_data)
@@ -948,6 +996,17 @@ def main():
     )
     prepare_p.add_argument("--target-duration", type=float, default=8.0, help="Duração alvo de cada cena")
     prepare_p.add_argument("--voice", default="pt-BR-AntonioNeural-Male", help="Voz TTS neural")
+    prepare_p.add_argument(
+        "--visual-director",
+        action="store_true",
+        default=False,
+        help="Habilita direção visual cinematográfica estruturada via Gemini",
+    )
+    prepare_p.add_argument(
+        "--visual-style-brief",
+        default="",
+        help="Diretriz opcional de estilo visual global",
+    )
 
     # Comando 'status'
     status_p = subparsers.add_parser("status", help="Inspeciona clipes baixados para o projeto")
@@ -978,6 +1037,21 @@ def main():
         help="Política para cenas Flow ausentes (strict | fallback_stock, padrão: strict)",
     )
 
+    # Comando 'visual-preview'
+    visual_preview_p = subparsers.add_parser(
+        "visual-preview",
+        help="Prévia da direção visual cinematográfica via Gemini",
+    )
+    visual_preview_p.add_argument(
+        "project_or_manifest",
+        help="Diretório do projeto ou caminho do manifest.json",
+    )
+    visual_preview_p.add_argument(
+        "--brief",
+        default="",
+        help="Diretriz opcional de estilo visual global",
+    )
+
     args = parser.parse_args()
 
     if args.command == "prepare":
@@ -1003,6 +1077,8 @@ def main():
             flow_scenes=flow_sc_list,
             niche=args.niche,
             target_flow_scenes=args.flow_count,
+            visual_director_enabled=args.visual_director,
+            visual_style_brief=args.visual_style_brief,
         )
         print("\n" + "=" * 60)
         print("PROJETO FLOW PREPARADO COM SUCESSO!")
@@ -1086,6 +1162,23 @@ def main():
             print(f"Duração:         {res['duration_seconds']}s")
             print(f"Tamanho:         {res['size_bytes'] / (1024*1024):.2f} MB")
         print("=" * 60)
+
+    elif args.command == "visual-preview":
+        res = preview_visual_direction(args.project_or_manifest, brief=args.brief)
+        print("\n" + "=" * 70)
+        print("VISUAL DIRECTOR PREVIEW")
+        print("=" * 70)
+        print(f"Global Style: {res['global_style']}")
+        print(f"Continuity Rules: {res['continuity_rules']}")
+        print("-" * 70)
+        for s in res["scenes"]:
+            print(f"\n[Cena {s['scene_index']:02d}] Importance: {s['visual_importance'].upper()}")
+            print(f"  Subject:     {s['subject']}")
+            print(f"  Action:      {s['action']}")
+            print(f"  Environment: {s['environment']}")
+            print(f"  Stock Terms: {s['stock_search_terms']}")
+            print(f"  Flow Prompt:\n    {s['compiled_flow_prompt']}")
+        print("\n" + "=" * 70)
 
     else:
         parser.print_help()

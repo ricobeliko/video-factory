@@ -107,7 +107,10 @@ function Format-Summary {
         [string]$RollbackResult,
         [string]$FinalSha,
         [string]$Status,
-        [string]$FailureReason = ""
+        [string]$FailureReason = "",
+        [string]$FfmpegResult = "",
+        [string]$FfprobeResult = "",
+        [string]$MediaRuntimeResult = ""
     )
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Cyan
@@ -115,6 +118,15 @@ function Format-Summary {
     Write-Host "==================================================" -ForegroundColor Cyan
     Write-Host "CURRENT_SHA     = $CurrentSha"
     Write-Host "TARGET_SHA      = $TargetSha"
+    if ($FfmpegResult -ne "") {
+        Write-Host "FFMPEG          = $FfmpegResult"
+    }
+    if ($FfprobeResult -ne "") {
+        Write-Host "FFPROBE         = $FfprobeResult"
+    }
+    if ($MediaRuntimeResult -ne "") {
+        Write-Host "MEDIA_RUNTIME   = $MediaRuntimeResult"
+    }
     Write-Host "BACKUP          = $BackupResult"
     Write-Host "UPDATE          = $UpdateResult"
     Write-Host "HEALTH          = $HealthResult"
@@ -139,6 +151,7 @@ if (-not (Test-Path $RepoPath)) {
 $RepoPathResolved = (Resolve-Path $RepoPath).Path
 Set-Location -Path $RepoPathResolved
 $env:PYTHONPATH = $RepoPathResolved
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User") + ";" + $env:Path
 
 Init-DeployLogger -BasePath $RepoPathResolved
 
@@ -275,7 +288,145 @@ try {
         Write-DeployLog "Scheduled Task '$TaskName' verificada: PRESENTE."
     }
 
-    # 4.9 Execução em Modo PreflightOnly
+    # 4.9 Validação de Runtime de Mídia (FFmpeg / FFprobe via Resolvers da Aplicação - FAIL-CLOSED)
+    Write-DeployLog "Executando verificação de runtime de mídia (FFmpeg/FFprobe)..."
+
+    $MediaCheckCode = @'
+import json, subprocess, sys
+res = {
+    "ffmpeg_path": None,
+    "ffprobe_path": None,
+    "ffmpeg_ok": False,
+    "ffprobe_ok": False,
+    "status": "FAIL",
+    "failure_reason": None,
+}
+try:
+    from app.utils import utils
+    from app.services import media_quality
+
+    ffmpeg_bin = utils.get_ffmpeg_binary()
+    ffprobe_bin = media_quality.get_ffprobe_binary()
+
+    res["ffmpeg_path"] = ffmpeg_bin
+    res["ffprobe_path"] = ffprobe_bin
+
+    if not ffmpeg_bin:
+        res["failure_reason"] = "FFMPEG_UNAVAILABLE"
+    elif not ffprobe_bin:
+        res["failure_reason"] = "FFPROBE_UNAVAILABLE"
+    else:
+        # 1. Validar execucao de ffmpeg -version
+        try:
+            p_ffmpeg = subprocess.run(
+                [ffmpeg_bin, "-version"],
+                capture_output=True,
+                timeout=5,
+                shell=False,
+            )
+            if p_ffmpeg.returncode == 0:
+                res["ffmpeg_ok"] = True
+            else:
+                res["failure_reason"] = "FFMPEG_UNAVAILABLE"
+        except Exception:
+            res["failure_reason"] = "FFMPEG_UNAVAILABLE"
+
+        # 2. Validar execucao de ffprobe -version se ffmpeg passou
+        if res["ffmpeg_ok"]:
+            try:
+                p_ffprobe = subprocess.run(
+                    [ffprobe_bin, "-version"],
+                    capture_output=True,
+                    timeout=5,
+                    shell=False,
+                )
+                if p_ffprobe.returncode == 0:
+                    res["ffprobe_ok"] = True
+                    res["status"] = "PASS"
+                else:
+                    res["failure_reason"] = "FFPROBE_UNAVAILABLE"
+            except Exception:
+                res["failure_reason"] = "FFPROBE_UNAVAILABLE"
+except Exception as e:
+    res["failure_reason"] = f"RESOLVER_ERROR: {e}"
+
+sys.stdout.write(json.dumps(res))
+sys.stdout.flush()
+'@
+
+    $FfmpegSummary = "FAIL"
+    $FfprobeSummary = "FAIL"
+    $MediaRuntimeSummary = "FAIL"
+    $MediaFailReason = "MEDIA_RUNTIME_FAILED"
+
+    $MediaProcessInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $MediaProcessInfo.FileName = $VenvPython
+    $MediaProcessInfo.Arguments = "-"
+    $MediaProcessInfo.WorkingDirectory = $RepoPathResolved
+    $MediaProcessInfo.RedirectStandardInput = $true
+    $MediaProcessInfo.RedirectStandardOutput = $true
+    $MediaProcessInfo.RedirectStandardError = $true
+    $MediaProcessInfo.UseShellExecute = $false
+    $MediaProcessInfo.CreateNoWindow = $true
+
+    try {
+        $MediaProcess = [System.Diagnostics.Process]::Start($MediaProcessInfo)
+        $MediaProcess.StandardInput.Write($MediaCheckCode)
+        $MediaProcess.StandardInput.Close()
+        $MediaStdout = $MediaProcess.StandardOutput.ReadToEnd()
+        $MediaStderr = $MediaProcess.StandardError.ReadToEnd()
+        $MediaProcess.WaitForExit()
+        $MediaExit = $MediaProcess.ExitCode
+
+        if ($MediaStderr -and $MediaStderr.Trim() -ne "") {
+            foreach ($errLine in ($MediaStderr -split "`r?`n")) {
+                if ($errLine.Trim() -ne "") {
+                    Write-DeployLog "  [MEDIA-RUNTIME-LOG] $errLine" -Level "INFO"
+                }
+            }
+        }
+
+        if ($MediaExit -eq 0 -and $MediaStdout) {
+            try {
+                $MediaData = $MediaStdout | ConvertFrom-Json
+                if ($MediaData.ffmpeg_path) {
+                    $FfmpegSummary = if ($MediaData.ffmpeg_ok) { "PASS ($($MediaData.ffmpeg_path))" } else { "FAIL ($($MediaData.ffmpeg_path))" }
+                } else {
+                    $FfmpegSummary = "FAIL"
+                }
+
+                if ($MediaData.ffprobe_path) {
+                    $FfprobeSummary = if ($MediaData.ffprobe_ok) { "PASS ($($MediaData.ffprobe_path))" } else { "FAIL ($($MediaData.ffprobe_path))" }
+                } else {
+                    $FfprobeSummary = "FAIL"
+                }
+
+                if ($MediaData.status -eq "PASS" -and $MediaData.ffmpeg_ok -and $MediaData.ffprobe_ok) {
+                    $MediaRuntimeSummary = "PASS"
+                    $MediaFailReason = ""
+                } else {
+                    $MediaRuntimeSummary = "FAIL"
+                    $MediaFailReason = if ($MediaData.failure_reason) { $MediaData.failure_reason } else { "MEDIA_RUNTIME_FAILED" }
+                }
+            } catch {
+                $MediaFailReason = "JSON_PARSE_ERROR"
+            }
+        } else {
+            $MediaFailReason = "PROCESS_EXIT_$MediaExit"
+        }
+    } catch {
+        $MediaFailReason = "PROCESS_START_FAILED"
+    }
+
+    if ($MediaRuntimeSummary -ne "PASS") {
+        Write-DeployLog "ABORT: Media runtime preflight falhou: $MediaFailReason" -Level "ERROR" -IsError
+        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult "NOT_ATTEMPTED" -UpdateResult "NOT_ATTEMPTED" -HealthResult "NOT_ATTEMPTED" -RollbackResult "NOT_REQUIRED" -FinalSha $CurrentSha -Status "PREFLIGHT_FAIL" -FailureReason $MediaFailReason -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult "FAIL"
+        exit 1
+    }
+
+    Write-DeployLog "Media runtime verificado com sucesso: FFMPEG=$FfmpegSummary | FFPROBE=$FfprobeSummary." -Level "SUCCESS"
+
+    # 4.10 Execução em Modo PreflightOnly
     if ($PreflightOnly) {
         Write-Host ""
         Write-Host "==================================================" -ForegroundColor Cyan
@@ -287,6 +438,9 @@ try {
         Write-Host "TASK_NAME       : $TaskName"
         Write-Host "HEALTH_URL      : $HealthUrl"
         Write-Host "FAST_FORWARD    : COMPATÍVEL"
+        Write-Host "FFMPEG          : $FfmpegSummary"
+        Write-Host "FFPROBE         : $FfprobeSummary"
+        Write-Host "MEDIA_RUNTIME   : $MediaRuntimeSummary"
         Write-Host "BACKUP_STRATEGY : Snapshot SQLite transacional (PRAGMA integrity_check + SHA-256)"
         Write-Host "UPDATE_STRATEGY : Fast-Forward FF-only para $TargetSha (com produção parada)"
         Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout 75s, HTTP 200 + 'ok')"
@@ -435,7 +589,7 @@ try {
 
     if ($HealthPassed) {
         Write-DeployLog "Health check passou com sucesso (HTTP 200 'ok'). Atualização concluída com êxito!" -Level "SUCCESS"
-        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS" -HealthResult "PASS" -RollbackResult "NOT_REQUIRED" -FinalSha $NewSha -Status "DEPLOY_SUCCESS"
+        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS" -HealthResult "PASS" -RollbackResult "NOT_REQUIRED" -FinalSha $NewSha -Status "DEPLOY_SUCCESS" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary
         exit 0
     }
 

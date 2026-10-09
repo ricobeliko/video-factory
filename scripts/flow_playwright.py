@@ -249,6 +249,165 @@ def ensure_studio_surface(
     return navigate_landing_to_studio(page, timeout_ms=timeout_ms)
 
 
+def ensure_video_generation_mode(
+    page: Page,
+    timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
+) -> Dict[str, Any]:
+    """
+    Garante operacionalmente que o modo de geração ativo é VIDEO antes de qualquer ação.
+    Contrato Fail-Closed:
+    - Se já estiver em VIDEO: não clica no seletor desnecessariamente, retorna confirmed=True, changed=False.
+    - Se estiver em IMAGEM (ou modelo Nano Banana): abre o seletor, localiza exatamente 1
+      opção de Vídeo, clica UMA vez, ajusta 9:16 e x1 se disponíveis, fecha seletor e
+      confirma via asserção de UI que o modo ativo agora é VIDEO. Retorna confirmed=True, changed=True.
+    - Se o controle de modo estiver ausente, ambíguo, ou a opção de Vídeo for ambígua/não confirmada:
+      FAIL CLOSED -> retorna confirmed=False com FLOW_VIDEO_MODE_NOT_CONFIRMED (zero cliques em Generate, zero créditos).
+    """
+    res: Dict[str, Any] = {
+        "confirmed": False,
+        "changed": False,
+        "generation_type": "UNKNOWN",
+        "aspect_ratio": None,
+        "output_count": None,
+        "error": None,
+    }
+
+    try:
+        # Se houver painel lateral de chat aberto cobrindo a interface principal, fecha-o
+        close_btn = page.locator(
+            "flow-chat button[aria-label*='Fechar' i], flow-chat button[aria-label*='Close' i], "
+            "button[aria-label='Fechar'], button[aria-label='Close']"
+        ).filter(has_text=re.compile(r"close", re.I))
+        if close_btn.count() > 0 and close_btn.first.is_visible():
+            logger.info("Fechando painel de chat para expor controles principais do Studio...")
+            try:
+                close_btn.first.click()
+            except Exception as close_exc:
+                logger.debug(f"Não foi necessário fechar chat: {close_exc}")
+
+        # Localiza o botão gatilho de configurações/modelo
+        trigger_btn = page.get_by_role("button", name=re.compile(r"gatilho de configura..es|settings trigger", re.I))
+        if trigger_btn.count() == 0:
+            # Fallback para botão contendo palavras-chave de modelos/modos
+            trigger_btn = page.locator("button").filter(
+                has_text=re.compile(r"\b(v[íi]deo|video|veo|omni|banana|nano|imagem|image)\b", re.I)
+            )
+
+        count = trigger_btn.count()
+        if count == 0:
+            logger.error("MISSING_GENERATION_TYPE_TRIGGER: nenhum botão de seleção de modo encontrado.")
+            res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+            return res
+
+        if count > 1:
+            visible_btns = [b for b in trigger_btn.all() if b.is_visible()]
+            if len(visible_btns) == 1:
+                target_btn = visible_btns[0]
+            else:
+                logger.error(f"AMBIGUOUS_GENERATION_TYPE_TRIGGER: count={count}, visible={len(visible_btns)}")
+                res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                return res
+        else:
+            target_btn = trigger_btn.first
+
+        target_btn.wait_for(state="visible", timeout=timeout_ms)
+        initial_text = target_btn.inner_text().strip()
+        logger.info(f"Texto atual do seletor de modo/modelo: '{initial_text}'")
+
+        # 1. ESTADO JÁ VIDEO
+        is_video = bool(re.search(r"\b(v[íi]deo|video|veo|omni)\b", initial_text, re.I))
+        is_image = bool(re.search(r"\b(imagem|image|banana|nano)\b", initial_text, re.I))
+
+        if is_video and not is_image:
+            logger.info("Modo de geração já está comprovado como VIDEO. Zero cliques no seletor.")
+            res["confirmed"] = True
+            res["changed"] = False
+            res["generation_type"] = "VIDEO"
+            if "9:16" in initial_text or "9_16" in initial_text:
+                res["aspect_ratio"] = "9:16"
+            if "x1" in initial_text:
+                res["output_count"] = 1
+            return res
+
+        # 2. ESTADO IMAGE / NÃO CONFIRMADO -> MUDANÇA CONTROLADA
+        logger.info("Modo não está configurado como VIDEO. Abrindo seletor para alteração controlada...")
+        target_btn.click(timeout=timeout_ms)
+
+        # Localiza o overlay
+        overlay = page.locator(".cdk-overlay-pane, [role='dialog'], [role='menu']").filter(
+            has=page.get_by_role("radio")
+        )
+        overlay.first.wait_for(state="visible", timeout=timeout_ms)
+
+        # Localiza a opção de Vídeo
+        video_radio = overlay.first.get_by_role("radio", name=re.compile(r"^(videocam\s+)?v[íi]deo$|^video$", re.I))
+        if video_radio.count() == 0:
+            video_radio = overlay.first.get_by_role("radio").filter(
+                has_text=re.compile(r"^\s*(videocam\s+)?v[íi]deo\s*$", re.I)
+            )
+
+        v_count = video_radio.count()
+        if v_count != 1:
+            logger.error(f"Opção 'Vídeo' ambígua ou ausente no seletor: count={v_count}. Abortando fail-closed.")
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+            return res
+
+        # Clica na opção Vídeo exatamente UMA vez
+        logger.info("Selecionando opção 'Vídeo' no overlay...")
+        video_radio.first.click(timeout=timeout_ms)
+        expect(video_radio.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
+
+        # Ajusta aspect ratio 9:16 se disponível
+        ar_9_16 = overlay.first.get_by_role("radio", name=re.compile(r"9:16", re.I))
+        if ar_9_16.count() == 1:
+            if ar_9_16.first.get_attribute("aria-checked") != "true":
+                logger.info("Configurando aspect ratio para 9:16...")
+                ar_9_16.first.click(timeout=timeout_ms)
+                expect(ar_9_16.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
+            res["aspect_ratio"] = "9:16"
+
+        # Ajusta contagem x1 se disponível
+        x1_opt = overlay.first.get_by_role("radio", name=re.compile(r"^x1$", re.I))
+        if x1_opt.count() == 1:
+            if x1_opt.first.get_attribute("aria-checked") != "true":
+                logger.info("Configurando contagem de saída para x1...")
+                x1_opt.first.click(timeout=timeout_ms)
+                expect(x1_opt.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
+            res["output_count"] = 1
+
+        # Fecha o overlay
+        page.keyboard.press("Escape")
+        try:
+            overlay.first.wait_for(state="hidden", timeout=5000)
+        except Exception:
+            pass
+
+        # Confirma na própria UI que o tipo ativo agora é Video
+        expect(target_btn).to_contain_text(re.compile(r"v[íi]deo|video", re.I), timeout=timeout_ms)
+        expect(target_btn).not_to_contain_text(re.compile(r"banana|nano|imagem|image", re.I), timeout=timeout_ms)
+
+        final_text = target_btn.inner_text().strip()
+        logger.info(f"Modo VIDEO confirmado na UI com sucesso! Seletor: '{final_text}'")
+
+        res["confirmed"] = True
+        res["changed"] = True
+        res["generation_type"] = "VIDEO"
+        return res
+
+    except Exception as exc:
+        logger.error(f"Falha ao assegurar modo VIDEO no Flow: {exc}")
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+        return res
+
+
 def fill_prompt(page: Page, prompt_text: str, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> None:
     """
     Localiza o editor ProseMirror, preenche o prompt com editor.fill()
@@ -370,6 +529,11 @@ def execute_credit_approval(
         logger.error(f"Botão de aprovação inválido ou ambíguo: match_count={count}")
         return res
 
+    if res["cost"] is not None and res["cost"] > 15:
+        res["error"] = f"CREDIT_COST_EXCEEDS_CAP_{res['cost']}"
+        logger.error(f"FAIL CLOSED: custo de créditos ({res['cost']}) excede o teto permitido (15). Abortando sem aprovação.")
+        return res
+
     logger.info(f"Clicando em 'Aprovar' (1 único clique, custo={res['cost']})...")
     approve_btn.click()
     res["click_count"] = 1
@@ -389,6 +553,8 @@ def execute_credit_approval(
 def wait_for_generation_started(
     page: Page,
     baseline_count: int = 0,
+    generation_type_confirmed: bool = False,
+    generation_type: str = "UNKNOWN",
     timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
 ) -> bool:
     """
@@ -396,7 +562,16 @@ def wait_for_generation_started(
     Evidência: indicador de geração/processamento ativo (spinner, progress bar, generating indicator,
     botão Parar ativo, ou novo tile adicionado à grade).
     NÃO aceita diálogo ou botão de aprovação pendente.
+    Exige estritamente generation_type_confirmed=True e generation_type='VIDEO'.
+    Gerações genéricas (ex: spinner de imagem) são estritamente rejeitadas se o modo não foi confirmado.
     """
+    if not generation_type_confirmed or generation_type != "VIDEO":
+        logger.error(
+            f"REJEITADO: início de geração não pode ser confirmado sem validação prévia de modo VIDEO "
+            f"(confirmed={generation_type_confirmed}, type='{generation_type}')"
+        )
+        return False
+
     logger.info(f"Aguardando evidência de início real de processamento do job (timeout {timeout_ms/1000}s)...")
     try:
         page.wait_for_function(
@@ -502,10 +677,19 @@ def wait_for_generation_complete(
 
     try:
         # Aguarda de forma síncrona até que o número de tiles na grade aumente
-        page.wait_for_function(
+        wait_res = page.wait_for_function(
             """(baseCount) => {
                 const gridTiles = Array.from(document.querySelectorAll('flow-grid-tile-container'));
                 if (gridTiles.length <= (baseCount || 0)) return false;
+
+                // Verifica se há novo tile com falha explícita (política, erro de servidor, etc.)
+                for (let i = 0; i < gridTiles.length; i++) {
+                    const t = gridTiles[i];
+                    const txt = (t.innerText || '').toLowerCase();
+                    if (txt.includes('falha') || txt.includes('violar') || txt.includes('política') || txt.includes('refund')) {
+                        return 'FAILED_BY_POLICY_OR_ERROR';
+                    }
+                }
 
                 // Verifica se os tiles possuem evidência de prontidão
                 for (let i = 0; i < gridTiles.length; i++) {
@@ -513,15 +697,28 @@ def wait_for_generation_complete(
                     const img = t.querySelector('img.thumbnail');
                     const video = t.querySelector('video');
                     const hotbar = t.querySelector('flow-video-hotbar');
-                    if (img || video || hotbar) return true;
+                    if (img || video || hotbar) return 'COMPLETED';
                 }
                 return false;
             }""",
             arg=len(baseline_list),
             timeout=timeout_sec * 1000,
         )
+        if wait_res.json_value() == "FAILED_BY_POLICY_OR_ERROR":
+            logger.error("Novo tile de geração detectado com falha de política de conteúdo ou erro do Flow.")
+            return False, None, "GENERATION_POLICY_OR_BACKEND_FAILURE"
     except Exception as exc:
         logger.error(f"Timeout aguardando novo resultado de geração: {exc}")
+        try:
+            error_tiles = page.locator("flow-grid-tile-container").filter(
+                has_text=re.compile(r"falha|violar|pol[íi]tica|refund", re.I)
+            )
+            if error_tiles.count() > 0:
+                err_text = error_tiles.first.inner_text().strip().replace('\n', ' ')
+                logger.error(f"Tile com falha/política detectado no DOM: {err_text}")
+                return False, None, f"FLOW_POLICY_FAILURE: {err_text[:100]}"
+        except Exception:
+            pass
         return False, None, "GENERATION_RESULT_NOT_FOUND"
 
     # Em Python: captura os identificadores SHA-256 de todos os tiles e valida isolamento
@@ -704,6 +901,9 @@ def run_playwright_flow_poc(
         "project_url_confirmed": False,
         "landing_to_studio": False,
         "editor_found": False,
+        "generation_type_confirmed": False,
+        "generation_type": "UNKNOWN",
+        "generation_type_changed": False,
         "prompt_filled": False,
         "prompt_confirmed": False,
         "generate_actionable": False,
@@ -789,7 +989,9 @@ def run_playwright_flow_poc(
     scene_01_path = os.path.join(project_dir, "clips", "flow_scene_01.mp4")
     if os.path.exists(scene_01_path):
         with open(scene_01_path, "rb") as f_s1:
-            report["scene_01_file_sha_before"] = hashlib.sha256(f_s1.read()).hexdigest()
+            raw_s1 = f_s1.read()
+            s1_bytes = raw_s1.encode("utf-8") if isinstance(raw_s1, str) else raw_s1
+            report["scene_01_file_sha_before"] = hashlib.sha256(s1_bytes).hexdigest()
         logger.info(f"SCENE_01_FILE_SHA_BEFORE capturado: {report['scene_01_file_sha_before']}")
 
     with sync_playwright() as p:
@@ -843,6 +1045,24 @@ def run_playwright_flow_poc(
             report["editor_found"] = True
             report["project_url_confirmed"] = True
             report["project_url"] = page.url
+
+            # 2b. MODO DE GERAÇÃO = VIDEO (GARANTIA OPERACIONAL MANDATÓRIA FAIL-CLOSED)
+            mode_res = ensure_video_generation_mode(page)
+            report["generation_type_confirmed"] = mode_res.get("confirmed", False)
+            report["generation_type"] = mode_res.get("generation_type", "UNKNOWN")
+            report["generation_type_changed"] = mode_res.get("changed", False)
+
+            if not mode_res.get("confirmed") or mode_res.get("generation_type") != "VIDEO":
+                err_msg = mode_res.get("error") or "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                logger.error(
+                    f"FAIL CLOSED: Modo de geração não pôde ser confirmado como VIDEO ({err_msg}). "
+                    f"Abortando antes de preencher prompt ou clicar Generate (zero cliques, zero créditos)."
+                )
+                report["status"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                report["error"] = err_msg
+                _stop_tracing("FLOW_VIDEO_MODE_NOT_CONFIRMED")
+                context.close()
+                return report
 
             # 3. Preenchimento e confirmação do prompt (apenas se editor estiver livre)
             is_pending, p_count, p_cost = check_pending_credit_approval(page)
@@ -998,7 +1218,13 @@ def run_playwright_flow_poc(
                         return report
 
                     # Confirmação posterior à aprovação
-                    started = wait_for_generation_started(page, baseline_count=len(baseline_ids), timeout_ms=DEFAULT_TIMEOUT_UI_MS)
+                    started = wait_for_generation_started(
+                        page,
+                        baseline_count=len(baseline_ids),
+                        generation_type_confirmed=report["generation_type_confirmed"],
+                        generation_type=report["generation_type"],
+                        timeout_ms=DEFAULT_TIMEOUT_UI_MS,
+                    )
                     report["generation_start_confirmed"] = started
                     if not started:
                         report["status"] = "GENERATION_START_NOT_CONFIRMED"
@@ -1008,6 +1234,14 @@ def run_playwright_flow_poc(
                         return report
                 else:
                     # Início direto confirmado
+                    if not report.get("generation_type_confirmed") or report.get("generation_type") != "VIDEO":
+                        logger.error("Início direto rejeitado: modo de geração não foi comprovado como VIDEO.")
+                        report["status"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                        report["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                        _stop_tracing(report["status"])
+                        context.close()
+                        return report
+
                     logger.info("GENERATION_STARTED confirmado diretamente após o clique no Generate!")
                     report["credit_approval_required"] = False
                     report["generation_start_confirmed"] = True
@@ -1232,6 +1466,9 @@ def generate_flow_scene(
     credits_consumed = 0
     if raw_status == "ALREADY_COMPLETE":
         credits_consumed = 0
+    elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED" or raw_res.get("generation_type") == "IMAGE":
+        # Modo não confirmado como VIDEO ou mode mismatch: zero créditos de vídeo inferidos
+        credits_consumed = 0
     elif raw_res.get("credit_approval_confirmed") or raw_res.get("generation_start_confirmed"):
         credits_consumed = raw_res.get("credit_cost") or 15
 
@@ -1240,6 +1477,8 @@ def generate_flow_scene(
         final_status = raw_status
     elif raw_status == "AWAITING_FLOW_EDGE_PROFILE_CLOSE":
         final_status = "FLOW_BROWSER_BUSY"
+    elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED":
+        final_status = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
     elif confirmed_dispatch and raw_status != "SUCCESS":
         # Crédito despachado / aprovação confirmada: não regenerar e não cair para stock cegamente
         final_status = "FLOW_GENERATION_NEEDS_RECOVERY"

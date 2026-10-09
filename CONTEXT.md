@@ -8,12 +8,25 @@
 ## 1. Estado Atual Canônico
 
 - **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.4_FLOW_AUTOMATION_EVALUATION`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.3_CONCLUDED`
-- **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `FLOW_AUTOMATION_EVALUATION`
+- **CURRENT_PHASE** = `V1.5_VISUAL_DIRECTOR`
+- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4_CONCLUDED`
+- **ACTIVE_BRANCH** = `feat/v1-4c-flow-pipeline-integration`
+- **NEXT_GATE** = `V1.5_VISUAL_DIRECTOR`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **BLOCKED_BY** = `NONE`
+
+### Validação Concluída da V1.4 (Automação Autônoma Playwright Flow):
+- **V1.4_FLOW_AUTOMATION** = CONCLUÍDA
+- **ENGINE_FLOW** = `Playwright Python 1.63.0` + Edge `msedge`
+- **CAPACIDADES_HOMOLOGADAS**:
+  - Execução single-flight sequencial (`FLOW_BROWSER_CONCURRENCY = 1`).
+  - Idempotência estrita antes de abrir navegador.
+  - Resume automático de cenas pendentes.
+  - Checkpoints atômicos com `atomic_write_json`.
+  - Recovery pós-consumo (`FLOW_GENERATION_NEEDS_RECOVERY`).
+  - Isolamento multi-tile com hash ASB seguro.
+  - Pipeline source-aware Flow/stock.
+  - Fallback configurável (padrão strict / fallback_stock).
 
 ### Validação Concluída da V1.3 (Agente Diretor & Multi-Nicho):
 - **V1.3_AGENT_DIRECTOR** = CONCLUÍDA

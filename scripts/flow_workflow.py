@@ -14,6 +14,7 @@ Reduzir a fricção operacional na produção híbrida:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -23,6 +24,14 @@ from typing import Any, Dict, List, Optional, Tuple
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+
+from loguru import logger  # noqa: E402
+from app.services.task_artifacts import atomic_write_json  # noqa: E402
+from scripts.flow_playwright import (  # noqa: E402
+    FlowSceneResult,
+    generate_flow_scene,
+    validate_clip_file,
+)
 
 from app.config import config  # noqa: E402
 from app.models import const  # noqa: E402
@@ -265,8 +274,7 @@ def prepare_project(
     }
 
     manifest_path = os.path.join(project_dir, "manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest_data, f, indent=2, ensure_ascii=False)
+    atomic_write_json(manifest_path, manifest_data)
 
     prompts_md_path = os.path.join(project_dir, "prompts_for_flow.md")
     with open(prompts_md_path, "w", encoding="utf-8") as f:
@@ -283,9 +291,192 @@ def prepare_project(
     }
 
 
+def update_manifest_flow_checkpoint(
+    manifest_path: str,
+    project_url: Optional[str] = None,
+    last_scene: Optional[int] = None,
+    status: Optional[str] = None,
+    completed_scenes: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """
+    Persiste metadados operacionais de checkpoint no manifest.json do projeto.
+    NÃO armazena cookies, tokens ASB, credenciais ou dados sensíveis.
+    """
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f"manifest.json não encontrado em {manifest_path}")
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    if project_url:
+        manifest["flow_project_url"] = project_url
+
+    flow_gen = manifest.get("flow_generation", {})
+    if status is not None:
+        flow_gen["status"] = status
+    if project_url is not None:
+        flow_gen["project_url"] = project_url
+    elif "flow_project_url" in manifest:
+        flow_gen["project_url"] = manifest["flow_project_url"]
+
+    if completed_scenes is not None:
+        flow_gen["completed_scenes"] = sorted(list(set(completed_scenes)))
+    if last_scene is not None:
+        flow_gen["last_scene"] = last_scene
+
+    flow_gen["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    manifest["flow_generation"] = flow_gen
+    atomic_write_json(manifest_path, manifest)
+    return flow_gen
+
+
+def generate_pending_flow_scenes(
+    manifest_path: str,
+    max_scenes: Optional[int] = None,
+    project_url: Optional[str] = None,
+    failure_policy: str = "strict",
+) -> Dict[str, Any]:
+    """
+    Processa sequencialmente (FLOW_BROWSER_CONCURRENCY = 1) todas as cenas marcadas
+    com is_flow_premium == True pendentes de geração.
+
+    Idempotência: Se expected_clip já existir e for válido, pula imediatamente com zero browser.
+    Resume: Pula cenas já prontas e continua da primeira pendente.
+    Checkpoint: Persiste status, project_url e completed_scenes após cada cena.
+    Recovery: Em caso de falha pós-consumo, suspende a execução com FLOW_GENERATION_NEEDS_RECOVERY.
+    """
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f"manifest.json não encontrado em {manifest_path}")
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    project_dir = os.path.dirname(os.path.abspath(manifest_path))
+    clips_dir = os.path.join(project_dir, "clips")
+
+    flow_scenes = [
+        s for s in manifest.get("scenes", [])
+        if s.get("is_flow_premium", True)
+    ]
+    flow_scenes.sort(key=lambda x: x.get("scene_index", 0))
+
+    effective_project_url = project_url or manifest.get("flow_project_url")
+    completed_scenes: List[int] = []
+    scene_results: List[Dict[str, Any]] = []
+    attempted_count = 0
+    overall_status = "ALL_FLOW_SCENES_READY"
+
+    for sc in flow_scenes:
+        s_idx = sc["scene_index"]
+        expected_clip = sc.get("expected_clip", f"flow_scene_{s_idx:02d}.mp4")
+        clip_path = os.path.join(clips_dir, expected_clip)
+
+        # 1. Verifica se já está concluído e válido no disco (idempotência sem abrir browser)
+        if os.path.exists(clip_path):
+            val = validate_clip_file(clip_path)
+            if val.get("valid"):
+                completed_scenes.append(s_idx)
+                scene_results.append({
+                    "scene_index": s_idx,
+                    "status": "ALREADY_COMPLETE",
+                    "output_file": clip_path,
+                    "output_valid": True,
+                    "duration": val.get("duration", 0.0),
+                    "credits_consumed": 0,
+                    "project_url": effective_project_url,
+                    "error": None,
+                })
+                continue
+
+        # 2. Respeita max_scenes
+        if max_scenes is not None and attempted_count >= max_scenes:
+            overall_status = "MAX_SCENES_REACHED"
+            break
+
+        # 3. Execução sequencial controlada (single-flight)
+        attempted_count += 1
+        res = generate_flow_scene(
+            manifest_path=manifest_path,
+            scene_index=s_idx,
+            project_url=effective_project_url,
+            failure_policy=failure_policy,
+        )
+
+        if res.project_url:
+            effective_project_url = res.project_url
+
+        scene_results.append(res.to_dict())
+
+        # Checkpoint após cada cena
+        if res.status in ("SUCCESS", "ALREADY_COMPLETE"):
+            completed_scenes.append(s_idx)
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status="IN_PROGRESS" if len(completed_scenes) < len(flow_scenes) else "COMPLETE",
+                completed_scenes=completed_scenes,
+            )
+        elif res.status == "FLOW_GENERATION_NEEDS_RECOVERY":
+            overall_status = "FLOW_GENERATION_NEEDS_RECOVERY"
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status="FLOW_GENERATION_NEEDS_RECOVERY",
+                completed_scenes=completed_scenes,
+            )
+            break
+        elif res.status in ("FLOW_BROWSER_BUSY", "AWAITING_FLOW_EDGE_PROFILE_CLOSE"):
+            overall_status = "FLOW_BROWSER_BUSY"
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status="FLOW_BROWSER_BUSY",
+                completed_scenes=completed_scenes,
+            )
+            break
+        else:
+            overall_status = f"FAILED_SCENE_{s_idx}"
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status=f"FAILED_SCENE_{s_idx}",
+                completed_scenes=completed_scenes,
+            )
+            if failure_policy == "strict":
+                break
+
+    if len(completed_scenes) == len(flow_scenes) and len(flow_scenes) > 0:
+        overall_status = "COMPLETE"
+        update_manifest_flow_checkpoint(
+            manifest_path=manifest_path,
+            project_url=effective_project_url,
+            status="COMPLETE",
+            completed_scenes=completed_scenes,
+        )
+
+    return {
+        "status": overall_status,
+        "manifest_path": manifest_path,
+        "project_url": effective_project_url,
+        "total_flow_scenes": len(flow_scenes),
+        "completed_count": len(completed_scenes),
+        "completed_scenes": completed_scenes,
+        "pending_count": len(flow_scenes) - len(completed_scenes),
+        "attempted_count": attempted_count,
+        "results": scene_results,
+    }
+
+
 def get_project_status(project_dir: str) -> Dict[str, Any]:
     """
     Passo 3: Inspeciona o estado dos clipes baixados para o projeto.
+    Distingue: READY_FLOW, READY_STOCK, PENDING_FLOW, INVALID_FLOW, FLOW_NEEDS_RECOVERY, FAILED_FLOW.
+    Usa validate_clip_file() como única fonte de verdade para validade de mídia.
     """
     manifest_path = os.path.join(project_dir, "manifest.json")
     if not os.path.exists(manifest_path):
@@ -295,38 +486,80 @@ def get_project_status(project_dir: str) -> Dict[str, Any]:
         manifest = json.load(f)
 
     clips_dir = os.path.join(project_dir, "clips")
+    flow_gen = manifest.get("flow_generation", {})
+    flow_gen_status = flow_gen.get("status")
+    last_scene = flow_gen.get("last_scene")
+
     scenes_status = []
-    ready_count = 0
+    ready_flow_count = 0
+    ready_stock_count = 0
+    invalid_flow_count = 0
 
     for sc in manifest.get("scenes", []):
+        s_idx = sc["scene_index"]
         expected_clip = sc["expected_clip"]
         clip_path = os.path.join(clips_dir, expected_clip)
-        exists = os.path.exists(clip_path) and os.path.getsize(clip_path) > 0
-        if exists:
-            ready_count += 1
-            size_mb = os.path.getsize(clip_path) / (1024 * 1024)
-            status_tag = "READY_FLOW"
+        exists = os.path.exists(clip_path)
+        size_mb = (os.path.getsize(clip_path) / (1024 * 1024)) if exists else 0.0
+        val = validate_clip_file(clip_path) if exists else {"valid": False}
+        is_valid = bool(val.get("valid", False))
+        is_flow = sc.get("is_flow_premium", True)
+
+        if is_flow:
+            if exists:
+                if is_valid:
+                    ready_flow_count += 1
+                    status_tag = "READY_FLOW"
+                else:
+                    if flow_gen_status == "FLOW_GENERATION_NEEDS_RECOVERY" and (
+                        last_scene == s_idx or not flow_gen.get("completed_scenes")
+                    ):
+                        status_tag = "FLOW_NEEDS_RECOVERY"
+                    else:
+                        status_tag = "INVALID_FLOW"
+                        invalid_flow_count += 1
+            else:
+                if flow_gen_status == "FLOW_GENERATION_NEEDS_RECOVERY" and (
+                    last_scene == s_idx or not flow_gen.get("completed_scenes")
+                ):
+                    status_tag = "FLOW_NEEDS_RECOVERY"
+                elif flow_gen_status and str(flow_gen_status).startswith("FAILED"):
+                    status_tag = "FAILED_FLOW"
+                else:
+                    status_tag = "PENDING_FLOW"
         else:
-            size_mb = 0.0
-            status_tag = "MISSING (STOCK_FALLBACK)"
+            if exists:
+                if is_valid:
+                    ready_stock_count += 1
+                    status_tag = "READY_STOCK"
+                else:
+                    status_tag = "MISSING (STOCK_FALLBACK)"
+            else:
+                status_tag = "MISSING (STOCK_FALLBACK)"
 
         scenes_status.append({
-            "scene_index": sc["scene_index"],
+            "scene_index": s_idx,
             "expected_clip": expected_clip,
             "status": status_tag,
             "size_mb": round(size_mb, 2),
             "narration": sc["narration"][:60] + "...",
+            "is_flow_premium": is_flow,
+            "is_valid": is_valid,
         })
 
     total = len(scenes_status)
     return {
         "project_name": manifest.get("project_name"),
         "project_dir": project_dir,
+        "flow_project_url": manifest.get("flow_project_url"),
+        "flow_generation": flow_gen,
         "total_scenes": total,
-        "ready_flow_clips": ready_count,
-        "missing_clips": total - ready_count,
-        "is_fully_flow": ready_count == total and total > 0,
-        "is_hybrid": 0 < ready_count < total,
+        "ready_flow_clips": ready_flow_count,
+        "ready_stock_clips": ready_stock_count,
+        "invalid_flow_clips": invalid_flow_count,
+        "missing_clips": total - (ready_flow_count + ready_stock_count),
+        "is_fully_flow": ready_flow_count == total and total > 0,
+        "is_hybrid": 0 < ready_flow_count < total,
         "scenes": scenes_status,
     }
 
@@ -340,7 +573,7 @@ def _find_stock_filler_clip(scene_idx: int) -> Optional[str]:
             for fname in os.listdir(c_dir):
                 if fname.endswith(".mp4") and not fname.startswith("flow_"):
                     fpath = os.path.join(c_dir, fname)
-                    if os.path.getsize(fpath) > 0:
+                    if os.path.getsize(fpath) > 0 and validate_clip_file(fpath).get("valid", False):
                         all_videos.append(fpath)
 
     if not all_videos:
@@ -355,10 +588,13 @@ def render_project(
     task_id: Optional[str] = None,
     output_dir: Optional[str] = None,
     stock_source: str = "coverr",
+    flow_failure_policy: str = "strict",
 ) -> Dict[str, Any]:
     """
     Passo 4: Ingestão simplificada e montagem pela Video Factory.
     Se dry_run=True, monta o ScenePlan e as instruções sem renderizar vídeo físico.
+    flow_failure_policy: 'strict' (falha se Flow ausente/inválido) ou 'fallback_stock' (resolve stock).
+    Se manifest indicar FLOW_GENERATION_NEEDS_RECOVERY, fail-closed imediato sem fallback.
     """
     manifest_path = os.path.join(project_dir, "manifest.json")
     if not os.path.exists(manifest_path):
@@ -372,6 +608,9 @@ def render_project(
     clips_dir = os.path.join(project_dir, "clips")
     out_dir = output_dir or os.path.join(project_dir, "final")
     os.makedirs(out_dir, exist_ok=True)
+
+    flow_gen = manifest.get("flow_generation", {})
+    flow_gen_status = flow_gen.get("status")
 
     params = VideoParams(
         video_subject=manifest.get("video_subject", project_name),
@@ -407,24 +646,105 @@ def render_project(
         flow_clip_path = os.path.join(clips_dir, expected_clip)
 
         if is_flow:
-            if not os.path.exists(flow_clip_path) or os.path.getsize(flow_clip_path) == 0:
-                raise FileNotFoundError(
-                    f"Cena {s_idx} [FLOW PREMIUM]: clipe obrigatório não encontrado ({expected_clip}). "
-                    f"Cenas premium do Google Flow não podem ser substituídas por stock."
-                )
-            mat_path = flow_clip_path
-            provider = "google_flow"
-            source_type = "flow"
+            flow_exists = os.path.exists(flow_clip_path)
+            flow_valid = flow_exists and validate_clip_file(flow_clip_path).get("valid", False)
+
+            if not flow_valid:
+                # Se manifest indicar FLOW_GENERATION_NEEDS_RECOVERY, fail-closed imediato sem mascarar com stock
+                if flow_gen_status == "FLOW_GENERATION_NEEDS_RECOVERY":
+                    raise RuntimeError(
+                        f"FLOW_GENERATION_NEEDS_RECOVERY: Cena {s_idx} [FLOW PREMIUM] requer recuperação explícita "
+                        f"antes de renderizar. Fallback para stock não permitido neste estado."
+                    )
+
+                if not flow_exists:
+                    if flow_failure_policy == "strict":
+                        raise FileNotFoundError(
+                            f"Cena {s_idx} [FLOW PREMIUM]: clipe obrigatório não encontrado ({expected_clip}). "
+                            f"Cenas premium do Google Flow não podem ser substituídas por stock (policy=strict)."
+                        )
+                    elif flow_failure_policy == "fallback_stock":
+                        logger.warning(
+                            f"Cena {s_idx} [FLOW PREMIUM]: clipe ausente ({expected_clip}). "
+                            f"Aplicando fallback para material de estoque (policy=fallback_stock)."
+                        )
+                    else:
+                        raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
+                else:
+                    # Arquivo existe mas validate_clip_file retornou False!
+                    if flow_failure_policy == "strict":
+                        raise RuntimeError(
+                            f"INVALID_FLOW_CLIP: Cena {s_idx} [FLOW PREMIUM] possui clipe corrompido ou inválido ({flow_clip_path}). "
+                            f"Render bloqueado (policy=strict)."
+                        )
+                    elif flow_failure_policy == "fallback_stock":
+                        logger.warning(
+                            f"Cena {s_idx} [FLOW PREMIUM]: clipe corrompido ou inválido ({flow_clip_path}). "
+                            f"Aplicando fallback para material de estoque (policy=fallback_stock)."
+                        )
+                    else:
+                        raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
+
+                # Resolução de material stock fallback
+                filler = _find_stock_filler_clip(s_idx)
+                if filler and os.path.exists(filler) and validate_clip_file(filler).get("valid", False):
+                    mat_path = filler
+                    provider = "stock_fallback"
+                    source_type = "stock_fallback"
+                else:
+                    from app.services import material, scene_material
+
+                    effective_stock = (
+                        stock_source
+                        or manifest.get("stock_source")
+                        or config.app.get("video_source", "coverr")
+                        or "coverr"
+                    )
+                    if not material.has_material_api_keys(effective_stock):
+                        raise RuntimeError(
+                            f"Cena {s_idx} [STOCK FALLBACK]: Nenhuma credencial configurada para o provider de stock '{effective_stock}'. "
+                            f"Configure uma chave válida para buscar materiais de estoque contextuais."
+                        )
+
+                    single_scene_plan = ScenePlan(
+                        total_scenes=1,
+                        scenes=[
+                            ScenePlanItem(
+                                scene_index=s_idx,
+                                narration=sc["narration"],
+                                duration_hint=float(sc.get("duration_hint", 8.0)),
+                                search_terms=sc.get("search_terms", []),
+                                visual_intent=sc.get("visual_intent", "cinematic"),
+                            )
+                        ],
+                    )
+                    scene_params = params.model_copy(update={"video_source": effective_stock})
+                    resolved_selections = scene_material.resolve_scene_materials(
+                        task_id=effective_task_id,
+                        scene_plan=single_scene_plan,
+                        params=scene_params,
+                        audio_duration=float(sc.get("duration_hint", 8.0)),
+                        strict=True,
+                    )
+                    if not resolved_selections or not resolved_selections[0].material_path:
+                        raise RuntimeError(f"Falha ao resolver material stock fallback para a cena {s_idx}")
+                    mat_path = resolved_selections[0].material_path
+                    provider = "stock_fallback"
+                    source_type = "stock_fallback"
+            else:
+                mat_path = flow_clip_path
+                provider = "google_flow"
+                source_type = "flow"
         else:
             # Cenas STOCK FILLER:
             # 1. Tentar material local/cache existente (na pasta clips/ ou nos caches)
-            if os.path.exists(flow_clip_path) and os.path.getsize(flow_clip_path) > 0:
+            if os.path.exists(flow_clip_path) and validate_clip_file(flow_clip_path).get("valid", False):
                 mat_path = flow_clip_path
                 provider = "local_clip"
                 source_type = "stock"
             else:
                 filler = _find_stock_filler_clip(s_idx)
-                if filler and os.path.exists(filler) and os.path.getsize(filler) > 0:
+                if filler and os.path.exists(filler) and validate_clip_file(filler).get("valid", False):
                     mat_path = filler
                     provider = "local_cache"
                     source_type = "stock"
@@ -509,6 +829,7 @@ def render_project(
             params=params,
             task_id=effective_task_id,
         )
+        mat_map = {m.scene_index: m.visual_source_type for m in material_selections}
         return {
             "status": "DRY_RUN_SUCCESS",
             "project_name": project_name,
@@ -519,7 +840,7 @@ def render_project(
                     "scene_index": inst.scene_index,
                     "duration_seconds": inst.duration_seconds,
                     "material_path": inst.material_path,
-                    "source": "flow" if "flow" in inst.material_path else "stock",
+                    "source": mat_map.get(inst.scene_index, "flow" if "flow" in inst.material_path else "stock"),
                 }
                 for inst in instructions
             ],
@@ -632,12 +953,30 @@ def main():
     status_p = subparsers.add_parser("status", help="Inspeciona clipes baixados para o projeto")
     status_p.add_argument("project_dir", help="Diretório do projeto (ex: storage/manual_media/meu_projeto)")
 
+    # Comando 'generate'
+    generate_p = subparsers.add_parser("generate", help="Gera clipes pendentes do Google Flow via Playwright provider")
+    generate_p.add_argument("project_dir", help="Diretório do projeto (ex: storage/manual_media/meu_projeto)")
+    generate_p.add_argument("--max-scenes", type=int, default=None, help="Limite máximo de cenas a processar nesta execução")
+    generate_p.add_argument("--project-url", default=None, help="URL explícita do projeto Flow existente")
+    generate_p.add_argument(
+        "--failure-policy",
+        choices=["strict", "fallback_stock"],
+        default="strict",
+        help="Política em caso de falha no Flow (strict | fallback_stock, padrão: strict)",
+    )
+
     # Comando 'render'
     render_p = subparsers.add_parser("render", help="Renderiza a montagem do projeto na Video Factory")
     render_p.add_argument("project_dir", help="Diretório do projeto")
     render_p.add_argument("--dry-run", action="store_true", help="Valida pipeline e instruções sem renderizar")
     render_p.add_argument("--output-dir", help="Diretório de saída customizado")
     render_p.add_argument("--stock-source", default="coverr", help="Provedor de estoque para cenas filler (padrão: coverr)")
+    render_p.add_argument(
+        "--failure-policy",
+        choices=["strict", "fallback_stock"],
+        default="strict",
+        help="Política para cenas Flow ausentes (strict | fallback_stock, padrão: strict)",
+    )
 
     args = parser.parse_args()
 
@@ -674,10 +1013,9 @@ def main():
         print(f"Total de Cenas:  {result['total_scenes']}")
         print(f"Pasta de Clipes: {result['clips_dir']}")
         print("\nPróximos passos:")
-        print(f"1. Abra '{result['prompts_md_path']}' e copie os prompts para o Google Flow.")
-        print(f"2. Salve os clipes .mp4 baixados em '{result['clips_dir']}'.")
-        print(f"3. Verifique com: python scripts/flow_workflow.py status {result['project_dir']}")
-        print(f"4. Renderize com: python scripts/flow_workflow.py render {result['project_dir']}")
+        print(f"1. Gerar com:    python scripts/flow_workflow.py generate {result['project_dir']}")
+        print(f"2. Verificar:    python scripts/flow_workflow.py status {result['project_dir']}")
+        print(f"3. Renderizar:   python scripts/flow_workflow.py render {result['project_dir']}")
 
     elif args.command == "status":
         info = get_project_status(args.project_dir)
@@ -687,10 +1025,43 @@ def main():
         print(f"Total de Cenas:     {info['total_scenes']}")
         print(f"Clipes Flow Prontos: {info['ready_flow_clips']}/{info['total_scenes']}")
         print(f"Clipes Pendentes:   {info['missing_clips']}")
+        if info.get("flow_project_url"):
+            print(f"Flow Project URL:   {info['flow_project_url']}")
         print("-" * 60)
         for s in info["scenes"]:
             print(f"Cena {s['scene_index']:02d}: {s['status']:<25} | {s['expected_clip']} ({s['size_mb']} MB)")
         print("=" * 60)
+
+    elif args.command == "generate":
+        manifest_path = os.path.join(args.project_dir, "manifest.json")
+        res = generate_pending_flow_scenes(
+            manifest_path=manifest_path,
+            max_scenes=args.max_scenes,
+            project_url=args.project_url,
+            failure_policy=args.failure_policy,
+        )
+        print("\n" + "=" * 60)
+        print("EXECUÇÃO DO GERADOR GOOGLE FLOW (PLAYWRIGHT)")
+        print("=" * 60)
+        print(f"Status Geral:       {res['status']}")
+        print(f"Cenas Flow Totais:  {res['total_flow_scenes']}")
+        print(f"Cenas Concluídas:   {res['completed_count']}")
+        print(f"Cenas Pendentes:    {res['pending_count']}")
+        print(f"Cenas Tentadas:     {res['attempted_count']}")
+        if res.get("project_url"):
+            print(f"Flow Project URL:   {res['project_url']}")
+        print("-" * 60)
+        for r in res.get("results", []):
+            st = r.get("status")
+            s_idx = r.get("scene_index")
+            out_f = r.get("output_file") or "N/A"
+            credits = r.get("credits_consumed", 0)
+            print(f"Cena {s_idx:02d}: {st:<30} | {out_f} (créditos: {credits})")
+        print("=" * 60)
+        if res["status"] in ("COMPLETE", "ALL_FLOW_SCENES_READY"):
+            sys.exit(0)
+        else:
+            sys.exit(1)
 
     elif args.command == "render":
         res = render_project(
@@ -698,6 +1069,7 @@ def main():
             dry_run=args.dry_run,
             output_dir=args.output_dir,
             stock_source=args.stock_source,
+            flow_failure_policy=args.failure_policy,
         )
         print("\n" + "=" * 60)
         if args.dry_run:

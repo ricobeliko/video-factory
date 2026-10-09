@@ -8201,6 +8201,12 @@ def _render_publication_schedule():
             st.caption(tr("No Planned Posts Available to Reschedule"))
 
 
+def _render_channel_factory_section():
+    with st.expander("📺 Canais (Channel Factory)", expanded=True):
+        from webui.components.channel_factory import render_channel_factory
+        render_channel_factory()
+
+
 def _render_operator_console_section():
     with st.expander(f"🛠️ {tr('Operator Console')}", expanded=True):
         from webui.components.operator_console import render_operator_console
@@ -9828,6 +9834,7 @@ def _render_generation_controls(
                 )
             st.rerun(scope="app")
 
+    _render_channel_factory_section()
     _render_operator_console_section()
     _render_trend_radar_section()
     _render_analytics_section()

@@ -184,19 +184,19 @@ def _normalize_text_response(content, llm_provider: str) -> str:
     return content
 
 
-def _sanitize_error_message(error: object) -> str:
+def sanitize_error_message(error: object) -> str:
     """
-    清理返回给 WebUI/API 的错误信息，避免自定义 base_url 中的凭据泄露。
+    Limpa mensagens de erro retornadas a WebUI/API/logs, impedindo vazamento de credenciais.
 
-    一些 OpenAI-compatible SDK 会把请求 URL 原样拼进异常信息。如果用户为了
-    代理网关配置了 `https://user:pass@example.com/v1`，直接返回 `str(e)`
-    就会把密码暴露给页面、API 调用方或后续日志。这里仅处理错误文案，不改变
-    实际请求地址，避免影响正常调用链路。
+    Limpa credenciais userinfo (user:pass@) e query strings sensíveis (api_key, token, secret, password).
     """
     message = str(error)
     message = _URL_USERINFO_RE.sub(r"\1***:***@", message)
     message = _SENSITIVE_QUERY_RE.sub(r"\1***", message)
     return message
+
+
+_sanitize_error_message = sanitize_error_message
 
 
 def _extract_chat_completion_text(response, llm_provider: str) -> str:

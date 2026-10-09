@@ -175,11 +175,34 @@ class TestSafeProductionUpdate(unittest.TestCase):
             subprocess.run(["git", "add", "README.md"], cwd=temp_path, check=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=temp_path, check=True)
 
-            # Cria estrutura mínima para preflight
+            # Cria executável mock para -version
+            mock_bin = temp_path / "mock_tool.cmd"
+            mock_bin.write_text("@exit /b 0\r\n", encoding="utf-8")
+            mock_bin_str = str(mock_bin).replace("\\", "\\\\")
+
+            # Cria estrutura do app com resolvers apontando para executáveis válidos
+            app_dir = temp_path / "app"
+            (app_dir / "services").mkdir(parents=True, exist_ok=True)
+            (app_dir / "utils").mkdir(parents=True, exist_ok=True)
+            (app_dir / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "services" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "utils.py").write_text(
+                f"def get_ffmpeg_binary():\n    return r'{mock_bin_str}'\n",
+                encoding="utf-8",
+            )
+            (app_dir / "services" / "media_quality.py").write_text(
+                f"def get_ffprobe_binary():\n    return r'{mock_bin_str}'\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=temp_path, check=True)
+            subprocess.run(["git", "commit", "-m", "add app mock"], cwd=temp_path, check=True)
+
+            # Cria estrutura de venv com python real
             venv_scripts = temp_path / ".venv" / "Scripts"
             venv_scripts.mkdir(parents=True, exist_ok=True)
             dummy_python = venv_scripts / "python.exe"
-            dummy_python.write_text("", encoding="utf-8")
+            shutil.copy(Path(os.sys.executable), dummy_python)
 
             # Executa Preflight com -SkipTaskCheck
             cmd = [
@@ -199,6 +222,9 @@ class TestSafeProductionUpdate(unittest.TestCase):
                 f"Preflight em repo limpo deve retornar 0. Erro: {result.stderr}\nSaída: {result.stdout}",
             )
             self.assertIn("PREFLIGHT_PASS", result.stdout)
+            self.assertIn("FFMPEG          : PASS", result.stdout)
+            self.assertIn("FFPROBE         : PASS", result.stdout)
+            self.assertIn("MEDIA_RUNTIME   : PASS", result.stdout)
 
     # 12. Preflight Funcional Fail-Closed com Working Tree Suja (DIRTY => FAIL)
     def test_12_preflight_fails_on_dirty_worktree(self):
@@ -391,6 +417,229 @@ class TestSafeProductionUpdate(unittest.TestCase):
             self.assertIn("RESULT: PASS", res.stdout)
             self.assertIn("sha256=9e4a205626abcdef", res.stdout)
             self.assertIn("STDERR_INFO_CAPTURED: YES", res.stdout)
+
+    # 15. Contrato Estático de Resolução de Mídia (FFmpeg e FFprobe via Resolvers do App)
+    def test_15_media_runtime_resolver_contract(self):
+        self.assertIn("utils.get_ffmpeg_binary()", self.script_content)
+        self.assertIn("media_quality.get_ffprobe_binary()", self.script_content)
+        self.assertIn("-version", self.script_content)
+        self.assertIn("FFMPEG_UNAVAILABLE", self.script_content)
+        self.assertIn("FFPROBE_UNAVAILABLE", self.script_content)
+        self.assertIn("MEDIA_RUNTIME", self.script_content)
+
+    # 16. Proibição de Comandos Automáticos de Instalação de Mídia (Detect-Only / Zero Auto-Install)
+    def test_16_no_automatic_media_installation(self):
+        lines = self.script_content.splitlines()
+        code_lines = []
+        in_comment_block = False
+        for line in lines:
+            stripped = line.strip()
+            if "<#" in stripped:
+                in_comment_block = True
+            if in_comment_block:
+                if "#>" in stripped:
+                    in_comment_block = False
+                continue
+            if stripped.startswith("#"):
+                continue
+            code_lines.append(stripped)
+
+        code_text = "\n".join(code_lines)
+        self.assertNotRegex(
+            code_text,
+            r"\bwinget\s+install\b",
+            "O updater NUNCA deve auto-instalar pacotes via winget install.",
+        )
+        self.assertNotRegex(
+            code_text,
+            r"\bchoco\s+install\b",
+            "O updater NUNCA deve auto-instalar pacotes via choco install.",
+        )
+        self.assertNotRegex(
+            code_text,
+            r"Invoke-WebRequest.*(?:ffmpeg|ffprobe|gyan)",
+            "O updater NUNCA deve baixar binários de ffmpeg/ffprobe automaticamente.",
+        )
+
+    # 17. Fail-Closed Funcional Quando FFprobe Indisponível
+    def test_17_preflight_fails_closed_when_ffprobe_unavailable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            subprocess.run(["git", "init", str(temp_path)], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=temp_path, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=temp_path, check=True)
+
+            readme = temp_path / "README.md"
+            readme.write_text("Test", encoding="utf-8")
+            mock_bin = temp_path / "mock_tool.cmd"
+            mock_bin.write_text("@exit /b 0\r\n", encoding="utf-8")
+            mock_bin_str = str(mock_bin).replace("\\", "\\\\")
+
+            app_dir = temp_path / "app"
+            (app_dir / "services").mkdir(parents=True, exist_ok=True)
+            (app_dir / "utils").mkdir(parents=True, exist_ok=True)
+            (app_dir / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "services" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "utils.py").write_text(
+                f"def get_ffmpeg_binary():\n    return r'{mock_bin_str}'\n",
+                encoding="utf-8",
+            )
+            # FFprobe retorna None (indisponível)
+            (app_dir / "services" / "media_quality.py").write_text(
+                "def get_ffprobe_binary():\n    return None\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=temp_path, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=temp_path, check=True)
+
+            venv_scripts = temp_path / ".venv" / "Scripts"
+            venv_scripts.mkdir(parents=True, exist_ok=True)
+            dummy_python = venv_scripts / "python.exe"
+            shutil.copy(Path(os.sys.executable), dummy_python)
+
+            cmd = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(self.script_path),
+                "-RepoPath", str(temp_path),
+                "-TargetRef", "HEAD",
+                "-PreflightOnly",
+                "-SkipTaskCheck",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                "Preflight DEVE abortar com código diferente de zero quando FFprobe estiver indisponível.",
+            )
+            combined_output = result.stdout + result.stderr
+            self.assertIn("PREFLIGHT_FAIL", combined_output)
+            self.assertIn("FFPROBE_UNAVAILABLE", combined_output)
+            self.assertIn("BACKUP          = NOT_ATTEMPTED", combined_output)
+            self.assertIn("UPDATE          = NOT_ATTEMPTED", combined_output)
+
+    # 18. Fail-Closed Funcional Quando FFmpeg Indisponível
+    def test_18_preflight_fails_closed_when_ffmpeg_unavailable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            subprocess.run(["git", "init", str(temp_path)], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=temp_path, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=temp_path, check=True)
+
+            readme = temp_path / "README.md"
+            readme.write_text("Test", encoding="utf-8")
+            mock_bin = temp_path / "mock_tool.cmd"
+            mock_bin.write_text("@exit /b 0\r\n", encoding="utf-8")
+            mock_bin_str = str(mock_bin).replace("\\", "\\\\")
+
+            app_dir = temp_path / "app"
+            (app_dir / "services").mkdir(parents=True, exist_ok=True)
+            (app_dir / "utils").mkdir(parents=True, exist_ok=True)
+            (app_dir / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "services" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "__init__.py").write_text("", encoding="utf-8")
+            # FFmpeg retorna None (indisponível)
+            (app_dir / "utils" / "utils.py").write_text(
+                "def get_ffmpeg_binary():\n    return None\n",
+                encoding="utf-8",
+            )
+            (app_dir / "services" / "media_quality.py").write_text(
+                f"def get_ffprobe_binary():\n    return r'{mock_bin_str}'\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=temp_path, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=temp_path, check=True)
+
+            venv_scripts = temp_path / ".venv" / "Scripts"
+            venv_scripts.mkdir(parents=True, exist_ok=True)
+            dummy_python = venv_scripts / "python.exe"
+            shutil.copy(Path(os.sys.executable), dummy_python)
+
+            cmd = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(self.script_path),
+                "-RepoPath", str(temp_path),
+                "-TargetRef", "HEAD",
+                "-PreflightOnly",
+                "-SkipTaskCheck",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                "Preflight DEVE abortar com código diferente de zero quando FFmpeg estiver indisponível.",
+            )
+            combined_output = result.stdout + result.stderr
+            self.assertIn("PREFLIGHT_FAIL", combined_output)
+            self.assertIn("FFMPEG_UNAVAILABLE", combined_output)
+            self.assertIn("BACKUP          = NOT_ATTEMPTED", combined_output)
+            self.assertIn("UPDATE          = NOT_ATTEMPTED", combined_output)
+
+    # 19. Fail-Closed Funcional Quando Execução de -version Falha (Binário Inválido/Corrompido)
+    def test_19_preflight_fails_closed_when_version_check_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            subprocess.run(["git", "init", str(temp_path)], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=temp_path, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=temp_path, check=True)
+
+            readme = temp_path / "README.md"
+            readme.write_text("Test", encoding="utf-8")
+            good_bin = temp_path / "good.cmd"
+            good_bin.write_text("@exit /b 0\r\n", encoding="utf-8")
+            good_bin_str = str(good_bin).replace("\\", "\\\\")
+
+            # Binário que falha com exit code 1 ao rodar -version
+            bad_bin = temp_path / "bad.cmd"
+            bad_bin.write_text("@exit /b 1\r\n", encoding="utf-8")
+            bad_bin_str = str(bad_bin).replace("\\", "\\\\")
+
+            app_dir = temp_path / "app"
+            (app_dir / "services").mkdir(parents=True, exist_ok=True)
+            (app_dir / "utils").mkdir(parents=True, exist_ok=True)
+            (app_dir / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "services" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "utils.py").write_text(
+                f"def get_ffmpeg_binary():\n    return r'{good_bin_str}'\n",
+                encoding="utf-8",
+            )
+            # FFprobe falha na execução
+            (app_dir / "services" / "media_quality.py").write_text(
+                f"def get_ffprobe_binary():\n    return r'{bad_bin_str}'\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=temp_path, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=temp_path, check=True)
+
+            venv_scripts = temp_path / ".venv" / "Scripts"
+            venv_scripts.mkdir(parents=True, exist_ok=True)
+            dummy_python = venv_scripts / "python.exe"
+            shutil.copy(Path(os.sys.executable), dummy_python)
+
+            cmd = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(self.script_path),
+                "-RepoPath", str(temp_path),
+                "-TargetRef", "HEAD",
+                "-PreflightOnly",
+                "-SkipTaskCheck",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                "Preflight DEVE abortar quando a execução de ffprobe -version falhar.",
+            )
+            combined_output = result.stdout + result.stderr
+            self.assertIn("PREFLIGHT_FAIL", combined_output)
+            self.assertIn("FFPROBE_UNAVAILABLE", combined_output)
 
 
 if __name__ == "__main__":

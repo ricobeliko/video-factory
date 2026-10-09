@@ -2988,7 +2988,43 @@ def _run_pipeline(
     # 5. Get video materials
     logger.info(f"[MATERIAL][START] task_id={task_id}")
     scene_instructions = None
-    if getattr(params, "scene_based_generation_enabled", False) and scene_plan:
+    if getattr(params, "flow_enabled", False):
+        if not scene_plan or not getattr(scene_plan, "scenes", None):
+            reason = "FLOW_REQUIRES_SCENE_PLAN"
+            logger.error(f"[FLOW][BLOCK] task_id={task_id} reason={reason}")
+            return _mark_task_failed(
+                task_id,
+                "materials",
+                "Google Flow integration requires a canonical ScenePlan",
+                details={"reason": reason},
+            )
+        try:
+            from app.services import flow_bridge, scene_assembly
+            scene_materials, flow_meta = flow_bridge.resolve_flow_materials_for_task(
+                task_id=task_id,
+                params=params,
+                video_script=video_script,
+                scene_plan=scene_plan,
+            )
+            task_artifacts.patch_script_data(task_id, **flow_meta)
+            scene_instructions = scene_assembly.assemble_scene_clips(
+                scene_plan=scene_plan,
+                material_selections=scene_materials,
+                audio_duration=audio_duration,
+                params=params,
+                task_id=task_id,
+            )
+            downloaded_videos = scene_assembly.get_ordered_video_paths(scene_instructions)
+        except Exception as exc:
+            reason = getattr(exc, "reason_code", "FLOW_MATERIAL_FAILED")
+            logger.error(f"[FLOW_MATERIAL][BLOCK] task_id={task_id} reason={reason} detail={exc}")
+            return _mark_task_failed(
+                task_id,
+                "materials",
+                f"Flow material resolution failed: {exc}",
+                details={"reason": reason},
+            )
+    elif getattr(params, "scene_based_generation_enabled", False) and scene_plan:
         try:
             from app.services import scene_assembly, scene_material
             scene_materials = scene_material.resolve_scene_materials(

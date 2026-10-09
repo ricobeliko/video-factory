@@ -129,25 +129,63 @@ class PostForMeUploadError(PostForMeError):
 def resolve_target_youtube_channel_id(
     channel_id: Optional[str] = None,
     profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
 ) -> Optional[str]:
     """Resolve o ID do canal do YouTube nativo (UC...) de forma determinística.
     
-    Aceita:
-    - channel-default-youtube -> UCss-ng7mkGuB2v-5KKtIN9A
-    - channel-historias-misterio-youtube -> UCGJaC83EuaOwiZ0a3-KqUZA
-    - profile_id default / profile-historias-misterio se channel_id ausente
-    - ID nativo direto se já começar com 'UC'
+    Prioridade canônica (Fase V1.5E-B):
+    1. Base de dados (publishing_channels.external_account_id via channel_id)
+    2. Base de dados (publishing_channels.external_account_id via profile_id se canal único)
+    3. Mapeamento legado homologado (YOUTUBE_CHANNEL_MAP)
+    4. ID nativo direto se já começar com 'UC' (len >= 20)
+    5. Fallback legado de profiles default / misterio
     Retorna None se não for possível mapear com certeza (Fail Closed).
     """
     c_clean = str(channel_id or "").strip()
     p_clean = str(profile_id or "").strip()
 
+    # 1. Consulta dinâmica por channel_id no SQLite
+    if c_clean:
+        try:
+            from app.services import profile_manager
+            with profile_manager.get_connection(db_path) as conn:
+                row = conn.execute(
+                    "SELECT external_account_id FROM publishing_channels WHERE id = ?;",
+                    (c_clean,),
+                ).fetchone()
+                if row and row["external_account_id"]:
+                    ext_id = str(row["external_account_id"]).strip()
+                    if ext_id.startswith("UC") and len(ext_id) >= 20:
+                        return ext_id
+        except Exception:
+            pass
+
+    # 2. Consulta dinâmica por profile_id se canal único habilitado
+    if p_clean and not c_clean:
+        try:
+            from app.services import profile_manager
+            with profile_manager.get_connection(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT external_account_id FROM publishing_channels "
+                    "WHERE profile_id = ? AND platform = 'youtube' AND is_enabled = 1;",
+                    (p_clean,),
+                ).fetchall()
+                if len(rows) == 1 and rows[0]["external_account_id"]:
+                    ext_id = str(rows[0]["external_account_id"]).strip()
+                    if ext_id.startswith("UC") and len(ext_id) >= 20:
+                        return ext_id
+        except Exception:
+            pass
+
+    # 3. Mapeamento estático legado
     if c_clean in YOUTUBE_CHANNEL_MAP:
         return YOUTUBE_CHANNEL_MAP[c_clean]["youtube_channel_id"]
 
+    # 4. ID nativo direto
     if c_clean.startswith("UC") and len(c_clean) >= 20:
         return c_clean
 
+    # 5. Fallback legado de profile_id
     if not c_clean or c_clean == "default":
         if p_clean in ("default", ""):
             return CHANNEL_DEFAULT_YT_ID
@@ -160,6 +198,70 @@ def resolve_target_youtube_channel_id(
         return CHANNEL_DEFAULT_YT_ID
 
     return None
+
+
+def list_connected_publishing_accounts(
+    platform: str = "youtube",
+    client: Optional["PostForMeClient"] = None,
+) -> List[Dict[str, Any]]:
+    """Consulta e normaliza contas sociais conectadas no Post for Me para o onboarding de canais.
+
+    Garantias de segurança e isolamento:
+    - Retorna apenas contas conectadas (status == 'connected')
+    - Valida identificador imutável (para YouTube, deve iniciar com 'UC')
+    - NUNCA expõe tokens, bearer auth, api keys nem payload bruto da API
+    - Fail closed: retorna lista vazia em caso de ausência de conta ou erro de rede
+    """
+    clean_plat = str(platform or "youtube").lower().strip()
+    c = client or PostForMeClient()
+    if not c.is_configured():
+        logger.debug(f"[POST_FOR_ME] Client não configurado para listar contas de {clean_plat}.")
+        return []
+
+    try:
+        raw_accounts = c.list_social_accounts(platform=clean_plat)
+    except Exception as exc:
+        logger.warning(f"[POST_FOR_ME] Falha ao consultar contas sociais conectadas: {sanitize_secrets(exc, c.api_key)}")
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for acc in raw_accounts:
+        if not isinstance(acc, dict):
+            continue
+
+        p = str(acc.get("platform") or acc.get("provider") or "").lower().strip()
+        if p != clean_plat:
+            continue
+
+        status = str(acc.get("status") or "").lower().strip()
+        if status != "connected":
+            continue
+
+        uid = str(
+            acc.get("user_id")
+            or acc.get("account_id")
+            or acc.get("channel_id")
+            or acc.get("external_id")
+            or ""
+        ).strip()
+
+        if not uid or uid.startswith(("spc_", "spt_", "spr_")):
+            continue
+
+        if clean_plat == "youtube" and not uid.startswith("UC"):
+            continue
+
+        disp_name = str(acc.get("display_name") or acc.get("name") or acc.get("title") or uid).strip()
+        username = str(acc.get("username") or acc.get("handle") or "").strip() or None
+
+        normalized.append({
+            "external_account_id": uid,
+            "display_name": disp_name,
+            "username": username,
+            "platform": clean_plat,
+        })
+
+    return normalized
 
 
 def resolve_target_tiktok_user_id(
@@ -1356,12 +1458,13 @@ class PostForMeClient:
         profile_id: Optional[str] = None,
         timeout_sec: int = 120,
         poll_interval_sec: float = 2.0,
+        db_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fluxo completo de publicação no YouTube via Post for Me com proteção de idempotência."""
         # 0. Guard JIT pré-provider (Camada 3 - V16.4.2B)
         try:
             from app.services import publishing_idempotency
-            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube")
+            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube", db_path=db_path)
             if not is_safe and canon:
                 logger.info(
                     f"[POST_FOR_ME][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "
@@ -1395,7 +1498,7 @@ class PostForMeClient:
             }
 
         # 2. Resolução do canal nativo do YouTube
-        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=profile_id)
+        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=profile_id, db_path=db_path)
         if not expected_yt_id:
             msg = f"Canal do YouTube não pôde ser resolvido para channel_id='{channel_id}', profile_id='{profile_id}'."
             logger.error(f"[POST_FOR_ME] {msg}")
@@ -2266,7 +2369,7 @@ def reconcile_post_for_me_status(
         if not post_for_me_client.is_configured():
             return {"status": "skipped", "reason": "client_not_configured"}
 
-        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=prof_id)
+        expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=prof_id, db_path=db_path)
         if not expected_yt_id:
             return {"status": "skipped", "reason": "channel_resolution_failed"}
 

@@ -1262,6 +1262,7 @@ def discover_candidate_topic(
     niche: str,
     language: str = "pt-BR",
     db_path: Optional[str] = None,
+    topic_brief: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Obtém o melhor candidato a novo tema a partir do Trend Radar ou Content Strategy.
 
@@ -1304,7 +1305,12 @@ def discover_candidate_topic(
     # 3. Fallback: Autopilot Idea Generator
     try:
         from app.services import autopilot
-        ideas = autopilot.generate_ideas(niche=niche, count=10, language=language)
+        ideas = autopilot.generate_ideas(
+            niche=niche,
+            count=10,
+            language=language,
+            topic_brief=topic_brief,
+        )
         for idea in ideas:
             if not is_topic_duplicate(idea, existing_topics):
                 return {
@@ -1539,12 +1545,14 @@ def build_autonomous_video_params(
             )
 
     try:
-        voice_volume = float(config.ui.get("voice_volume", 1.0))
+        raw_vol = ctx.get("voice_volume") if ctx.get("voice_volume") is not None else config.ui.get("voice_volume", 1.0)
+        voice_volume = float(raw_vol)
     except (ValueError, TypeError):
         voice_volume = 1.0
 
     try:
-        raw_rate = float(config.ui.get("voice_rate", 1.0))
+        raw_rate = ctx.get("voice_rate") if ctx.get("voice_rate") is not None else config.ui.get("voice_rate", 1.0)
+        raw_rate = float(raw_rate)
         # V16.5.1 Narration Recovery: velocidade natural de fala em pt-BR (0.95 - 1.30).
         # Taxas baixas (como 0.8) degradam a naturalidade tornando a fala arrastada/robótica.
         if raw_rate < 0.95 or raw_rate > 1.30:
@@ -1658,6 +1666,7 @@ def build_autonomous_video_params(
         region=region,
         monetization_preset=preset,
         narrative_structure=narrative_structure,
+        topic_brief=ctx.get("topic_brief") or None,
         profile_id=assigned_profile_id,
         video_source=video_source,
         voice_name=resolved_voice_name,
@@ -1688,6 +1697,12 @@ def build_autonomous_video_params(
         bgm_type=bgm_type,
         bgm_file=bgm_file,
         bgm_volume=bgm_volume,
+        # Channel Factory / Flow Integration (Fase V1.5E-E)
+        visual_director_enabled=bool(ctx.get("visual_director_enabled", False)),
+        visual_style_brief=str(ctx.get("visual_style_brief") or ""),
+        flow_enabled=bool(ctx.get("flow_enabled", False)),
+        flow_scene_count=int(ctx.get("flow_scene_count", 6)),
+        stock_fallback_enabled=bool(ctx.get("stock_fallback_enabled", True)),
         # Virtual Presenter (V14-C): estritamente desativado para novas gerações autônomas
         avatar_mode="none",
         avatar_provider="local",
@@ -2445,6 +2460,7 @@ def _run_autonomous_cycle(
         niche=probe_params.niche,
         language=probe_params.video_language,
         db_path=db_path,
+        topic_brief=probe_params.topic_brief,
     )
     if not candidate or not candidate.get("topic"):
         _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)

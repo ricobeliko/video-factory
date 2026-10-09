@@ -32,6 +32,12 @@ from scripts.flow_playwright import (  # noqa: E402
     generate_flow_scene,
     validate_clip_file,
 )
+from app.services.visual_director import (  # noqa: E402
+    compile_flow_prompt,
+    direct_scenes,
+    get_gemini_config,
+    preview_visual_direction,
+)
 
 from app.config import config  # noqa: E402
 from app.models import const  # noqa: E402
@@ -159,10 +165,16 @@ def prepare_project(
     custom_prompts: Optional[Dict[int, str]] = None,
     niche: str = "",
     target_flow_scenes: int = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
+    visual_director_enabled: bool = False,
+    visual_style_brief: str = "",
+    scene_plan: Optional[ScenePlan] = None,
 ) -> Dict[str, Any]:
     """
     Passo 1 & 2: Divide o roteiro em cenas temporizadas e gera prompts para o Flow.
     Cria a estrutura de pastas e o manifesto estruturado.
+    Quando visual_director_enabled=True, utiliza o Gemini Visual Director para
+    gerar especificações visuais cinematográficas estruturadas.
+    Se scene_plan for fornecido, reutiliza o ScenePlan canônico da tarefa sem re-planejar.
     """
     if not script_text or not script_text.strip():
         raise ValueError("script_text não pode ser vazio")
@@ -176,18 +188,40 @@ def prepare_project(
     clips_dir = os.path.join(project_dir, "clips")
     os.makedirs(clips_dir, exist_ok=True)
 
-    # 1. Planejamento determinístico de cenas
-    scene_plan = scene_planner.plan_scenes(
-        video_script=script_text,
-        target_scene_duration=target_scene_duration,
-        task_id=f"flow_prep_{safe_project_name}",
-    )
+    # 1. Planejamento determinístico de cenas (reutiliza canônico se fornecido)
+    if scene_plan is None:
+        scene_plan = scene_planner.plan_scenes(
+            video_script=script_text,
+            target_scene_duration=target_scene_duration,
+            task_id=f"flow_prep_{safe_project_name}",
+        )
 
     if flow_scenes is not None:
         flow_indices = set(flow_scenes)
     else:
         flow_indices = set(select_default_flow_scenes(scene_plan.scenes, target_count=target_flow_scenes))
     custom_map = custom_prompts or {}
+
+    visual_direction_plan = None
+    visual_director_meta = None
+    if visual_director_enabled:
+        logger.info(
+            f"[VisualDirector] Solicitando direção visual estruturada para {len(scene_plan.scenes)} cenas..."
+        )
+        visual_direction_plan = direct_scenes(
+            scenes=scene_plan.scenes,
+            video_subject=video_subject,
+            niche=niche,
+            visual_style_brief=visual_style_brief,
+        )
+        gemini_cfg = get_gemini_config()
+        visual_director_meta = {
+            "enabled": True,
+            "provider": "gemini",
+            "model": gemini_cfg["model_name"],
+            "global_style": visual_direction_plan.global_style,
+            "continuity_rules": visual_direction_plan.continuity_rules,
+        }
 
     scenes_data = []
     prompts_md_lines = [
@@ -203,7 +237,7 @@ def prepare_project(
         "## Como Usar:",
         "1. Abra o **Google Flow / Veo / Nano Banana** no navegador.",
         "2. Gere clipes APENAS para as cenas marcadas com **[FLOW PREMIUM]** abaixo (formato vertical 9:16).",
-        f"3. Baixe os vídeos e salve na pasta: `storage/manual_media/{safe_project_name}/clips/`.",
+        f"3. Baixe os vídeos e salve na pasta: `{clips_dir}`.",
         "4. As demais cenas serão preenchidas automaticamente pela Video Factory com materiais de estoque.",
         "",
         "---",
@@ -215,10 +249,21 @@ def prepare_project(
         is_flow = s_idx in flow_indices
         clip_filename = f"flow_scene_{s_idx:02d}.mp4"
 
-        if is_flow and s_idx in custom_map:
+        if visual_direction_plan is not None:
+            spec = next((s for s in visual_direction_plan.scenes if s.scene_index == s_idx), None)
+            if not spec:
+                raise RuntimeError(f"VISUAL_DIRECTOR_FAILED: Cena {s_idx} ausente do plano visual")
+            prompt_en = compile_flow_prompt(spec)
+            prompt_pt = f"Cena {s_idx}: {spec.subject} — {spec.action}"
+            visual_intent = spec.style
+            search_terms = spec.stock_search_terms
+            visual_direction_dict = spec.model_dump()
+        elif is_flow and s_idx in custom_map:
             prompt_en = custom_map[s_idx]
             prompt_pt = f"Cena {s_idx} personalizada para {video_subject}."
             visual_intent = "custom visual"
+            search_terms = scene.search_terms
+            visual_direction_dict = None
         else:
             prompt_info = build_flow_prompt(
                 narration=scene.narration,
@@ -228,6 +273,8 @@ def prepare_project(
             prompt_en = prompt_info["prompt_en"]
             prompt_pt = prompt_info["prompt_pt"]
             visual_intent = prompt_info["visual_intent"]
+            search_terms = scene.search_terms
+            visual_direction_dict = None
 
         scene_dict = {
             "scene_index": s_idx,
@@ -238,8 +285,10 @@ def prepare_project(
             "prompt_en": prompt_en,
             "prompt_pt": prompt_pt,
             "visual_intent": visual_intent,
-            "search_terms": scene.search_terms,
+            "search_terms": search_terms,
         }
+        if visual_direction_dict is not None:
+            scene_dict["visual_direction"] = visual_direction_dict
         scenes_data.append(scene_dict)
 
         if is_flow:
@@ -272,6 +321,8 @@ def prepare_project(
         "flow_scenes": sorted(list(flow_indices)),
         "scenes": scenes_data,
     }
+    if visual_director_meta is not None:
+        manifest_data["visual_director"] = visual_director_meta
 
     manifest_path = os.path.join(project_dir, "manifest.json")
     atomic_write_json(manifest_path, manifest_data)
@@ -367,6 +418,27 @@ def generate_pending_flow_scenes(
     attempted_count = 0
     overall_status = "ALL_FLOW_SCENES_READY"
 
+    # Recovery guard imediato: se o manifesto já estiver em estado de recuperação pós-consumo,
+    # bloqueia qualquer nova chamada ou retry cego com zero browser.
+    flow_gen = manifest.get("flow_generation", {})
+    prior_status = flow_gen.get("status")
+    if prior_status == "FLOW_GENERATION_NEEDS_RECOVERY":
+        logger.warning(
+            f"[FLOW_RECOVERY_GUARD] Manifest em {manifest_path} possui status anterior "
+            f"FLOW_GENERATION_NEEDS_RECOVERY. Bloqueando novas chamadas ao Flow para evitar re-consumo indevido."
+        )
+        return {
+            "status": "FLOW_GENERATION_NEEDS_RECOVERY",
+            "manifest_path": manifest_path,
+            "project_url": effective_project_url,
+            "total_flow_scenes": len(flow_scenes),
+            "completed_count": len(flow_gen.get("completed_scenes", [])),
+            "completed_scenes": flow_gen.get("completed_scenes", []),
+            "pending_count": len(flow_scenes) - len(flow_gen.get("completed_scenes", [])),
+            "attempted_count": 0,
+            "results": [],
+        }
+
     for sc in flow_scenes:
         s_idx = sc["scene_index"]
         expected_clip = sc.get("expected_clip", f"flow_scene_{s_idx:02d}.mp4")
@@ -428,6 +500,39 @@ def generate_pending_flow_scenes(
                 completed_scenes=completed_scenes,
             )
             break
+        elif res.status == "FLOW_CONTENT_POLICY_BLOCKED":
+            refund_confirmed = bool(res.details.get("policy_refund_confirmed"))
+            logger.warning(
+                f"[POLICY_BLOCK] Cena {s_idx} bloqueada por política no Flow. "
+                f"Reembolso confirmado={refund_confirmed}. Zero retry da mesma cena."
+            )
+            if refund_confirmed and failure_policy != "strict":
+                logger.info(
+                    f"[POLICY_FALLBACK] Roteando Cena {s_idx} para STOCK (fallback permitido, refund confirmado)."
+                )
+                sc["is_flow_premium"] = False
+                sc["fallback_used"] = True
+                sc["fallback_reason"] = "FLOW_CONTENT_POLICY_BLOCKED"
+                sc["visual_source"] = "stock"
+                atomic_write_json(manifest_path, manifest)
+                update_manifest_flow_checkpoint(
+                    manifest_path=manifest_path,
+                    project_url=effective_project_url,
+                    last_scene=s_idx,
+                    status=f"FALLBACK_STOCK_SCENE_{s_idx}",
+                    completed_scenes=completed_scenes,
+                )
+                continue
+            else:
+                overall_status = "FLOW_CONTENT_POLICY_BLOCKED" if refund_confirmed else "FLOW_GENERATION_NEEDS_RECOVERY"
+                update_manifest_flow_checkpoint(
+                    manifest_path=manifest_path,
+                    project_url=effective_project_url,
+                    last_scene=s_idx,
+                    status=overall_status,
+                    completed_scenes=completed_scenes,
+                )
+                break
         elif res.status in ("FLOW_BROWSER_BUSY", "AWAITING_FLOW_EDGE_PROFILE_CLOSE"):
             overall_status = "FLOW_BROWSER_BUSY"
             update_manifest_flow_checkpoint(
@@ -582,19 +687,17 @@ def _find_stock_filler_clip(scene_idx: int) -> Optional[str]:
     return all_videos[(scene_idx - 1) % len(all_videos)]
 
 
-def render_project(
+def resolve_project_materials(
     project_dir: str,
-    dry_run: bool = False,
     task_id: Optional[str] = None,
-    output_dir: Optional[str] = None,
-    stock_source: str = "coverr",
+    stock_source: Optional[str] = None,
     flow_failure_policy: str = "strict",
-) -> Dict[str, Any]:
+    params: Optional[VideoParams] = None,
+) -> List[SceneMaterialSelection]:
     """
-    Passo 4: Ingestão simplificada e montagem pela Video Factory.
-    Se dry_run=True, monta o ScenePlan e as instruções sem renderizar vídeo físico.
-    flow_failure_policy: 'strict' (falha se Flow ausente/inválido) ou 'fallback_stock' (resolve stock).
-    Se manifest indicar FLOW_GENERATION_NEEDS_RECOVERY, fail-closed imediato sem fallback.
+    Passo 4a (Material-Only): Resolve clipes Flow ou Stock para cada cena do projeto sem efeitos colaterais.
+    NÃO executa renderização de vídeo, síntese de áudio TTS ou geração de legendas.
+    Retorna a lista ordenada de SceneMaterialSelection.
     """
     manifest_path = os.path.join(project_dir, "manifest.json")
     if not os.path.exists(manifest_path):
@@ -606,15 +709,13 @@ def render_project(
     project_name = manifest.get("project_name", "flow_project")
     effective_task_id = task_id or f"task_{project_name}"
     clips_dir = os.path.join(project_dir, "clips")
-    out_dir = output_dir or os.path.join(project_dir, "final")
-    os.makedirs(out_dir, exist_ok=True)
 
     flow_gen = manifest.get("flow_generation", {})
     flow_gen_status = flow_gen.get("status")
 
-    params = VideoParams(
+    effective_params = params or VideoParams(
         video_subject=manifest.get("video_subject", project_name),
-        video_script=manifest["script_text"],
+        video_script=manifest.get("script_text", ""),
         video_language="pt-BR",
         video_source="local",
         video_concat_mode=VideoConcatMode.sequential,
@@ -627,19 +728,11 @@ def render_project(
         bgm_type="random",
         bgm_volume=0.2,
         subtitle_enabled=True,
-        font_name="STHeitiMedium.ttc",
-        font_size=60,
-        text_fore_color="#FFFFFF",
-        stroke_color="#000000",
-        stroke_width=2.0,
-        subtitle_position="bottom",
     )
 
-    # 1. Mapeamento de materiais para cada cena
     material_selections: List[SceneMaterialSelection] = []
-    scene_plan_items: List[ScenePlanItem] = []
 
-    for sc in manifest["scenes"]:
+    for sc in manifest.get("scenes", []):
         s_idx = sc["scene_index"]
         expected_clip = sc["expected_clip"]
         is_flow = sc.get("is_flow_premium", True)
@@ -718,7 +811,7 @@ def render_project(
                             )
                         ],
                     )
-                    scene_params = params.model_copy(update={"video_source": effective_stock})
+                    scene_params = effective_params.model_copy(update={"video_source": effective_stock})
                     resolved_selections = scene_material.resolve_scene_materials(
                         task_id=effective_task_id,
                         scene_plan=single_scene_plan,
@@ -737,7 +830,6 @@ def render_project(
                 source_type = "flow"
         else:
             # Cenas STOCK FILLER:
-            # 1. Tentar material local/cache existente (na pasta clips/ ou nos caches)
             if os.path.exists(flow_clip_path) and validate_clip_file(flow_clip_path).get("valid", False):
                 mat_path = flow_clip_path
                 provider = "local_clip"
@@ -749,7 +841,6 @@ def render_project(
                     provider = "local_cache"
                     source_type = "stock"
                 else:
-                    # 2. Reutilizar o resolver nativo de materiais da Video Factory (scene_material)
                     from app.services import material, scene_material
 
                     effective_stock = (
@@ -777,7 +868,7 @@ def render_project(
                             )
                         ],
                     )
-                    scene_params = params.model_copy(update={"video_source": effective_stock})
+                    scene_params = effective_params.model_copy(update={"video_source": effective_stock})
                     resolved_selections = scene_material.resolve_scene_materials(
                         task_id=effective_task_id,
                         scene_plan=single_scene_plan,
@@ -791,16 +882,6 @@ def render_project(
                     provider = resolved_selections[0].provider
                     source_type = "stock"
 
-        scene_plan_items.append(
-            ScenePlanItem(
-                scene_index=s_idx,
-                narration=sc["narration"],
-                duration_hint=float(sc.get("duration_hint", 8.0)),
-                search_terms=sc.get("search_terms", []),
-                visual_intent=sc.get("visual_intent", "cinematic"),
-            )
-        )
-
         material_selections.append(
             SceneMaterialSelection(
                 scene_index=s_idx,
@@ -813,6 +894,78 @@ def render_project(
             )
         )
 
+    return material_selections
+
+
+def render_project(
+    project_dir: str,
+    dry_run: bool = False,
+    task_id: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    stock_source: str = "coverr",
+    flow_failure_policy: str = "strict",
+) -> Dict[str, Any]:
+    """
+    Passo 4: Ingestão simplificada e montagem pela Video Factory.
+    Se dry_run=True, monta o ScenePlan e as instruções sem renderizar vídeo físico.
+    flow_failure_policy: 'strict' (falha se Flow ausente/inválido) ou 'fallback_stock' (resolve stock).
+    Se manifest indicar FLOW_GENERATION_NEEDS_RECOVERY, fail-closed imediato sem fallback.
+    """
+    manifest_path = os.path.join(project_dir, "manifest.json")
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f"manifest.json não encontrado em {project_dir}")
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    project_name = manifest.get("project_name", "flow_project")
+    effective_task_id = task_id or f"task_{project_name}"
+    clips_dir = os.path.join(project_dir, "clips")
+    out_dir = output_dir or os.path.join(project_dir, "final")
+    os.makedirs(out_dir, exist_ok=True)
+
+    params = VideoParams(
+        video_subject=manifest.get("video_subject", project_name),
+        video_script=manifest["script_text"],
+        video_language="pt-BR",
+        video_source="local",
+        video_concat_mode=VideoConcatMode.sequential,
+        video_fit_mode=VideoFitMode.cover,
+        video_clip_duration=10,
+        video_aspect=VideoAspect.portrait,
+        voice_name=manifest.get("voice_name", "pt-BR-AntonioNeural-Male"),
+        voice_volume=1.0,
+        voice_rate=1.0,
+        bgm_type="random",
+        bgm_volume=0.2,
+        subtitle_enabled=True,
+        font_name="STHeitiMedium.ttc",
+        font_size=60,
+        text_fore_color="#FFFFFF",
+        stroke_color="#000000",
+        stroke_width=2.0,
+        subtitle_position="bottom",
+    )
+
+    # 1. Resolução dos materiais de cada cena (reutiliza helper material-only)
+    material_selections = resolve_project_materials(
+        project_dir=project_dir,
+        task_id=effective_task_id,
+        stock_source=stock_source,
+        flow_failure_policy=flow_failure_policy,
+        params=params,
+    )
+
+    scene_plan_items = [
+        ScenePlanItem(
+            scene_index=sc["scene_index"],
+            narration=sc["narration"],
+            duration_hint=float(sc.get("duration_hint", 8.0)),
+            search_terms=sc.get("search_terms", []),
+            visual_intent=sc.get("visual_intent", "cinematic"),
+        )
+        for sc in manifest["scenes"]
+    ]
     scene_plan = ScenePlan(
         total_scenes=len(scene_plan_items),
         scenes=scene_plan_items,
@@ -948,6 +1101,17 @@ def main():
     )
     prepare_p.add_argument("--target-duration", type=float, default=8.0, help="Duração alvo de cada cena")
     prepare_p.add_argument("--voice", default="pt-BR-AntonioNeural-Male", help="Voz TTS neural")
+    prepare_p.add_argument(
+        "--visual-director",
+        action="store_true",
+        default=False,
+        help="Habilita direção visual cinematográfica estruturada via Gemini",
+    )
+    prepare_p.add_argument(
+        "--visual-style-brief",
+        default="",
+        help="Diretriz opcional de estilo visual global",
+    )
 
     # Comando 'status'
     status_p = subparsers.add_parser("status", help="Inspeciona clipes baixados para o projeto")
@@ -978,6 +1142,21 @@ def main():
         help="Política para cenas Flow ausentes (strict | fallback_stock, padrão: strict)",
     )
 
+    # Comando 'visual-preview'
+    visual_preview_p = subparsers.add_parser(
+        "visual-preview",
+        help="Prévia da direção visual cinematográfica via Gemini",
+    )
+    visual_preview_p.add_argument(
+        "project_or_manifest",
+        help="Diretório do projeto ou caminho do manifest.json",
+    )
+    visual_preview_p.add_argument(
+        "--brief",
+        default="",
+        help="Diretriz opcional de estilo visual global",
+    )
+
     args = parser.parse_args()
 
     if args.command == "prepare":
@@ -1003,6 +1182,8 @@ def main():
             flow_scenes=flow_sc_list,
             niche=args.niche,
             target_flow_scenes=args.flow_count,
+            visual_director_enabled=args.visual_director,
+            visual_style_brief=args.visual_style_brief,
         )
         print("\n" + "=" * 60)
         print("PROJETO FLOW PREPARADO COM SUCESSO!")
@@ -1086,6 +1267,23 @@ def main():
             print(f"Duração:         {res['duration_seconds']}s")
             print(f"Tamanho:         {res['size_bytes'] / (1024*1024):.2f} MB")
         print("=" * 60)
+
+    elif args.command == "visual-preview":
+        res = preview_visual_direction(args.project_or_manifest, brief=args.brief)
+        print("\n" + "=" * 70)
+        print("VISUAL DIRECTOR PREVIEW")
+        print("=" * 70)
+        print(f"Global Style: {res['global_style']}")
+        print(f"Continuity Rules: {res['continuity_rules']}")
+        print("-" * 70)
+        for s in res["scenes"]:
+            print(f"\n[Cena {s['scene_index']:02d}] Importance: {s['visual_importance'].upper()}")
+            print(f"  Subject:     {s['subject']}")
+            print(f"  Action:      {s['action']}")
+            print(f"  Environment: {s['environment']}")
+            print(f"  Stock Terms: {s['stock_search_terms']}")
+            print(f"  Flow Prompt:\n    {s['compiled_flow_prompt']}")
+        print("\n" + "=" * 70)
 
     else:
         parser.print_help()

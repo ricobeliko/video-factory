@@ -18,12 +18,15 @@ from scripts.flow_playwright import (
     check_pending_credit_approval,
     download_generated_clip,
     ensure_studio_surface,
+    ensure_video_generation_mode,
     execute_credit_approval,
     extract_tile_identifier_from_src,
     fill_prompt,
     find_single_approve_button,
+    generate_flow_scene,
     launch_flow_context,
     navigate_landing_to_studio,
+    run_playwright_flow_poc,
     validate_clip_file,
     wait_for_generation_complete,
     wait_for_generation_started,
@@ -172,7 +175,12 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_page = MagicMock()
         # Simula wait_for_function falhando porque há botão aprovar pendente
         mock_page.wait_for_function.side_effect = Exception("Timeout: approval pending")
-        started = wait_for_generation_started(mock_page, timeout_ms=100)
+        started = wait_for_generation_started(
+            mock_page,
+            generation_type_confirmed=True,
+            generation_type="VIDEO",
+            timeout_ms=100,
+        )
         self.assertFalse(started)
 
     def test_find_single_approve_button_matches_aprovar(self):
@@ -215,7 +223,8 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_btn.count.return_value = 1
         mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
 
-        with patch("scripts.flow_playwright.expect") as mock_expect:
+        with patch("scripts.flow_playwright.expect") as mock_expect, \
+             patch("scripts.flow_playwright.extract_credit_cost", return_value=15):
             res = execute_credit_approval(mock_page, timeout_confirm_ms=1000)
             self.assertTrue(res["required"])
             self.assertEqual(res["click_count"], 1)
@@ -231,13 +240,72 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_btn.count.return_value = 1
         mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
 
-        with patch("scripts.flow_playwright.expect", side_effect=Exception("Timeout waiting for hidden")):
+        with patch("scripts.flow_playwright.expect", side_effect=Exception("Timeout waiting for hidden")), \
+             patch("scripts.flow_playwright.extract_credit_cost", return_value=15):
             res = execute_credit_approval(mock_page, timeout_confirm_ms=100)
             self.assertFalse(res["confirmed"])
             self.assertEqual(res["error"], "CREDIT_APPROVAL_NOT_CONFIRMED")
             self.assertEqual(res["click_count"], 1)
             # Garantia mandatória: disparado estritamente UMA vez
             mock_btn.click.assert_called_once()
+
+    def test_unknown_credit_cost_blocks_approval(self):
+        """1. Custo de crédito desconhecido (None) bloqueia aprovação fail-closed com zero cliques."""
+        mock_page = MagicMock()
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_page.get_by_role.return_value.or_.return_value.filter.return_value = mock_btn
+
+        with patch("scripts.flow_playwright.extract_credit_cost", return_value=None):
+            res = execute_credit_approval(mock_page)
+            self.assertEqual(res["error"], "CREDIT_COST_UNKNOWN")
+            self.assertEqual(res["click_count"], 0)
+            self.assertFalse(res["confirmed"])
+            mock_btn.click.assert_not_called()
+
+    def test_explicit_policy_refund_maps_terminal(self):
+        """2. Recusa explícita de política com reembolso confirmado mapeia para FLOW_CONTENT_POLICY_BLOCKED, créditos=0 e needs_recovery=False."""
+        raw_res = {
+            "status": "FLOW_CONTENT_POLICY_BLOCKED",
+            "content_policy_blocked": True,
+            "policy_refund_confirmed": True,
+            "policy_message": "Falha: Esse comando pode violar nossas políticas. You will be refunded for this generation.",
+            "error": "FLOW_POLICY_FAILURE",
+            "generation_start_confirmed": True,
+            "credit_cost": 15,
+        }
+        with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))):
+            res = generate_flow_scene("dummy_manifest.json", scene_index=1)
+            self.assertEqual(res.status, "FLOW_CONTENT_POLICY_BLOCKED")
+            self.assertEqual(res.credits_consumed, 0)
+            self.assertFalse(res.details.get("needs_recovery"))
+            self.assertTrue(res.details.get("content_policy_blocked"))
+            self.assertTrue(res.details.get("policy_refund_confirmed"))
+
+    def test_policy_block_without_refund_stays_recovery(self):
+        """3. Bloqueio de política sem confirmação segura de reembolso mantém comportamento conservador FLOW_GENERATION_NEEDS_RECOVERY."""
+        raw_res = {
+            "status": "FLOW_GENERATION_NEEDS_RECOVERY",
+            "content_policy_blocked": True,
+            "policy_refund_confirmed": False,
+            "policy_message": "Falha: Esse comando pode violar políticas.",
+            "error": "FLOW_POLICY_FAILURE",
+            "generation_start_confirmed": True,
+            "credit_cost": 15,
+        }
+        with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))):
+            res = generate_flow_scene("dummy_manifest.json", scene_index=1)
+            self.assertEqual(res.status, "FLOW_GENERATION_NEEDS_RECOVERY")
+            self.assertEqual(res.credits_consumed, 15)
+            self.assertTrue(res.details.get("needs_recovery"))
 
     def test_check_pending_approval_found(self):
         """4. Approval pendente no início é detectado com contagem e custo."""
@@ -476,6 +544,221 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertIsNotNone(scene_02)
         self.assertEqual(scene_02["expected_clip"], "flow_scene_02.mp4")
         self.assertNotEqual(scene_02["expected_clip"], "flow_scene_01.mp4")
+
+    def test_ensure_video_generation_mode_already_video(self):
+        """A. already_video: confirma Video e zero cliques no seletor."""
+        mock_page = MagicMock()
+        mock_close = MagicMock()
+        mock_close.count.return_value = 0
+        mock_close.first.is_visible.return_value = False
+        mock_page.locator.return_value.filter.return_value = mock_close
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.first = mock_trigger
+        mock_trigger.inner_text.return_value = "Vídeo · 720p · 8s crop_9_16 x1"
+        mock_page.get_by_role.return_value = mock_trigger
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertTrue(res["confirmed"])
+        self.assertFalse(res["changed"])
+        self.assertEqual(res["generation_type"], "VIDEO")
+        self.assertEqual(res["aspect_ratio"], "9:16")
+        self.assertEqual(res["output_count"], 1)
+        mock_trigger.click.assert_not_called()
+
+    def test_ensure_video_generation_mode_image_to_video(self):
+        """B. image_to_video: abre seletor, escolhe Vídeo exatamente 1 vez, confirma estado."""
+        mock_page = MagicMock()
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.first = mock_trigger
+        mock_trigger.inner_text.side_effect = ["🍌 Nano Banana 2.1 crop_16_9 x2", "Vídeo · 720p · 8s crop_9_16 x1"]
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_overlay = MagicMock()
+        mock_overlay.first = mock_overlay
+
+        mock_video_radio = MagicMock()
+        mock_video_radio.count.return_value = 1
+        mock_video_radio.first = mock_video_radio
+
+        mock_ar_radio = MagicMock()
+        mock_ar_radio.count.return_value = 1
+        mock_ar_radio.first = mock_ar_radio
+        mock_ar_radio.first.get_attribute.return_value = "false"
+
+        mock_x1_radio = MagicMock()
+        mock_x1_radio.count.return_value = 1
+        mock_x1_radio.first = mock_x1_radio
+        mock_x1_radio.first.get_attribute.return_value = "false"
+
+        def _get_by_role_overlay(role, name=None):
+            if role == "radio":
+                p = getattr(name, "pattern", "") if name else ""
+                if "v" in p or "video" in p:
+                    return mock_video_radio
+                elif "9:16" in p:
+                    return mock_ar_radio
+                elif "x1" in p:
+                    return mock_x1_radio
+            return MagicMock(count=lambda: 0)
+
+        mock_overlay.get_by_role.side_effect = _get_by_role_overlay
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif "cdk-overlay-pane" in selector:
+                loc.filter.return_value = mock_overlay
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            res = ensure_video_generation_mode(mock_page)
+            self.assertTrue(res["confirmed"])
+            self.assertTrue(res["changed"])
+            self.assertEqual(res["generation_type"], "VIDEO")
+            mock_trigger.click.assert_called_once()
+            mock_video_radio.click.assert_called_once()
+            mock_ar_radio.click.assert_called_once()
+            mock_x1_radio.click.assert_called_once()
+            mock_page.keyboard.press.assert_called_with("Escape")
+            mock_expect.assert_called()
+
+    def test_ensure_video_generation_mode_ambiguous_video_option(self):
+        """C. ambiguous_video_option: fail closed, Generate não é clicado."""
+        mock_page = MagicMock()
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.first = mock_trigger
+        mock_trigger.inner_text.return_value = "🍌 Nano Banana 2.1"
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_overlay = MagicMock()
+        mock_overlay.first = mock_overlay
+
+        mock_video_radio = MagicMock()
+        mock_video_radio.count.return_value = 2  # Múltiplas opções de vídeo = ambíguo
+        mock_overlay.get_by_role.return_value = mock_video_radio
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif "cdk-overlay-pane" in selector:
+                loc.filter.return_value = mock_overlay
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+        mock_video_radio.first.click.assert_not_called()
+
+    def test_ensure_video_generation_mode_missing_generation_type(self):
+        """D. missing_generation_type: fail closed."""
+        mock_page = MagicMock()
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 0
+        mock_page.get_by_role.return_value = mock_trigger
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            else:
+                loc.filter.return_value = mock_trigger
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+
+    def test_trial_only_confirms_video_zero_generate(self):
+        """E. trial_only confirma Video e garante Generate real = 0 e crédito = 0."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button") as mock_get_gen, \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"tile_a"}), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test prompt", "expected_clip": "flow_scene_01.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_launch.return_value = (mock_ctx, None)
+            mock_gen_btn = MagicMock()
+            mock_get_gen.return_value = mock_gen_btn
+
+            res = run_playwright_flow_poc(manifest_path="dummy_manifest.json", scene_index=1, trial_only=True)
+
+            self.assertEqual(res["status"], "PRE_FLIGHT_TRIAL_PASS")
+            self.assertTrue(res["generation_type_confirmed"])
+            self.assertEqual(res["generation_type"], "VIDEO")
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            mock_gen_btn.click.assert_not_called()
+
+    def test_image_mode_blocks_generate(self):
+        """F. Modo imagem nunca pode chegar em Generate (fail closed imediato)."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": False, "changed": False, "generation_type": "UNKNOWN", "error": "FLOW_VIDEO_MODE_NOT_CONFIRMED"}), \
+             patch("scripts.flow_playwright.fill_prompt") as mock_fill, \
+             patch("scripts.flow_playwright.get_generate_button") as mock_get_gen, \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test prompt", "expected_clip": "flow_scene_01.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_launch.return_value = (mock_ctx, None)
+
+            res = run_playwright_flow_poc(manifest_path="dummy_manifest.json", scene_index=1, trial_only=False)
+
+            self.assertEqual(res["status"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+            self.assertFalse(res["generation_type_confirmed"])
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            mock_fill.assert_not_called()
+            mock_get_gen.assert_not_called()
+
+    def test_generation_start_rejected_without_video_confirmation(self):
+        """G. generation_start genérico sem video confirmation é estritamente rejeitado."""
+        mock_page = MagicMock()
+        mock_page.wait_for_function.return_value = True
+
+        started = wait_for_generation_started(
+            mock_page,
+            generation_type_confirmed=False,
+            generation_type="UNKNOWN",
+        )
+        self.assertFalse(started)
+        mock_page.wait_for_function.assert_not_called()
 
 
 if __name__ == "__main__":

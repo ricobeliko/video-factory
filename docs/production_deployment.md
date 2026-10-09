@@ -87,6 +87,9 @@ O script:
 - Define o diretório de trabalho correto.
 - Inicia o Streamlit com bind em `0.0.0.0` e porta `8501` em modo headless (sem abrir navegador no host).
 
+### Pré-requisitos de Runtime de Mídia
+- **FFmpeg & FFprobe:** Production media quality requires resolvable FFmpeg + FFprobe (`ffmpeg.exe` e `ffprobe.exe` executáveis no PATH ou ambiente). O updater oficial (`scripts/update_production.ps1`) valida ambos em modo fail-closed no pre-flight antes de qualquer mutação.
+
 ---
 
 ---

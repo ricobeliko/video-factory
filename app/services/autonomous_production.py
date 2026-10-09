@@ -1697,6 +1697,12 @@ def build_autonomous_video_params(
         bgm_type=bgm_type,
         bgm_file=bgm_file,
         bgm_volume=bgm_volume,
+        # Channel Factory / Flow Integration (Fase V1.5E-E)
+        visual_director_enabled=bool(ctx.get("visual_director_enabled", False)),
+        visual_style_brief=str(ctx.get("visual_style_brief") or ""),
+        flow_enabled=bool(ctx.get("flow_enabled", False)),
+        flow_scene_count=int(ctx.get("flow_scene_count", 6)),
+        stock_fallback_enabled=bool(ctx.get("stock_fallback_enabled", True)),
         # Virtual Presenter (V14-C): estritamente desativado para novas gerações autônomas
         avatar_mode="none",
         avatar_provider="local",

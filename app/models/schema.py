@@ -184,6 +184,12 @@ class VideoParams(BaseModel):
     niche: Optional[str] = None
     region: Optional[str] = None
     topic_brief: Optional[str] = None
+    # Channel Factory / Flow Integration (Fase V1.5E-E)
+    visual_director_enabled: bool = False
+    visual_style_brief: str = ""
+    flow_enabled: bool = False
+    flow_scene_count: int = 6
+    stock_fallback_enabled: bool = True
 
     # Virtual Presenter / Character Overlay (Fase V14-C)
     avatar_mode: str = Field(default=const.DEFAULT_AVATAR_MODE)

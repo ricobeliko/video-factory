@@ -33,6 +33,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+from app.models import const
 from app.models.schema import (
     SceneClipInstruction,
     SceneMaterialSelection,
@@ -40,7 +41,13 @@ from app.models.schema import (
     ScenePlanItem,
     VideoParams,
 )
-from app.services import autonomous_production, flow_bridge, profile_manager, task
+from app.services import (
+    autonomous_production,
+    flow_bridge,
+    profile_manager,
+    task,
+    visual_director,
+)
 from scripts import flow_workflow
 
 
@@ -499,6 +506,659 @@ class TestFlowPipelineIntegration(unittest.TestCase):
             self.assertFalse(params.flow_enabled)
             self.assertEqual(mock_direct.call_count, 0)
             self.assertEqual(mock_bridge.call_count, 0)
+
+
+class TestFlowRuntimePipelineHardening(unittest.TestCase):
+    """
+    Fase V1.5E-E.1 — Hardening de Testes Runtime E2E do Pipeline Google Flow.
+
+    Executa diretamente app.services.task._run_pipeline() provando:
+    1. Flow ON atravessa _run_pipeline com 1 chamada para cada estágio e zero erro.
+    2. audio_duration real (do TTS) chega ao scene_assembly.assemble_scene_clips.
+    3. Flow OFF atravessa _run_pipeline executando o caminho legado (scene_material).
+    4. Flow OFF + Visual Director ON executa stock sem chamar direct_scenes nem flow_bridge.
+    5. Falha de recuperação no flow_bridge (NEEDS_RECOVERY) bloqueia a renderização final.
+    6. Manifesto corrompido no flow_bridge (FLOW_MANIFEST_INVALID) bloqueia a renderização final.
+    7. Metadados do Flow são persistidos via task_artifacts.patch_script_data.
+    8. Renderização final é executada estritamente UMA vez no fluxo Flow ON.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="test_flow_runtime_")
+        self.dummy_video_path = os.path.join(self.test_dir, "clip.mp4")
+        with open(self.dummy_video_path, "wb") as f:
+            f.write(b"dummy mp4 data" * 100)
+        self.dummy_audio_path = os.path.join(self.test_dir, "audio.mp3")
+        with open(self.dummy_audio_path, "wb") as f:
+            f.write(b"dummy audio data" * 100)
+        self.dummy_subtitle_path = os.path.join(self.test_dir, "sub.srt")
+        with open(self.dummy_subtitle_path, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,000 --> 00:00:05,000\nLegenda\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    # TESTE 1 — FLOW ON ATRAVESSA _run_pipeline
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro canônico para teste Flow runtime.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.scene_material.resolve_scene_materials")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.media_quality.evaluate_final_media_quality")
+    def test_runtime_01_flow_on_traverses_real_pipeline(
+        self,
+        mock_quality,
+        mock_final_videos,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_assemble,
+        mock_scene_material,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        canonical_plan = ScenePlan(
+            total_scenes=2,
+            scenes=[
+                ScenePlanItem(scene_index=1, narration="Cena 1 Flow", search_terms=["flow1"], duration_hint=5.0),
+                ScenePlanItem(scene_index=2, narration="Cena 2 Flow", search_terms=["flow2"], duration_hint=5.0),
+            ],
+        )
+        mock_plan_scenes.return_value = canonical_plan
+        expected_audio_duration = 16.42
+        mock_audio.return_value = (self.dummy_audio_path, expected_audio_duration, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+
+        mock_flow_bridge.return_value = (
+            [
+                SceneMaterialSelection(
+                    scene_index=1,
+                    material_path=self.dummy_video_path,
+                    duration=8.21,
+                    provider="google_flow",
+                    asset_id="f1",
+                    media_type="video",
+                    visual_source_type="flow",
+                ),
+                SceneMaterialSelection(
+                    scene_index=2,
+                    material_path=self.dummy_video_path,
+                    duration=8.21,
+                    provider="google_flow",
+                    asset_id="f2",
+                    media_type="video",
+                    visual_source_type="flow",
+                ),
+            ],
+            {
+                "flow_enabled": True,
+                "flow_status": "COMPLETE",
+                "flow_scene_count_requested": 2,
+                "flow_scene_count_completed": 2,
+                "flow_failure_policy": "fallback_stock",
+                "flow_manifest_path": "/storage/tasks/task_rt_01/flow/manifest.json",
+                "flow_project_url": "https://labs.google/flow/project/xyz",
+                "visual_director_enabled": False,
+                "stock_fallback_enabled": True,
+            },
+        )
+
+        mock_assemble.return_value = [
+            SceneClipInstruction(scene_index=1, material_path=self.dummy_video_path, duration_seconds=8.21),
+            SceneClipInstruction(scene_index=2, material_path=self.dummy_video_path, duration_seconds=8.21),
+        ]
+        mock_final_videos.return_value = ([self.dummy_video_path], [self.dummy_video_path], [])
+        mock_quality.return_value = {"valid": True, "status": "PASS", "reasons": [], "metrics": {}}
+
+        params = VideoParams(
+            video_subject="Flow Runtime E2E Success",
+            flow_enabled=True,
+            flow_scene_count=2,
+            scene_based_generation_enabled=True,
+            visual_director_enabled=False,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_01",
+            params=params,
+            stop_at="video",
+        )
+
+        # Provas requeridas pelo TESTE 1:
+        self.assertEqual(mock_plan_scenes.call_count, 1)
+        self.assertEqual(mock_flow_bridge.call_count, 1)
+        self.assertEqual(mock_scene_material.call_count, 0)
+        self.assertEqual(mock_audio.call_count, 1)
+        self.assertEqual(mock_subtitle.call_count, 1)
+        self.assertEqual(mock_final_videos.call_count, 1)
+        self.assertNotIn("error", res)
+        self.assertNotEqual(res.get("state"), const.TASK_STATE_FAILED)
+
+    # TESTE 2 — AUDIO DURATION REAL
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro com duração real de áudio.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.media_quality.evaluate_final_media_quality")
+    def test_runtime_02_real_audio_duration_passed_to_scene_assembly(
+        self,
+        mock_quality,
+        mock_final_videos,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_assemble,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        hint_duration = 5.0
+        exact_tts_duration = 16.42
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[
+                ScenePlanItem(scene_index=1, narration="Cena Única", search_terms=["tech"], duration_hint=hint_duration)
+            ],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, exact_tts_duration, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+
+        mock_flow_bridge.return_value = (
+            [
+                SceneMaterialSelection(
+                    scene_index=1,
+                    material_path=self.dummy_video_path,
+                    duration=exact_tts_duration,
+                    provider="google_flow",
+                    asset_id="f1",
+                    media_type="video",
+                    visual_source_type="flow",
+                )
+            ],
+            {"flow_enabled": True, "flow_status": "COMPLETE"},
+        )
+        mock_assemble.return_value = [
+            SceneClipInstruction(scene_index=1, material_path=self.dummy_video_path, duration_seconds=exact_tts_duration)
+        ]
+        mock_final_videos.return_value = ([self.dummy_video_path], [self.dummy_video_path], [])
+        mock_quality.return_value = {"valid": True, "status": "PASS", "reasons": [], "metrics": {}}
+
+        params = VideoParams(
+            video_subject="Audio Duration Real E2E",
+            flow_enabled=True,
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_02_dur",
+            params=params,
+            stop_at="video",
+        )
+
+        self.assertNotIn("error", res)
+        self.assertEqual(mock_assemble.call_count, 1)
+        _, asm_kwargs = mock_assemble.call_args
+        # Confirma que audio_duration é exatamente 16.42 e NÃO o duration_hint de 5.0
+        self.assertEqual(asm_kwargs.get("audio_duration"), exact_tts_duration)
+        self.assertNotEqual(asm_kwargs.get("audio_duration"), hint_duration)
+
+    # TESTE 3 — FLOW OFF ATRAVESSA _run_pipeline
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro legado para teste Flow OFF.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.scene_material.resolve_scene_materials")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.media_quality.evaluate_final_media_quality")
+    def test_runtime_03_flow_off_traverses_real_pipeline_legacy_regression(
+        self,
+        mock_quality,
+        mock_final_videos,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_assemble,
+        mock_scene_material,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Cena Legada", search_terms=["stock"], duration_hint=10.0)],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, 10.0, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+        mock_scene_material.return_value = [
+            SceneMaterialSelection(
+                scene_index=1,
+                material_path=self.dummy_video_path,
+                duration=10.0,
+                provider="pexels",
+                asset_id="s1",
+                media_type="video",
+                visual_source_type="stock",
+            )
+        ]
+        mock_assemble.return_value = [
+            SceneClipInstruction(scene_index=1, material_path=self.dummy_video_path, duration_seconds=10.0)
+        ]
+        mock_final_videos.return_value = ([self.dummy_video_path], [self.dummy_video_path], [])
+        mock_quality.return_value = {"valid": True, "status": "PASS", "reasons": [], "metrics": {}}
+
+        params = VideoParams(
+            video_subject="Flow Off Legacy Regression",
+            flow_enabled=False,
+            scene_based_generation_enabled=True,
+            visual_director_enabled=False,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_03_legacy",
+            params=params,
+            stop_at="video",
+        )
+
+        # Provas do caminho legado:
+        self.assertEqual(mock_flow_bridge.call_count, 0)
+        self.assertEqual(mock_scene_material.call_count, 1)
+        self.assertEqual(mock_audio.call_count, 1)
+        self.assertEqual(mock_subtitle.call_count, 1)
+        self.assertEqual(mock_final_videos.call_count, 1)
+        self.assertNotIn("error", res)
+
+    # TESTE 4 — FLOW OFF + VISUAL DIRECTOR ON
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro com VD ON mas Flow OFF.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.visual_director.direct_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.scene_material.resolve_scene_materials")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.media_quality.evaluate_final_media_quality")
+    def test_runtime_04_flow_off_visual_director_on_zero_direct_scenes(
+        self,
+        mock_quality,
+        mock_final_videos,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_assemble,
+        mock_scene_material,
+        mock_flow_bridge,
+        mock_direct_scenes,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Cena VD Off Flow", search_terms=["stock"], duration_hint=8.0)],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, 8.0, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+        mock_scene_material.return_value = [
+            SceneMaterialSelection(
+                scene_index=1,
+                material_path=self.dummy_video_path,
+                duration=8.0,
+                provider="pexels",
+                asset_id="s1",
+                media_type="video",
+                visual_source_type="stock",
+            )
+        ]
+        mock_assemble.return_value = [
+            SceneClipInstruction(scene_index=1, material_path=self.dummy_video_path, duration_seconds=8.0)
+        ]
+        mock_final_videos.return_value = ([self.dummy_video_path], [self.dummy_video_path], [])
+        mock_quality.return_value = {"valid": True, "status": "PASS", "reasons": [], "metrics": {}}
+
+        params = VideoParams(
+            video_subject="VD ON Flow OFF",
+            flow_enabled=False,
+            visual_director_enabled=True,
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_04_vd_on_flow_off",
+            params=params,
+            stop_at="video",
+        )
+
+        # Provas de isolamento:
+        self.assertEqual(mock_flow_bridge.call_count, 0)
+        self.assertEqual(mock_direct_scenes.call_count, 0)
+        self.assertEqual(mock_scene_material.call_count, 1)
+        self.assertEqual(mock_final_videos.call_count, 1)
+        self.assertNotIn("error", res)
+
+    # TESTE 5 — BRIDGE FAILURE BLOQUEIA RENDER
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro que cairá em recovery.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    def test_runtime_05_bridge_recovery_blocks_render(
+        self,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_final_videos,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Cena Recovery", search_terms=["rec"], duration_hint=5.0)],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, 5.0, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+
+        # Simula erro de recovery levantado pelo flow_bridge
+        mock_flow_bridge.side_effect = RuntimeError(
+            "FLOW_GENERATION_NEEDS_RECOVERY: manifest contains pending recovery state"
+        )
+
+        params = VideoParams(
+            video_subject="Flow Recovery Failure",
+            flow_enabled=True,
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_05_recovery",
+            params=params,
+            stop_at="video",
+        )
+
+        self.assertEqual(res.get("state"), const.TASK_STATE_FAILED)
+        self.assertEqual(res.get("failed_stage"), "materials")
+        self.assertIn("FLOW_GENERATION_NEEDS_RECOVERY", res.get("error", ""))
+        self.assertEqual(mock_final_videos.call_count, 0)
+
+    # TESTE 6 — CORRUPT MANIFEST BLOQUEIA RENDER
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro com manifesto corrompido.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    def test_runtime_06_corrupt_manifest_blocks_render(
+        self,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_final_videos,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Cena Corrupt", search_terms=["bad"], duration_hint=5.0)],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, 5.0, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+
+        # Simula manifesto corrompido detectado pelo flow_bridge
+        mock_flow_bridge.side_effect = ValueError(
+            "FLOW_MANIFEST_INVALID: JSONDecodeError at line 1"
+        )
+
+        params = VideoParams(
+            video_subject="Flow Corrupt Failure",
+            flow_enabled=True,
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_06_corrupt",
+            params=params,
+            stop_at="video",
+        )
+
+        self.assertEqual(res.get("state"), const.TASK_STATE_FAILED)
+        self.assertEqual(res.get("failed_stage"), "materials")
+        self.assertIn("FLOW_MANIFEST_INVALID", res.get("error", ""))
+        self.assertEqual(mock_final_videos.call_count, 0)
+
+    # TESTE 7 — FLOW METADATA REALMENTE É PERSISTIDA
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro para validação de persistência de metadados Flow.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.media_quality.evaluate_final_media_quality")
+    def test_runtime_07_flow_metadata_is_persisted(
+        self,
+        mock_quality,
+        mock_final_videos,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_assemble,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Cena Meta", search_terms=["meta"], duration_hint=7.0)],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, 7.0, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+
+        flow_meta_returned = {
+            "flow_enabled": True,
+            "flow_status": "COMPLETE",
+            "flow_scene_count_requested": 1,
+            "flow_scene_count_completed": 1,
+            "flow_failure_policy": "fallback_stock",
+            "flow_manifest_path": "/storage/tasks/task_rt_07_meta/flow/manifest.json",
+            "flow_project_url": "https://labs.google/flow/project/meta123",
+            "visual_director_enabled": False,
+            "stock_fallback_enabled": True,
+        }
+
+        mock_flow_bridge.return_value = (
+            [
+                SceneMaterialSelection(
+                    scene_index=1,
+                    material_path=self.dummy_video_path,
+                    duration=7.0,
+                    provider="google_flow",
+                    asset_id="f_meta",
+                    media_type="video",
+                    visual_source_type="flow",
+                )
+            ],
+            flow_meta_returned,
+        )
+
+        mock_assemble.return_value = [
+            SceneClipInstruction(scene_index=1, material_path=self.dummy_video_path, duration_seconds=7.0)
+        ]
+        mock_final_videos.return_value = ([self.dummy_video_path], [self.dummy_video_path], [])
+        mock_quality.return_value = {"valid": True, "status": "PASS", "reasons": [], "metrics": {}}
+
+        params = VideoParams(
+            video_subject="Flow Metadata Persistence Test",
+            flow_enabled=True,
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_07_meta",
+            params=params,
+            stop_at="video",
+        )
+
+        self.assertNotIn("error", res)
+        # Confirma que task_artifacts.patch_script_data recebeu exatamente os metadados do Flow
+        meta_calls = [
+            call for call in mock_patch_script.call_args_list
+            if call[1].get("flow_status") == "COMPLETE"
+        ]
+        self.assertEqual(len(meta_calls), 1)
+        task_id_arg, kwargs_arg = meta_calls[0][0][0], meta_calls[0][1]
+        self.assertEqual(task_id_arg, "task_rt_07_meta")
+        self.assertEqual(kwargs_arg.get("flow_enabled"), True)
+        self.assertEqual(kwargs_arg.get("flow_status"), "COMPLETE")
+        self.assertEqual(kwargs_arg.get("flow_scene_count_requested"), 1)
+        self.assertEqual(kwargs_arg.get("flow_scene_count_completed"), 1)
+        self.assertEqual(kwargs_arg.get("flow_project_url"), "https://labs.google/flow/project/meta123")
+        self.assertEqual(kwargs_arg.get("flow_failure_policy"), "fallback_stock")
+
+    # TESTE 8 — SINGLE FINAL RENDER
+    @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
+    @patch("app.services.task.generate_script", return_value="Roteiro para validar render único.")
+    @patch("app.services.scene_planner.plan_scenes")
+    @patch("app.services.flow_bridge.resolve_flow_materials_for_task")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.task_artifacts.patch_script_data")
+    @patch("app.services.task.save_script_data")
+    @patch("app.services.state.state.update_task")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.services.media_quality.evaluate_final_media_quality")
+    def test_runtime_08_single_final_render_flow_on(
+        self,
+        mock_quality,
+        mock_final_videos,
+        mock_subtitle,
+        mock_audio,
+        mock_update_task,
+        mock_save_script,
+        mock_patch_script,
+        mock_assemble,
+        mock_flow_bridge,
+        mock_plan_scenes,
+        mock_generate_script,
+        mock_ffmpeg,
+    ):
+        mock_plan_scenes.return_value = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Cena Single Render", search_terms=["render"], duration_hint=6.0)],
+        )
+        mock_audio.return_value = (self.dummy_audio_path, 6.0, None)
+        mock_subtitle.return_value = self.dummy_subtitle_path
+        mock_flow_bridge.return_value = (
+            [
+                SceneMaterialSelection(
+                    scene_index=1,
+                    material_path=self.dummy_video_path,
+                    duration=6.0,
+                    provider="google_flow",
+                    asset_id="f_render",
+                    media_type="video",
+                    visual_source_type="flow",
+                )
+            ],
+            {"flow_enabled": True, "flow_status": "COMPLETE"},
+        )
+        mock_assemble.return_value = [
+            SceneClipInstruction(scene_index=1, material_path=self.dummy_video_path, duration_seconds=6.0)
+        ]
+        mock_final_videos.return_value = ([self.dummy_video_path], [self.dummy_video_path], [])
+        mock_quality.return_value = {"valid": True, "status": "PASS", "reasons": [], "metrics": {}}
+
+        params = VideoParams(
+            video_subject="Single Final Render Test",
+            flow_enabled=True,
+            scene_based_generation_enabled=True,
+            subtitle_required=False,
+            final_media_quality_required=False,
+        )
+
+        res = task._run_pipeline(
+            task_id="task_rt_08_single_render",
+            params=params,
+            stop_at="video",
+        )
+
+        self.assertNotIn("error", res)
+        # Afirmação explícita do TESTE 8:
+        self.assertEqual(mock_final_videos.call_count, 1)
 
 
 if __name__ == "__main__":

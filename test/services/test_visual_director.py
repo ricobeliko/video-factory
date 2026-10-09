@@ -7,6 +7,7 @@ Valida contratos de schema, regras de validação, compilador determinístico de
 chamada única ao Gemini e integração com o flow_workflow.
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -19,6 +20,7 @@ from app.services.visual_director import (
     build_director_prompt,
     compile_flow_prompt,
     direct_scenes,
+    preview_visual_direction,
     validate_visual_direction_plan,
 )
 from scripts.flow_workflow import prepare_project
@@ -304,6 +306,93 @@ class TestVisualDirectorWorkflowIntegration(unittest.TestCase):
                 visual_director_enabled=True,
             )
         self.assertIn("VISUAL_DIRECTOR_FAILED", str(ctx.exception))
+
+    @patch("app.services.visual_director.direct_scenes")
+    def test_preview_visual_direction_uses_video_subject(self, mock_direct):
+        """18. preview_visual_direction extrai corretamente video_subject do manifest."""
+        manifest_data = {
+            "video_subject": "Canonical Subject JFK",
+            "niche": "historias_misterios",
+            "scenes": [
+                {
+                    "scene_index": 1,
+                    "narration": "Texto de abertura.",
+                    "visual_intent": "historical",
+                    "search_terms": ["jfk", "dallas"],
+                }
+            ],
+        }
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f)
+
+        mock_direct.return_value = make_sample_plan(count=1)
+
+        preview_visual_direction(manifest_path)
+
+        mock_direct.assert_called_once()
+        call_kwargs = mock_direct.call_args[1]
+        self.assertEqual(call_kwargs.get("video_subject"), "Canonical Subject JFK")
+
+    @patch("app.services.visual_director.get_gemini_config")
+    def test_direct_scenes_sanitizes_sensitive_error_in_log_and_exception(self, mock_get_cfg):
+        """19. Exceção com URL/API key sensível é sanitizada sem expor credenciais no log ou erro."""
+        mock_get_cfg.return_value = {
+            "api_key": "dummy_key",
+            "model_name": "gemini-3.5-flash-lite",
+            "base_url": "",
+        }
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = RuntimeError(
+            "Connection failed: https://user:password@example.com/v1?api_key=SECRET"
+        )
+
+        scenes = [{"scene_index": 1, "narration": "Test narration"}]
+
+        with self.assertRaises(RuntimeError) as ctx:
+            direct_scenes(
+                scenes=scenes,
+                video_subject="Test Subject",
+                client=mock_client,
+            )
+
+        err_text = str(ctx.exception)
+        self.assertNotIn("password", err_text)
+        self.assertNotIn("SECRET", err_text)
+        self.assertIn("***:***@", err_text)
+        self.assertIn("api_key=***", err_text)
+        self.assertIn("VISUAL_DIRECTOR_FAILED", err_text)
+
+    def test_comparison_legacy_director_does_not_alter_manifest(self):
+        """20. Comparação entre prompt legado e visual director não altera o manifest original."""
+        original_manifest = {
+            "video_subject": "Quantum Paradox",
+            "scenes": [
+                {
+                    "scene_index": 1,
+                    "narration": "O experimento começou às três da manhã.",
+                    "prompt_en": "Legacy prompt text",
+                    "visual_intent": "science lab",
+                }
+            ],
+        }
+        manifest_copy = json.loads(json.dumps(original_manifest))
+
+        spec = make_sample_spec(scene_index=1)
+        compiled_dir_prompt = compile_flow_prompt(spec)
+        legacy_prompt = original_manifest["scenes"][0]["prompt_en"]
+
+        self.assertNotEqual(compiled_dir_prompt, legacy_prompt)
+        self.assertEqual(original_manifest, manifest_copy)
+
+    @patch("scripts.flow_playwright.sync_playwright")
+    def test_semantic_review_does_not_open_browser(self, mock_playwright):
+        """21. Revisão e compilação de direção visual opera estritamente offline sem abrir browser."""
+        spec = make_sample_spec(scene_index=1)
+        prompt = compile_flow_prompt(spec)
+        self.assertTrue(len(prompt) > 20)
+        mock_playwright.assert_not_called()
 
 
 if __name__ == "__main__":

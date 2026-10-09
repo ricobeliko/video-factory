@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 
 from app.config import config
 from app.models.llm_provider import get_llm_provider
+from app.services.llm import sanitize_error_message
 
 
 # =============================================================================
@@ -395,11 +396,13 @@ def direct_scenes(
         return plan
 
     except Exception as exc:
-        err_msg = str(exc)
+        err_msg = sanitize_error_message(exc)
         logger.error(f"[VisualDirector] Falha na direção visual: {err_msg}")
         if "VISUAL_DIRECTION_INVALID" in err_msg or "VISUAL_DIRECTOR_FAILED" in err_msg:
-            raise
-        raise RuntimeError(f"VISUAL_DIRECTOR_FAILED: {err_msg}") from exc
+            if isinstance(exc, ValueError):
+                raise ValueError(err_msg) from None
+            raise RuntimeError(err_msg) from None
+        raise RuntimeError(f"VISUAL_DIRECTOR_FAILED: {err_msg}") from None
 
 
 # =============================================================================
@@ -422,7 +425,7 @@ def preview_visual_direction(
         manifest = json.load(f)
 
     scenes = manifest.get("scenes", [])
-    subject = manifest.get("subject", "")
+    subject = manifest.get("video_subject", "") or manifest.get("subject", "")
     niche = manifest.get("niche", "")
 
     plan = direct_scenes(

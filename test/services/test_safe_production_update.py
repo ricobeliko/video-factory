@@ -641,7 +641,69 @@ class TestSafeProductionUpdate(unittest.TestCase):
             self.assertIn("PREFLIGHT_FAIL", combined_output)
             self.assertIn("FFPROBE_UNAVAILABLE", combined_output)
 
+    # 20. Fail-Closed Funcional Quando Dependência Obrigatória Ausente no .venv (Dependency Drift)
+    def test_20_preflight_fails_closed_when_mandatory_dependency_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            subprocess.run(["git", "init", str(temp_path)], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=temp_path, check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.local"], cwd=temp_path, check=True)
+
+            readme = temp_path / "README.md"
+            readme.write_text("Test", encoding="utf-8")
+            good_bin = temp_path / "good.cmd"
+            good_bin.write_text("@exit /b 0\r\n", encoding="utf-8")
+            good_bin_str = str(good_bin).replace("\\", "\\\\")
+
+            app_dir = temp_path / "app"
+            (app_dir / "services").mkdir(parents=True, exist_ok=True)
+            (app_dir / "utils").mkdir(parents=True, exist_ok=True)
+            (app_dir / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "services" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "utils" / "utils.py").write_text(
+                f"def get_ffmpeg_binary():\n    return r'{good_bin_str}'\n",
+                encoding="utf-8",
+            )
+            (app_dir / "services" / "media_quality.py").write_text(
+                f"def get_ffprobe_binary():\n    return r'{good_bin_str}'\n",
+                encoding="utf-8",
+            )
+            # Declara dependência inexistente no requirements.txt
+            req_file = temp_path / "requirements.txt"
+            req_file.write_text("missing_package_xyz_987654==1.0.0\n", encoding="utf-8")
+
+            subprocess.run(["git", "add", "."], cwd=temp_path, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=temp_path, check=True)
+
+            venv_scripts = temp_path / ".venv" / "Scripts"
+            venv_scripts.mkdir(parents=True, exist_ok=True)
+            dummy_python = venv_scripts / "python.exe"
+            shutil.copy(Path(os.sys.executable), dummy_python)
+
+            cmd = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(self.script_path),
+                "-RepoPath", str(temp_path),
+                "-TargetRef", "HEAD",
+                "-PreflightOnly",
+                "-SkipTaskCheck",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                "Preflight DEVE abortar quando houver divergência de dependências obrigatórias.",
+            )
+            combined_output = result.stdout + result.stderr
+            self.assertIn("PREFLIGHT_FAIL", combined_output)
+            self.assertIn("DEPENDENCY_DRIFT", combined_output)
+            self.assertIn("missing-package-xyz-987654", combined_output)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

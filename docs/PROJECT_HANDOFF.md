@@ -1,14 +1,25 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 08/10/2026
+## Estado Atual Canônico — 09/10/2026
 
-- **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.5_VISUAL_DIRECTOR`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4_CONCLUDED`
-- **ACTIVE_BRANCH** = `feat/v1-4c-flow-pipeline-integration`
-- **NEXT_GATE** = `V1.5_VISUAL_DIRECTOR`
+- **CURRENT_FOCUS** = `PC_FORTE_PRODUCTION_RUNTIME_HARDENING`
+- **CURRENT_PHASE** = `V1.5E-N`
+- **PROJECT_STATUS** = `ACTIVE_DEV / PR_READY`
+- **ACTIVE_BRANCH** = `fix/pc-forte-production-runtime-hardening`
+- **NEXT_GATE** = `PRODUCTION_HOMOLOGATION`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **BLOCKED_BY** = `NONE`
+
+### PC Forte Production Runtime Contract:
+- **Python via .venv**: Operação e pacotes restritos ao ambiente virtual do projeto;
+- **Dependências sincronizadas**: Safe updater detecta divergências de dependências obrigatórias e sincroniza determinísticamente no `.venv`;
+- **Playwright obrigatório**: Passivamente exigido no readiness check quando Flow estiver habilitado;
+- **Edge msedge obrigatório**: Canal Microsoft Edge (`msedge`) validado passivamente no host Windows;
+- **Flow headless canônico**: Automação padrão opera estritamente com `headless=True` em produção; modo `headless=False` disponível para diagnóstico DEV;
+- **Perfil Flow persistente**: Sessão Google autenticada preservada em `storage/flow_browser_profile`;
+- **Conta de execução Windows**: Produção deverá executar sob a conta Windows do operador (`bob`), não `SYSTEM`, devido ao perfil/sessão do navegador;
+- **Proteção de credenciais**: Credenciais Windows protegidas e armazenadas exclusivamente pelo Task Scheduler, nunca em scripts/repositório;
+- **Políticas de publicação**: Auto Publish permanece OFF, Scheduler permanece OFF durante homologação, TikTok permanece OFF.
 
 ### Destaque da Frente Google Flow / Qualidade Visual:
 - **V1.4_FLOW_AUTOMATION** = CONCLUÍDA / HOMOLOGADA

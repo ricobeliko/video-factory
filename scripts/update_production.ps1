@@ -97,6 +97,146 @@ function Test-HealthEndpoint {
     return $false
 }
 
+function Test-VenvDependencies {
+    param(
+        [string]$PythonExe,
+        [string]$BasePath
+    )
+    $ReqPath = Join-Path $BasePath "requirements.txt"
+    if (-not (Test-Path $ReqPath)) {
+        return @{
+            status = "PASS"
+            missing = @()
+            incompatible = @()
+            failure_reason = $null
+        }
+    }
+
+    $DepCode = @'
+import json, sys, os, re
+res = {"missing": [], "incompatible": [], "status": "PASS", "failure_reason": None}
+try:
+    import importlib.metadata
+    try:
+        from packaging.requirements import Requirement
+        has_packaging = True
+    except ImportError:
+        has_packaging = False
+
+    req_file = os.path.join(os.getcwd(), "requirements.txt")
+    if os.path.isfile(req_file):
+        with open(req_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if has_packaging:
+                    try:
+                        req = Requirement(line)
+                    except Exception:
+                        continue
+                    if req.marker and not req.marker.evaluate():
+                        continue
+                    try:
+                        inst_ver = importlib.metadata.version(req.name)
+                        if not req.specifier.contains(inst_ver, prereleases=True):
+                            res["incompatible"].append({"name": req.name, "required": str(req.specifier), "installed": inst_ver})
+                    except importlib.metadata.PackageNotFoundError:
+                        res["missing"].append({"name": req.name, "required": str(req.specifier)})
+                else:
+                    clean_line = line.split("#")[0].strip()
+                    marker_part = ""
+                    if ";" in clean_line:
+                        clean_line, marker_part = clean_line.split(";", 1)
+                        clean_line = clean_line.strip()
+                        if "python_version" in marker_part and "3.13" in marker_part:
+                            if sys.version_info < (3, 13):
+                                continue
+                    m = re.match(r"^([A-Za-z0-9_.\-]+)(?:([<>=!~].*))?$", clean_line)
+                    if m:
+                        pkg_name = m.group(1).replace("_", "-")
+                        try:
+                            inst_ver = importlib.metadata.version(pkg_name)
+                        except importlib.metadata.PackageNotFoundError:
+                            res["missing"].append({"name": pkg_name, "required": m.group(2) or ""})
+
+    if res["missing"] or res["incompatible"]:
+        res["status"] = "FAIL"
+        names = [x["name"] for x in res["missing"]] + [x["name"] for x in res["incompatible"]]
+        res["failure_reason"] = f"DEPENDENCY_DRIFT: {', '.join(names)}"
+except Exception as e:
+    res["status"] = "FAIL"
+    res["failure_reason"] = f"DEP_CHECK_ERROR: {e}"
+
+sys.stdout.write(json.dumps(res))
+sys.stdout.flush()
+'@
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $PythonExe
+    $psi.Arguments = "-"
+    $psi.WorkingDirectory = $BasePath
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Write($DepCode)
+        $proc.StandardInput.Close()
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $proc.WaitForExit()
+
+        if ($proc.ExitCode -eq 0 -and $stdout) {
+            try {
+                return ($stdout | ConvertFrom-Json)
+            } catch {}
+        }
+    } catch {}
+
+    return @{
+        status = "FAIL"
+        missing = @()
+        incompatible = @()
+        failure_reason = "DEP_CHECK_FAILED"
+    }
+}
+
+function Sync-VenvDependencies {
+    param(
+        [string]$PythonExe,
+        [string]$BasePath
+    )
+    $ReqPath = Join-Path $BasePath "requirements.txt"
+    if (-not (Test-Path $ReqPath)) {
+        return $true
+    }
+
+    $Synced = $false
+    # 1. Tenta uv se disponível no sistema
+    $UvCmd = Get-Command uv -ErrorAction SilentlyContinue
+    if ($UvCmd) {
+        Write-DeployLog "Sincronizando dependências via 'uv pip install' no .venv..."
+        & uv pip install -r $ReqPath --python $PythonExe 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $Synced = $true
+        }
+    }
+
+    # 2. Se uv não concluiu ou não existe, tenta pip do próprio .venv
+    if (-not $Synced) {
+        Write-DeployLog "Tentando sincronizar dependências via pip do .venv..."
+        & $PythonExe -m pip install -r $ReqPath 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $Synced = $true
+        }
+    }
+
+    return $Synced
+}
+
 function Format-Summary {
     param(
         [string]$CurrentSha,
@@ -110,7 +250,8 @@ function Format-Summary {
         [string]$FailureReason = "",
         [string]$FfmpegResult = "",
         [string]$FfprobeResult = "",
-        [string]$MediaRuntimeResult = ""
+        [string]$MediaRuntimeResult = "",
+        [string]$DependencyResult = ""
     )
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Cyan
@@ -126,6 +267,9 @@ function Format-Summary {
     }
     if ($MediaRuntimeResult -ne "") {
         Write-Host "MEDIA_RUNTIME   = $MediaRuntimeResult"
+    }
+    if ($DependencyResult -ne "") {
+        Write-Host "DEPENDENCIES    = $DependencyResult"
     }
     Write-Host "BACKUP          = $BackupResult"
     Write-Host "UPDATE          = $UpdateResult"
@@ -151,6 +295,7 @@ if (-not (Test-Path $RepoPath)) {
 $RepoPathResolved = (Resolve-Path $RepoPath).Path
 Set-Location -Path $RepoPathResolved
 $env:PYTHONPATH = $RepoPathResolved
+$env:PYTHONIOENCODING = "utf-8"
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User") + ";" + $env:Path
 
 Init-DeployLogger -BasePath $RepoPathResolved
@@ -426,7 +571,23 @@ sys.stdout.flush()
 
     Write-DeployLog "Media runtime verificado com sucesso: FFMPEG=$FfmpegSummary | FFPROBE=$FfprobeSummary." -Level "SUCCESS"
 
-    # 4.10 Execução em Modo PreflightOnly
+    # 4.10 Validação de Dependências do Ambiente Virtual (requirements.txt vs .venv)
+    Write-DeployLog "Executando verificação passiva de dependências (.venv)..."
+    $DepCheck = Test-VenvDependencies -PythonExe $VenvPython -BasePath $RepoPathResolved
+    $DependencySummary = if ($DepCheck.status -eq "PASS") { "PASS" } else { "FAIL ($($DepCheck.failure_reason))" }
+
+    if ($DepCheck.status -ne "PASS") {
+        Write-DeployLog "ABORT: Divergência de dependências detectada: $($DepCheck.failure_reason)" -Level "ERROR" -IsError
+        if ($PreflightOnly) {
+            Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult "NOT_ATTEMPTED" -UpdateResult "NOT_ATTEMPTED" -HealthResult "NOT_ATTEMPTED" -RollbackResult "NOT_REQUIRED" -FinalSha $CurrentSha -Status "PREFLIGHT_FAIL" -FailureReason $DepCheck.failure_reason -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary
+            exit 1
+        } else {
+            throw $DepCheck.failure_reason
+        }
+    }
+    Write-DeployLog "Dependências do .venv verificadas: PASS." -Level "SUCCESS"
+
+    # 4.11 Execução em Modo PreflightOnly
     if ($PreflightOnly) {
         Write-Host ""
         Write-Host "==================================================" -ForegroundColor Cyan
@@ -441,6 +602,7 @@ sys.stdout.flush()
         Write-Host "FFMPEG          : $FfmpegSummary"
         Write-Host "FFPROBE         : $FfprobeSummary"
         Write-Host "MEDIA_RUNTIME   : $MediaRuntimeSummary"
+        Write-Host "DEPENDENCIES    : $DependencySummary"
         Write-Host "BACKUP_STRATEGY : Snapshot SQLite transacional (PRAGMA integrity_check + SHA-256)"
         Write-Host "UPDATE_STRATEGY : Fast-Forward FF-only para $TargetSha (com produção parada)"
         Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout 75s, HTTP 200 + 'ok')"
@@ -570,6 +732,23 @@ sys.stdout.flush()
     }
     Write-DeployLog "Atualização Git FF-only aplicada com sucesso. Novo HEAD: $NewSha"
 
+    # 7.1 Validação e sincronização de dependências pós-update
+    Write-DeployLog "Verificando dependências pós-atualização..."
+    $PostDepCheck = Test-VenvDependencies -PythonExe $VenvPython -BasePath $RepoPathResolved
+    if ($PostDepCheck.status -ne "PASS") {
+        Write-DeployLog "Divergência de dependências detectada pós-update ($($PostDepCheck.failure_reason)). Tentando sincronização automática no .venv..." -Level "WARN"
+        $SyncOk = Sync-VenvDependencies -PythonExe $VenvPython -BasePath $RepoPathResolved
+        $PostDepCheck = Test-VenvDependencies -PythonExe $VenvPython -BasePath $RepoPathResolved
+        if ($PostDepCheck.status -ne "PASS") {
+            Write-DeployLog "ABORT: Dependências obrigatórias ainda ausentes após sincronização: $($PostDepCheck.failure_reason). Executando rollback de emergência..." -Level "ERROR" -IsError
+            git switch --detach $CurrentSha 2>&1 | Out-Null
+            schtasks /Run /TN $TaskName 2>&1 | Out-Null
+            throw "DEPENDENCY_DRIFT: $($PostDepCheck.failure_reason)"
+        }
+        Write-DeployLog "Dependências do .venv sincronizadas com sucesso." -Level "SUCCESS"
+    }
+    $DependencySummary = "PASS"
+
     # ==============================================================================
     # 8. START DA PRODUÇÃO
     # ==============================================================================
@@ -589,7 +768,7 @@ sys.stdout.flush()
 
     if ($HealthPassed) {
         Write-DeployLog "Health check passou com sucesso (HTTP 200 'ok'). Atualização concluída com êxito!" -Level "SUCCESS"
-        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS" -HealthResult "PASS" -RollbackResult "NOT_REQUIRED" -FinalSha $NewSha -Status "DEPLOY_SUCCESS" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary
+        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS" -HealthResult "PASS" -RollbackResult "NOT_REQUIRED" -FinalSha $NewSha -Status "DEPLOY_SUCCESS" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary
         exit 0
     }
 

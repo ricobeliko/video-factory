@@ -32,6 +32,14 @@ if ROOT_DIR not in sys.path:
 
 from app.services.task_artifacts import atomic_write_json  # noqa: E402
 
+# Garante saída UTF-8 para evitar UnicodeEncodeError (charmap) no console/serviço Windows
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 DEFAULT_FLOW_URL = "https://flow.google.com"
 DEFAULT_USER_DATA_DIR = os.path.join(ROOT_DIR, "storage", "flow_browser_profile")
 DEFAULT_TIMEOUT_UI_MS = 30000
@@ -109,10 +117,25 @@ def validate_clip_file(file_path: str) -> Dict[str, Any]:
         return res
 
 
+def resolve_flow_headless(headless: Optional[bool] = None) -> bool:
+    """
+    Resolve o modo headless para a automação do Google Flow.
+    Padrão canônico: True (headless=True para produção e background).
+    Permite override explícito via argumento (headless=False) ou
+    variável de ambiente FLOW_HEADLESS=0/false/no/off (para diagnóstico manual DEV).
+    """
+    if headless is not None:
+        return bool(headless)
+    env_val = os.getenv("FLOW_HEADLESS")
+    if env_val is not None:
+        return env_val.strip().lower() not in ("0", "false", "no", "off")
+    return True
+
+
 def launch_flow_context(
     playwright: Playwright,
     user_data_dir: str = DEFAULT_USER_DATA_DIR,
-    headless: bool = False,
+    headless: bool = True,
 ) -> Tuple[Optional[BrowserContext], Optional[str]]:
     """
     Abre o contexto persistente do Playwright usando o Microsoft Edge instalado (channel='msedge').
@@ -906,6 +929,7 @@ def run_playwright_flow_poc(
     project_url: Optional[str] = None,
     download_only: bool = False,
     force_new_project: bool = False,
+    headless: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Executa o ciclo completo de validação do Playwright com isolamento de resultado:
@@ -1031,7 +1055,8 @@ def run_playwright_flow_poc(
         logger.info(f"SCENE_01_FILE_SHA_BEFORE capturado: {report['scene_01_file_sha_before']}")
 
     with sync_playwright() as p:
-        context, err = launch_flow_context(p, headless=False)
+        is_headless = resolve_flow_headless(headless)
+        context, err = launch_flow_context(p, headless=is_headless)
         if err:
             report["status"] = err
             report["error"] = err
@@ -1423,6 +1448,7 @@ def generate_flow_scene(
     trial_only: bool = False,
     timeout_gen_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
     download_only: bool = False,
+    headless: Optional[bool] = None,
 ) -> FlowSceneResult:
     """
     API canônica reutilizável para o flow_workflow.py.
@@ -1498,6 +1524,7 @@ def generate_flow_scene(
         timeout_gen_sec=timeout_gen_sec,
         project_url=target_project_url,
         download_only=download_only,
+        headless=headless,
     )
 
     raw_status = raw_res.get("status")
@@ -1577,8 +1604,11 @@ def main():
     parser.add_argument("--project-url", default=None, help="URL explícita do projeto Flow existente")
     parser.add_argument("--download-only", action="store_true", help="Executa apenas isolamento, download e validação do novo tile já gerado")
     parser.add_argument("--new-project", action="store_true", help="Força a criação de um novo projeto limpo no Flow")
+    parser.add_argument("--headful", action="store_true", help="Executa o navegador com interface gráfica visível (headless=False) para diagnóstico")
 
     args = parser.parse_args()
+
+    headless_override = False if args.headful else None
 
     res = run_playwright_flow_poc(
         manifest_path=args.manifest,
@@ -1588,6 +1618,7 @@ def main():
         project_url=args.project_url,
         download_only=args.download_only,
         force_new_project=args.new_project,
+        headless=headless_override,
     )
 
     print("\n" + "=" * 50)

@@ -1,5 +1,22 @@
 # PRODUCTION_RUNBOOK — Video Factory
 
+## PC Forte Production Runtime Contract — 09/10/2026
+
+Contrato operacional mandatório validado e endurecido para o PC Forte:
+
+- **Python via .venv**: O runtime de produção opera estritamente dentro do `.venv` do projeto. Não utilizar Python global;
+- **Dependências sincronizadas**: O `scripts/update_production.ps1` detecta divergências de dependências declaradas (`requirements.txt`) contra o `.venv` no preflight e sincroniza determinísticamente via `uv pip` ou `pip` pós-merge;
+- **Playwright obrigatório quando Flow ON**: A presença e compatibilidade do Playwright (`>=1.40.0`) são validadas passivamente pelo Production Readiness sempre que houver perfil ativo com Flow;
+- **Microsoft Edge msedge obrigatório**: Presença do executável `msedge.exe` validada passivamente no Windows pelo readiness;
+- **Flow headless canônico obrigatório em produção**: A automação do Flow utiliza `headless=True` como padrão canônico, permitindo operação estável em background sem display gráfico. O modo `headless=False` permanece disponível exclusivamente para diagnóstico/manual DEV via CLI `--headful` ou `FLOW_HEADLESS=false`;
+- **Perfil Flow persistente**: Perfil do navegador mantido em `storage/flow_browser_profile` preservando cookies e autenticação Google;
+- **Conta de execução Windows**: A Scheduled Task `"VideoFactory Production"` deverá executar sob a conta Windows interativa do operador (`DESKTOP-21KQ4RJ\bob`), e NÃO sob `SYSTEM` (ServiceAccount), devido à persistência de sessão Google/Edge profile;
+- **Armazenamento de credenciais**: Credenciais de logon do Windows devem ser configuradas e protegidas nativamente pelo Windows Task Scheduler, NUNCA em texto plano, arquivos, scripts ou repositório;
+- **Políticas de publicação**:
+  - `auto_publish_enabled` = OFF;
+  - `scheduler_enabled` = OFF durante homologação de runtime;
+  - `tiktok` = OFF.
+
 ## V12-E.3 — contrato DEV, sem rollout autorizado
 
 Esta etapa não acessou produção e não autoriza deploy, commit ou push.

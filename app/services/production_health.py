@@ -15,6 +15,7 @@ PRINCÍPIOS:
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -367,16 +368,163 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
     if not storage_writable:
         missing_critical.append("Diretório de storage não gravável")
 
-    # 5. FFmpeg
+    # 5. FFmpeg e FFprobe
+    from app.services import media_quality
     ffmpeg_ready = utils.check_ffmpeg_ready()
+    ffmpeg_bin = utils.get_ffmpeg_binary()
+    ffprobe_bin = media_quality.get_ffprobe_binary()
+    ffprobe_ready = False
+    if ffprobe_bin:
+        try:
+            p_ffp = subprocess.run([ffprobe_bin, "-version"], capture_output=True, timeout=5, shell=False)
+            ffprobe_ready = (p_ffp.returncode == 0)
+        except Exception:
+            ffprobe_ready = False
+
     ffmpeg_check = {
-        "binary": utils.get_ffmpeg_binary(),
+        "binary": ffmpeg_bin,
         "passed": ffmpeg_ready,
+    }
+    ffprobe_check = {
+        "binary": ffprobe_bin,
+        "passed": ffprobe_ready,
     }
     if not ffmpeg_ready:
         missing_critical.append("FFmpeg ausente ou inoperante")
+    if not ffprobe_ready:
+        missing_critical.append("FFprobe ausente ou inoperante")
 
-    # 6. Configuração (config.toml)
+    # 6. Fonte de Legenda Configurada/Existente
+    configured_font = config.ui.get("font_name") or "STHeitiMedium.ttc"
+    font_dir_path = utils.font_dir()
+    font_file_path = configured_font if os.path.isabs(configured_font) else os.path.join(font_dir_path, configured_font)
+    font_found = os.path.isfile(font_file_path)
+    if not font_found:
+        try:
+            available_fonts = [f for f in os.listdir(font_dir_path) if f.lower().endswith((".ttf", ".ttc"))]
+            font_found = len(available_fonts) > 0
+            if font_found:
+                font_file_path = os.path.join(font_dir_path, available_fonts[0])
+        except Exception:
+            font_found = False
+
+    font_check = {
+        "configured_font": configured_font,
+        "resolved_path": font_file_path if font_found else None,
+        "passed": font_found,
+    }
+    if not font_found:
+        missing_critical.append(f"Fonte de legenda ausente no sistema ({configured_font})")
+
+    # 7. Pré-requisitos de Google Flow / Qualidade Visual (Passivo)
+    flow_required = False
+    try:
+        from app.services import profile_manager
+        profiles = profile_manager.list_profiles(db_path=db_path)
+        for p in profiles:
+            if p.get("is_active"):
+                p_sett = profile_manager.get_profile_settings(p["id"], db_path=db_path)
+                if p_sett and p_sett.visual and p_sett.visual.flow_enabled:
+                    flow_required = True
+                    break
+    except Exception:
+        flow_required = False
+
+    if os.getenv("FLOW_REQUIRED", "").lower() in ("1", "true", "yes"):
+        flow_required = True
+
+    playwright_installed = False
+    playwright_version = None
+    playwright_compatible = False
+    try:
+        import playwright
+        playwright_installed = True
+        playwright_version = getattr(playwright, "__version__", None)
+        if playwright_version:
+            from packaging import version
+            playwright_compatible = version.parse(playwright_version) >= version.parse("1.40.0")
+        else:
+            playwright_compatible = True
+    except Exception:
+        playwright_installed = False
+        playwright_compatible = False
+
+    playwright_check = {
+        "installed": playwright_installed,
+        "version": playwright_version,
+        "compatible": playwright_compatible,
+        "required": flow_required,
+        "passed": (playwright_installed and playwright_compatible) if flow_required else True,
+    }
+
+    edge_available = False
+    edge_path = None
+    if os.name == "nt":
+        edge_candidates = [
+            shutil.which("msedge"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for ec in edge_candidates:
+            if ec and os.path.isfile(ec):
+                edge_available = True
+                edge_path = ec
+                break
+    else:
+        w_edge = shutil.which("microsoft-edge") or shutil.which("msedge")
+        edge_available = bool(w_edge)
+        edge_path = w_edge
+
+    edge_check = {
+        "channel": "msedge",
+        "executable": edge_path,
+        "available": edge_available,
+        "required": flow_required,
+        "passed": edge_available if flow_required else True,
+    }
+
+    flow_profile_dir = os.path.join(storage_folder, "flow_browser_profile")
+    flow_profile_writable = False
+    if flow_required:
+        if os.path.exists(flow_profile_dir):
+            try:
+                t_fp = os.path.join(flow_profile_dir, f".readiness_test_{os.getpid()}.tmp")
+                with open(t_fp, "w", encoding="utf-8") as f:
+                    f.write("readiness")
+                if os.path.exists(t_fp):
+                    os.remove(t_fp)
+                flow_profile_writable = True
+            except Exception:
+                flow_profile_writable = False
+        else:
+            flow_profile_writable = storage_writable
+    else:
+        flow_profile_writable = True
+
+    flow_profile_check = {
+        "path": flow_profile_dir,
+        "writable": flow_profile_writable,
+        "required": flow_required,
+        "passed": flow_profile_writable,
+    }
+
+    if flow_required:
+        if not (playwright_installed and playwright_compatible):
+            missing_critical.append("Playwright ausente ou incompatível com Flow requerido")
+        if not edge_available:
+            missing_critical.append("Microsoft Edge channel (msedge) ausente no sistema com Flow requerido")
+        if not flow_profile_writable:
+            missing_critical.append("Diretório de perfil do navegador do Flow não gravável")
+    else:
+        if not (playwright_installed and playwright_compatible):
+            warnings.append("Playwright não instalado (Flow desabilitado neste host)")
+        if not edge_available:
+            warnings.append("Microsoft Edge não detectado (Flow desabilitado neste host)")
+
+    # 8. Configuração (config.toml)
     config_file_path = os.path.join(project_root, "config.toml")
     config_exists = os.path.isfile(config_file_path)
     config_check = {
@@ -387,7 +535,7 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
     if not config_exists:
         warnings.append("config.toml não encontrado na raiz (usando defaults)")
 
-    # 7. Single Instance Lock Queryable
+    # 9. Single Instance Lock Queryable
     lock_queryable = False
     try:
         with operator_console.get_connection(db_path) as conn:
@@ -405,7 +553,7 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
     if not lock_queryable:
         missing_critical.append("Infraestrutura de single-instance (instance_locks) inacessível")
 
-    # 8. Scheduler Infra
+    # 10. Scheduler Infra
     sched_tables_ready = False
     try:
         with scheduler.get_connection(db_path) as conn:
@@ -422,7 +570,7 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
     if not sched_tables_ready:
         missing_critical.append("Tabelas do scheduler não inicializadas")
 
-    # 9. Verificação Passiva de Presença de Credenciais (Apenas PRESENT / MISSING, zero segredos expostos)
+    # 11. Verificação Passiva de Presença de Credenciais (Apenas PRESENT / MISSING, zero segredos expostos)
     def _check_secret_presence(val: Any) -> str:
         if isinstance(val, (list, tuple)):
             return "PRESENT" if any(bool(v) for v in val) else "MISSING"
@@ -436,7 +584,7 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
         "tiktok_credentials": _check_secret_presence(config.app.get("tiktok_access_token") or os.path.exists(os.path.join(storage_folder, "tiktok_token.json"))),
     }
 
-    # 10. Verificação Passiva de Backup para Readiness (Apenas warning, nunca bloqueia boot)
+    # 12. Verificação Passiva de Backup para Readiness (Apenas warning, nunca bloqueia boot)
     from app.services import production_backup
     try:
         b_info = production_backup.get_latest_backup_info()
@@ -458,6 +606,11 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
             "database": db_check,
             "storage": storage_check,
             "ffmpeg": ffmpeg_check,
+            "ffprobe": ffprobe_check,
+            "subtitle_font": font_check,
+            "playwright": playwright_check,
+            "edge_channel": edge_check,
+            "flow_browser_profile": flow_profile_check,
             "config": config_check,
             "single_instance": single_instance_check,
             "scheduler_infra": scheduler_infra_check,

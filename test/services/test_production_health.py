@@ -179,12 +179,18 @@ class TestProductionHealth(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_12_zero_api_calls_and_zero_video_generation(self, mock_urlopen, mock_subproc):
         """Garante que tanto o health check quanto o readiness check realizam zero chamadas de rede e zero renders."""
+        mock_subproc.return_value = MagicMock(returncode=0)
         with patch("app.utils.utils.check_ffmpeg_ready", return_value=True):
             production_health.get_production_health(db_path=self.test_db_path)
             production_health.get_production_readiness(db_path=self.test_db_path)
 
         self.assertEqual(mock_urlopen.call_count, 0)
-        self.assertEqual(mock_subproc.call_count, 0)
+        for call_args in mock_subproc.call_args_list:
+            cmd = call_args[0][0] if call_args[0] else []
+            if cmd == "ver" or cmd == ["ver"]:
+                continue
+            self.assertIn("-version", cmd)
+            self.assertNotIn("-i", cmd)
 
     def test_19_health_with_valid_recent_backup(self):
         """Verifica que com backup válido recente o status de backup é HEALTHY."""
@@ -368,6 +374,60 @@ class TestProductionHealth(unittest.TestCase):
         self.assertFalse(os.path.exists(non_existent_db), "get_production_health() criou o banco indevidamente!")
         self.assertFalse(health["scheduler"]["worker_alive"])
         self.assertEqual(health["scheduler"]["worker_health_source"], scheduler.WORKER_SOURCE_UNAVAILABLE)
+
+    def test_30_readiness_without_flow_required_passes(self):
+        """Readiness check passa quando Flow não é requerido mesmo sem Playwright/Edge."""
+        with patch.dict(os.environ, {"FLOW_REQUIRED": "0"}), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
+             patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
+             patch("app.services.media_quality.get_ffprobe_binary", return_value="dummy_ffprobe"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+             patch.dict("sys.modules", {"playwright": None}):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertTrue(readiness["ready"])
+            self.assertEqual(readiness["status"], "READY")
+            self.assertFalse(readiness["checks"]["playwright"]["required"])
+            self.assertFalse(readiness["checks"]["edge_channel"]["required"])
+
+    def test_31_readiness_fails_when_flow_required_and_playwright_missing(self):
+        """Readiness check falha (NOT_READY) se Flow for requerido e Playwright estiver ausente."""
+        with patch.dict(os.environ, {"FLOW_REQUIRED": "1"}), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
+             patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
+             patch("app.services.media_quality.get_ffprobe_binary", return_value="dummy_ffprobe"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+             patch.dict("sys.modules", {"playwright": None}):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(readiness["status"], "NOT_READY")
+            self.assertFalse(readiness["checks"]["playwright"]["installed"])
+            self.assertTrue(any("Playwright ausente" in m for m in readiness["missing_critical_requirements"]))
+
+    def test_32_readiness_fails_when_flow_required_and_edge_missing(self):
+        """Readiness check falha (NOT_READY) se Flow for requerido e Microsoft Edge estiver ausente."""
+        with patch.dict(os.environ, {"FLOW_REQUIRED": "1"}), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
+             patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
+             patch("app.services.media_quality.get_ffprobe_binary", return_value="dummy_ffprobe"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+             patch("shutil.which", return_value=None), \
+             patch("os.path.isfile", side_effect=lambda p: False if "msedge" in str(p).lower() else True):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(readiness["status"], "NOT_READY")
+            self.assertFalse(readiness["checks"]["edge_channel"]["available"])
+            self.assertTrue(any("Microsoft Edge channel" in m for m in readiness["missing_critical_requirements"]))
+
+    def test_33_readiness_validates_ffprobe_and_subtitle_font(self):
+        """Readiness check falha se FFprobe estiver indisponível ou fonte de legenda não for encontrada."""
+        with patch.dict(os.environ, {"FLOW_REQUIRED": "0"}), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
+             patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
+             patch("app.services.media_quality.get_ffprobe_binary", return_value=None):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertFalse(readiness["ready"])
+            self.assertFalse(readiness["checks"]["ffprobe"]["passed"])
+            self.assertTrue(any("FFprobe ausente" in m for m in readiness["missing_critical_requirements"]))
 
 
 if __name__ == "__main__":

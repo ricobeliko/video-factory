@@ -1290,6 +1290,22 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
 - **Critério:** Decisão baseada em volume real, estabilidade do workflow e custo-benefício.
 - **Status:** `FUTURE / CONDITIONAL`
 
+### V1.5E-N — PC Forte Production Runtime Hardening
+- **Objetivo:** Fortalecimento do runtime e pré-requisitos no PC Forte antes da próxima geração.
+- **PC Forte Production Runtime Contract:**
+  - Python executado estritamente via `.venv`;
+  - Dependências sincronizadas e checadas passivamente contra `requirements.txt` via safe updater;
+  - Playwright obrigatório quando Flow estiver habilitado em perfis ativos;
+  - Microsoft Edge (`msedge`) obrigatório no Windows quando Flow ativo;
+  - Flow headless canônico (`headless=True` por padrão) em produção; modo diagnóstico (`headless=False`) disponível para depuração local;
+  - Perfil Flow persistente em `storage/flow_browser_profile`;
+  - Produção deverá executar sob conta Windows do operador (`bob`), não `SYSTEM`, por causa da sessão Google/browser profile;
+  - Credenciais Windows devem ser armazenadas pelo Task Scheduler, nunca em arquivos/scripts/repositório;
+  - Auto Publish permanece OFF;
+  - Scheduler permanece OFF durante homologação;
+  - TikTok permanece OFF.
+- **Status:** ✅ CONCLUÍDA / PRONTA PARA HOMOLOGAÇÃO
+
 ---
 
 ## Visão e Diretrizes Futuras (Planned / Backlog)

@@ -1,8 +1,17 @@
 import functools
 import os
+import sys
 import threading
 
 from loguru import logger
+
+# Garante streams em UTF-8 com substituição segura para evitar UnicodeEncodeError (charmap)
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 PROJECT_ROOT = os.path.dirname(
@@ -111,13 +120,18 @@ def format_log_record(record):
 
 def configure_terminal_logger(sink, level: str, colorize: bool = True) -> int:
     """
-    安全替换进程级终端日志 handler，并保留任务专用 handler。
-
-    Streamlit 在代码热重载或缓存失效时可能重新执行日志初始化。这里只按已记录
-    的 handler ID 精确移除旧终端输出，因此不会中断后台任务正在写入的 WebUI
-    日志。锁用于保护多个浏览器会话同时初始化时的 ID 更新。
+    Substitui com segurança o handler de log do terminal e preserva handlers de tarefas.
+    Garante reconfiguração defensiva de encoding (UTF-8 com errors='replace') para evitar
+    UnicodeEncodeError ('charmap' codec can't encode character) no console/serviço Windows.
     """
     global _terminal_handler_id
+
+    for stream in (sink, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
 
     with _terminal_handler_lock:
         if _terminal_handler_id is not None:

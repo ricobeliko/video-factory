@@ -7873,6 +7873,27 @@ def _validate_batch_prerequisites(
             st.stop()
 
 
+def _on_scheduler_enabled_changed():
+    scheduler.set_setting(
+        "scheduler_enabled",
+        bool(st.session_state["scheduler_enabled_cb"]),
+    )
+
+
+def _on_auto_publish_enabled_changed():
+    scheduler.set_setting(
+        "auto_publish_enabled",
+        bool(st.session_state["scheduler_auto_publish_cb"]),
+    )
+
+
+def _on_dry_run_changed():
+    scheduler.set_setting(
+        "dry_run",
+        bool(st.session_state["scheduler_dry_run_cb"]),
+    )
+
+
 @st.fragment(run_every="10s")
 def _render_publication_schedule():
     st.divider()
@@ -7883,37 +7904,33 @@ def _render_publication_schedule():
 
     current_settings = scheduler.get_all_settings()
 
+    # Sincroniza estado da sessão com os valores canônicos do banco ANTES de instanciar os widgets
+    st.session_state["scheduler_enabled_cb"] = bool(current_settings["scheduler_enabled"])
+    st.session_state["scheduler_auto_publish_cb"] = bool(current_settings["auto_publish_enabled"])
+    st.session_state["scheduler_dry_run_cb"] = bool(current_settings["dry_run"])
+
     # Controles principais da publicação
     ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
     with ctrl_col1:
-        scheduler_on = st.checkbox(
+        st.checkbox(
             tr("Scheduler Enabled"),
-            value=current_settings["scheduler_enabled"],
             key="scheduler_enabled_cb",
+            on_change=_on_scheduler_enabled_changed,
         )
-        if scheduler_on != current_settings["scheduler_enabled"]:
-            scheduler.set_setting("scheduler_enabled", scheduler_on)
-            st.rerun(scope="fragment")
 
     with ctrl_col2:
-        auto_pub_on = st.checkbox(
+        st.checkbox(
             tr("Auto Publish Enabled"),
-            value=current_settings["auto_publish_enabled"],
             key="scheduler_auto_publish_cb",
+            on_change=_on_auto_publish_enabled_changed,
         )
-        if auto_pub_on != current_settings["auto_publish_enabled"]:
-            scheduler.set_setting("auto_publish_enabled", auto_pub_on)
-            st.rerun(scope="fragment")
 
     with ctrl_col3:
-        dry_run_on = st.checkbox(
+        st.checkbox(
             tr("Simulation Mode (Dry Run)"),
-            value=current_settings["dry_run"],
             key="scheduler_dry_run_cb",
+            on_change=_on_dry_run_changed,
         )
-        if dry_run_on != current_settings["dry_run"]:
-            scheduler.set_setting("dry_run", dry_run_on)
-            st.rerun(scope="fragment")
 
     if current_settings["dry_run"]:
         st.warning(f"⚠️ {tr('Simulation Notice')}")

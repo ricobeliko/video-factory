@@ -391,16 +391,18 @@ class TestProductionHealth(unittest.TestCase):
 
     def test_31_readiness_fails_when_flow_required_and_playwright_missing(self):
         """Readiness check falha (NOT_READY) se Flow for requerido e Playwright estiver ausente."""
+        import importlib.metadata
         with patch.dict(os.environ, {"FLOW_REQUIRED": "1"}), \
              patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
              patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
              patch("app.services.media_quality.get_ffprobe_binary", return_value="dummy_ffprobe"), \
              patch("subprocess.run", return_value=MagicMock(returncode=0)), \
-             patch.dict("sys.modules", {"playwright": None}):
+             patch("importlib.metadata.version", side_effect=importlib.metadata.PackageNotFoundError):
             readiness = production_health.get_production_readiness(db_path=self.test_db_path)
             self.assertFalse(readiness["ready"])
             self.assertEqual(readiness["status"], "NOT_READY")
             self.assertFalse(readiness["checks"]["playwright"]["installed"])
+            self.assertFalse(readiness["checks"]["playwright"]["compatible"])
             self.assertTrue(any("Playwright ausente" in m for m in readiness["missing_critical_requirements"]))
 
     def test_32_readiness_fails_when_flow_required_and_edge_missing(self):
@@ -428,6 +430,39 @@ class TestProductionHealth(unittest.TestCase):
             self.assertFalse(readiness["ready"])
             self.assertFalse(readiness["checks"]["ffprobe"]["passed"])
             self.assertTrue(any("FFprobe ausente" in m for m in readiness["missing_critical_requirements"]))
+
+    def test_34_readiness_fails_when_flow_required_and_playwright_incompatible(self):
+        """Readiness check falha (NOT_READY) se Flow for requerido e Playwright tiver versão incompatível (ex: 1.50.0)."""
+        with patch.dict(os.environ, {"FLOW_REQUIRED": "1"}), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
+             patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
+             patch("app.services.media_quality.get_ffprobe_binary", return_value="dummy_ffprobe"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+             patch("importlib.metadata.version", return_value="1.50.0"):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(readiness["status"], "NOT_READY")
+            self.assertTrue(readiness["checks"]["playwright"]["installed"])
+            self.assertFalse(readiness["checks"]["playwright"]["compatible"])
+            self.assertEqual(readiness["checks"]["playwright"]["version"], "1.50.0")
+            self.assertTrue(any("Playwright ausente ou incompatível" in m for m in readiness["missing_critical_requirements"]))
+
+    def test_35_readiness_passes_when_flow_required_and_playwright_1_63_0(self):
+        """Readiness check tem sucesso (READY) se Flow for requerido e Playwright for exatamente 1.63.0."""
+        with patch.dict(os.environ, {"FLOW_REQUIRED": "1"}), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=True), \
+             patch("app.utils.utils.get_ffmpeg_binary", return_value="dummy_ffmpeg"), \
+             patch("app.services.media_quality.get_ffprobe_binary", return_value="dummy_ffprobe"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+             patch("importlib.metadata.version", return_value="1.63.0"), \
+             patch("shutil.which", return_value=r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"), \
+             patch("os.path.isfile", return_value=True):
+            readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+            self.assertTrue(readiness["ready"])
+            self.assertEqual(readiness["status"], "READY")
+            self.assertTrue(readiness["checks"]["playwright"]["installed"])
+            self.assertTrue(readiness["checks"]["playwright"]["compatible"])
+            self.assertEqual(readiness["checks"]["playwright"]["version"], "1.63.0")
 
 
 if __name__ == "__main__":

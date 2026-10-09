@@ -1295,12 +1295,13 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
 - **PC Forte Production Runtime Contract:**
   - Python executado estritamente via `.venv`;
   - Dependências sincronizadas e checadas passivamente contra `requirements.txt` via safe updater;
-  - Playwright obrigatório quando Flow estiver habilitado em perfis ativos;
+  - Playwright obrigatório correspondendo exatamente ao requisito declarado em `requirements.txt` (`playwright==1.63.0`) quando Flow estiver ativo;
   - Microsoft Edge (`msedge`) obrigatório no Windows quando Flow ativo;
   - Flow headless canônico (`headless=True` por padrão) em produção; modo diagnóstico (`headless=False`) disponível para depuração local;
   - Perfil Flow persistente em `storage/flow_browser_profile`;
-  - Produção deverá executar sob conta Windows do operador (`bob`), não `SYSTEM`, por causa da sessão Google/browser profile;
-  - Credenciais Windows devem ser armazenadas pelo Task Scheduler, nunca em arquivos/scripts/repositório;
+  - Execução Windows e Scheduled Task:
+    - **VALIDADO:** `bob + Interactive + Flow headless = PASS`
+    - **TARGET PENDENTE DE HOMOLOGAÇÃO:** `bob + Password/non-interactive + Flow headless` (credencial protegida pelo Task Scheduler, zero senhas em arquivos/scripts/repositório; autonomia pós-reboot pendente de homologação);
   - Auto Publish permanece OFF;
   - Scheduler permanece OFF durante homologação;
   - TikTok permanece OFF.

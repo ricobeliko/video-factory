@@ -13,12 +13,13 @@
 ### PC Forte Production Runtime Contract:
 - **Python via .venv**: Operação e pacotes restritos ao ambiente virtual do projeto;
 - **Dependências sincronizadas**: Safe updater detecta divergências de dependências obrigatórias e sincroniza determinísticamente no `.venv`;
-- **Playwright obrigatório**: Passivamente exigido no readiness check quando Flow estiver habilitado;
+- **Playwright obrigatório**: Exigido no readiness check correspondendo exatamente ao requisito declarado em `requirements.txt` (`playwright==1.63.0`) quando Flow estiver habilitado;
 - **Edge msedge obrigatório**: Canal Microsoft Edge (`msedge`) validado passivamente no host Windows;
 - **Flow headless canônico**: Automação padrão opera estritamente com `headless=True` em produção; modo `headless=False` disponível para diagnóstico DEV;
 - **Perfil Flow persistente**: Sessão Google autenticada preservada em `storage/flow_browser_profile`;
-- **Conta de execução Windows**: Produção deverá executar sob a conta Windows do operador (`bob`), não `SYSTEM`, devido ao perfil/sessão do navegador;
-- **Proteção de credenciais**: Credenciais Windows protegidas e armazenadas exclusivamente pelo Task Scheduler, nunca em scripts/repositório;
+- **Execução Windows e Scheduled Task (`VideoFactory Production`):**
+  - **VALIDADO:** `User = DESKTOP-21KQ4RJ\bob`, `LogonType = Interactive`, `headless=True`, `Flow AUTHENTICATED` = **PASS**;
+  - **TARGET PENDENTE DE HOMOLOGAÇÃO:** `User = DESKTOP-21KQ4RJ\bob`, *Run whether user is logged on or not*, `LogonType = Password` (credencial protegida pelo Windows Task Scheduler, zero senhas em arquivos/scripts/repositório), `Flow headless=True`. Autonomia pós-reboot permanece pendente de homologação;
 - **Políticas de publicação**: Auto Publish permanece OFF, Scheduler permanece OFF durante homologação, TikTok permanece OFF.
 
 ### Destaque da Frente Google Flow / Qualidade Visual:

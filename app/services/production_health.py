@@ -433,18 +433,39 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
     if os.getenv("FLOW_REQUIRED", "").lower() in ("1", "true", "yes"):
         flow_required = True
 
+    # Resolução do requisito declarado de Playwright em requirements.txt
+    playwright_req_str = "playwright==1.63.0"
+    req_file_path = os.path.join(project_root, "requirements.txt")
+    if os.path.isfile(req_file_path):
+        try:
+            with open(req_file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line_clean = line.strip()
+                    if line_clean.startswith("playwright"):
+                        playwright_req_str = line_clean
+                        break
+        except Exception:
+            pass
+
     playwright_installed = False
     playwright_version = None
     playwright_compatible = False
+    playwright_spec = None
+
     try:
-        import playwright
-        playwright_installed = True
-        playwright_version = getattr(playwright, "__version__", None)
-        if playwright_version:
-            from packaging import version
-            playwright_compatible = version.parse(playwright_version) >= version.parse("1.40.0")
-        else:
-            playwright_compatible = True
+        import importlib.metadata
+        from packaging.requirements import Requirement
+
+        req = Requirement(playwright_req_str)
+        playwright_spec = str(req.specifier)
+
+        try:
+            playwright_version = importlib.metadata.version("playwright")
+            playwright_installed = True
+            playwright_compatible = req.specifier.contains(playwright_version, prereleases=True)
+        except importlib.metadata.PackageNotFoundError:
+            playwright_installed = False
+            playwright_compatible = False
     except Exception:
         playwright_installed = False
         playwright_compatible = False
@@ -452,6 +473,7 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
     playwright_check = {
         "installed": playwright_installed,
         "version": playwright_version,
+        "required_spec": playwright_spec or playwright_req_str,
         "compatible": playwright_compatible,
         "required": flow_required,
         "passed": (playwright_installed and playwright_compatible) if flow_required else True,
@@ -513,14 +535,18 @@ def get_production_readiness(db_path: Optional[str] = None) -> Dict[str, Any]:
 
     if flow_required:
         if not (playwright_installed and playwright_compatible):
-            missing_critical.append("Playwright ausente ou incompatível com Flow requerido")
+            missing_critical.append(
+                f"Playwright ausente ou incompatível com Flow requerido (instalado: {playwright_version or 'nenhum'}, esperado: {playwright_spec or playwright_req_str})"
+            )
         if not edge_available:
             missing_critical.append("Microsoft Edge channel (msedge) ausente no sistema com Flow requerido")
         if not flow_profile_writable:
             missing_critical.append("Diretório de perfil do navegador do Flow não gravável")
     else:
         if not (playwright_installed and playwright_compatible):
-            warnings.append("Playwright não instalado (Flow desabilitado neste host)")
+            warnings.append(
+                f"Playwright não instalado ou incompatível (instalado: {playwright_version or 'nenhum'}, esperado: {playwright_spec or playwright_req_str}; Flow desabilitado neste host)"
+            )
         if not edge_available:
             warnings.append("Microsoft Edge não detectado (Flow desabilitado neste host)")
 

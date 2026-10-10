@@ -46,6 +46,76 @@ DEFAULT_USER_DATA_DIR = os.path.join(ROOT_DIR, "storage", "flow_browser_profile"
 DEFAULT_TIMEOUT_UI_MS = 30000
 DEFAULT_TIMEOUT_GEN_SEC = 600
 DEFAULT_TIMEOUT_DOWNLOAD_MS = 30000
+MIN_TILE_EVIDENCE_CHARS = 24
+
+
+def normalize_tile_label(label: str) -> str:
+    """
+    Normaliza evidência textual do aria-label de um tile ou de texto de referência:
+    1. casefold/lower
+    2. trim whitespace
+    3. normalizar espaços repetidos
+    4. remover SOMENTE marcador de truncamento terminal:
+       - U+2026 '…'
+       - ou '...' terminal
+    """
+    text = (label or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    if text.endswith("\u2026"):
+        text = text[:-1].rstrip()
+    elif text.endswith("..."):
+        text = text[:-3].rstrip()
+    return text
+
+
+def match_tile_label_to_scene(
+    label_attr: Optional[str],
+    target_scene: Dict[str, Any],
+    min_evidence_chars: int = MIN_TILE_EVIDENCE_CHARS,
+) -> bool:
+    """
+    Compara deterministicamente a evidência textual do tile contra os textos da cena:
+    - prompt_en
+    - prompt
+    - prompt_pt
+    - narration (quando disponível)
+
+    Regras:
+    1. Match exato: clean_label == target (aceito se não-vazio).
+    2. Match de prefixo: target.startswith(clean_label) com len(clean_label) >= min_evidence_chars.
+    3. Match de target em label: clean_label.startswith(target) com len(target) >= min_evidence_chars.
+    4. Rejeita labels curtos/genéricos (< min_evidence_chars) para casamento por prefixo.
+    """
+    if not isinstance(label_attr, str):
+        return False
+    clean_label = normalize_tile_label(label_attr)
+    if not clean_label:
+        return False
+
+    target_candidates: List[str] = []
+    for key in ("prompt_en", "prompt", "prompt_pt", "narration"):
+        val = target_scene.get(key)
+        if isinstance(val, str) and val.strip():
+            norm_val = normalize_tile_label(val)
+            if norm_val and norm_val not in target_candidates:
+                target_candidates.append(norm_val)
+
+    if not target_candidates:
+        return False
+
+    for target in target_candidates:
+        # 1. Match exato
+        if clean_label == target:
+            return True
+
+        # 2. Relação de prefixo (exigindo evidência mínima de 24 caracteres úteis)
+        if len(clean_label) >= min_evidence_chars and target.startswith(clean_label):
+            return True
+
+        if len(target) >= min_evidence_chars and clean_label.startswith(target):
+            return True
+
+    return False
 
 
 def validate_clip_file(file_path: str) -> Dict[str, Any]:
@@ -1439,25 +1509,14 @@ def run_playwright_flow_poc(
                     target_tile_loc = all_tiles.first
                 else:
                     # Multi-tile grid: busca identificação determinística da cena alvo
+                    # Suporta labels truncados pelo Flow (U+2026 '…' ou '...') com evidência suficiente (>= 24 chars)
                     # NUNCA seleciona arbitrariamente nth(0) ou mais recente sem evidência
-                    target_prompt = (
-                        target_scene.get("prompt")
-                        or target_scene.get("prompt_en")
-                        or target_scene.get("narration")
-                        or ""
-                    ).strip().lower()
-                    target_narration = (target_scene.get("narration") or "").strip().lower()
-
                     matched_indices = []
                     for idx in range(t_count):
                         tile_cand = all_tiles.nth(idx)
                         label_attr = tile_cand.get_attribute("aria-label")
-                        if isinstance(label_attr, str) and label_attr.strip():
-                            label = label_attr.strip().lower()
-                            if (target_prompt and (target_prompt in label or label in target_prompt)) or (
-                                target_narration and (target_narration in label or label in target_narration)
-                            ):
-                                matched_indices.append(idx)
+                        if match_tile_label_to_scene(label_attr, target_scene):
+                            matched_indices.append(idx)
 
                     if len(matched_indices) == 1:
                         target_tile_loc = all_tiles.nth(matched_indices[0])

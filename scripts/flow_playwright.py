@@ -216,6 +216,9 @@ def launch_flow_context(
     """
     os.makedirs(user_data_dir, exist_ok=True)
     if downloads_path:
+        if "native_download_staging" in str(downloads_path).replace("\\", "/"):
+            logger.error("FAIL_CLOSED: native_download_staging NUNCA pode ser entregue como downloads_path ao Playwright.")
+            return None, "INVALID_PLAYWRIGHT_DOWNLOADS_PATH"
         os.makedirs(downloads_path, exist_ok=True)
     try:
         launch_kwargs: Dict[str, Any] = {
@@ -1075,6 +1078,11 @@ def _persist_download(
                 break
             time.sleep(0.5)
 
+        has_partial = any(f.endswith(".crdownload") for f in os.listdir(staging_dir))
+        if has_partial:
+            logger.error("Download não concluiu no staging nativo antes do timeout (.crdownload remanescente).")
+            return False, "DOWNLOAD_TIMEOUT_INCOMPLETE_CRDOWNLOAD"
+
         candidates = [
             f for f in os.listdir(staging_dir)
             if not f.endswith(".crdownload") and not f.startswith(".")
@@ -1101,6 +1109,8 @@ def _persist_download(
             os.replace(temp_out, output_path)
             persisted = True
             logger.info(f"Artefato recuperado com sucesso do staging ({cand_name} -> {output_path}).")
+        elif len(candidates) == 0:
+            logger.error(f"Nenhum artefato concluído encontrado no staging nativo ({staging_dir}).")
 
     # Validação do arquivo persistido no disco
     if os.path.exists(output_path):
@@ -1139,7 +1149,8 @@ def download_generated_clip(
     logger.info("Iniciando fluxo de download escopado...")
     out_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(out_dir, exist_ok=True)
-    effective_staging = staging_dir or os.path.join(out_dir, "staging_downloads")
+    dl_tag = f"dl_{int(time.time())}_{os.getpid()}"
+    effective_staging = staging_dir or os.path.join(out_dir, "native_download_staging", dl_tag)
     os.makedirs(effective_staging, exist_ok=True)
 
     # Garante que CDP direciona downloads nativos do Chromium para effective_staging
@@ -1149,12 +1160,12 @@ def download_generated_clip(
             cdp = page.context.new_cdp_session(page)
             cdp.send("Page.setDownloadBehavior", {
                 "behavior": "allow",
-                "downloadPath": effective_staging,
+                "downloadPath": os.path.abspath(effective_staging),
             })
             try:
                 cdp.send("Browser.setDownloadBehavior", {
                     "behavior": "allow",
-                    "downloadPath": effective_staging,
+                    "downloadPath": os.path.abspath(effective_staging),
                     "eventsEnabled": True,
                 })
             except Exception:
@@ -1367,13 +1378,31 @@ def run_playwright_flow_poc(
             report["scene_01_file_sha_before"] = hashlib.sha256(s1_bytes).hexdigest()
         logger.info(f"SCENE_01_FILE_SHA_BEFORE capturado: {report['scene_01_file_sha_before']}")
 
-    downloads_staging = os.path.join(project_dir, "staging_downloads")
-    os.makedirs(downloads_staging, exist_ok=True)
-    _clean_staging_dir(downloads_staging)
+    # A) Diretório Playwright descartável
+    pw_downloads_dir = os.path.join(project_dir, "playwright_downloads")
+    try:
+        os.makedirs(pw_downloads_dir, exist_ok=True)
+    except Exception:
+        pass
+    _clean_staging_dir(pw_downloads_dir)
+
+    # B) Diretório CDP nativo durável exclusivo desta execução
+    native_staging_base = os.path.join(project_dir, "native_download_staging")
+    try:
+        os.makedirs(native_staging_base, exist_ok=True)
+    except Exception:
+        pass
+    run_tag = f"run_{scene_index}_{int(time.time())}"
+    native_staging_dir = os.path.join(native_staging_base, run_tag)
+    try:
+        os.makedirs(native_staging_dir, exist_ok=True)
+    except Exception:
+        pass
+    _clean_staging_dir(native_staging_dir)
 
     with sync_playwright() as p:
         is_headless = resolve_flow_headless(headless)
-        context, err = launch_flow_context(p, headless=is_headless, downloads_path=downloads_staging)
+        context, err = launch_flow_context(p, headless=is_headless, downloads_path=pw_downloads_dir)
         if err:
             report["status"] = err
             report["error"] = err
@@ -1406,17 +1435,17 @@ def run_playwright_flow_poc(
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_UI_MS)
 
-        # Configura download behavior via CDP para downloads_staging (segurança extra)
+        # Configura download behavior via CDP exclusivamente para native_staging_dir (durável)
         try:
             cdp = context.new_cdp_session(page)
             cdp.send("Page.setDownloadBehavior", {
                 "behavior": "allow",
-                "downloadPath": downloads_staging,
+                "downloadPath": os.path.abspath(native_staging_dir),
             })
             try:
                 cdp.send("Browser.setDownloadBehavior", {
                     "behavior": "allow",
-                    "downloadPath": downloads_staging,
+                    "downloadPath": os.path.abspath(native_staging_dir),
                     "eventsEnabled": True,
                 })
             except Exception:
@@ -1717,7 +1746,7 @@ def run_playwright_flow_poc(
                     page,
                     canonical_output_path,
                     tile_locator=new_tile_loc,
-                    staging_dir=downloads_staging,
+                    staging_dir=native_staging_dir,
                 )
                 report["download_event_confirmed"] = dl_ok
                 if not dl_ok:

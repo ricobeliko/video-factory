@@ -1242,7 +1242,7 @@ class TestFlowPlaywright(unittest.TestCase):
             with patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": False, "error": "CORRUPT_MEDIA"}):
                 ok, err = _persist_download(mock_dl, out_file)
                 self.assertFalse(ok)
-                self.assertEqual(err, "INVALID_OUTPUT_MEDIA: CORRUPT_MEDIA")
+                self.assertIn("CORRUPT_MEDIA", str(err))
 
             # Caso C: arquivo gravado e validate_clip_file diz válido -> retorna True
             def _write_good(p):
@@ -1274,6 +1274,191 @@ class TestFlowPlaywright(unittest.TestCase):
             self.assertIn("DOWNLOAD_FAILED", str(err))
             self.assertIn("Target page, context or browser has been closed", str(err))
             self.assertFalse(os.path.exists(out_file))
+
+    def test_save_as_empty_file_falls_back_to_valid_native_staging(self):
+        """1. save_as cria 0 bytes (Edge 155), remove arquivo vazio e tem sucesso via native staging válido."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            # Staging contém clipe válido
+            staged_file = os.path.join(staging_dir, "valid_staged.mp4")
+            with open(staged_file, "wb") as f:
+                f.write(b"valid_7mb_data")
+
+            # save_as cria 0 bytes sem lançar exceção (comportamento Edge 155)
+            mock_dl = MagicMock()
+            mock_dl.suggested_filename = "valid_staged.mp4"
+            def _empty_save_as(p):
+                with open(p, "wb") as f:
+                    pass  # 0 bytes
+            mock_dl.save_as.side_effect = _empty_save_as
+            mock_dl.path.return_value = None
+
+            def _validate(p):
+                if p == staged_file or (os.path.exists(p) and os.path.getsize(p) > 0):
+                    return {"valid": True, "duration": 8.0, "size": 7499520}
+                return {"valid": False, "error": "EMPTY_FILE", "size": 0}
+
+            with patch("scripts.flow_playwright.validate_clip_file", side_effect=_validate):
+                ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir)
+
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(os.path.exists(out_file))
+            with open(out_file, "rb") as f:
+                self.assertEqual(f.read(), b"valid_7mb_data")
+
+    def test_save_as_corrupted_media_falls_back_to_valid_native_staging(self):
+        """2. save_as cria mídia inválida/corrompida, remove arquivo e recupera com sucesso do staging."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            staged_file = os.path.join(staging_dir, "valid_staged.mp4")
+            with open(staged_file, "wb") as f:
+                f.write(b"valid_recovered_clip")
+
+            mock_dl = MagicMock()
+            mock_dl.suggested_filename = "valid_staged.mp4"
+            def _corrupt_save_as(p):
+                with open(p, "wb") as f:
+                    f.write(b"corrupt_header_bytes")
+            mock_dl.save_as.side_effect = _corrupt_save_as
+            mock_dl.path.return_value = None
+
+            def _validate(p):
+                if os.path.abspath(p) == os.path.abspath(staged_file):
+                    return {"valid": True, "duration": 8.0}
+                if os.path.exists(p):
+                    with open(p, "rb") as f:
+                        content = f.read()
+                    if content == b"valid_recovered_clip":
+                        return {"valid": True, "duration": 8.0}
+                return {"valid": False, "error": "CORRUPT_MEDIA"}
+
+            with patch("scripts.flow_playwright.validate_clip_file", side_effect=_validate):
+                ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir)
+
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(os.path.exists(out_file))
+            with open(out_file, "rb") as f:
+                self.assertEqual(f.read(), b"valid_recovered_clip")
+
+    def test_save_as_valid_media_succeeds_directly_without_fallback(self):
+        """3. save_as cria mídia válida -> SUCCESS direto sem usar fallback."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            mock_dl = MagicMock()
+            mock_dl.suggested_filename = "clip.mp4"
+            def _good_save_as(p):
+                with open(p, "wb") as f:
+                    f.write(b"good_direct_data")
+            mock_dl.save_as.side_effect = _good_save_as
+
+            with patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}):
+                ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir)
+
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(os.path.exists(out_file))
+            # Staging não foi tocado / não precisou conter nada
+            mock_dl.path.assert_not_called()
+
+    def test_save_as_invalid_and_staging_invalid_fails_closed(self):
+        """4. save_as inválido + staging com candidato inválido -> fail closed."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            staged_file = os.path.join(staging_dir, "bad_staged.mp4")
+            with open(staged_file, "wb") as f:
+                f.write(b"bad_staged_bytes")
+
+            mock_dl = MagicMock()
+            def _bad_save_as(p):
+                with open(p, "wb") as f:
+                    f.write(b"bad_save_as_bytes")
+            mock_dl.save_as.side_effect = _bad_save_as
+            mock_dl.path.return_value = None
+
+            with patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": False, "error": "CORRUPT_HEADER"}):
+                ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir)
+
+            self.assertFalse(ok)
+            self.assertIn("INVALID_STAGING_DOWNLOAD_CLIP", str(err))
+            self.assertFalse(os.path.exists(out_file))
+
+    def test_invalid_save_as_file_is_removed_before_fallback(self):
+        """5. Arquivo inválido criado por save_as é removido antes do fallback."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+
+            mock_dl = MagicMock()
+            def _bad_save_as(p):
+                with open(p, "wb") as f:
+                    f.write(b"bad")
+            mock_dl.save_as.side_effect = _bad_save_as
+            mock_dl.path.return_value = None
+
+            with patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": False, "error": "INVALID_FORMAT"}):
+                ok, err = _persist_download(mock_dl, out_file)
+
+            self.assertFalse(ok)
+            # Confirma que o arquivo inválido foi fisicamente removido do disco
+            self.assertFalse(os.path.exists(out_file))
+
+    def test_download_path_invalid_does_not_mark_persisted_and_continues_fallback(self):
+        """6. download.path produz arquivo inválido -> remove output_path, não marca persisted, continua fallback."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            # Staging tem arquivo válido
+            staged_file = os.path.join(staging_dir, "good_from_staging.mp4")
+            with open(staged_file, "wb") as f:
+                f.write(b"valid_staging_payload")
+
+            # p_val do download.path tem arquivo inválido
+            path_file = os.path.join(tmp_dir, "temp_dl_path.mp4")
+            with open(path_file, "wb") as f:
+                f.write(b"corrupt_path_payload")
+
+            mock_dl = MagicMock()
+            mock_dl.save_as.side_effect = Exception("TargetClosedError")
+            mock_dl.path.return_value = path_file
+
+            def _validate(p):
+                if os.path.abspath(p) == os.path.abspath(staged_file):
+                    return {"valid": True, "duration": 8.0}
+                if os.path.exists(p):
+                    with open(p, "rb") as f:
+                        if f.read() == b"valid_staging_payload":
+                            return {"valid": True, "duration": 8.0}
+                return {"valid": False, "error": "CORRUPT_PATH_MEDIA"}
+
+            with patch("scripts.flow_playwright.validate_clip_file", side_effect=_validate):
+                ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir)
+
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(os.path.exists(out_file))
+            with open(out_file, "rb") as f:
+                self.assertEqual(f.read(), b"valid_staging_payload")
 
     def test_launch_flow_context_rejects_native_download_staging_as_downloads_path(self):
         """Regra 1: launch_persistent_context NÃO pode aceitar native_download_staging como downloads_path."""

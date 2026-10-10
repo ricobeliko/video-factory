@@ -374,3 +374,93 @@ def test_canonical_stable_bed_has_no_double_volume():
 def test_ambient_bgm_preflight_is_enabled():
     """ambient_bgm.is_enabled() retorna True pois não requer chaves de API externa."""
     assert ambient_bgm.is_enabled() is True
+
+
+def _measure_wav_peak_and_rms(filepath: str) -> tuple[float, float, float]:
+    import math
+    import struct
+    import wave
+
+    with wave.open(filepath, "rb") as w:
+        nchannels = w.getnchannels()
+        sampwidth = w.getsampwidth()
+        framerate = w.getframerate()
+        nframes = w.getnframes()
+        duration = nframes / float(framerate)
+        frames = w.readframes(nframes)
+
+    max_val = 32768.0 if sampwidth == 2 else 1.0
+    samples = struct.unpack(f"<{nframes * nchannels}h", frames)
+    peak = max(abs(s) for s in samples)
+    peak_dbfs = 20 * math.log10(peak / max_val) if peak > 0 else -100.0
+    sum_sq = sum(float(s) ** 2 for s in samples)
+    rms = math.sqrt(sum_sq / len(samples))
+    rms_dbfs = 20 * math.log10(rms / max_val) if rms > 0 else -100.0
+    return duration, peak_dbfs, rms_dbfs
+
+
+# -----------------------------------------------------------------------------
+# 16. futuristic não produz near-silence e atinge gate de audibilidade
+# -----------------------------------------------------------------------------
+def test_futuristic_not_near_silent_and_audible(tmp_path):
+    """Mood futuristic deve produzir sinal audível saudável (peak > -15 dBFS, rms > -30 dBFS)."""
+    test_out = str(tmp_path / "futuristic_test.wav")
+    ambient_bgm.generate_ambient_bgm(
+        output_path=test_out,
+        duration=3.0,
+        mood="futuristic",
+    )
+    assert os.path.isfile(test_out)
+    dur, peak, rms = _measure_wav_peak_and_rms(test_out)
+    assert peak > -15.0, f"Peak muito baixo: {peak} dBFS"
+    assert peak < -1.0, f"Peak em clipping: {peak} dBFS"
+    assert rms > -30.0, f"RMS muito baixo: {rms} dBFS"
+
+
+# -----------------------------------------------------------------------------
+# 17. Todos os moods produzem energia mensurável e audível dentro do headroom
+# -----------------------------------------------------------------------------
+def test_all_moods_produce_audible_energy(tmp_path):
+    """Todos os 7 moods procedurais produzem energia mensurável e saudável (peak e RMS)."""
+    for mood in ambient_bgm.SUPPORTED_MOODS:
+        test_out = str(tmp_path / f"{mood}_test.wav")
+        ambient_bgm.generate_ambient_bgm(
+            output_path=test_out,
+            duration=2.0,
+            mood=mood,
+        )
+        assert os.path.isfile(test_out)
+        dur, peak, rms = _measure_wav_peak_and_rms(test_out)
+        assert peak > -15.0, f"Mood {mood} peak muito baixo: {peak} dBFS"
+        assert peak < -1.0, f"Mood {mood} peak em clipping: {peak} dBFS"
+        assert rms > -30.0, f"Mood {mood} rms muito baixo: {rms} dBFS"
+
+
+# -----------------------------------------------------------------------------
+# 18. Síntese NÃO contém atenuação do bgm_volume do perfil
+# -----------------------------------------------------------------------------
+def test_synthesis_command_contains_no_profile_volume_filter(monkeypatch):
+    """Garantir que a síntese de áudio lavfi não insere filtro de volume do perfil."""
+    captured_cmds = []
+
+    def _mock_run(cmd, *args, **kwargs):
+        captured_cmds.append(cmd)
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        return mock_proc
+
+    monkeypatch.setattr("subprocess.run", _mock_run)
+    monkeypatch.setattr("os.path.isfile", lambda p: True)
+    monkeypatch.setattr("os.path.getsize", lambda p: 1024)
+
+    ambient_bgm.generate_ambient_bgm(
+        output_path="test_mock.wav",
+        duration=2.0,
+        mood="neutral",
+        volume=0.10,
+    )
+
+    assert len(captured_cmds) == 1
+    full_cmd_str = " ".join(captured_cmds[0])
+    assert "volume=" not in full_cmd_str
+

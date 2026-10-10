@@ -15,19 +15,23 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from app.models.schema import SceneMaterialSelection
 from scripts.flow_playwright import (
     FlowSceneResult,
     generate_flow_scene,
 )
 from scripts.flow_workflow import (
     DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
+    _find_stock_filler_clip,
+    _list_valid_stock_filler_clips,
     build_flow_prompt,
     generate_pending_flow_scenes,
     get_project_status,
     prepare_project,
     render_project,
+    resolve_project_materials,
     select_default_flow_scenes,
     update_manifest_flow_checkpoint,
 )
@@ -838,6 +842,134 @@ class TestFlowWorkflow(unittest.TestCase):
         # Nenhum arquivo temporário .tmp residual deve permanecer
         tmp_files = [f for f in os.listdir(self.test_dir) if f.endswith(".tmp")]
         self.assertEqual(len(tmp_files), 0)
+
+    def test_stock_filler_validated_once_per_resolution_and_reused(self):
+        """19. A & B & C: Candidatos locais são validados uma única vez por resolução e pool é reutilizada deterministicamente."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "stock_cache_test",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "stock_01.mp4", "is_flow_premium": False, "narration": "Cena 1", "duration_hint": 5.0},
+                {"scene_index": 2, "expected_clip": "stock_02.mp4", "is_flow_premium": False, "narration": "Cena 2", "duration_hint": 5.0},
+                {"scene_index": 3, "expected_clip": "stock_03.mp4", "is_flow_premium": False, "narration": "Cena 3", "duration_hint": 5.0},
+            ]
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        fake_cache = os.path.join(self.test_dir, "fake_cache")
+        os.makedirs(fake_cache, exist_ok=True)
+        cand_a = os.path.join(fake_cache, "cand_a.mp4")
+        cand_b = os.path.join(fake_cache, "cand_b.mp4")
+        with open(cand_a, "wb") as f:
+            f.write(b"\x00" * 100)
+        with open(cand_b, "wb") as f:
+            f.write(b"\x00" * 100)
+
+        validation_calls = []
+
+        def mock_validate(path):
+            validation_calls.append(path)
+            return {"valid": True, "duration": 5.0}
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("scripts.flow_workflow.validate_clip_file", side_effect=mock_validate):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        # Prova A: cada candidato local é validado exatamente 1 vez por resolução (não 3x por cena)
+        self.assertEqual(validation_calls.count(cand_a), 1)
+        self.assertEqual(validation_calls.count(cand_b), 1)
+        self.assertEqual(len(validation_calls), 2)
+
+        # Prova B & C: pool é reutilizada deterministicamente por scene_idx:
+        # cena 1 ((1-1)%2=0) -> cand_a, cena 2 ((2-1)%2=1) -> cand_b, cena 3 ((3-1)%2=0) -> cand_a
+        self.assertEqual(len(selections), 3)
+        self.assertEqual(selections[0].material_path, cand_a)
+        self.assertEqual(selections[0].provider, "local_cache")
+        self.assertEqual(selections[1].material_path, cand_b)
+        self.assertEqual(selections[1].provider, "local_cache")
+        self.assertEqual(selections[2].material_path, cand_a)
+        self.assertEqual(selections[2].provider, "local_cache")
+
+    def test_empty_stock_pool_falls_back_to_remote_provider(self):
+        """20. D: Pool vazia preserva fallback transparente para provider remoto."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "empty_pool_test",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "stock_01.mp4", "is_flow_premium": False, "narration": "Cena 1", "duration_hint": 5.0},
+            ]
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        mock_selection = SceneMaterialSelection(
+            scene_index=1,
+            material_path=os.path.join(self.test_dir, "remote_pexels.mp4"),
+            duration=5.0,
+            provider="pexels",
+            asset_id="remote_pexels.mp4",
+            media_type="video",
+        )
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", os.path.join(self.test_dir, "empty_cache")), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "empty_local")), \
+             patch("app.services.material.has_material_api_keys", return_value=True), \
+             patch("app.services.scene_material.resolve_scene_materials", return_value=[mock_selection]):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        self.assertEqual(len(selections), 1)
+        self.assertEqual(selections[0].material_path, os.path.join(self.test_dir, "remote_pexels.mp4"))
+        self.assertEqual(selections[0].provider, "pexels")
+
+    def test_valid_flow_scenes_do_not_trigger_stock_scan(self):
+        """21. E: Cenas Flow válidas não provocam varredura stock desnecessária."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "flow_only_test",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1", "duration_hint": 5.0},
+                {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2", "duration_hint": 5.0},
+            ]
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        flow_01 = os.path.join(clips_dir, "flow_scene_01.mp4")
+        flow_02 = os.path.join(clips_dir, "flow_scene_02.mp4")
+        with open(flow_01, "wb") as f:
+            f.write(b"flow1")
+        with open(flow_02, "wb") as f:
+            f.write(b"flow2")
+
+        with patch("scripts.flow_workflow._list_valid_stock_filler_clips") as mock_list_stock, \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        self.assertEqual(len(selections), 2)
+        self.assertEqual(selections[0].provider, "google_flow")
+        self.assertEqual(selections[1].provider, "google_flow")
+        # Prova E: varredura de stock filler NÃO foi invocada
+        mock_list_stock.assert_not_called()
+
+    def test_find_stock_filler_clip_deterministic_selection(self):
+        """22. _find_stock_filler_clip aceita valid_videos pré-validados e preserva indexação determinística."""
+        pool = ["clip_a.mp4", "clip_b.mp4", "clip_c.mp4"]
+        self.assertEqual(_find_stock_filler_clip(1, pool), "clip_a.mp4")
+        self.assertEqual(_find_stock_filler_clip(2, pool), "clip_b.mp4")
+        self.assertEqual(_find_stock_filler_clip(3, pool), "clip_c.mp4")
+        self.assertEqual(_find_stock_filler_clip(4, pool), "clip_a.mp4")
+        self.assertIsNone(_find_stock_filler_clip(1, []))
 
 
 if __name__ == "__main__":

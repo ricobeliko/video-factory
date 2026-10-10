@@ -236,3 +236,158 @@ def test_stage_progress_reporting_flow():
     assert "SCENE_RENDER_PREP" in stages_seen
     assert "SCENE_RENDER_CLIPS" in stages_seen
     assert "CONCAT" in stages_seen
+
+
+def test_close_clip_default_collects_garbage_once():
+    """A. close_clip() default continua chamando gc.collect() exatamente uma vez e fecha readers."""
+    mock_clip = MagicMock()
+    reader = mock_clip.reader = MagicMock()
+    audio_reader = MagicMock()
+    mock_clip.audio = MagicMock(reader=audio_reader)
+    mask_reader = MagicMock()
+    mock_clip.mask = MagicMock(reader=mask_reader)
+    mock_clip.clips = []
+
+    with patch("gc.collect") as mock_gc:
+        video.close_clip(mock_clip)
+        assert mock_gc.call_count == 1
+        reader.close.assert_called_once()
+        audio_reader.close.assert_called_once()
+        mask_reader.close.assert_called_once()
+
+
+def test_close_clip_without_garbage_collection():
+    """B. close_clip(..., collect_garbage=False) fecha readers mas NÃO chama gc.collect()."""
+    mock_clip = MagicMock()
+    reader = mock_clip.reader = MagicMock()
+    audio_reader = MagicMock()
+    mock_clip.audio = MagicMock(reader=audio_reader)
+    mask_reader = MagicMock()
+    mock_clip.mask = MagicMock(reader=mask_reader)
+    mock_clip.clips = []
+
+    with patch("gc.collect") as mock_gc:
+        video.close_clip(mock_clip, collect_garbage=False)
+        assert mock_gc.call_count == 0
+        reader.close.assert_called_once()
+        audio_reader.close.assert_called_once()
+        mask_reader.close.assert_called_once()
+
+
+def test_scene_based_loop_avoids_gc_and_executes_single_post_loop_gc():
+    """C, D, E. scene-based com múltiplas cenas evita gc.collect() entre cenas, executa 1 coleta ao final e emite logs na ordem correta."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clip_path = os.path.join(tmpdir, "mat.mp4")
+        with open(clip_path, "w") as f:
+            f.write("clip")
+
+        instructions = [
+            MagicMock(scene_index=1, material_path=clip_path, duration_seconds=3.0, fit_mode=None),
+            MagicMock(scene_index=2, material_path=clip_path, duration_seconds=3.0, fit_mode=None),
+            MagicMock(scene_index=3, material_path=clip_path, duration_seconds=3.0, fit_mode=None),
+        ]
+
+        info_logs = []
+        original_info = video.logger.info
+
+        def mock_info(msg, *args, **kwargs):
+            info_logs.append(str(msg))
+            original_info(msg, *args, **kwargs)
+
+        with patch("app.services.video.AudioFileClip") as mock_audio, \
+             patch("app.services.video.concat_video_clips_with_ffmpeg"), \
+             patch("app.services.video._open_video_clip_quietly") as mock_open, \
+             patch("app.services.video._write_videofile_with_codec_fallback") as mock_write, \
+             patch("gc.collect", return_value=42) as mock_gc, \
+             patch.object(video.logger, "info", side_effect=mock_info):
+
+            mock_audio.return_value.duration = 9.0
+            fake_clip = MagicMock(duration=5.0, size=(1080, 1920), w=1080, h=1920)
+            fake_clip.subclipped.return_value = fake_clip
+            mock_open.return_value = fake_clip
+
+            def fake_write(clip, clip_file, **kwargs):
+                with open(clip_file, "w") as f:
+                    f.write("scene_clip")
+            mock_write.side_effect = fake_write
+
+            video.combine_videos(
+                combined_video_path=os.path.join(tmpdir, "combined.mp4"),
+                video_paths=[],
+                audio_file=os.path.join(tmpdir, "audio.mp3"),
+                scene_clip_instructions=instructions,
+            )
+
+            # C & D: gc.collect() não é chamado entre cenas, e é chamado exatamente 1 vez após todas as cenas
+            assert mock_gc.call_count == 1
+
+            # E: ordem observável dos logs:
+            scene_logs = [log for log in info_logs if "[SCENE_RENDER]" in log]
+            expected_markers = [
+                "[SCENE_RENDER][SCENE_START] scene=1",
+                "[SCENE_RENDER][SCENE_WRITTEN] scene=1",
+                "[SCENE_RENDER][SCENE_CLOSED] scene=1",
+                "[SCENE_RENDER][SCENE_START] scene=2",
+                "[SCENE_RENDER][SCENE_WRITTEN] scene=2",
+                "[SCENE_RENDER][SCENE_CLOSED] scene=2",
+                "[SCENE_RENDER][SCENE_START] scene=3",
+                "[SCENE_RENDER][SCENE_WRITTEN] scene=3",
+                "[SCENE_RENDER][SCENE_CLOSED] scene=3",
+                "[SCENE_RENDER][GC_START]",
+                "[SCENE_RENDER][GC_DONE] collected=42",
+            ]
+
+            filtered_logs = []
+            for marker in expected_markers:
+                match = [l for l in scene_logs if marker in l]
+                assert len(match) >= 1, f"Marker {marker} not found in logs: {scene_logs}"
+                filtered_logs.append(match[0])
+
+            # Verificar sequência estrita
+            for i in range(len(filtered_logs) - 1):
+                idx_curr = scene_logs.index(filtered_logs[i])
+                idx_next = scene_logs.index(filtered_logs[i + 1])
+                assert idx_curr < idx_next, f"Log order inverted between {filtered_logs[i]} and {filtered_logs[i+1]}"
+
+
+def test_scene_render_exception_closes_raw_clip():
+    """F. Exceção durante uma cena continua fechando raw clip corretamente via finally."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clip_path = os.path.join(tmpdir, "mat.mp4")
+        with open(clip_path, "w") as f:
+            f.write("clip")
+
+        instructions = [
+            MagicMock(scene_index=1, material_path=clip_path, duration_seconds=3.0, fit_mode=None),
+        ]
+
+        closed_raw_clips = []
+
+        fake_raw = MagicMock(duration=5.0, size=(1080, 1920), w=1080, h=1920)
+        fake_clip = MagicMock(duration=5.0, size=(1080, 1920), w=1080, h=1920)
+        fake_raw.subclipped.return_value = fake_clip
+        fake_raw.reader = MagicMock()
+        def on_raw_close():
+            closed_raw_clips.append(fake_raw)
+        fake_raw.reader.close.side_effect = on_raw_close
+
+        with patch("app.services.video.AudioFileClip") as mock_audio, \
+             patch("app.services.video._open_video_clip_quietly", return_value=fake_raw), \
+             patch("app.services.video._write_videofile_with_codec_fallback", side_effect=RuntimeError("Encoding crashed")), \
+             patch("gc.collect") as mock_gc:
+
+            mock_audio.return_value.duration = 3.0
+
+            with pytest.raises(video.SceneRenderError) as exc_info:
+                video.combine_videos(
+                    combined_video_path=os.path.join(tmpdir, "combined.mp4"),
+                    video_paths=[],
+                    audio_file=os.path.join(tmpdir, "audio.mp3"),
+                    scene_clip_instructions=instructions,
+                )
+
+            assert "failed to render scene 1" in str(exc_info.value)
+            # F: raw_clip fechado corretamente
+            assert len(closed_raw_clips) == 1
+            # E nenhum GC intermediário disparado
+            assert mock_gc.call_count == 0

@@ -117,7 +117,7 @@ class TestChannelFactory(unittest.TestCase):
         self.assertEqual(ctx["profile_id"], pid)
         self.assertEqual(ctx["niche"], "curiosidades")
         from app.config import config
-        expected_global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "pt-BR-FranciscaNeural"
+        expected_global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
         self.assertEqual(ctx["voice_name"], expected_global_voice)
         self.assertFalse(ctx["visual_director_enabled"])
         self.assertFalse(ctx["flow_enabled"])

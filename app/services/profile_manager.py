@@ -70,6 +70,13 @@ class AutomationSettings(BaseModel):
     posts_per_day: Optional[int] = None
 
 
+class MusicSettings(BaseModel):
+    enabled: bool = False
+    mode: str = "auto"
+    volume: float = 0.20
+    default_mood: str = "neutral"
+
+
 class ChannelWorkspaceSettings(BaseModel):
     schema_version: int = 1
     editorial: EditorialSettings = Field(default_factory=EditorialSettings)
@@ -77,6 +84,7 @@ class ChannelWorkspaceSettings(BaseModel):
     visual: VisualSettings = Field(default_factory=VisualSettings)
     subtitle: SubtitleSettings = Field(default_factory=SubtitleSettings)
     automation: AutomationSettings = Field(default_factory=AutomationSettings)
+    music: MusicSettings = Field(default_factory=MusicSettings)
 
     def to_json(self) -> str:
         return self.model_dump_json()
@@ -985,7 +993,7 @@ def onboard_channel_workspace(
     if settings is None:
         settings_model = ChannelWorkspaceSettings()
         # Novos canais criados pelo onboarding recebem defaults operacionais explícitos
-        settings_model.voice.voice_name = "pt-BR-FranciscaNeural"
+        settings_model.voice.voice_name = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
         settings_model.voice.voice_rate = 1.0
         settings_model.voice.voice_volume = 1.0
         settings_model.visual.visual_director_enabled = True
@@ -1116,10 +1124,10 @@ def get_generation_profile_context(
     fallback_preset = const.DEFAULT_MONETIZATION_PRESET
     fallback_growth = const.DEFAULT_GROWTH_MODE
 
-    # Precedência: Profile Settings explícito -> Global Config -> Safe Default
+    # Precedência: Voz GLOBAL da aplicação (V1.5E-G8.6: Brian como voz global para todos os canais da fábrica)
     # 1. Voice
-    global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "pt-BR-FranciscaNeural"
-    voice_name = settings.voice.voice_name if settings.voice.voice_name else global_voice
+    global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
+    voice_name = global_voice
 
     global_rate = config.ui.get("voice_rate") or config.app.get("voice_rate") or 1.0
     voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else float(global_rate)
@@ -1167,6 +1175,11 @@ def get_generation_profile_context(
         "autonomous_enabled": canonical_auto_enabled,
         "target_ready_stock": canonical_target_stock,
         "posts_per_day": settings.automation.posts_per_day or 1,
+        "music": settings.music,
+        "music_enabled": bool(settings.music.enabled),
+        "music_mode": settings.music.mode,
+        "music_volume": settings.music.volume,
+        "music_default_mood": settings.music.default_mood,
         "settings": settings.model_dump(),
     }
 

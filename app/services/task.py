@@ -19,6 +19,7 @@ from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
 from app.services import bgm as bgm_service
 from app.services import (
+    ambient_bgm,
     elevenlabs_music,
     llm,
     loomloom,
@@ -88,6 +89,13 @@ _VIDEO_MUSIC_PROVIDERS = {
         "suffix": ".mp3",
         "warning_code": "elevenlabs_bgm_failed",
         "display_name": "ElevenLabs",
+    },
+    "ambient_auto": {
+        "service": ambient_bgm,
+        "error_type": ambient_bgm.AmbientBgmError,
+        "suffix": ".wav",
+        "warning_code": "ambient_bgm_failed",
+        "display_name": "Ambient Sound",
     },
 }
 

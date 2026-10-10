@@ -100,22 +100,31 @@ def build_asset_provenance(
         raw_bgm_file = bgm_file_used or _get_param(params, "bgm_file", "") or ""
         filename = Path(raw_bgm_file).name if raw_bgm_file else None
 
-        # Identifica se é faixa legada de resource/songs
-        is_legacy = bool(
-            (raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file))
-            or (filename and filename.lower().startswith("output") and filename.lower().endswith(".mp3"))
-            or bgm_type in ("random", "preset")
-        )
-        source = "legacy_resource_songs" if is_legacy else (
-            "custom_upload" if bgm_type == "custom" else str(bgm_type)
-        )
-        bgm_prov = {
-            "enabled": True,
-            "filename": filename,
-            "source": source,
-            "license_type": "unknown",
-            "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
-        }
+        if bgm_type == "ambient_auto":
+            bgm_prov = {
+                "enabled": True,
+                "filename": filename or "ambient_auto_procedural",
+                "source": "procedural",
+                "license_type": "safe_procedural",
+                "provenance_status": "SAFE_PROCEDURAL",
+            }
+        else:
+            # Identifica se é faixa legada de resource/songs
+            is_legacy = bool(
+                (raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file))
+                or (filename and filename.lower().startswith("output") and filename.lower().endswith(".mp3"))
+                or bgm_type in ("random", "preset")
+            )
+            source = "legacy_resource_songs" if is_legacy else (
+                "custom_upload" if bgm_type == "custom" else str(bgm_type)
+            )
+            bgm_prov = {
+                "enabled": True,
+                "filename": filename,
+                "source": source,
+                "license_type": "unknown",
+                "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
+            }
 
     # Se material_sources não foi fornecido, tenta ler do script.json
     if material_sources is None:
@@ -156,19 +165,28 @@ def build_asset_provenance(
             else:
                 raw_bgm_file = bgm_file_used or _get_param(params, "bgm_file", "") or ""
                 filename = Path(raw_bgm_file).name if raw_bgm_file else None
-                is_legacy = bool(
-                    (raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file))
-                    or (filename and filename.lower().startswith("output") and filename.lower().endswith(".mp3"))
-                    or bgm_type in ("random", "preset")
-                )
-                source = "legacy_resource_songs" if is_legacy else ("custom_upload" if bgm_type == "custom" else str(bgm_type))
-                bgm_prov = {
-                    "enabled": True,
-                    "filename": filename,
-                    "source": source,
-                    "license_type": "unknown",
-                    "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
-                }
+                if bgm_type == "ambient_auto":
+                    bgm_prov = {
+                        "enabled": True,
+                        "filename": filename or "ambient_auto_procedural",
+                        "source": "procedural",
+                        "license_type": "safe_procedural",
+                        "provenance_status": "SAFE_PROCEDURAL",
+                    }
+                else:
+                    is_legacy = bool(
+                        (raw_bgm_file and ("resource" in raw_bgm_file and "songs" in raw_bgm_file))
+                        or (filename and filename.lower().startswith("output") and filename.lower().endswith(".mp3"))
+                        or bgm_type in ("random", "preset")
+                    )
+                    source = "legacy_resource_songs" if is_legacy else ("custom_upload" if bgm_type == "custom" else str(bgm_type))
+                    bgm_prov = {
+                        "enabled": True,
+                        "filename": filename,
+                        "source": source,
+                        "license_type": "unknown",
+                        "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
+                    }
 
     visual_clips: List[Dict[str, Any]] = []
     for item in (material_sources or []):
@@ -225,7 +243,11 @@ def build_asset_provenance(
     prov_status = (
         "SAFE_NO_BGM"
         if not bgm_is_enabled and visual_clips
-        else ("UNVERIFIED_BGM" if bgm_is_enabled else "INCOMPLETE_ASSETS")
+        else (
+            "SAFE_PROCEDURAL"
+            if bgm_is_enabled and bgm_prov.get("provenance_status") == "SAFE_PROCEDURAL" and visual_clips
+            else ("UNVERIFIED_BGM" if bgm_is_enabled else "INCOMPLETE_ASSETS")
+        )
     )
 
     return {
@@ -303,7 +325,11 @@ def evaluate_copyright_provenance_gate(
 
     if bgm_info.get("enabled"):
         bgm_source = str(bgm_info.get("source", "")).lower()
-        if "legacy" in bgm_source or "songs" in bgm_source or bgm_type in ("random", "preset"):
+        bgm_prov_status = str(bgm_info.get("provenance_status", "")).upper()
+        if bgm_type == "ambient_auto" and (bgm_source == "procedural" or bgm_prov_status == "SAFE_PROCEDURAL"):
+            # SAFE_PROCEDURAL é expressamente aprovada para modo autônomo (V1.5E-G8)
+            pass
+        elif "legacy" in bgm_source or "songs" in bgm_source or bgm_type in ("random", "preset"):
             return (
                 False,
                 "BGM legado de resource/songs não é permitido em gerações autônomas",
@@ -313,15 +339,16 @@ def evaluate_copyright_provenance_gate(
                     "bgm_source": bgm_source,
                 },
             )
-        return (
-            False,
-            f"BGM ativa sem whitelist comprovada para produção autônoma (type={bgm_type})",
-            {
-                "copyright_provenance_gate": "FAIL",
-                "bgm_status": "UNAPPROVED_SOURCE",
-                "bgm_source": bgm_source,
-            },
-        )
+        else:
+            return (
+                False,
+                f"BGM ativa sem whitelist comprovada para produção autônoma (type={bgm_type})",
+                {
+                    "copyright_provenance_gate": "FAIL",
+                    "bgm_status": "UNAPPROVED_SOURCE",
+                    "bgm_source": bgm_source,
+                },
+            )
 
     # 2. Verificação de Ativos Visuais
     if not visual_clips:
@@ -357,12 +384,17 @@ def evaluate_copyright_provenance_gate(
                 },
             )
 
+    bgm_final_status = (
+        "SAFE_PROCEDURAL"
+        if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "SAFE_PROCEDURAL")
+        else "SAFE_NO_BGM"
+    )
     return (
         True,
         "COPYRIGHT_PROVENANCE_GATE = PASS",
         {
             "copyright_provenance_gate": "PASS",
-            "bgm_status": "SAFE_NO_BGM",
+            "bgm_status": bgm_final_status,
             "visual_clips_count": len(visual_clips),
             "providers_verified": list(sorted({c.get("provider") for c in visual_clips})),
         },
@@ -571,7 +603,7 @@ def get_copyright_provenance_summary(
 
     return {
         "task_id": resolved_task_id,
-        "bgm_mode": "none" if not bgm_info.get("enabled") else "custom",
+        "bgm_mode": "none" if not bgm_info.get("enabled") else ("procedural" if bgm_info.get("source") == "procedural" else "custom"),
         "bgm_filename": bgm_info.get("filename") or "Nenhuma (SAFE_NO_BGM)",
         "bgm_provenance": bgm_info.get("provenance_status", "SAFE_NO_BGM"),
         "visual_providers": providers or ["Pexels", "Pixabay", "Coverr"],

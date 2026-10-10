@@ -10,6 +10,7 @@ Apresenta a experiência de Channel Factory:
 from typing import Any, Dict, List, Optional
 import streamlit as st
 
+from app.config import config
 from app.services import autonomous_production, operator_console, post_for_me, profile_manager
 
 
@@ -96,9 +97,10 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
         # 3. Produção & Visual
         st.markdown("##### 3. Produção & Visual")
+        global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
         c_voice, c_stock = st.columns(2)
         with c_voice:
-            voice_val = st.text_input("Voz (TTS)", value="pt-BR-FranciscaNeural", key="cf_new_ch_voice")
+            st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key="cf_new_ch_voice", disabled=True)
         with c_stock:
             stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="cf_new_ch_stock")
 
@@ -114,6 +116,32 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         flow_scenes = profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
         if flow_enabled:
             flow_scenes = st.slider("Cenas Flow por Vídeo", min_value=1, max_value=10, value=profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, key="cf_new_ch_scenes")
+
+        # 3.1 Som Ambiente (Fase V1.5E-G8)
+        st.markdown("##### 🎵 Som Ambiente")
+        music_enabled = st.checkbox("Ativar som ambiente", value=False, key="cf_new_ch_music_enabled")
+        c_music_mode, c_music_vol, c_music_mood = st.columns(3)
+        with c_music_mode:
+            st.selectbox("Modo", options=["Auto pelo roteiro"], index=0, key="cf_new_ch_music_mode", disabled=True)
+        with c_music_vol:
+            music_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
+            music_vol_labels = ["5%", "8%", "10%", "12%", "15%", "20%"]
+            sel_vol_idx = st.selectbox(
+                "Volume",
+                options=range(len(music_vol_options)),
+                format_func=lambda i: music_vol_labels[i],
+                index=5,
+                key="cf_new_ch_music_vol",
+            )
+            music_volume = music_vol_options[sel_vol_idx]
+        with c_music_mood:
+            music_mood_options = ["Neutral", "Suspense", "Terror", "Futuristic", "Epic", "Energetic", "Emotional"]
+            music_default_mood = st.selectbox(
+                "Mood padrão",
+                options=music_mood_options,
+                index=0,
+                key="cf_new_ch_music_mood",
+            ).lower()
 
         # 4. Ativação (Default Seguro: Pausado)
         st.markdown("##### 4. Ativação")
@@ -152,13 +180,17 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
             settings_obj = profile_manager.ChannelWorkspaceSettings()
             settings_obj.editorial.topic_brief = clean_topic
-            settings_obj.voice.voice_name = str(voice_val or "pt-BR-FranciscaNeural").strip()
+            settings_obj.voice.voice_name = global_voice
             settings_obj.visual.visual_director_enabled = bool(vd_enabled)
             settings_obj.visual.flow_enabled = bool(flow_enabled)
             settings_obj.visual.flow_scene_count = int(flow_scenes)
             settings_obj.visual.stock_fallback_enabled = bool(fallback_enabled)
             settings_obj.automation.autonomous_enabled = bool(autonomous_start)
             settings_obj.automation.target_ready_stock = int(stock_target)
+            settings_obj.music.enabled = bool(music_enabled)
+            settings_obj.music.mode = "auto"
+            settings_obj.music.volume = float(music_volume)
+            settings_obj.music.default_mood = str(music_default_mood).lower()
 
             try:
                 res = profile_manager.onboard_channel_workspace(
@@ -292,9 +324,10 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
 
                 m_brief = st.text_area("Tema / Linha Editorial", value=settings.editorial.topic_brief or "", key=f"m_brief_{p_id}", disabled=not is_primary)
 
+                global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
                 c_m_v, c_m_stk = st.columns(2)
                 with c_m_v:
-                    m_voice = st.text_input("Voz (TTS)", value=settings.voice.voice_name or "pt-BR-FranciscaNeural", key=f"m_voice_{p_id}", disabled=not is_primary)
+                    st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key=f"m_voice_{p_id}", disabled=True)
                 with c_m_stk:
                     m_target_stock = st.number_input("Meta de Estoque", min_value=1, max_value=10, value=int(settings.automation.target_ready_stock or 3), key=f"m_stock_{p_id}", disabled=not is_primary)
 
@@ -308,6 +341,39 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                     m_scenes = st.number_input("Cenas Flow", min_value=1, max_value=10, value=int(settings.visual.flow_scene_count or profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT), key=f"m_scenes_{p_id}", disabled=not is_primary)
 
                 m_fallback = st.checkbox("Fallback para Stock", value=bool(settings.visual.stock_fallback_enabled), key=f"m_fallback_{p_id}", disabled=not is_primary)
+
+                # Som Ambiente (Fase V1.5E-G8)
+                st.markdown("##### 🎵 Som Ambiente")
+                cur_music = getattr(settings, "music", None) or profile_manager.MusicSettings()
+                m_music_enabled = st.checkbox("Ativar som ambiente", value=bool(cur_music.enabled), key=f"m_music_en_{p_id}", disabled=not is_primary)
+                c_mm_mode, c_mm_vol, c_mm_mood = st.columns(3)
+                with c_mm_mode:
+                    st.selectbox("Modo", options=["Auto pelo roteiro"], index=0, key=f"m_music_mode_{p_id}", disabled=True)
+                with c_mm_vol:
+                    m_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
+                    m_vol_labels = ["5%", "8%", "10%", "12%", "15%", "20%"]
+                    cur_vol_val = float(cur_music.volume if cur_music.volume is not None else 0.20)
+                    cur_vol_idx = min(range(len(m_vol_options)), key=lambda i: abs(m_vol_options[i] - cur_vol_val))
+                    sel_m_vol_idx = st.selectbox(
+                        "Volume",
+                        options=range(len(m_vol_options)),
+                        format_func=lambda i: m_vol_labels[i],
+                        index=cur_vol_idx,
+                        key=f"m_music_vol_{p_id}",
+                        disabled=not is_primary,
+                    )
+                    m_music_volume = m_vol_options[sel_m_vol_idx]
+                with c_mm_mood:
+                    m_mood_options = ["Neutral", "Suspense", "Terror", "Futuristic", "Epic", "Energetic", "Emotional"]
+                    cur_mood_val = str(cur_music.default_mood or "neutral").capitalize()
+                    cur_mood_idx = m_mood_options.index(cur_mood_val) if cur_mood_val in m_mood_options else 0
+                    m_music_default_mood = st.selectbox(
+                        "Mood padrão",
+                        options=m_mood_options,
+                        index=cur_mood_idx,
+                        key=f"m_music_mood_{p_id}",
+                        disabled=not is_primary,
+                    ).lower()
 
                 # Destino YouTube
                 if yt:
@@ -326,12 +392,16 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         profile_manager.update_profile(p_id, name=clean_m_name, niche=clean_m_niche, db_path=db_path)
                         updated_settings = settings.model_copy(deep=True)
                         updated_settings.editorial.topic_brief = str(m_brief or "").strip()
-                        updated_settings.voice.voice_name = str(m_voice or "pt-BR-FranciscaNeural").strip()
+                        updated_settings.voice.voice_name = settings.voice.voice_name or global_voice
                         updated_settings.visual.visual_director_enabled = bool(m_vd)
                         updated_settings.visual.flow_enabled = bool(m_flow)
                         updated_settings.visual.flow_scene_count = int(m_scenes)
                         updated_settings.visual.stock_fallback_enabled = bool(m_fallback)
                         updated_settings.automation.target_ready_stock = int(m_target_stock)
+                        updated_settings.music.enabled = bool(m_music_enabled)
+                        updated_settings.music.mode = "auto"
+                        updated_settings.music.volume = float(m_music_volume)
+                        updated_settings.music.default_mood = str(m_music_default_mood).lower()
                         profile_manager.update_profile_settings(p_id, updated_settings, db_path=db_path)
 
                         if yt:

@@ -1056,20 +1056,34 @@ def check_asset_eligibility_for_destination(
 # 2.1. Contrato de Conteúdo Brasileiro (Fase V16.1 — Brazilian Content Contract)
 # ---------------------------------------------------------------------------
 
+# Allowlist explícita de vozes multilíngues homologadas com suporte oficial ao português (pt-BR)
+_APPROVED_MULTILINGUAL_PT_BR_VOICES: frozenset[str] = frozenset({
+    "en-us-brianmultilingualneural",
+})
+
+
 def is_valid_pt_br_voice(voice_name: Optional[str]) -> bool:
-    """Verifica se um identificador de voz TTS pertence comprovadamente ao locale pt-BR.
+    """Verifica se um identificador de voz TTS é compatível com pt-BR para o contrato autônomo (V16.1 / V1.5E-G8.6).
 
     Regras:
     - Retorna False para strings vazias, None ou sentinelas de sem voz ('no-voice', 'none').
+    - Aceita a allowlist explícita de vozes multilíngues homologadas para pt-BR ('en-US-BrianMultilingualNeural').
     - Aceita identificadores com prefixo pt-BR (ex: 'pt-BR-AntonioNeural', 'pt-BR-FranciscaNeural-Female',
       'pt-BR-ThalitaMultilingualNeural', 'pt-BR-AntonioNeural-Male').
-    - Rejeita qualquer outro locale (ex: 'af-ZA-*', 'en-*', 'zh-*', 'pt-PT-*').
+    - Rejeita qualquer outro locale ou voz estrangeira não homologada (ex: 'af-ZA-*', 'en-US-JennyNeural', 'en-US-GuyNeural', 'zh-*', 'pt-PT-*').
     """
     if not voice_name or not str(voice_name).strip():
         return False
     clean = str(voice_name).strip()
     if clean.lower() in ("no-voice", "none"):
         return False
+
+    # 1. Allowlist explícita de vozes multilíngues homologadas para pt-BR
+    normalized = clean.replace("_", "-").lower()
+    if normalized in _APPROVED_MULTILINGUAL_PT_BR_VOICES:
+        return True
+
+    # 2. Vozes nativas do locale pt-BR
     parts = clean.replace("_", "-").split("-")
     if len(parts) >= 2:
         lang_part = parts[0].strip().lower()
@@ -1652,12 +1666,16 @@ def build_autonomous_video_params(
     text_background_color = subtitle_bg_color if subtitle_bg_enabled else False
     rounded_subtitle_background = bool(config.ui.get("rounded_subtitle_background", False))
 
-    # 9. Trilha Sonora (BGM) - Fail-closed para modo autônomo (V14-B)
+    # 9. Trilha Sonora (BGM) - Fail-closed para modo autônomo (V14-B / V1.5E-G8)
     from app.services import bgm as bgm_service
-    auto_bgm = bgm_service.resolve_autonomous_bgm(config.ui)
+    auto_bgm = bgm_service.resolve_autonomous_bgm(
+        config_ui=config.ui,
+        music_settings=ctx.get("music"),
+    )
     bgm_type = auto_bgm["type"]
     bgm_file = auto_bgm["file"]
     bgm_volume = auto_bgm["volume"]
+    bgm_default_mood = auto_bgm.get("default_mood", "neutral")
 
     params = VideoParams(
         video_subject=topic,
@@ -1697,6 +1715,7 @@ def build_autonomous_video_params(
         bgm_type=bgm_type,
         bgm_file=bgm_file,
         bgm_volume=bgm_volume,
+        bgm_default_mood=bgm_default_mood,
         # Channel Factory / Flow Integration (Fase V1.5E-E)
         visual_director_enabled=bool(ctx.get("visual_director_enabled", False)),
         visual_style_brief=str(ctx.get("visual_style_brief") or ""),
@@ -1805,7 +1824,7 @@ def check_required_providers_preflight(
             details["TTS"] = "Gemini"
         else:
             try:
-                import edge_tts
+                import edge_tts  # noqa: F401
                 details["TTS"] = "Edge TTS"
             except Exception as exc:
                 return False, f"Provedor de TTS (Edge TTS) indisponível: {exc}", {"TTS": "UNAVAILABLE"}

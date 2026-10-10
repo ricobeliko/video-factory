@@ -709,3 +709,8 @@ class SceneClipInstruction(BaseModel):
     duration_seconds: float = Field(..., gt=0.0, description="Exact clip duration for this scene")
     fit_mode: str = Field(default="cover", description="Video fit mode (cover, contain, etc.)")
     start_offset: float = Field(default=0.0, ge=0.0, description="Start offset within the source video")
+
+
+# Re-export dos modelos de configuração de canal (Fase V1.5E-G8)
+from app.services.profile_manager import ChannelWorkspaceSettings, MusicSettings  # noqa: E402, F401
+

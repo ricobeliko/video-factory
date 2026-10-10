@@ -360,14 +360,58 @@ def resolve_bgm_file(unsafe_path: str) -> str:
     raise ValueError(str(last_error)) from last_error
 
 
-def resolve_autonomous_bgm(config_ui: dict | None = None) -> dict[str, Any]:
+def resolve_autonomous_bgm(
+    config_ui: dict | None = None,
+    channel_settings: Any = None,
+    music_settings: Any = None,
+) -> dict[str, Any]:
     """
-    Resolve a configuração de BGM estritamente para o modo autônomo (Fase V14-B).
+    Resolve a configuração de BGM estritamente para o modo autônomo (Fases V14-B e V1.5E-G8).
 
-    Fail-closed: novas gerações autônomas NÃO podem usar faixas legadas de resource/songs.
-    Até que exista uma biblioteca formalmente licenciada e whitelisted, o modo autônomo
-    utiliza exclusivamente bgm_type='none', volume=0.0 e provenance='SAFE_NO_BGM'.
+    Fail-closed por padrão: novas gerações autônomas NÃO podem usar faixas legadas
+    de resource/songs nem faixas customizadas sem whitelist comprovada.
+
+    ÚNICA exceção explicitamente segura permitida (Fase V1.5E-G8):
+    music.enabled == True AND music.mode == "auto"
+    => bgm_type = "ambient_auto"
+    => bgm_volume = valor validado (0.05..0.15, default 0.10)
+    => provenance_status = "SAFE_PROCEDURAL"
+
+    Qualquer outro caso retorna:
+    bgm_type = "none", bgm_volume = 0.0, provenance_status = "SAFE_NO_BGM"
     """
+    music = music_settings
+    if music is None and channel_settings is not None:
+        music = getattr(channel_settings, "music", None)
+        if music is None and isinstance(channel_settings, dict):
+            music = channel_settings.get("music")
+    if music is None and isinstance(config_ui, dict):
+        music = config_ui.get("music")
+
+    if music is not None:
+        m_enabled = getattr(music, "enabled", None)
+        m_mode = getattr(music, "mode", None)
+        m_volume = getattr(music, "volume", None)
+        m_default_mood = getattr(music, "default_mood", None)
+        if isinstance(music, dict):
+            m_enabled = music.get("enabled", False) if m_enabled is None else m_enabled
+            m_mode = music.get("mode", "auto") if m_mode is None else m_mode
+            m_volume = music.get("volume", 0.10) if m_volume is None else m_volume
+            m_default_mood = music.get("default_mood", "neutral") if m_default_mood is None else m_default_mood
+
+        clean_mode = str(m_mode or "").lower().strip()
+        if bool(m_enabled) and clean_mode == "auto":
+            from app.services import ambient_bgm
+            validated_vol = ambient_bgm.normalize_volume(m_volume, default=0.10)
+            return {
+                "enabled": True,
+                "type": "ambient_auto",
+                "file": "",
+                "volume": validated_vol,
+                "default_mood": str(m_default_mood or "neutral").lower().strip(),
+                "provenance_status": "SAFE_PROCEDURAL",
+            }
+
     return {
         "enabled": False,
         "type": "none",
@@ -375,4 +419,5 @@ def resolve_autonomous_bgm(config_ui: dict | None = None) -> dict[str, Any]:
         "volume": 0.0,
         "provenance_status": "SAFE_NO_BGM",
     }
+
 

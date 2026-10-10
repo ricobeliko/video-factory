@@ -115,6 +115,32 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         if flow_enabled:
             flow_scenes = st.slider("Cenas Flow por Vídeo", min_value=1, max_value=10, value=profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT, key="cf_new_ch_scenes")
 
+        # 3.1 Som Ambiente (Fase V1.5E-G8)
+        st.markdown("##### 🎵 Som Ambiente")
+        music_enabled = st.checkbox("Ativar som ambiente", value=False, key="cf_new_ch_music_enabled")
+        c_music_mode, c_music_vol, c_music_mood = st.columns(3)
+        with c_music_mode:
+            st.selectbox("Modo", options=["Auto pelo roteiro"], index=0, key="cf_new_ch_music_mode", disabled=True)
+        with c_music_vol:
+            music_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15]
+            music_vol_labels = ["5%", "8%", "10%", "12%", "15%"]
+            sel_vol_idx = st.selectbox(
+                "Volume",
+                options=range(len(music_vol_options)),
+                format_func=lambda i: music_vol_labels[i],
+                index=2,
+                key="cf_new_ch_music_vol",
+            )
+            music_volume = music_vol_options[sel_vol_idx]
+        with c_music_mood:
+            music_mood_options = ["Neutral", "Suspense", "Terror", "Futuristic", "Epic", "Energetic", "Emotional"]
+            music_default_mood = st.selectbox(
+                "Mood padrão",
+                options=music_mood_options,
+                index=0,
+                key="cf_new_ch_music_mood",
+            ).lower()
+
         # 4. Ativação (Default Seguro: Pausado)
         st.markdown("##### 4. Ativação")
         st.warning("⚠️ **Recomendado:** Deixar a produção autônoma pausada inicialmente para validação do canal antes da ativação contínua.")
@@ -159,6 +185,10 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
             settings_obj.visual.stock_fallback_enabled = bool(fallback_enabled)
             settings_obj.automation.autonomous_enabled = bool(autonomous_start)
             settings_obj.automation.target_ready_stock = int(stock_target)
+            settings_obj.music.enabled = bool(music_enabled)
+            settings_obj.music.mode = "auto"
+            settings_obj.music.volume = float(music_volume)
+            settings_obj.music.default_mood = str(music_default_mood).lower()
 
             try:
                 res = profile_manager.onboard_channel_workspace(
@@ -309,6 +339,39 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
 
                 m_fallback = st.checkbox("Fallback para Stock", value=bool(settings.visual.stock_fallback_enabled), key=f"m_fallback_{p_id}", disabled=not is_primary)
 
+                # Som Ambiente (Fase V1.5E-G8)
+                st.markdown("##### 🎵 Som Ambiente")
+                cur_music = getattr(settings, "music", None) or profile_manager.MusicSettings()
+                m_music_enabled = st.checkbox("Ativar som ambiente", value=bool(cur_music.enabled), key=f"m_music_en_{p_id}", disabled=not is_primary)
+                c_mm_mode, c_mm_vol, c_mm_mood = st.columns(3)
+                with c_mm_mode:
+                    st.selectbox("Modo", options=["Auto pelo roteiro"], index=0, key=f"m_music_mode_{p_id}", disabled=True)
+                with c_mm_vol:
+                    m_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15]
+                    m_vol_labels = ["5%", "8%", "10%", "12%", "15%"]
+                    cur_vol_val = float(cur_music.volume if cur_music.volume is not None else 0.10)
+                    cur_vol_idx = min(range(len(m_vol_options)), key=lambda i: abs(m_vol_options[i] - cur_vol_val))
+                    sel_m_vol_idx = st.selectbox(
+                        "Volume",
+                        options=range(len(m_vol_options)),
+                        format_func=lambda i: m_vol_labels[i],
+                        index=cur_vol_idx,
+                        key=f"m_music_vol_{p_id}",
+                        disabled=not is_primary,
+                    )
+                    m_music_volume = m_vol_options[sel_m_vol_idx]
+                with c_mm_mood:
+                    m_mood_options = ["Neutral", "Suspense", "Terror", "Futuristic", "Epic", "Energetic", "Emotional"]
+                    cur_mood_val = str(cur_music.default_mood or "neutral").capitalize()
+                    cur_mood_idx = m_mood_options.index(cur_mood_val) if cur_mood_val in m_mood_options else 0
+                    m_music_default_mood = st.selectbox(
+                        "Mood padrão",
+                        options=m_mood_options,
+                        index=cur_mood_idx,
+                        key=f"m_music_mood_{p_id}",
+                        disabled=not is_primary,
+                    ).lower()
+
                 # Destino YouTube
                 if yt:
                     m_yt_enabled = st.checkbox("Destino YouTube Habilitado", value=bool(yt.get("is_enabled")), key=f"m_yt_en_{p_id}", disabled=not is_primary)
@@ -332,6 +395,10 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         updated_settings.visual.flow_scene_count = int(m_scenes)
                         updated_settings.visual.stock_fallback_enabled = bool(m_fallback)
                         updated_settings.automation.target_ready_stock = int(m_target_stock)
+                        updated_settings.music.enabled = bool(m_music_enabled)
+                        updated_settings.music.mode = "auto"
+                        updated_settings.music.volume = float(m_music_volume)
+                        updated_settings.music.default_mood = str(m_music_default_mood).lower()
                         profile_manager.update_profile_settings(p_id, updated_settings, db_path=db_path)
 
                         if yt:

@@ -1652,9 +1652,12 @@ def build_autonomous_video_params(
     text_background_color = subtitle_bg_color if subtitle_bg_enabled else False
     rounded_subtitle_background = bool(config.ui.get("rounded_subtitle_background", False))
 
-    # 9. Trilha Sonora (BGM) - Fail-closed para modo autônomo (V14-B)
+    # 9. Trilha Sonora (BGM) - Fail-closed para modo autônomo (V14-B / V1.5E-G8)
     from app.services import bgm as bgm_service
-    auto_bgm = bgm_service.resolve_autonomous_bgm(config.ui)
+    auto_bgm = bgm_service.resolve_autonomous_bgm(
+        config_ui=config.ui,
+        music_settings=ctx.get("music"),
+    )
     bgm_type = auto_bgm["type"]
     bgm_file = auto_bgm["file"]
     bgm_volume = auto_bgm["volume"]

@@ -70,6 +70,13 @@ class AutomationSettings(BaseModel):
     posts_per_day: Optional[int] = None
 
 
+class MusicSettings(BaseModel):
+    enabled: bool = False
+    mode: str = "auto"
+    volume: float = 0.10
+    default_mood: str = "neutral"
+
+
 class ChannelWorkspaceSettings(BaseModel):
     schema_version: int = 1
     editorial: EditorialSettings = Field(default_factory=EditorialSettings)
@@ -77,6 +84,7 @@ class ChannelWorkspaceSettings(BaseModel):
     visual: VisualSettings = Field(default_factory=VisualSettings)
     subtitle: SubtitleSettings = Field(default_factory=SubtitleSettings)
     automation: AutomationSettings = Field(default_factory=AutomationSettings)
+    music: MusicSettings = Field(default_factory=MusicSettings)
 
     def to_json(self) -> str:
         return self.model_dump_json()
@@ -1167,6 +1175,11 @@ def get_generation_profile_context(
         "autonomous_enabled": canonical_auto_enabled,
         "target_ready_stock": canonical_target_stock,
         "posts_per_day": settings.automation.posts_per_day or 1,
+        "music": settings.music,
+        "music_enabled": bool(settings.music.enabled),
+        "music_mode": settings.music.mode,
+        "music_volume": settings.music.volume,
+        "music_default_mood": settings.music.default_mood,
         "settings": settings.model_dump(),
     }
 

@@ -72,8 +72,28 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertIsNone(ctx)
         self.assertEqual(err, "AWAITING_FLOW_EDGE_PROFILE_CLOSE")
 
+    def test_check_login_state_public_about_landing(self):
+        """1. Landing pública (/about) retorna AWAITING_INITIAL_HUMAN_LOGIN (fail-closed)."""
+        mock_page = MagicMock()
+        mock_page.url = "https://flow.google.com/about"
+
+        status = check_login_state(mock_page)
+        self.assertEqual(status, "AWAITING_INITIAL_HUMAN_LOGIN")
+
+    def test_check_login_state_public_cta_detected(self):
+        """2. Landing pública com CTA 'Crie com o Google Flow' retorna AWAITING_INITIAL_HUMAN_LOGIN."""
+        mock_page = MagicMock()
+        mock_page.url = "https://flow.google.com"
+        mock_cta = MagicMock()
+        mock_cta.count.return_value = 1
+        mock_cta.first.is_visible.return_value = True
+        mock_page.get_by_text.return_value = mock_cta
+
+        status = check_login_state(mock_page)
+        self.assertEqual(status, "AWAITING_INITIAL_HUMAN_LOGIN")
+
     def test_check_login_state_redirect_to_accounts(self):
-        """Detecta tela de login do Google e retorna AWAITING_INITIAL_HUMAN_LOGIN."""
+        """3. Redirecionamento para accounts.google.com retorna AWAITING_INITIAL_HUMAN_LOGIN."""
         mock_page = MagicMock()
         mock_page.url = "https://accounts.google.com/signin/v2/identifier"
 
@@ -81,7 +101,7 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertEqual(status, "AWAITING_INITIAL_HUMAN_LOGIN")
 
     def test_check_login_state_captcha_detected(self):
-        """Detecta desafio de captcha e retorna BLOCKED_CAPTCHA."""
+        """4. Desafio de captcha presente retorna BLOCKED_CAPTCHA."""
         mock_page = MagicMock()
         mock_page.url = "https://flow.google.com"
         mock_captcha = MagicMock()
@@ -92,13 +112,46 @@ class TestFlowPlaywright(unittest.TestCase):
         status = check_login_state(mock_page)
         self.assertEqual(status, "BLOCKED_CAPTCHA")
 
-    def test_check_login_state_authenticated(self):
-        """Detecta sessão válida no Flow e retorna AUTHENTICATED."""
+    def test_check_login_state_authenticated_project_url(self):
+        """5. URL contendo /project/ é evidência positiva e retorna AUTHENTICATED."""
+        mock_page = MagicMock()
+        mock_page.url = "https://flow.google.com/project/abc-123"
+
+        status = check_login_state(mock_page)
+        self.assertEqual(status, "AUTHENTICATED")
+
+    def test_check_login_state_authenticated_with_new_project_button(self):
+        """6. Landing com evidência inequívoca do botão 'Novo projeto' retorna AUTHENTICATED."""
         mock_page = MagicMock()
         mock_page.url = "https://flow.google.com"
-        mock_captcha = MagicMock()
-        mock_captcha.count.return_value = 0
-        mock_page.locator.return_value = mock_captcha
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_btn.first.is_visible.return_value = True
+        mock_page.get_by_role.return_value = mock_btn
+
+        status = check_login_state(mock_page)
+        self.assertEqual(status, "AUTHENTICATED")
+
+    def test_check_login_state_landing_without_positive_evidence_fails_closed(self):
+        """7. Landing sem evidência positiva de autenticação falha fechada para AWAITING_INITIAL_HUMAN_LOGIN."""
+        mock_page = MagicMock()
+        mock_page.url = "https://flow.google.com"
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 0
+        mock_page.get_by_role.return_value = mock_btn
+
+        status = check_login_state(mock_page)
+        self.assertNotEqual(status, "AUTHENTICATED")
+        self.assertEqual(status, "AWAITING_INITIAL_HUMAN_LOGIN")
+
+    def test_check_login_state_authenticated(self):
+        """Compatibilidade: sessão no Flow com botão 'Novo projeto' visível retorna AUTHENTICATED."""
+        mock_page = MagicMock()
+        mock_page.url = "https://flow.google.com"
+        mock_btn = MagicMock()
+        mock_btn.count.return_value = 1
+        mock_btn.first.is_visible.return_value = True
+        mock_page.get_by_role.return_value = mock_btn
 
         status = check_login_state(mock_page)
         self.assertEqual(status, "AUTHENTICATED")

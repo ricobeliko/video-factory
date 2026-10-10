@@ -176,12 +176,27 @@ def launch_flow_context(
         return None, f"PLAYWRIGHT_LAUNCH_FAILED: {err_msg}"
 
 
+def _is_locator_visible(locator: Any) -> bool:
+    """Verifica com segurança se um locator possui ao menos um elemento visível."""
+    try:
+        cnt = locator.count()
+        if isinstance(cnt, int) and cnt > 0:
+            if hasattr(locator, "first") and hasattr(locator.first, "is_visible"):
+                return bool(locator.first.is_visible())
+            elif hasattr(locator, "is_visible"):
+                return bool(locator.is_visible())
+    except Exception:
+        pass
+    return False
+
+
 def check_login_state(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> str:
     """
     Navega para https://flow.google.com se necessário e confirma o estado de autenticação.
     Retorna:
-    - 'AUTHENTICATED' se sessão válida
-    - 'AWAITING_INITIAL_HUMAN_LOGIN' se redirecionado para accounts.google.com
+    - 'AUTHENTICATED' se sessão válida com evidência positiva (/project/ ou botão 'Novo projeto' visível)
+    - 'AWAITING_INITIAL_HUMAN_LOGIN' se redirecionado para accounts.google.com, landing pública (/about),
+      CTA público ('Crie com o Google Flow') ou ausência de evidência positiva (fail-closed)
     - 'BLOCKED_CAPTCHA' se desafio de segurança ou captcha detectado
     """
     page.set_default_timeout(timeout_ms)
@@ -198,13 +213,69 @@ def check_login_state(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> st
         logger.warning("Redirecionado para tela de login Google. Intervenção humana necessária.")
         return "AWAITING_INITIAL_HUMAN_LOGIN"
 
-    # Verificação de CAPTCHA
-    captcha_loc = page.locator("iframe[src*='recaptcha'], div#captcha, iframe[src*='challenges']")
-    if captcha_loc.count() > 0 and captcha_loc.first.is_visible():
-        logger.error("Desafio de segurança ou CAPTCHA detectado na página.")
-        return "BLOCKED_CAPTCHA"
+    # Landing pública não autenticada (/about)
+    if "/about" in current_url:
+        logger.warning("Landing pública detectada (URL contém /about). Intervenção humana necessária.")
+        return "AWAITING_INITIAL_HUMAN_LOGIN"
 
-    return "AUTHENTICATED"
+    # Verificação de CAPTCHA
+    try:
+        captcha_loc = page.locator("iframe[src*='recaptcha'], div#captcha, iframe[src*='challenges']")
+        if _is_locator_visible(captcha_loc):
+            logger.error("Desafio de segurança ou CAPTCHA detectado na página.")
+            return "BLOCKED_CAPTCHA"
+    except Exception as exc:
+        logger.debug(f"Erro ao verificar captcha: {exc}")
+
+    # Verificação de CTA público da landing não autenticada ('Crie com o Google Flow' / 'Create with Google Flow')
+    try:
+        public_cta_patterns = re.compile(r"crie com o google flow|create with google flow", re.I)
+        cta_candidates = [
+            page.get_by_text(public_cta_patterns),
+            page.locator("text=/crie com o google flow/i, text=/create with google flow/i"),
+        ]
+        for cta_loc in cta_candidates:
+            if _is_locator_visible(cta_loc):
+                logger.warning("CTA público ('Crie com o Google Flow') detectado. Sessão não autenticada.")
+                return "AWAITING_INITIAL_HUMAN_LOGIN"
+    except Exception as exc:
+        logger.debug(f"Erro ao verificar CTA público: {exc}")
+
+    # EVIDÊNCIA POSITIVA DE AUTENTICAÇÃO
+    # 1. Já está em URL de projeto (/project/)
+    if "/project/" in current_url:
+        logger.info("Superfície autenticada confirmada por URL de projeto (/project/).")
+        return "AUTHENTICATED"
+
+    # 2. Botão 'Novo projeto' / 'New project' presente e visível na landing autenticada
+    try:
+        new_proj_patterns = re.compile(r"novo projeto|new project", re.I)
+        new_proj_btn = page.get_by_role("button", name=new_proj_patterns)
+
+        if hasattr(new_proj_btn, "wait_for"):
+            try:
+                wait_time = min(5000, timeout_ms) if timeout_ms else 5000
+                new_proj_btn.wait_for(state="visible", timeout=wait_time)
+            except Exception:
+                pass
+
+        if _is_locator_visible(new_proj_btn):
+            logger.info("Superfície autenticada confirmada por presença do botão 'Novo projeto'.")
+            return "AUTHENTICATED"
+
+        new_proj_loc = page.locator("button:has-text('Novo projeto'), button:has-text('New project')")
+        if _is_locator_visible(new_proj_loc):
+            logger.info("Superfície autenticada confirmada por locator do botão 'Novo projeto'.")
+            return "AUTHENTICATED"
+    except Exception as exc:
+        logger.debug(f"Erro ao verificar botão 'Novo projeto': {exc}")
+
+    # Sem evidência positiva: FAIL-CLOSED
+    logger.warning(
+        "Superfície não confirmou evidência positiva de autenticação (/project/ ou botão 'Novo projeto'). "
+        "Falhando fechado para AWAITING_INITIAL_HUMAN_LOGIN."
+    )
+    return "AWAITING_INITIAL_HUMAN_LOGIN"
 
 
 def navigate_landing_to_studio(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> str:

@@ -44,10 +44,9 @@ Valida os 40 requisitos obrigatórios da fundação de Clip Mode:
 40. UI read path não executa ffprobe/hash/copy
 """
 import os
-import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services import (
     clip_mode,
@@ -212,7 +211,7 @@ class TestClipMode(unittest.TestCase):
     # 10. arquivo vazio rejeitado
     def test_10_empty_file_rejected(self):
         empty_path = os.path.join(self.tmp_dir.name, "empty.mp4")
-        with open(empty_path, "wb") as f:
+        with open(empty_path, "wb"):
             pass
         with self.assertRaises(clip_mode.ClipValidationError) as ctx:
             clip_mode.import_clip_source(
@@ -399,7 +398,7 @@ class TestClipMode(unittest.TestCase):
 
     # 23. path traversal bloqueado
     def test_23_path_traversal_blocked(self):
-        traversal_name = sanitize = clip_mode.sanitize_clip_filename("../../etc/passwd.mp4")
+        traversal_name = clip_mode.sanitize_clip_filename("../../etc/passwd.mp4")
         self.assertNotIn("/", traversal_name)
         self.assertNotIn("\\", traversal_name)
         self.assertEqual(traversal_name, "passwd.mp4")

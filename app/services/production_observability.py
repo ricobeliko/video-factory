@@ -33,7 +33,6 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from app.models import const
 from app.services import (
     analytics,
     analytics_scheduler,
@@ -670,7 +669,7 @@ def main():
         sys.stdout.write(json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n")
         sys.stdout.flush()
     else:
-        sys.stdout.write(f"=== PRODUCTION OBSERVABILITY BASELINE (V15-A) ===\n")
+        sys.stdout.write("=== PRODUCTION OBSERVABILITY BASELINE (V15-A) ===\n")
         sys.stdout.write(f"Generated at: {snapshot.get('generated_at')}\n")
         sys.stdout.write(f"Profiles: {list(snapshot.get('profiles', {}).keys())}\n")
         sys.stdout.write(f"Global Warnings: {snapshot.get('global', {}).get('warnings', [])}\n")

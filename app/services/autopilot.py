@@ -1,6 +1,7 @@
 import re
 import string
 from typing import Any, Dict, List, Optional
+import unicodedata
 from loguru import logger
 
 from app.models import const
@@ -15,8 +16,6 @@ MAX_TIKTOK_TARGET = 15
 DEFAULT_YOUTUBE_TARGET = 10
 MAX_YOUTUBE_TARGET = 10
 DEFAULT_DESIRED_STOCK = 30
-
-import unicodedata
 
 _NORMALIZE_PUNCT_RE = re.compile(r"[" + re.escape(string.punctuation) + r"".join(re.escape(p) for p in const.PUNCTUATIONS) + r"]")
 

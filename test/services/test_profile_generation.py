@@ -6,7 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from app.models import const
 from app.models.schema import VideoParams

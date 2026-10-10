@@ -21,7 +21,6 @@ from loguru import logger
 from moviepy import ColorClip, CompositeVideoClip, ImageClip, VideoFileClip
 
 from app.models import const
-from app.models.schema import VideoParams
 
 
 ALLOWED_AVATAR_EXTENSIONS = {".png", ".webp", ".webm"}

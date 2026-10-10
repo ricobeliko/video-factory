@@ -15,7 +15,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -29,7 +29,6 @@ from app.services import profile_manager
 from app.services import quality_score
 from app.services import safety_gate
 from app.services import scheduler
-from app.services import task_artifacts
 
 
 def test_1_legacy_params_dict_bgm_random_detected():

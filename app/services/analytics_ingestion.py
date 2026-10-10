@@ -8,9 +8,7 @@ compatível com o sistema existente de analytics, sem duplicar scoring e sem
 alterar o estado das tarefas de vídeo em caso de falha.
 """
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-import sqlite3
 
 from loguru import logger
 

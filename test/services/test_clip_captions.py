@@ -39,9 +39,7 @@ Cobre os requisitos de legendas:
 35. PROCESSING duplicado bloqueado
 """
 from datetime import datetime, timezone
-import hashlib
 import os
-import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -53,7 +51,6 @@ from app.services import (
     operator_console,
     profile_manager,
 )
-from app.utils import utils
 
 
 class TestClipCaptions(unittest.TestCase):

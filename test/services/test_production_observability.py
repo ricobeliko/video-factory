@@ -20,11 +20,9 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from app.models import const
 from app.services import (
     analytics,
     autonomous_production,
-    copyright_gate,
     operator_console,
     production_observability,
     profile_manager,

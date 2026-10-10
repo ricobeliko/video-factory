@@ -15,9 +15,7 @@ Cobre:
 
 from __future__ import annotations
 
-import io
 import json
-import os
 import socket
 import sys
 import tempfile
@@ -30,8 +28,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.services import youtube_direct
-from scripts import youtube_direct_probe
+from app.services import youtube_direct  # noqa: E402
+from scripts import youtube_direct_probe  # noqa: E402
 
 
 class TestYouTubeDirect(unittest.TestCase):
@@ -93,7 +91,7 @@ class TestYouTubeDirect(unittest.TestCase):
         mock_creds = self._create_mock_credentials()
 
         with patch("googleapiclient.discovery.build") as mock_build, \
-             patch("googleapiclient.http.MediaFileUpload") as mock_media:
+             patch("googleapiclient.http.MediaFileUpload"):
 
             mock_request = MagicMock()
             mock_request.next_chunk.return_value = (None, {"id": "YT_VID_001"})

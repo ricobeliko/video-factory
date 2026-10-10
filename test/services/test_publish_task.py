@@ -1,13 +1,11 @@
 import json
 import os
 import shutil
-import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.config import config
 from app.models import const
-from app.services import state as sm
 from app.services import task as tm
 from app.services.state import MemoryState
 from app.utils import utils

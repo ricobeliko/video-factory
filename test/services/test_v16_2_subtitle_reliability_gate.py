@@ -14,7 +14,6 @@ import os
 import shutil
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.config import config
@@ -67,7 +66,7 @@ class TestV16_2SubtitleReliabilityGate(unittest.TestCase):
     def test_02_srt_validator_empty_file(self):
         """2. arquivo vazio -> invalid (empty_file)."""
         empty_srt = os.path.join(self.tmp_dir, "empty.srt")
-        with open(empty_srt, "w", encoding="utf-8") as f:
+        with open(empty_srt, "w", encoding="utf-8"):
             pass
         res = subtitle.validate_subtitle_file(empty_srt)
         self.assertFalse(res["valid"])
@@ -280,7 +279,7 @@ class TestV16_2SubtitleReliabilityGate(unittest.TestCase):
             sub_maker = MagicMock()
 
             def _fake_edge(text, sub_maker, subtitle_file, word_level=False):
-                with open(subtitle_file, "w", encoding="utf-8") as f:
+                with open(subtitle_file, "w", encoding="utf-8"):
                     pass  # vazio
 
             def _fake_whisper(audio_file, subtitle_file, word_level=False):
@@ -393,7 +392,7 @@ class TestV16_2SubtitleReliabilityGate(unittest.TestCase):
             params = VideoParams(video_subject="Whisper Empty", subtitle_enabled=True, subtitle_required=True)
 
             def _fake_whisper(audio_file, subtitle_file, word_level=False):
-                with open(subtitle_file, "w", encoding="utf-8") as f:
+                with open(subtitle_file, "w", encoding="utf-8"):
                     pass  # vazio
                 return subtitle_file
 
@@ -863,7 +862,7 @@ class TestV16_2SubtitleReliabilityGate(unittest.TestCase):
         task_id = "test-edge-temp-invalid"
         task_dir = utils.task_dir(task_id)
         os.makedirs(task_dir, exist_ok=True)
-        canonical_srt = os.path.join(task_dir, "subtitle.srt")
+        os.path.join(task_dir, "subtitle.srt")
 
         try:
             params = VideoParams(video_subject="Edge Temp Inv", subtitle_enabled=True, subtitle_required=True)

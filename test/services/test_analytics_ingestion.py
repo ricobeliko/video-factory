@@ -3,7 +3,6 @@ Tests for Analytics Ingestion Service and Snapshot Compatibility.
 V10-A — Automatic Analytics Provider Foundation.
 """
 import os
-import sqlite3
 import tempfile
 import threading
 import unittest
@@ -16,7 +15,6 @@ from app.services import scheduler
 from app.services.analytics_providers import (
     AnalyticsProviderError,
     ERR_AUTH,
-    NormalizedAnalytics,
     YouTubeAnalyticsProvider,
     register_provider,
 )
@@ -269,7 +267,7 @@ class TestAnalyticsIngestion(unittest.TestCase):
         active_threads_before = threading.active_count()
         # Chama rotinas do provider e da ingestão
         provider = analytics_ingestion.get_provider("youtube")
-        status = provider.get_status(db_path=self.db_path)
+        provider.get_status(db_path=self.db_path)
         active_threads_after = threading.active_count()
 
         # Nenhuma thread daemon ou worker extra foi disparada

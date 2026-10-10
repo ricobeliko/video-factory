@@ -34,12 +34,11 @@ Cobre os requisitos 1 a 30:
 30. UI read não carrega engine
 """
 import os
-import shutil
 import subprocess
 import tempfile
 import threading
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services import (
     clip_mode,
@@ -875,7 +874,7 @@ class TestClipTranscription(unittest.TestCase):
         def side_effect(cmd, **kwargs):
             temp_f = cmd[-1]
             created_temp.append(temp_f)
-            with open(temp_f, "wb") as f:
+            with open(temp_f, "wb"):
                 pass
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -892,7 +891,7 @@ class TestClipTranscription(unittest.TestCase):
         source_id = self._import_ready_source(has_audio=True)
         target_dir = utils.storage_dir(os.path.join("clip_sources", source_id, "transcription"), create=True)
         final_audio = os.path.join(target_dir, "audio.wav")
-        with open(final_audio, "wb") as f:
+        with open(final_audio, "wb"):
             pass
 
         def side_effect(cmd, **kwargs):

@@ -15,8 +15,6 @@ Cobre os 12 requisitos obrigatórios da especificação:
 12. Presenter continua OFF (avatar_mode='none' padrão, Nox dormant)
 """
 
-import json
-import math
 import socket
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch

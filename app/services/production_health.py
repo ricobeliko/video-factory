@@ -20,7 +20,6 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from loguru import logger
 
 from app.config import config
 from app.services import operator_console, scheduler

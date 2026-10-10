@@ -16,7 +16,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import uuid
 
 from loguru import logger

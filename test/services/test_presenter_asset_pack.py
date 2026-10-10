@@ -18,7 +18,7 @@ import os
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
@@ -78,7 +78,7 @@ def test_1_character_spec_and_config_loads_correctly():
 
     # 2. Carregamento de config.json
     with tempfile.TemporaryDirectory() as tmp_dir:
-        pack_dir = _create_synthetic_character_pack(Path(tmp_dir), "misterio_host_v1")
+        _create_synthetic_character_pack(Path(tmp_dir), "misterio_host_v1")
         pack = presenter.resolve_character_pack("misterio_host_v1", custom_root=tmp_dir)
 
         assert pack["character_id"] == "misterio_host_v1"

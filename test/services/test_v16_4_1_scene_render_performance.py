@@ -200,7 +200,7 @@ class TestSceneRenderPerformanceTiming(unittest.TestCase):
         self.assertGreaterEqual(timings["FINAL_RENDER_SECONDS"], 0.0)
 
         logs = [call.args[0] for call in mock_logger.call_args_list if call.args]
-        self.assertTrue(any("FINAL_RENDER_SECONDS=" in str(l) for l in logs))
+        self.assertTrue(any("FINAL_RENDER_SECONDS=" in str(log_item) for log_item in logs))
 
 
 

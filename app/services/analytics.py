@@ -7,9 +7,8 @@ import re
 from statistics import median
 from datetime import timedelta
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from loguru import logger
 
 # Caminho opcional override do SQLite (útil em testes)
 DB_PATH: Optional[str] = None

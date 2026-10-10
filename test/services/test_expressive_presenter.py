@@ -21,10 +21,8 @@ Cobertura estrita dos 15 requisitos:
 
 import os
 import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from app.models import const
 from app.models.schema import VideoParams
@@ -254,7 +252,7 @@ def test_14_autonomous_presenter_remains_strictly_off():
 
 def test_15_no_network_or_external_api_called():
     """15. nenhuma rede/API/publicação."""
-    with patch("urllib.request.urlopen") as mock_urlopen, patch("requests.post") if "requests" in globals() else patch("urllib.request.Request") as mock_req:
+    with patch("urllib.request.urlopen") as mock_urlopen, patch("requests.post") if "requests" in globals() else patch("urllib.request.Request"):
         subtitles = presenter.parse_srt_timeline(SAMPLE_SRT)
         timeline = presenter.build_presenter_expression_timeline(
             subtitle_items=subtitles,

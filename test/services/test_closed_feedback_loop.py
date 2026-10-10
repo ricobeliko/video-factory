@@ -5,9 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models import const
 from app.config import config
-from app.models.schema import VideoParams
 from app.services import (analytics, analytics_ingestion, autonomous_production as autonomous,
                           content_strategy as strategy, operator_console as console,
                           profile_manager, quality_score, safety_gate, scheduler)

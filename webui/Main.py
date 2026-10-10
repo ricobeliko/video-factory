@@ -8122,7 +8122,7 @@ def _render_publication_schedule():
         c_yes, c_no = st.columns(2)
         with c_yes:
             if st.button("Confirmar Limpeza", key="confirm_clear_sched_yes_btn", type="primary", use_container_width=True):
-                removed_count = scheduler.clear_future_schedule()
+                scheduler.clear_future_schedule()
                 st.session_state["confirm_clear_future_schedule"] = False
                 st.toast(tr("Schedule Cleared"), icon="🗑️")
                 st.rerun(scope="fragment")
@@ -9762,7 +9762,6 @@ def _render_generation_controls(
             icon=":material/playlist_add:",
         )
 
-    batch_submitted = False
     if batch_button:
         if not operator_console.is_primary_instance():
             st.error("Operação bloqueada: Esta instância está em modo VIEW ONLY.")
@@ -9836,7 +9835,6 @@ def _render_generation_controls(
                 _remove_active_generation_task(task_id)
 
         if submitted_task_ids:
-            batch_submitted = True
             st.session_state["current_generation_task_id"] = submitted_task_ids[0]
             feedback_msg = tr("{count} videos added to generation queue").format(
                 count=len(submitted_task_ids)

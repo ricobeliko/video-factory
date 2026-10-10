@@ -10,12 +10,10 @@ idempotência e total isolamento de falhas.
 from datetime import datetime, timedelta, timezone
 import json
 import os
-import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from app.models import const
 from app.services import analytics, analytics_ingestion
 from app.services.analytics_providers import (
     AnalyticsProviderError,
@@ -25,7 +23,6 @@ from app.services.analytics_providers import (
     ERR_RATE_LIMIT,
     ERR_TEMPORARY,
     ERR_UNAVAILABLE,
-    get_provider,
     validate_provider_configuration,
 )
 from app.services import operator_console, profile_manager, scheduler
@@ -862,7 +859,6 @@ def run_analytics_collection_cycle(
             task_id = cand["task_id"]
             platform = cand["platform"]
             channel_id = cand.get("channel_id")
-            ext_id = cand.get("external_id")
 
             # 6. Revalidação imediatamente antes de chamar o provider (Seção V12-F.1A):
             # reconfirma elegibilidade (dedupe de cooldown/snapshot novo) e libera apenas

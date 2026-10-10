@@ -11,7 +11,8 @@ Provides a centralized, SaaS-grade Mission Control dashboard:
 
 from datetime import datetime, timezone
 import html
-from typing import Any, Dict, List, Optional
+import os
+from typing import Any, Dict, Optional
 import streamlit as st
 
 from app.models import const
@@ -93,8 +94,6 @@ def _render_stepper_html(current_stage_idx: int = 5) -> str:
 
 def _get_mock_fixtures(scenario: str) -> Dict[str, Any]:
     """Generates pure in-memory test fixtures for visual homologation without persisting to DB."""
-    now_str = datetime.now().strftime("%H:%M:%S")
-
     # Base state
     mock_data = {
         "factory_state": "RUNNING",
@@ -1345,7 +1344,7 @@ def _render_profile_management_section(demo_enabled: bool, scenario_choice: str,
                         else:
                             st.toast("Canal alterado em demonstração.", icon="📺")
         else:
-            st.info(f"Nenhum canal de publicação vinculado a este perfil. Adicione abaixo.")
+            st.info("Nenhum canal de publicação vinculado a este perfil. Adicione abaixo.")
 
         with st.expander("➕ Vincular Novo Canal ao Perfil", expanded=False):
             if not is_primary:
@@ -1424,7 +1423,7 @@ def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is
                 if last_err:
                     st.caption(f":red[Erro:] `{last_err[:40]}`")
                 else:
-                    st.caption(f":green[Operação normal]")
+                    st.caption(":green[Operação normal]")
 
                 with st.expander("Detalhes", expanded=False):
                     clean_details = _sanitize_text(p_val.get("details", "Sem detalhes adicionais"))
@@ -1435,7 +1434,7 @@ def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is
 
                     if p_name in ("YouTube Analytics", "TikTok Analytics"):
                         plat = "youtube" if "youtube" in p_name.lower() else "tiktok"
-                        if st.button(f"🔍 Testar Configuração", key=f"op_test_cfg_{plat}", use_container_width=True):
+                        if st.button("🔍 Testar Configuração", key=f"op_test_cfg_{plat}", use_container_width=True):
                             res = operator_console.test_analytics_provider_configuration(plat)
                             if res.get("configured"):
                                 st.success(f"✓ Configuração do {p_name} válida e pronta para uso.")
@@ -2549,7 +2548,7 @@ def _render_observability_section(demo_enabled: bool, scenario_choice: str, is_p
             if an_snap:
                 st.write(f"**Analytics:** Views: {an_snap.get('metrics', {}).get('views')} | Likes: {an_snap.get('metrics', {}).get('likes')}")
             else:
-                st.write(f"**Analytics:** Sem snapshots recentes")
+                st.write("**Analytics:** Sem snapshots recentes")
             st.write(f"**Feedback Loop:** Modo: `{p_cl.get('mode')}` | Amostras: {p_cl.get('sample_count')} (`{p_cl.get('evidence_state')}`)")
             st.write(f"**Cost Guard:** {p_cost.get('approvals_24h')}/{p_cost.get('max_approvals_24h')} aprovados | {p_cost.get('attempts_24h')}/{p_cost.get('max_attempts_24h')} tentativas")
 
@@ -2579,7 +2578,7 @@ def _render_observability_section(demo_enabled: bool, scenario_choice: str, is_p
             if an_snap:
                 st.write(f"**Analytics:** Views: {an_snap.get('metrics', {}).get('views')} | Likes: {an_snap.get('metrics', {}).get('likes')}")
             else:
-                st.write(f"**Analytics:** Sem snapshots recentes")
+                st.write("**Analytics:** Sem snapshots recentes")
             st.write(f"**Feedback Loop:** Modo: `{p_cl.get('mode')}` | Amostras: {p_cl.get('sample_count')} (`{p_cl.get('evidence_state')}`)")
             st.write(f"**Cost Guard:** {p_cost.get('approvals_24h')}/{p_cost.get('max_approvals_24h')} aprovados | {p_cost.get('attempts_24h')}/{p_cost.get('max_attempts_24h')} tentativas")
 

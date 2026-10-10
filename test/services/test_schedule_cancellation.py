@@ -2,7 +2,6 @@
 Testes unitários e de integração para cancelamento terminal de scheduled_posts com PRIMARY Guard (Hotfix V12-D.1).
 """
 import io
-import json
 import os
 import shutil
 import sys
@@ -12,7 +11,6 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.services import operator_console, scheduler
-from app.utils import utils
 
 
 class TestScheduleCancellation(unittest.TestCase):

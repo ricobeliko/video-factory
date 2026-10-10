@@ -6,7 +6,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.models import const
 from app.services import scheduler
 
 

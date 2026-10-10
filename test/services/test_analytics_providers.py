@@ -8,19 +8,15 @@ from unittest.mock import patch, MagicMock
 
 from app.config import config
 from app.services.analytics_providers import (
-    AnalyticsProvider,
     AnalyticsProviderError,
-    NormalizedAnalytics,
     YouTubeAnalyticsProvider,
     TikTokAnalyticsProvider,
     get_provider,
-    get_all_providers_status,
     STATUS_CONFIGURED,
     STATUS_NOT_CONFIGURED,
     ERR_AUTH,
     ERR_RATE_LIMIT,
     ERR_TEMPORARY,
-    ERR_NOT_FOUND,
 )
 from app.services import operator_console
 

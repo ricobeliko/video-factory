@@ -6,8 +6,8 @@ import os
 import shutil
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from app.config import config
 from app.models import const
@@ -225,7 +225,7 @@ class TestMultiProfileConsole(unittest.TestCase):
     # 13. nenhuma secret persistida
     def test_13_no_secrets_persisted(self):
         prof = profile_manager.create_profile("No Secret", is_active=True, db_path=self.db_path)
-        ch = profile_manager.create_channel(
+        profile_manager.create_channel(
             prof["id"], "youtube", "YT Sec", external_profile_name="public_handle", db_path=self.db_path
         )
         with scheduler.get_connection(self.db_path) as conn:
@@ -239,8 +239,8 @@ class TestMultiProfileConsole(unittest.TestCase):
     # 14. múltiplos canais mesma plataforma exibidos
     def test_14_multiple_channels_same_platform_displayed(self):
         prof = profile_manager.create_profile("Multi Same", is_active=True, db_path=self.db_path)
-        ch1 = profile_manager.create_channel(prof["id"], "youtube", "Canal 1", is_enabled=True, db_path=self.db_path)
-        ch2 = profile_manager.create_channel(prof["id"], "youtube", "Canal 2", is_enabled=True, db_path=self.db_path)
+        profile_manager.create_channel(prof["id"], "youtube", "Canal 1", is_enabled=True, db_path=self.db_path)
+        profile_manager.create_channel(prof["id"], "youtube", "Canal 2", is_enabled=True, db_path=self.db_path)
 
         overview = operator_console.get_profile_operations_overview(db_path=self.db_path)
         po = next(p for p in overview if p["profile_id"] == prof["id"])
@@ -362,7 +362,7 @@ class TestMultiProfileConsole(unittest.TestCase):
     # 21. publication routing mantém channel correto
     def test_21_publication_routing_maintains_correct_channel(self):
         prof = profile_manager.create_profile("Pub Route Prof", is_active=True, db_path=self.db_path)
-        ch = profile_manager.create_channel(
+        profile_manager.create_channel(
             prof["id"], "youtube", "Pub Ch", external_profile_name="uploadpost_pub", is_enabled=True, db_path=self.db_path
         )
         task_id = "task-pub-route-01"
@@ -395,7 +395,7 @@ class TestMultiProfileConsole(unittest.TestCase):
     # 23. disabled channel bloqueia
     def test_23_disabled_channel_blocks(self):
         prof = profile_manager.create_profile("Dis Ch Sched", is_active=True, db_path=self.db_path)
-        ch = profile_manager.create_channel(prof["id"], "youtube", "YT Inativo", is_enabled=False, db_path=self.db_path)
+        profile_manager.create_channel(prof["id"], "youtube", "YT Inativo", is_enabled=False, db_path=self.db_path)
         task_id = "task-dis-ch-01"
         profile_manager.set_task_profile_id(task_id, prof["id"], db_path=self.db_path)
 

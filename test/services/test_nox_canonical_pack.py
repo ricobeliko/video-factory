@@ -221,7 +221,7 @@ def test_7_dimension_mismatch_detected(tmp_path):
 
 def test_8_contact_sheet_preview_creation(tmp_path):
     """8. preview/contact sheet pode ser criado com assets sintéticos."""
-    pack_dir = _create_synthetic_pack(
+    _create_synthetic_pack(
         tmp_path / "nox_v1",
         include_core=True,
         include_extended=True,

@@ -33,7 +33,7 @@ import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.config import config
 from app.models import const
@@ -292,7 +292,7 @@ class TestProfileScheduler(unittest.TestCase):
     # 10. duplicata task/channel/platform não é criada
     def test_10_duplicate_task_channel_platform_not_created(self):
         prof = profile_manager.create_profile("Dup Test", is_active=True, db_path=self.db_path)
-        ch = profile_manager.create_channel(prof["id"], "youtube", "Dup YT", is_enabled=True, db_path=self.db_path)
+        profile_manager.create_channel(prof["id"], "youtube", "Dup YT", is_enabled=True, db_path=self.db_path)
 
         task_id = "task-dup-01"
         profile_manager.set_task_profile_id(task_id, prof["id"], db_path=self.db_path)
@@ -319,7 +319,7 @@ class TestProfileScheduler(unittest.TestCase):
     # 11. publish resolve channel da task
     def test_11_publish_resolves_task_channel(self):
         prof_a = profile_manager.create_profile("Perfil Alfa", is_active=True, db_path=self.db_path)
-        ch_a = profile_manager.create_channel(
+        profile_manager.create_channel(
             prof_a["id"], "youtube", "Canal Alfa", external_profile_name="UploadPost_Alfa", is_enabled=True, db_path=self.db_path
         )
         prof_b = profile_manager.create_profile("Perfil Beta", is_active=True, db_path=self.db_path)
@@ -367,7 +367,7 @@ class TestProfileScheduler(unittest.TestCase):
     # 13. múltiplos canais ambíguos não escolhem arbitrariamente
     def test_13_multiple_ambiguous_channels_do_not_pick_arbitrarily(self):
         prof = profile_manager.create_profile("Multi YT", is_active=True, db_path=self.db_path)
-        ch1 = profile_manager.create_channel(prof["id"], "youtube", "YT Canal 1", is_enabled=True, db_path=self.db_path)
+        profile_manager.create_channel(prof["id"], "youtube", "YT Canal 1", is_enabled=True, db_path=self.db_path)
         ch2 = profile_manager.create_channel(prof["id"], "youtube", "YT Canal 2", is_enabled=True, db_path=self.db_path)
 
         task_id = "task-ambiguous-01"

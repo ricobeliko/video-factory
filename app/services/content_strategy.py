@@ -25,7 +25,6 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from loguru import logger
 
 # Faixas operacionais do Strategy Score
 LABEL_PRIORITY = "PRIORITY"       # 85–100

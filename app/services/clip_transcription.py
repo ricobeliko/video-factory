@@ -7,14 +7,8 @@ persistência de transcrições e segmentos temporais no SQLite, concorrência c
 e isolamento rigoroso de falhas.
 """
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
 from datetime import datetime, timezone
-import json
 import os
-from pathlib import Path
-import re
-import shutil
-import sqlite3
 import subprocess
 import threading
 from typing import Any, Dict, List, Optional, Tuple

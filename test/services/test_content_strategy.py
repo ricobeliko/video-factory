@@ -2,7 +2,6 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from app.services import content_strategy, quality_score, safety_gate
 

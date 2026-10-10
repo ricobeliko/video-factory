@@ -50,7 +50,6 @@ from app.services import (
     scene_material,
     scene_planner,
     task as tm,
-    task_artifacts,
     video,
 )
 

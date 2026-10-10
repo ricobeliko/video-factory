@@ -241,7 +241,7 @@ class TestChannelFactory(unittest.TestCase):
 
     def test_g_no_secrets_persisted(self):
         """G. Nenhum secret, bearer token ou chave de API persistido no SQLite."""
-        res = profile_manager.onboard_channel_workspace(
+        profile_manager.onboard_channel_workspace(
             name="Canal Seguro",
             niche="seguranca",
             external_account_id="UCseguro_1234567890",

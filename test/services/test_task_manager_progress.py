@@ -11,7 +11,6 @@ from webui.Main import (
     _active_generation_tasks,
     _add_active_generation_task,
     _collect_task_summaries,
-    _remove_active_generation_task,
 )
 
 
@@ -157,8 +156,8 @@ class TestTaskManagerProgress(unittest.TestCase):
 
         s1 = {item["task_id"]: item for item in _collect_task_summaries(limit=50)}
         self.assertEqual(s1[t1]["progress"], 40)
-        self.assertEqual(s2_prog := s1[t2]["progress"], 0)
-        self.assertEqual(s3_prog := s1[t3]["progress"], 0)
+        self.assertEqual(s1[t2]["progress"], 0)
+        self.assertEqual(s1[t3]["progress"], 0)
         self.assertEqual(s1[t1]["state"], const.TASK_STATE_PROCESSING)
         self.assertEqual(s1[t2]["state"], const.TASK_STATE_PROCESSING)
         self.assertEqual(s1[t3]["state"], const.TASK_STATE_PROCESSING)

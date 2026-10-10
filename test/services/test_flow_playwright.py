@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.flow_playwright import (
+    GENERATION_COMPLETE_JS,
     check_generate_actionable,
     check_login_state,
     check_pending_credit_approval,
@@ -457,6 +458,78 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertIsNone(tile_loc)
         self.assertEqual(err, "AMBIGUOUS_GENERATION_RESULTS")
 
+    def test_old_ready_tile_does_not_complete_new_placeholder(self):
+        """Um tile antigo do baseline pronto NÃO completa um novo placeholder; completa apenas quando o novo fica pronto."""
+        # 1. Validação direta da lógica JS (readyCount > baseCount)
+        js_test = f"""
+        const func = {GENERATION_COMPLETE_JS};
+        // Estado A: baseline=1, tile 0 pronto, tile 1 placeholder não pronto
+        let tilesA = [
+            {{ querySelector: (sel) => (sel.includes('img') ? {{}} : null), innerText: '' }},
+            {{ querySelector: (sel) => null, innerText: '' }}
+        ];
+        global.document = {{
+            querySelectorAll: () => tilesA
+        }};
+        const resA = func(1);
+        if (resA !== false) {{
+            process.stderr.write("FAILED_A: expected false but got " + resA);
+            process.exit(1);
+        }}
+
+        // Estado B: baseline=1, tile 0 pronto E tile 1 pronto
+        let tilesB = [
+            {{ querySelector: (sel) => (sel.includes('img') ? {{}} : null), innerText: '' }},
+            {{ querySelector: (sel) => (sel.includes('img') ? {{}} : null), innerText: '' }}
+        ];
+        global.document = {{
+            querySelectorAll: () => tilesB
+        }};
+        const resB = func(1);
+        if (resB !== 'COMPLETED') {{
+            process.stderr.write("FAILED_B: expected COMPLETED but got " + resB);
+            process.exit(2);
+        }}
+        process.stdout.write("OK");
+        """
+        import subprocess
+        proc = subprocess.run(["node", "-e", js_test], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"JS readiness failed: {proc.stderr}")
+        self.assertEqual(proc.stdout.strip(), "OK")
+
+        # 2. Validação no Python em wait_for_generation_complete
+        mock_page = MagicMock()
+        mock_tiles = MagicMock()
+        mock_tiles.count.return_value = 2
+
+        # Tile 0: antigo da cena 1 (já no baseline)
+        mock_t0 = MagicMock()
+        mock_img0 = MagicMock()
+        mock_img0.count.return_value = 1
+        mock_img0.get_attribute.return_value = "https://flow.google.com/asb/OLD_TOKEN_SCENE_01"
+        mock_t0.locator.side_effect = lambda sel: mock_img0 if "img" in sel else MagicMock(count=lambda: 0)
+
+        # Tile 1: novo da cena 2 (novo resultado)
+        mock_t1 = MagicMock()
+        mock_img1 = MagicMock()
+        mock_img1.count.return_value = 1
+        mock_img1.get_attribute.return_value = "https://flow.google.com/asb/NEW_TOKEN_SCENE_02"
+        mock_t1.locator.side_effect = lambda sel: mock_img1 if "img" in sel else MagicMock(count=lambda: 0)
+
+        mock_tiles.nth.side_effect = lambda idx: mock_t0 if idx == 0 else mock_t1
+        mock_page.locator.return_value = mock_tiles
+
+        base_id_01 = extract_tile_identifier_from_src("https://flow.google.com/asb/OLD_TOKEN_SCENE_01")
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            ok, tile_loc, err = wait_for_generation_complete(
+                mock_page, baseline_ids={base_id_01}, timeout_sec=10
+            )
+            self.assertTrue(ok)
+            self.assertEqual(tile_loc, mock_t1)
+            self.assertIsNone(err)
+            mock_expect.assert_called_once_with(mock_t1)
+
     def test_download_requires_or_receives_specific_tile(self):
         """5. Download recebe tile_locator específico e busca elementos dentro dele."""
         mock_page = MagicMock()
@@ -874,6 +947,52 @@ class TestFlowPlaywright(unittest.TestCase):
             mock_launch.assert_called_once()
             _, kwargs = mock_launch.call_args
             self.assertFalse(kwargs.get("headless"))
+
+    def test_download_only_telemetry_zero_clicks_zero_attempts(self):
+        """--download-only reporta telemetria verdadeira: 0 cliques Generate, 0 aprovações, 0 tentativas."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button") as mock_get_gen, \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"tile_a"}), \
+             patch("scripts.flow_playwright.download_generated_clip", return_value=(True, None)), \
+             patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 2, "prompt_en": "test prompt", "expected_clip": "flow_scene_02.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+            mock_gen_btn = MagicMock()
+            mock_get_gen.return_value = mock_gen_btn
+
+            # Simula grade com 2 tiles para download_only
+            mock_tiles = MagicMock()
+            mock_tiles.count.return_value = 2
+            mock_t0 = MagicMock()
+            mock_tiles.nth.return_value = mock_t0
+            mock_page.locator.return_value = mock_tiles
+
+            with patch("scripts.flow_playwright.expect"):
+                res = run_playwright_flow_poc(
+                    manifest_path="dummy_manifest.json",
+                    scene_index=2,
+                    download_only=True,
+                )
+
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            self.assertEqual(res["credit_approval_click_count"], 0)
+            self.assertFalse(res["credit_approval_confirmed"])
+            self.assertEqual(res["generation_attempts"], 0)
+            mock_gen_btn.click.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1056,20 +1056,34 @@ def check_asset_eligibility_for_destination(
 # 2.1. Contrato de Conteúdo Brasileiro (Fase V16.1 — Brazilian Content Contract)
 # ---------------------------------------------------------------------------
 
+# Allowlist explícita de vozes multilíngues homologadas com suporte oficial ao português (pt-BR)
+_APPROVED_MULTILINGUAL_PT_BR_VOICES: frozenset[str] = frozenset({
+    "en-us-brianmultilingualneural",
+})
+
+
 def is_valid_pt_br_voice(voice_name: Optional[str]) -> bool:
-    """Verifica se um identificador de voz TTS pertence comprovadamente ao locale pt-BR.
+    """Verifica se um identificador de voz TTS é compatível com pt-BR para o contrato autônomo (V16.1 / V1.5E-G8.6).
 
     Regras:
     - Retorna False para strings vazias, None ou sentinelas de sem voz ('no-voice', 'none').
+    - Aceita a allowlist explícita de vozes multilíngues homologadas para pt-BR ('en-US-BrianMultilingualNeural').
     - Aceita identificadores com prefixo pt-BR (ex: 'pt-BR-AntonioNeural', 'pt-BR-FranciscaNeural-Female',
       'pt-BR-ThalitaMultilingualNeural', 'pt-BR-AntonioNeural-Male').
-    - Rejeita qualquer outro locale (ex: 'af-ZA-*', 'en-*', 'zh-*', 'pt-PT-*').
+    - Rejeita qualquer outro locale ou voz estrangeira não homologada (ex: 'af-ZA-*', 'en-US-JennyNeural', 'en-US-GuyNeural', 'zh-*', 'pt-PT-*').
     """
     if not voice_name or not str(voice_name).strip():
         return False
     clean = str(voice_name).strip()
     if clean.lower() in ("no-voice", "none"):
         return False
+
+    # 1. Allowlist explícita de vozes multilíngues homologadas para pt-BR
+    normalized = clean.replace("_", "-").lower()
+    if normalized in _APPROVED_MULTILINGUAL_PT_BR_VOICES:
+        return True
+
+    # 2. Vozes nativas do locale pt-BR
     parts = clean.replace("_", "-").split("-")
     if len(parts) >= 2:
         lang_part = parts[0].strip().lower()

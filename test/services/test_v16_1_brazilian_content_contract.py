@@ -111,6 +111,7 @@ class TestV16_1BrazilianContentContract(unittest.TestCase):
             "pt-BR-AntonioNeural-Male",
             "pt-BR-FranciscaNeural-Female",
             "pt-br-brenda-neural",
+            "en-US-BrianMultilingualNeural",
         ]
 
         for v in valid_voices:

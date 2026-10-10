@@ -73,7 +73,7 @@ class AutomationSettings(BaseModel):
 class MusicSettings(BaseModel):
     enabled: bool = False
     mode: str = "auto"
-    volume: float = 0.10
+    volume: float = 0.20
     default_mood: str = "neutral"
 
 
@@ -993,7 +993,7 @@ def onboard_channel_workspace(
     if settings is None:
         settings_model = ChannelWorkspaceSettings()
         # Novos canais criados pelo onboarding recebem defaults operacionais explícitos
-        settings_model.voice.voice_name = "pt-BR-FranciscaNeural"
+        settings_model.voice.voice_name = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
         settings_model.voice.voice_rate = 1.0
         settings_model.voice.voice_volume = 1.0
         settings_model.visual.visual_director_enabled = True
@@ -1124,10 +1124,10 @@ def get_generation_profile_context(
     fallback_preset = const.DEFAULT_MONETIZATION_PRESET
     fallback_growth = const.DEFAULT_GROWTH_MODE
 
-    # Precedência: Profile Settings explícito -> Global Config -> Safe Default
+    # Precedência: Voz GLOBAL da aplicação (V1.5E-G8.6: Brian como voz global para todos os canais da fábrica)
     # 1. Voice
-    global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "pt-BR-FranciscaNeural"
-    voice_name = settings.voice.voice_name if settings.voice.voice_name else global_voice
+    global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
+    voice_name = global_voice
 
     global_rate = config.ui.get("voice_rate") or config.app.get("voice_rate") or 1.0
     voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else float(global_rate)

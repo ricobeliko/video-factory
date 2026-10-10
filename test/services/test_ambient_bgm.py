@@ -78,22 +78,23 @@ def test_music_enabled_and_mode_auto_returns_ambient_auto():
 # 4. Volume inválido é normalizado com segurança
 # -----------------------------------------------------------------------------
 def test_invalid_volume_is_safely_normalized():
-    """Valores de volume inválidos ou fora dos limites seguros [0.05, 0.15] são normalizados."""
+    """Valores de volume inválidos ou fora dos limites seguros [0.05, 0.20] são normalizados."""
     assert ambient_bgm.normalize_volume(0.01) == 0.05
-    assert ambient_bgm.normalize_volume(0.50) == 0.15
+    assert ambient_bgm.normalize_volume(0.50) == 0.20
     assert ambient_bgm.normalize_volume(0.08) == 0.08
-    assert ambient_bgm.normalize_volume("invalido") == 0.10
-    assert ambient_bgm.normalize_volume(None) == 0.10
-    assert ambient_bgm.normalize_volume(float("nan")) == 0.10
-    assert ambient_bgm.normalize_volume(-0.5) == 0.10
+    assert ambient_bgm.normalize_volume(0.20) == 0.20
+    assert ambient_bgm.normalize_volume("invalido") == 0.20
+    assert ambient_bgm.normalize_volume(None) == 0.20
+    assert ambient_bgm.normalize_volume(float("nan")) == 0.20
+    assert ambient_bgm.normalize_volume(-0.5) == 0.20
 
     m_settings_clamped = MusicSettings(enabled=True, mode="auto", volume=0.99)
     res_clamped = bgm_service.resolve_autonomous_bgm(music_settings=m_settings_clamped)
-    assert res_clamped["volume"] == 0.15
+    assert res_clamped["volume"] == 0.20
 
     m_settings_invalid = {"enabled": True, "mode": "auto", "volume": "not_a_number"}
     res_invalid = bgm_service.resolve_autonomous_bgm(music_settings=m_settings_invalid)
-    assert res_invalid["volume"] == 0.10
+    assert res_invalid["volume"] == 0.20
 
 
 # -----------------------------------------------------------------------------
@@ -252,7 +253,7 @@ def test_legacy_channel_backward_compatibility():
     settings = ChannelWorkspaceSettings.from_json(legacy_json)
     assert settings.music.enabled is False
     assert settings.music.mode == "auto"
-    assert settings.music.volume == 0.10
+    assert settings.music.volume == 0.20
     assert settings.music.default_mood == "neutral"
 
     # Confirma que resolve_autonomous_bgm é estritamente fail-closed para perfil legado
@@ -463,4 +464,116 @@ def test_synthesis_command_contains_no_profile_volume_filter(monkeypatch):
     assert len(captured_cmds) == 1
     full_cmd_str = " ".join(captured_cmds[0])
     assert "volume=" not in full_cmd_str
+
+
+# -----------------------------------------------------------------------------
+# 19. Volume 0.20 baseline oficial e preservação de volumes existentes
+# -----------------------------------------------------------------------------
+def test_volume_020_baseline_and_existing_profiles_preserved():
+    """MusicSettings tem volume padrão 0.20 e perfis existentes com 0.10/0.15 são preservados."""
+    # Default novo
+    default_music = MusicSettings()
+    assert default_music.enabled is False
+    assert default_music.volume == 0.20
+
+    # Limites de normalização
+    assert ambient_bgm.DEFAULT_BGM_VOLUME == 0.20
+    assert ambient_bgm.MAX_BGM_VOLUME == 0.20
+    assert ambient_bgm.MIN_BGM_VOLUME == 0.05
+    assert ambient_bgm.normalize_volume(0.20) == 0.20
+    assert ambient_bgm.normalize_volume(0.25) == 0.20
+    assert ambient_bgm.normalize_volume(0.01) == 0.05
+
+    # Perfil existente com 0.10 salvo explicitamente é preservado
+    json_010 = json.dumps({"music": {"enabled": True, "mode": "auto", "volume": 0.10}})
+    loaded_10 = ChannelWorkspaceSettings.from_json(json_010)
+    assert loaded_10.music.volume == 0.10
+    res_10 = bgm_service.resolve_autonomous_bgm(channel_settings=loaded_10)
+    assert res_10["volume"] == 0.10
+
+    # Perfil existente com 0.15 salvo explicitamente é preservado
+    json_015 = json.dumps({"music": {"enabled": True, "mode": "auto", "volume": 0.15}})
+    loaded_15 = ChannelWorkspaceSettings.from_json(json_015)
+    assert loaded_15.music.volume == 0.15
+    res_15 = bgm_service.resolve_autonomous_bgm(channel_settings=loaded_15)
+    assert res_15["volume"] == 0.15
+
+
+# -----------------------------------------------------------------------------
+# 20. BrianMultilingualNeural aceito pelo contrato pt-BR e outros bloqueados
+# -----------------------------------------------------------------------------
+def test_brian_multilingual_pt_br_contract_and_blocking_others():
+    """Brian é aceito na allowlist pt-BR enquanto outras vozes en-US e estrangeiras continuam bloqueadas."""
+    from app.services import autonomous_production
+
+    # 1. Brian aprovado
+    assert autonomous_production.is_valid_pt_br_voice("en-US-BrianMultilingualNeural") is True
+    assert autonomous_production.is_valid_pt_br_voice("EN_US_BRIANMULTILINGUALNEURAL") is True
+
+    # 2. Voz nativa pt-BR continua aceita
+    assert autonomous_production.is_valid_pt_br_voice("pt-BR-AntonioNeural") is True
+    assert autonomous_production.is_valid_pt_br_voice("pt-BR-FranciscaNeural") is True
+
+    # 3. Outras vozes en-US e estrangeiras permanecem bloqueadas
+    assert autonomous_production.is_valid_pt_br_voice("en-US-JennyNeural") is False
+    assert autonomous_production.is_valid_pt_br_voice("en-US-GuyNeural") is False
+    assert autonomous_production.is_valid_pt_br_voice("pt-PT-DuarteNeural") is False
+    assert autonomous_production.is_valid_pt_br_voice("af-ZA-AdriNeural") is False
+    assert autonomous_production.is_valid_pt_br_voice("zh-CN-XiaoxiaoNeural") is False
+
+
+# -----------------------------------------------------------------------------
+# 21. Preflight com Brian não reporta INVALID_LOCALE
+# -----------------------------------------------------------------------------
+def test_preflight_checks_with_brian_passes_without_invalid_locale(tmp_path):
+    """Preflight check com en-US-BrianMultilingualNeural reconhece Edge TTS e não gera INVALID_LOCALE."""
+    from app.services import autonomous_production
+    from app.config import config
+
+    db_path = str(tmp_path / "test_preflight.db")
+    with patch.dict(config.ui, {"voice_mode": "tts", "voice_name": "en-US-BrianMultilingualNeural"}), \
+         patch("app.services.autonomous_production.utils.check_ffmpeg_ready", return_value=True), \
+         patch("shutil.disk_usage", return_value=(0, 0, 10 * 1024**3)), \
+         patch("app.services.material.has_material_api_keys", return_value=True):
+        ok, msg, details = autonomous_production.check_required_providers_preflight(
+            video_source="pexels",
+            db_path=db_path,
+        )
+        assert details.get("TTS") != "INVALID_LOCALE"
+        assert details.get("TTS") == "Edge TTS"
+
+
+# -----------------------------------------------------------------------------
+# 22. Channel Factory context impõe voz GLOBAL Brian ignorando override
+# -----------------------------------------------------------------------------
+def test_channel_factory_context_enforces_global_brian_voice(tmp_path):
+    """get_generation_profile_context impõe a voz global mesmo se o perfil legado tiver outra voz salva."""
+    from app.services import profile_manager
+    from app.config import config
+
+    db_path = str(tmp_path / "test_global_voice.db")
+    with patch.dict(config.ui, {"voice_name": "en-US-BrianMultilingualNeural"}):
+        res = profile_manager.onboard_channel_workspace(
+            name="Canal Teste Brian",
+            niche="gta_vi",
+            topic_brief="Notícias GTA VI",
+            language="pt-BR",
+            external_account_id="UC1234567890abcdef",
+            db_path=db_path,
+        )
+        pid = res["profile"]["id"]
+
+        # Força voice_name legado no perfil
+        settings = profile_manager.get_profile_settings(pid, db_path=db_path)
+        settings.voice.voice_name = "pt-BR-AntonioNeural"
+        profile_manager.update_profile_settings(pid, settings, db_path=db_path)
+
+        # Confirma que settings persistidos guardam para retrocompatibilidade
+        reloaded = profile_manager.get_profile_settings(pid, db_path=db_path)
+        assert reloaded.voice.voice_name == "pt-BR-AntonioNeural"
+
+        # Mas o contexto de geração da fábrica autônoma impõe a voz global da fábrica
+        ctx = profile_manager.get_generation_profile_context(pid, db_path=db_path)
+        assert ctx["voice_name"] == "en-US-BrianMultilingualNeural"
+
 

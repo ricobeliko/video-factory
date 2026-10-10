@@ -96,9 +96,11 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
         # 3. Produção & Visual
         st.markdown("##### 3. Produção & Visual")
+        global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
         c_voice, c_stock = st.columns(2)
         with c_voice:
-            voice_val = st.text_input("Voz (TTS)", value="pt-BR-FranciscaNeural", key="cf_new_ch_voice")
+            st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key="cf_new_ch_voice", disabled=True)
+            voice_val = global_voice
         with c_stock:
             stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="cf_new_ch_stock")
 
@@ -122,13 +124,13 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         with c_music_mode:
             st.selectbox("Modo", options=["Auto pelo roteiro"], index=0, key="cf_new_ch_music_mode", disabled=True)
         with c_music_vol:
-            music_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15]
-            music_vol_labels = ["5%", "8%", "10%", "12%", "15%"]
+            music_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
+            music_vol_labels = ["5%", "8%", "10%", "12%", "15%", "20%"]
             sel_vol_idx = st.selectbox(
                 "Volume",
                 options=range(len(music_vol_options)),
                 format_func=lambda i: music_vol_labels[i],
-                index=2,
+                index=5,
                 key="cf_new_ch_music_vol",
             )
             music_volume = music_vol_options[sel_vol_idx]
@@ -178,7 +180,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
             settings_obj = profile_manager.ChannelWorkspaceSettings()
             settings_obj.editorial.topic_brief = clean_topic
-            settings_obj.voice.voice_name = str(voice_val or "pt-BR-FranciscaNeural").strip()
+            settings_obj.voice.voice_name = global_voice
             settings_obj.visual.visual_director_enabled = bool(vd_enabled)
             settings_obj.visual.flow_enabled = bool(flow_enabled)
             settings_obj.visual.flow_scene_count = int(flow_scenes)
@@ -322,9 +324,10 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
 
                 m_brief = st.text_area("Tema / Linha Editorial", value=settings.editorial.topic_brief or "", key=f"m_brief_{p_id}", disabled=not is_primary)
 
+                global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
                 c_m_v, c_m_stk = st.columns(2)
                 with c_m_v:
-                    m_voice = st.text_input("Voz (TTS)", value=settings.voice.voice_name or "pt-BR-FranciscaNeural", key=f"m_voice_{p_id}", disabled=not is_primary)
+                    st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key=f"m_voice_{p_id}", disabled=True)
                 with c_m_stk:
                     m_target_stock = st.number_input("Meta de Estoque", min_value=1, max_value=10, value=int(settings.automation.target_ready_stock or 3), key=f"m_stock_{p_id}", disabled=not is_primary)
 
@@ -347,9 +350,9 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 with c_mm_mode:
                     st.selectbox("Modo", options=["Auto pelo roteiro"], index=0, key=f"m_music_mode_{p_id}", disabled=True)
                 with c_mm_vol:
-                    m_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15]
-                    m_vol_labels = ["5%", "8%", "10%", "12%", "15%"]
-                    cur_vol_val = float(cur_music.volume if cur_music.volume is not None else 0.10)
+                    m_vol_options = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
+                    m_vol_labels = ["5%", "8%", "10%", "12%", "15%", "20%"]
+                    cur_vol_val = float(cur_music.volume if cur_music.volume is not None else 0.20)
                     cur_vol_idx = min(range(len(m_vol_options)), key=lambda i: abs(m_vol_options[i] - cur_vol_val))
                     sel_m_vol_idx = st.selectbox(
                         "Volume",
@@ -389,7 +392,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         profile_manager.update_profile(p_id, name=clean_m_name, niche=clean_m_niche, db_path=db_path)
                         updated_settings = settings.model_copy(deep=True)
                         updated_settings.editorial.topic_brief = str(m_brief or "").strip()
-                        updated_settings.voice.voice_name = str(m_voice or "pt-BR-FranciscaNeural").strip()
+                        updated_settings.voice.voice_name = settings.voice.voice_name or global_voice
                         updated_settings.visual.visual_director_enabled = bool(m_vd)
                         updated_settings.visual.flow_enabled = bool(m_flow)
                         updated_settings.visual.flow_scene_count = int(m_scenes)

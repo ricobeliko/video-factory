@@ -374,7 +374,7 @@ def resolve_autonomous_bgm(
     ÚNICA exceção explicitamente segura permitida (Fase V1.5E-G8):
     music.enabled == True AND music.mode == "auto"
     => bgm_type = "ambient_auto"
-    => bgm_volume = valor validado (0.05..0.15, default 0.10)
+    => bgm_volume = valor validado (0.05..0.20, default 0.20)
     => provenance_status = "SAFE_PROCEDURAL"
 
     Qualquer outro caso retorna:
@@ -396,13 +396,13 @@ def resolve_autonomous_bgm(
         if isinstance(music, dict):
             m_enabled = music.get("enabled", False) if m_enabled is None else m_enabled
             m_mode = music.get("mode", "auto") if m_mode is None else m_mode
-            m_volume = music.get("volume", 0.10) if m_volume is None else m_volume
+            m_volume = music.get("volume", 0.20) if m_volume is None else m_volume
             m_default_mood = music.get("default_mood", "neutral") if m_default_mood is None else m_default_mood
 
         clean_mode = str(m_mode or "").lower().strip()
         if bool(m_enabled) and clean_mode == "auto":
             from app.services import ambient_bgm
-            validated_vol = ambient_bgm.normalize_volume(m_volume, default=0.10)
+            validated_vol = ambient_bgm.normalize_volume(m_volume, default=0.20)
             return {
                 "enabled": True,
                 "type": "ambient_auto",

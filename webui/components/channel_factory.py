@@ -10,6 +10,7 @@ Apresenta a experiência de Channel Factory:
 from typing import Any, Dict, List, Optional
 import streamlit as st
 
+from app.config import config
 from app.services import autonomous_production, operator_console, post_for_me, profile_manager
 
 
@@ -100,7 +101,6 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         c_voice, c_stock = st.columns(2)
         with c_voice:
             st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key="cf_new_ch_voice", disabled=True)
-            voice_val = global_voice
         with c_stock:
             stock_target = st.number_input("Meta de Estoque de Vídeos", min_value=1, max_value=10, value=3, key="cf_new_ch_stock")
 

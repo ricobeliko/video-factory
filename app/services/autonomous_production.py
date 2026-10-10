@@ -1824,7 +1824,7 @@ def check_required_providers_preflight(
             details["TTS"] = "Gemini"
         else:
             try:
-                import edge_tts
+                import edge_tts  # noqa: F401
                 details["TTS"] = "Edge TTS"
             except Exception as exc:
                 return False, f"Provedor de TTS (Edge TTS) indisponível: {exc}", {"TTS": "UNAVAILABLE"}

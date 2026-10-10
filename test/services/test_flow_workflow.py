@@ -843,31 +843,55 @@ class TestFlowWorkflow(unittest.TestCase):
         tmp_files = [f for f in os.listdir(self.test_dir) if f.endswith(".tmp")]
         self.assertEqual(len(tmp_files), 0)
 
-    def test_stock_filler_validated_once_per_resolution_and_reused(self):
-        """19. A & B & C: Candidatos locais são validados uma única vez por resolução e pool é reutilizada deterministicamente."""
+    def test_stock_filler_preserves_listdir_order_non_alphabetical(self):
+        """19. 1: Ordem retornada por os.listdir é preservada rigorosamente (ordem não alfabética)."""
+        fake_cache = os.path.join(self.test_dir, "fake_cache_order")
+        os.makedirs(fake_cache, exist_ok=True)
+        filenames = ["z_clip.mp4", "a_clip.mp4", "m_clip.mp4"]
+        for fn in filenames:
+            with open(os.path.join(fake_cache, fn), "wb") as f:
+                f.write(b"\x00" * 100)
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("os.listdir", return_value=list(filenames)), \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
+            clips = _list_valid_stock_filler_clips()
+
+        expected = [os.path.join(fake_cache, fn) for fn in filenames]
+        self.assertEqual(clips, expected)
+        self.assertEqual(os.path.basename(clips[0]), "z_clip.mp4")
+        self.assertEqual(os.path.basename(clips[1]), "a_clip.mp4")
+        self.assertEqual(os.path.basename(clips[2]), "m_clip.mp4")
+
+    def test_bounded_stock_filler_validation_stops_at_max_scene_idx(self):
+        """20. 2 & 3 & 4: Com max_scene_idx=13 e >13 candidatos, validação roda 13x e seleção 1..13 é idêntica à legada."""
         manifest_path = os.path.join(self.test_dir, "manifest.json")
         clips_dir = os.path.join(self.test_dir, "clips")
         os.makedirs(clips_dir, exist_ok=True)
 
         manifest = {
-            "project_name": "stock_cache_test",
+            "project_name": "bounded_13_test",
             "scenes": [
-                {"scene_index": 1, "expected_clip": "stock_01.mp4", "is_flow_premium": False, "narration": "Cena 1", "duration_hint": 5.0},
-                {"scene_index": 2, "expected_clip": "stock_02.mp4", "is_flow_premium": False, "narration": "Cena 2", "duration_hint": 5.0},
-                {"scene_index": 3, "expected_clip": "stock_03.mp4", "is_flow_premium": False, "narration": "Cena 3", "duration_hint": 5.0},
-            ]
+                {
+                    "scene_index": i,
+                    "expected_clip": f"stock_{i:02d}.mp4",
+                    "is_flow_premium": False,
+                    "narration": f"Cena {i}",
+                    "duration_hint": 5.0,
+                }
+                for i in range(1, 14)  # 1..13
+            ],
         }
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f)
 
-        fake_cache = os.path.join(self.test_dir, "fake_cache")
+        fake_cache = os.path.join(self.test_dir, "fake_cache_bounded")
         os.makedirs(fake_cache, exist_ok=True)
-        cand_a = os.path.join(fake_cache, "cand_a.mp4")
-        cand_b = os.path.join(fake_cache, "cand_b.mp4")
-        with open(cand_a, "wb") as f:
-            f.write(b"\x00" * 100)
-        with open(cand_b, "wb") as f:
-            f.write(b"\x00" * 100)
+        all_candidate_names = [f"cand_{i:02d}.mp4" for i in range(1, 26)]
+        for fn in all_candidate_names:
+            with open(os.path.join(fake_cache, fn), "wb") as f:
+                f.write(b"\x00" * 100)
 
         validation_calls = []
 
@@ -877,26 +901,78 @@ class TestFlowWorkflow(unittest.TestCase):
 
         with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
              patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("os.listdir", return_value=list(all_candidate_names)), \
              patch("scripts.flow_workflow.validate_clip_file", side_effect=mock_validate):
             selections = resolve_project_materials(project_dir=self.test_dir)
 
-        # Prova A: cada candidato local é validado exatamente 1 vez por resolução (não 3x por cena)
-        self.assertEqual(validation_calls.count(cand_a), 1)
-        self.assertEqual(validation_calls.count(cand_b), 1)
-        self.assertEqual(len(validation_calls), 2)
+        # 2. validate_clip_file é chamado somente 13 vezes
+        self.assertEqual(len(validation_calls), 13)
 
-        # Prova B & C: pool é reutilizada deterministicamente por scene_idx:
-        # cena 1 ((1-1)%2=0) -> cand_a, cena 2 ((2-1)%2=1) -> cand_b, cena 3 ((3-1)%2=0) -> cand_a
-        self.assertEqual(len(selections), 3)
-        self.assertEqual(selections[0].material_path, cand_a)
-        self.assertEqual(selections[0].provider, "local_cache")
-        self.assertEqual(selections[1].material_path, cand_b)
-        self.assertEqual(selections[1].provider, "local_cache")
-        self.assertEqual(selections[2].material_path, cand_a)
-        self.assertEqual(selections[2].provider, "local_cache")
+        # 3. nenhum candidato depois do 13º é validado
+        first_13_expected = [os.path.join(fake_cache, fn) for fn in all_candidate_names[:13]]
+        self.assertEqual(validation_calls, first_13_expected)
+        for fn in all_candidate_names[13:]:
+            self.assertNotIn(os.path.join(fake_cache, fn), validation_calls)
+
+        # 4. seleção para scene_idx 1..13 é idêntica ao algoritmo legado
+        self.assertEqual(len(selections), 13)
+        for i in range(13):
+            self.assertEqual(selections[i].scene_index, i + 1)
+            self.assertEqual(selections[i].material_path, first_13_expected[i])
+            self.assertEqual(selections[i].provider, "local_cache")
+
+    def test_bounded_stock_filler_validation_fewer_than_max(self):
+        """21. 5: Se houver menos de 13 válidos, varredura completa ocorre e seleção modular continua correta."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "bounded_fewer_test",
+            "scenes": [
+                {
+                    "scene_index": i,
+                    "expected_clip": f"stock_{i:02d}.mp4",
+                    "is_flow_premium": False,
+                    "narration": f"Cena {i}",
+                    "duration_hint": 5.0,
+                }
+                for i in range(1, 14)  # 1..13
+            ],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        fake_cache = os.path.join(self.test_dir, "fake_cache_fewer")
+        os.makedirs(fake_cache, exist_ok=True)
+        candidate_names = [f"cand_{i:02d}.mp4" for i in range(1, 6)]
+        for fn in candidate_names:
+            with open(os.path.join(fake_cache, fn), "wb") as f:
+                f.write(b"\x00" * 100)
+
+        validation_calls = []
+
+        def mock_validate(path):
+            validation_calls.append(path)
+            return {"valid": True, "duration": 5.0}
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("os.listdir", return_value=list(candidate_names)), \
+             patch("scripts.flow_workflow.validate_clip_file", side_effect=mock_validate):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        # Varredura completa ocorre (todos os 5 candidatos validados)
+        self.assertEqual(len(validation_calls), 5)
+        self.assertEqual(len(selections), 13)
+        candidate_paths = [os.path.join(fake_cache, fn) for fn in candidate_names]
+        for i in range(13):
+            expected_path = candidate_paths[i % 5]
+            self.assertEqual(selections[i].material_path, expected_path)
+            self.assertEqual(selections[i].provider, "local_cache")
 
     def test_empty_stock_pool_falls_back_to_remote_provider(self):
-        """20. D: Pool vazia preserva fallback transparente para provider remoto."""
+        """22. Pool vazia preserva fallback transparente para provider remoto."""
         manifest_path = os.path.join(self.test_dir, "manifest.json")
         clips_dir = os.path.join(self.test_dir, "clips")
         os.makedirs(clips_dir, exist_ok=True)
@@ -930,7 +1006,7 @@ class TestFlowWorkflow(unittest.TestCase):
         self.assertEqual(selections[0].provider, "pexels")
 
     def test_valid_flow_scenes_do_not_trigger_stock_scan(self):
-        """21. E: Cenas Flow válidas não provocam varredura stock desnecessária."""
+        """23. 6: Cenas Flow válidas não provocam varredura stock desnecessária."""
         manifest_path = os.path.join(self.test_dir, "manifest.json")
         clips_dir = os.path.join(self.test_dir, "clips")
         os.makedirs(clips_dir, exist_ok=True)
@@ -959,11 +1035,10 @@ class TestFlowWorkflow(unittest.TestCase):
         self.assertEqual(len(selections), 2)
         self.assertEqual(selections[0].provider, "google_flow")
         self.assertEqual(selections[1].provider, "google_flow")
-        # Prova E: varredura de stock filler NÃO foi invocada
         mock_list_stock.assert_not_called()
 
     def test_find_stock_filler_clip_deterministic_selection(self):
-        """22. _find_stock_filler_clip aceita valid_videos pré-validados e preserva indexação determinística."""
+        """24. _find_stock_filler_clip aceita valid_videos pré-validados e preserva indexação determinística."""
         pool = ["clip_a.mp4", "clip_b.mp4", "clip_c.mp4"]
         self.assertEqual(_find_stock_filler_clip(1, pool), "clip_a.mp4")
         self.assertEqual(_find_stock_filler_clip(2, pool), "clip_b.mp4")

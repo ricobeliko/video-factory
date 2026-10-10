@@ -707,22 +707,32 @@ def get_project_status(project_dir: str) -> Dict[str, Any]:
     }
 
 
-def _find_stock_filler_clip(scene_idx: int) -> Optional[str]:
-    """Busca um clipe de preenchimento local existente para fallback híbrido."""
+def _list_valid_stock_filler_clips(max_valid_clips: Optional[int] = None) -> List[str]:
+    """Varre diretórios locais/cache e retorna lista de clipes stock válidos na ordem de os.listdir."""
     candidate_dirs = [DEFAULT_CACHE_VIDEOS_DIR, DEFAULT_LOCAL_VIDEOS_DIR]
-    all_videos = []
+    all_videos: List[str] = []
     for c_dir in candidate_dirs:
         if os.path.exists(c_dir):
             for fname in os.listdir(c_dir):
                 if fname.endswith(".mp4") and not fname.startswith("flow_"):
                     fpath = os.path.join(c_dir, fname)
-                    if os.path.getsize(fpath) > 0 and validate_clip_file(fpath).get("valid", False):
-                        all_videos.append(fpath)
+                    try:
+                        if os.path.getsize(fpath) > 0 and validate_clip_file(fpath).get("valid", False):
+                            all_videos.append(fpath)
+                            if max_valid_clips is not None and len(all_videos) >= max_valid_clips:
+                                return all_videos
+                    except OSError:
+                        continue
+    return all_videos
 
-    if not all_videos:
+
+def _find_stock_filler_clip(scene_idx: int, valid_videos: Optional[List[str]] = None) -> Optional[str]:
+    """Busca um clipe de preenchimento local existente para fallback híbrido."""
+    videos = valid_videos if valid_videos is not None else _list_valid_stock_filler_clips()
+    if not videos:
         return None
     # Seleção determinística por índice de cena
-    return all_videos[(scene_idx - 1) % len(all_videos)]
+    return videos[(scene_idx - 1) % len(videos)]
 
 
 def resolve_project_materials(
@@ -768,7 +778,10 @@ def resolve_project_materials(
         subtitle_enabled=True,
     )
 
+    manifest_scenes = manifest.get("scenes", [])
+    max_scene_idx = max((sc.get("scene_index", 1) for sc in manifest_scenes), default=1)
     material_selections: List[SceneMaterialSelection] = []
+    stock_filler_pool: Optional[List[str]] = None
 
     for sc in manifest.get("scenes", []):
         s_idx = sc["scene_index"]
@@ -817,8 +830,10 @@ def resolve_project_materials(
                         raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
 
                 # Resolução de material stock fallback
-                filler = _find_stock_filler_clip(s_idx)
-                if filler and os.path.exists(filler) and validate_clip_file(filler).get("valid", False):
+                if stock_filler_pool is None:
+                    stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
+                filler = _find_stock_filler_clip(s_idx, stock_filler_pool)
+                if filler and os.path.exists(filler):
                     mat_path = filler
                     provider = "stock_fallback"
                     source_type = "stock_fallback"
@@ -873,8 +888,10 @@ def resolve_project_materials(
                 provider = "local_clip"
                 source_type = "stock"
             else:
-                filler = _find_stock_filler_clip(s_idx)
-                if filler and os.path.exists(filler) and validate_clip_file(filler).get("valid", False):
+                if stock_filler_pool is None:
+                    stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
+                filler = _find_stock_filler_clip(s_idx, stock_filler_pool)
+                if filler and os.path.exists(filler):
                     mat_path = filler
                     provider = "local_cache"
                     source_type = "stock"

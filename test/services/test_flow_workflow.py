@@ -15,19 +15,23 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from app.models.schema import SceneMaterialSelection
 from scripts.flow_playwright import (
     FlowSceneResult,
     generate_flow_scene,
 )
 from scripts.flow_workflow import (
     DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT,
+    _find_stock_filler_clip,
+    _list_valid_stock_filler_clips,
     build_flow_prompt,
     generate_pending_flow_scenes,
     get_project_status,
     prepare_project,
     render_project,
+    resolve_project_materials,
     select_default_flow_scenes,
     update_manifest_flow_checkpoint,
 )
@@ -838,6 +842,209 @@ class TestFlowWorkflow(unittest.TestCase):
         # Nenhum arquivo temporário .tmp residual deve permanecer
         tmp_files = [f for f in os.listdir(self.test_dir) if f.endswith(".tmp")]
         self.assertEqual(len(tmp_files), 0)
+
+    def test_stock_filler_preserves_listdir_order_non_alphabetical(self):
+        """19. 1: Ordem retornada por os.listdir é preservada rigorosamente (ordem não alfabética)."""
+        fake_cache = os.path.join(self.test_dir, "fake_cache_order")
+        os.makedirs(fake_cache, exist_ok=True)
+        filenames = ["z_clip.mp4", "a_clip.mp4", "m_clip.mp4"]
+        for fn in filenames:
+            with open(os.path.join(fake_cache, fn), "wb") as f:
+                f.write(b"\x00" * 100)
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("os.listdir", return_value=list(filenames)), \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
+            clips = _list_valid_stock_filler_clips()
+
+        expected = [os.path.join(fake_cache, fn) for fn in filenames]
+        self.assertEqual(clips, expected)
+        self.assertEqual(os.path.basename(clips[0]), "z_clip.mp4")
+        self.assertEqual(os.path.basename(clips[1]), "a_clip.mp4")
+        self.assertEqual(os.path.basename(clips[2]), "m_clip.mp4")
+
+    def test_bounded_stock_filler_validation_stops_at_max_scene_idx(self):
+        """20. 2 & 3 & 4: Com max_scene_idx=13 e >13 candidatos, validação roda 13x e seleção 1..13 é idêntica à legada."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "bounded_13_test",
+            "scenes": [
+                {
+                    "scene_index": i,
+                    "expected_clip": f"stock_{i:02d}.mp4",
+                    "is_flow_premium": False,
+                    "narration": f"Cena {i}",
+                    "duration_hint": 5.0,
+                }
+                for i in range(1, 14)  # 1..13
+            ],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        fake_cache = os.path.join(self.test_dir, "fake_cache_bounded")
+        os.makedirs(fake_cache, exist_ok=True)
+        all_candidate_names = [f"cand_{i:02d}.mp4" for i in range(1, 26)]
+        for fn in all_candidate_names:
+            with open(os.path.join(fake_cache, fn), "wb") as f:
+                f.write(b"\x00" * 100)
+
+        validation_calls = []
+
+        def mock_validate(path):
+            validation_calls.append(path)
+            return {"valid": True, "duration": 5.0}
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("os.listdir", return_value=list(all_candidate_names)), \
+             patch("scripts.flow_workflow.validate_clip_file", side_effect=mock_validate):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        # 2. validate_clip_file é chamado somente 13 vezes
+        self.assertEqual(len(validation_calls), 13)
+
+        # 3. nenhum candidato depois do 13º é validado
+        first_13_expected = [os.path.join(fake_cache, fn) for fn in all_candidate_names[:13]]
+        self.assertEqual(validation_calls, first_13_expected)
+        for fn in all_candidate_names[13:]:
+            self.assertNotIn(os.path.join(fake_cache, fn), validation_calls)
+
+        # 4. seleção para scene_idx 1..13 é idêntica ao algoritmo legado
+        self.assertEqual(len(selections), 13)
+        for i in range(13):
+            self.assertEqual(selections[i].scene_index, i + 1)
+            self.assertEqual(selections[i].material_path, first_13_expected[i])
+            self.assertEqual(selections[i].provider, "local_cache")
+
+    def test_bounded_stock_filler_validation_fewer_than_max(self):
+        """21. 5: Se houver menos de 13 válidos, varredura completa ocorre e seleção modular continua correta."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "bounded_fewer_test",
+            "scenes": [
+                {
+                    "scene_index": i,
+                    "expected_clip": f"stock_{i:02d}.mp4",
+                    "is_flow_premium": False,
+                    "narration": f"Cena {i}",
+                    "duration_hint": 5.0,
+                }
+                for i in range(1, 14)  # 1..13
+            ],
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        fake_cache = os.path.join(self.test_dir, "fake_cache_fewer")
+        os.makedirs(fake_cache, exist_ok=True)
+        candidate_names = [f"cand_{i:02d}.mp4" for i in range(1, 6)]
+        for fn in candidate_names:
+            with open(os.path.join(fake_cache, fn), "wb") as f:
+                f.write(b"\x00" * 100)
+
+        validation_calls = []
+
+        def mock_validate(path):
+            validation_calls.append(path)
+            return {"valid": True, "duration": 5.0}
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", fake_cache), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "nonexistent")), \
+             patch("os.listdir", return_value=list(candidate_names)), \
+             patch("scripts.flow_workflow.validate_clip_file", side_effect=mock_validate):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        # Varredura completa ocorre (todos os 5 candidatos validados)
+        self.assertEqual(len(validation_calls), 5)
+        self.assertEqual(len(selections), 13)
+        candidate_paths = [os.path.join(fake_cache, fn) for fn in candidate_names]
+        for i in range(13):
+            expected_path = candidate_paths[i % 5]
+            self.assertEqual(selections[i].material_path, expected_path)
+            self.assertEqual(selections[i].provider, "local_cache")
+
+    def test_empty_stock_pool_falls_back_to_remote_provider(self):
+        """22. Pool vazia preserva fallback transparente para provider remoto."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "empty_pool_test",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "stock_01.mp4", "is_flow_premium": False, "narration": "Cena 1", "duration_hint": 5.0},
+            ]
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        mock_selection = SceneMaterialSelection(
+            scene_index=1,
+            material_path=os.path.join(self.test_dir, "remote_pexels.mp4"),
+            duration=5.0,
+            provider="pexels",
+            asset_id="remote_pexels.mp4",
+            media_type="video",
+        )
+
+        with patch("scripts.flow_workflow.DEFAULT_CACHE_VIDEOS_DIR", os.path.join(self.test_dir, "empty_cache")), \
+             patch("scripts.flow_workflow.DEFAULT_LOCAL_VIDEOS_DIR", os.path.join(self.test_dir, "empty_local")), \
+             patch("app.services.material.has_material_api_keys", return_value=True), \
+             patch("app.services.scene_material.resolve_scene_materials", return_value=[mock_selection]):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        self.assertEqual(len(selections), 1)
+        self.assertEqual(selections[0].material_path, os.path.join(self.test_dir, "remote_pexels.mp4"))
+        self.assertEqual(selections[0].provider, "pexels")
+
+    def test_valid_flow_scenes_do_not_trigger_stock_scan(self):
+        """23. 6: Cenas Flow válidas não provocam varredura stock desnecessária."""
+        manifest_path = os.path.join(self.test_dir, "manifest.json")
+        clips_dir = os.path.join(self.test_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+
+        manifest = {
+            "project_name": "flow_only_test",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1", "duration_hint": 5.0},
+                {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2", "duration_hint": 5.0},
+            ]
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        flow_01 = os.path.join(clips_dir, "flow_scene_01.mp4")
+        flow_02 = os.path.join(clips_dir, "flow_scene_02.mp4")
+        with open(flow_01, "wb") as f:
+            f.write(b"flow1")
+        with open(flow_02, "wb") as f:
+            f.write(b"flow2")
+
+        with patch("scripts.flow_workflow._list_valid_stock_filler_clips") as mock_list_stock, \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}):
+            selections = resolve_project_materials(project_dir=self.test_dir)
+
+        self.assertEqual(len(selections), 2)
+        self.assertEqual(selections[0].provider, "google_flow")
+        self.assertEqual(selections[1].provider, "google_flow")
+        mock_list_stock.assert_not_called()
+
+    def test_find_stock_filler_clip_deterministic_selection(self):
+        """24. _find_stock_filler_clip aceita valid_videos pré-validados e preserva indexação determinística."""
+        pool = ["clip_a.mp4", "clip_b.mp4", "clip_c.mp4"]
+        self.assertEqual(_find_stock_filler_clip(1, pool), "clip_a.mp4")
+        self.assertEqual(_find_stock_filler_clip(2, pool), "clip_b.mp4")
+        self.assertEqual(_find_stock_filler_clip(3, pool), "clip_c.mp4")
+        self.assertEqual(_find_stock_filler_clip(4, pool), "clip_a.mp4")
+        self.assertIsNone(_find_stock_filler_clip(1, []))
 
 
 if __name__ == "__main__":

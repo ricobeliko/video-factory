@@ -418,26 +418,64 @@ def generate_pending_flow_scenes(
     attempted_count = 0
     overall_status = "ALL_FLOW_SCENES_READY"
 
-    # Recovery guard imediato: se o manifesto já estiver em estado de recuperação pós-consumo,
-    # bloqueia qualquer nova chamada ou retry cego com zero browser.
+    # Recovery guard com reconciliação determinística segura:
+    # Se o manifesto estiver em FLOW_GENERATION_NEEDS_RECOVERY, verifica se a last_scene
+    # possui evidência de clipe canônico já resolvido/baixado com integridade válida no disco.
     flow_gen = manifest.get("flow_generation", {})
     prior_status = flow_gen.get("status")
     if prior_status == "FLOW_GENERATION_NEEDS_RECOVERY":
-        logger.warning(
-            f"[FLOW_RECOVERY_GUARD] Manifest em {manifest_path} possui status anterior "
-            f"FLOW_GENERATION_NEEDS_RECOVERY. Bloqueando novas chamadas ao Flow para evitar re-consumo indevido."
-        )
-        return {
-            "status": "FLOW_GENERATION_NEEDS_RECOVERY",
-            "manifest_path": manifest_path,
-            "project_url": effective_project_url,
-            "total_flow_scenes": len(flow_scenes),
-            "completed_count": len(flow_gen.get("completed_scenes", [])),
-            "completed_scenes": flow_gen.get("completed_scenes", []),
-            "pending_count": len(flow_scenes) - len(flow_gen.get("completed_scenes", [])),
-            "attempted_count": 0,
-            "results": [],
-        }
+        last_scene = flow_gen.get("last_scene")
+        can_reconcile = False
+
+        if last_scene is not None:
+            all_scenes = manifest.get("scenes", [])
+            last_sc_obj = next((s for s in all_scenes if s.get("scene_index") == last_scene), None)
+            clip_name = last_sc_obj.get("expected_clip", f"flow_scene_{last_scene:02d}.mp4") if last_sc_obj else f"flow_scene_{last_scene:02d}.mp4"
+            last_clip_path = os.path.join(clips_dir, clip_name)
+
+            if os.path.exists(last_clip_path):
+                val_res = validate_clip_file(last_clip_path)
+                if val_res.get("valid"):
+                    can_reconcile = True
+
+        if can_reconcile:
+            prior_completed = flow_gen.get("completed_scenes", [])
+            reconciled_completed = sorted(list(set(prior_completed + [last_scene])))
+            all_flow_indices = {s.get("scene_index") for s in flow_scenes}
+            is_all_complete = set(reconciled_completed).issuperset(all_flow_indices) and len(all_flow_indices) > 0
+            new_status = "COMPLETE" if is_all_complete else "IN_PROGRESS"
+
+            logger.info(
+                f"[FLOW_RECOVERY_RECONCILED] Evidência canônica válida encontrada para cena {last_scene} ({last_clip_path}). "
+                f"Reconciliando checkpoint: status={new_status}, completed_scenes={reconciled_completed}."
+            )
+            update_manifest_flow_checkpoint(
+                manifest_path,
+                project_url=effective_project_url,
+                last_scene=last_scene,
+                status=new_status,
+                completed_scenes=reconciled_completed,
+            )
+            flow_gen["status"] = new_status
+            flow_gen["completed_scenes"] = reconciled_completed
+            # Continua para a verificação de cenas abaixo (respeitando idempotência das cenas prontas)
+        else:
+            logger.warning(
+                f"[FLOW_RECOVERY_GUARD] Manifest em {manifest_path} possui status anterior "
+                f"FLOW_GENERATION_NEEDS_RECOVERY e cena {last_scene} não possui evidência canônica válida. "
+                f"Bloqueando novas chamadas ao Flow para evitar re-consumo indevido."
+            )
+            return {
+                "status": "FLOW_GENERATION_NEEDS_RECOVERY",
+                "manifest_path": manifest_path,
+                "project_url": effective_project_url,
+                "total_flow_scenes": len(flow_scenes),
+                "completed_count": len(flow_gen.get("completed_scenes", [])),
+                "completed_scenes": flow_gen.get("completed_scenes", []),
+                "pending_count": len(flow_scenes) - len(flow_gen.get("completed_scenes", [])),
+                "attempted_count": 0,
+                "results": [],
+            }
 
     for sc in flow_scenes:
         s_idx = sc["scene_index"]

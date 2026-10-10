@@ -455,6 +455,199 @@ class TestFlowWorkflow(unittest.TestCase):
                 manifest_data = json.load(f)
             self.assertEqual(manifest_data["flow_generation"]["status"], "FLOW_GENERATION_NEEDS_RECOVERY")
 
+    def test_recovery_guard_blocks_when_last_scene_clip_missing(self):
+        """1. recovery status + last_scene sem arquivo => continua bloqueado, zero geração."""
+        prep = prepare_project(
+            script_text="Cena 1. Cena 2.",
+            project_name="rec_missing_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1, 2],
+        )
+        update_manifest_flow_checkpoint(
+            prep["manifest_path"],
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            last_scene=2,
+            completed_scenes=[1],
+        )
+        with patch("scripts.flow_workflow.generate_flow_scene") as mock_gen:
+            res = generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
+            self.assertEqual(res["status"], "FLOW_GENERATION_NEEDS_RECOVERY")
+            mock_gen.assert_not_called()
+
+    def test_recovery_guard_blocks_when_last_scene_clip_invalid(self):
+        """2. recovery status + last_scene com arquivo inválido => continua bloqueado, zero geração."""
+        prep = prepare_project(
+            script_text="Cena 1. Cena 2.",
+            project_name="rec_invalid_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1, 2],
+        )
+        update_manifest_flow_checkpoint(
+            prep["manifest_path"],
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            last_scene=2,
+            completed_scenes=[1],
+        )
+        clip2_path = os.path.join(prep["clips_dir"], "flow_scene_02.mp4")
+        with open(clip2_path, "wb") as f:
+            f.write(b"corrupted")
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": False}), \
+             patch("scripts.flow_workflow.generate_flow_scene") as mock_gen:
+            res = generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
+            self.assertEqual(res["status"], "FLOW_GENERATION_NEEDS_RECOVERY")
+            mock_gen.assert_not_called()
+
+    def test_recovery_reconciles_when_last_scene_clip_valid_and_continues(self):
+        """3. recovery status + last_scene com arquivo canônico válido => reconcilia completed_scenes, não regenera cena recuperada e continua para próxima."""
+        prep = prepare_project(
+            script_text="Cena 1. Cena 2. Cena 3.",
+            project_name="rec_valid_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1, 2, 3],
+        )
+        with open(prep["manifest_path"], "r", encoding="utf-8") as f:
+            manifest_obj = json.load(f)
+        manifest_obj["scenes"] = [
+            {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1"},
+            {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2"},
+            {"scene_index": 3, "expected_clip": "flow_scene_03.mp4", "is_flow_premium": True, "narration": "Cena 3"},
+        ]
+        with open(prep["manifest_path"], "w", encoding="utf-8") as f:
+            json.dump(manifest_obj, f)
+
+        update_manifest_flow_checkpoint(
+            prep["manifest_path"],
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            last_scene=2,
+            completed_scenes=[1],
+        )
+        clip1_path = os.path.join(prep["clips_dir"], "flow_scene_01.mp4")
+        clip2_path = os.path.join(prep["clips_dir"], "flow_scene_02.mp4")
+        with open(clip1_path, "wb") as f:
+            f.write(b"valid1")
+        with open(clip2_path, "wb") as f:
+            f.write(b"valid2")
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("scripts.flow_workflow.generate_flow_scene") as mock_gen:
+            mock_gen.return_value = FlowSceneResult(
+                status="SUCCESS",
+                scene_index=3,
+                output_file=os.path.join(prep["clips_dir"], "flow_scene_03.mp4"),
+                output_valid=True,
+                duration=8.0,
+                credits_consumed=15,
+            )
+            res = generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
+
+            # Cena 3 foi gerada, mas cenas 1 e 2 NÃO foram regeneradas
+            self.assertEqual(mock_gen.call_count, 1)
+            self.assertEqual(mock_gen.call_args[1]["scene_index"], 3)
+
+            with open(prep["manifest_path"], "r", encoding="utf-8") as f:
+                manifest_data = json.load(f)
+            self.assertIn(1, manifest_data["flow_generation"]["completed_scenes"])
+            self.assertIn(2, manifest_data["flow_generation"]["completed_scenes"])
+            self.assertIn(3, manifest_data["flow_generation"]["completed_scenes"])
+
+    def test_recovery_reconciliation_exact_scenario_completed_1_last_2_next_5(self):
+        """4. completed_scenes=[1], last_scene=2, clips 1 e 2 válidos => resultado reconciliado contém [1,2], próxima geração solicitada é cena 5."""
+        prep = prepare_project(
+            script_text="Cena 1. Cena 2. Cena 5.",
+            project_name="rec_production_scenario_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1, 2, 5],
+        )
+        with open(prep["manifest_path"], "r", encoding="utf-8") as f:
+            manifest_obj = json.load(f)
+        manifest_obj["scenes"] = [
+            {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1"},
+            {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2"},
+            {"scene_index": 5, "expected_clip": "flow_scene_05.mp4", "is_flow_premium": True, "narration": "Cena 5"},
+        ]
+        with open(prep["manifest_path"], "w", encoding="utf-8") as f:
+            json.dump(manifest_obj, f)
+
+        update_manifest_flow_checkpoint(
+            prep["manifest_path"],
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            last_scene=2,
+            completed_scenes=[1],
+        )
+        clip1_path = os.path.join(prep["clips_dir"], "flow_scene_01.mp4")
+        clip2_path = os.path.join(prep["clips_dir"], "flow_scene_02.mp4")
+        with open(clip1_path, "wb") as f:
+            f.write(b"clip1")
+        with open(clip2_path, "wb") as f:
+            f.write(b"clip2")
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("scripts.flow_workflow.generate_flow_scene") as mock_gen:
+            mock_gen.return_value = FlowSceneResult(
+                status="SUCCESS",
+                scene_index=5,
+                output_file=os.path.join(prep["clips_dir"], "flow_scene_05.mp4"),
+                output_valid=True,
+                duration=8.0,
+                credits_consumed=15,
+            )
+            res = generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
+
+            # Apenas cena 5 deve ser solicitada para geração
+            mock_gen.assert_called_once()
+            self.assertEqual(mock_gen.call_args[1]["scene_index"], 5)
+
+            # Cenas 1 e 2 foram ALREADY_COMPLETE
+            results = res["results"]
+            c1_res = next((r for r in results if r["scene_index"] == 1), None)
+            c2_res = next((r for r in results if r["scene_index"] == 2), None)
+            c5_res = next((r for r in results if r["scene_index"] == 5), None)
+            self.assertEqual(c1_res["status"], "ALREADY_COMPLETE")
+            self.assertEqual(c2_res["status"], "ALREADY_COMPLETE")
+            self.assertEqual(c5_res["status"], "SUCCESS")
+
+    def test_recovery_all_scenes_valid_results_in_complete_zero_browser(self):
+        """5. Se todas as cenas Flow já tiverem arquivos válidos => status COMPLETE, zero browser, zero créditos."""
+        prep = prepare_project(
+            script_text="Cena 1. Cena 2.",
+            project_name="rec_all_valid_test",
+            base_dir=self.test_dir,
+            flow_scenes=[1, 2],
+        )
+        with open(prep["manifest_path"], "r", encoding="utf-8") as f:
+            manifest_obj = json.load(f)
+        manifest_obj["scenes"] = [
+            {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1"},
+            {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2"},
+        ]
+        with open(prep["manifest_path"], "w", encoding="utf-8") as f:
+            json.dump(manifest_obj, f)
+
+        update_manifest_flow_checkpoint(
+            prep["manifest_path"],
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            last_scene=2,
+            completed_scenes=[1],
+        )
+        clip1_path = os.path.join(prep["clips_dir"], "flow_scene_01.mp4")
+        clip2_path = os.path.join(prep["clips_dir"], "flow_scene_02.mp4")
+        with open(clip1_path, "wb") as f:
+            f.write(b"clip1")
+        with open(clip2_path, "wb") as f:
+            f.write(b"clip2")
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("scripts.flow_workflow.generate_flow_scene") as mock_gen:
+            res = generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
+            self.assertEqual(res["status"], "COMPLETE")
+            mock_gen.assert_not_called()
+
+            with open(prep["manifest_path"], "r", encoding="utf-8") as f:
+                manifest_data = json.load(f)
+            self.assertEqual(manifest_data["flow_generation"]["status"], "COMPLETE")
+            self.assertEqual(manifest_data["flow_generation"]["completed_scenes"], [1, 2])
+
     def test_status_distinguishes_flow_vs_stock(self):
         """11. get_project_status distingue READY_FLOW, READY_STOCK, PENDING_FLOW."""
         manifest_path = os.path.join(self.test_dir, "manifest.json")

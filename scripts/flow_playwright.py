@@ -765,6 +765,37 @@ def capture_tile_baseline(page: Page) -> Set[str]:
     return baseline_ids
 
 
+GENERATION_COMPLETE_JS = """(baseCount) => {
+    const gridTiles = Array.from(document.querySelectorAll('flow-grid-tile-container'));
+    if (gridTiles.length <= (baseCount || 0)) return false;
+
+    // Verifica se há novo tile com falha explícita (política, erro de servidor, etc.)
+    for (let i = 0; i < gridTiles.length; i++) {
+        const t = gridTiles[i];
+        const txt = (t.innerText || '').toLowerCase();
+        if (txt.includes('falha') || txt.includes('violar') || txt.includes('política') || txt.includes('refund')) {
+            return 'FAILED_BY_POLICY_OR_ERROR';
+        }
+    }
+
+    // Verifica se os tiles possuem evidência de prontidão ALÉM do baseline pré-existente
+    let readyCount = 0;
+    for (let i = 0; i < gridTiles.length; i++) {
+        const t = gridTiles[i];
+        const img = t.querySelector('img.thumbnail');
+        const video = t.querySelector('video');
+        const hotbar = t.querySelector('flow-video-hotbar');
+        if (img || video || hotbar) {
+            readyCount++;
+        }
+    }
+    if (readyCount > (baseCount || 0)) {
+        return 'COMPLETED';
+    }
+    return false;
+}"""
+
+
 def wait_for_generation_complete(
     page: Page,
     baseline_ids: Optional[Set[str]] = None,
@@ -774,6 +805,7 @@ def wait_for_generation_complete(
     Acompanha a conclusão da geração garantindo isolamento do novo resultado via hash SHA-256.
     Se baseline_ids for fornecido:
     - Um resultado pré-existente no baseline NUNCA confirma a nova geração.
+    - Exige evidência de pelo menos uma unidade pronta além do baseline (readyCount > baseCount).
     - Exige exatamente 1 novo resultado (len(new_ids) == 1).
     - Se 0 novos resultados ao expirar timeout: GENERATION_RESULT_NOT_FOUND.
     - Se > 1 novos resultados: AMBIGUOUS_GENERATION_RESULTS.
@@ -783,31 +815,9 @@ def wait_for_generation_complete(
     baseline_list = list(baseline_ids or [])
 
     try:
-        # Aguarda de forma síncrona até que o número de tiles na grade aumente
+        # Aguarda de forma síncrona até que o número de tiles prontos na grade aumente além do baseline
         wait_res = page.wait_for_function(
-            """(baseCount) => {
-                const gridTiles = Array.from(document.querySelectorAll('flow-grid-tile-container'));
-                if (gridTiles.length <= (baseCount || 0)) return false;
-
-                // Verifica se há novo tile com falha explícita (política, erro de servidor, etc.)
-                for (let i = 0; i < gridTiles.length; i++) {
-                    const t = gridTiles[i];
-                    const txt = (t.innerText || '').toLowerCase();
-                    if (txt.includes('falha') || txt.includes('violar') || txt.includes('política') || txt.includes('refund')) {
-                        return 'FAILED_BY_POLICY_OR_ERROR';
-                    }
-                }
-
-                // Verifica se os tiles possuem evidência de prontidão
-                for (let i = 0; i < gridTiles.length; i++) {
-                    const t = gridTiles[i];
-                    const img = t.querySelector('img.thumbnail');
-                    const video = t.querySelector('video');
-                    const hotbar = t.querySelector('flow-video-hotbar');
-                    if (img || video || hotbar) return 'COMPLETED';
-                }
-                return false;
-            }""",
+            GENERATION_COMPLETE_JS,
             arg=len(baseline_list),
             timeout=timeout_sec * 1000,
         )
@@ -848,30 +858,43 @@ def wait_for_generation_complete(
         return False, None, "GENERATION_RESULT_NOT_FOUND"
 
     # Em Python: captura os identificadores SHA-256 de todos os tiles e valida isolamento
-    all_grid_tiles = page.locator("flow-grid-tile-container")
-    count = all_grid_tiles.count()
-    new_tiles = []
+    # Se o novo tile ainda estiver presente mas sem identificador estável, aguarda/polla por um intervalo limitado.
+    poll_deadline = time.time() + min(15.0, float(timeout_sec))
     baseline_set = set(baseline_list)
+    new_tiles = []
 
-    for i in range(count):
-        t = all_grid_tiles.nth(i)
-        img = t.locator("img.thumbnail")
-        ident = None
-        if img.count() > 0:
-            src = img.get_attribute("src") or ""
-            ident = extract_tile_identifier_from_src(src)
-        if not ident:
-            video = t.locator("video")
-            if video.count() > 0:
-                vsrc = video.get_attribute("src") or ""
-                ident = extract_tile_identifier_from_src(vsrc)
-        if not ident:
-            label = t.get_attribute("aria-label")
-            if label:
-                ident = f"label:{label.strip()}"
+    while True:
+        all_grid_tiles = page.locator("flow-grid-tile-container")
+        count = all_grid_tiles.count()
+        new_tiles = []
 
-        if ident and ident not in baseline_set:
-            new_tiles.append({"id": ident, "index": i, "locator": t})
+        for i in range(count):
+            t = all_grid_tiles.nth(i)
+            img = t.locator("img.thumbnail")
+            ident = None
+            if img.count() > 0:
+                src = img.get_attribute("src") or ""
+                ident = extract_tile_identifier_from_src(src)
+            if not ident:
+                video = t.locator("video")
+                if video.count() > 0:
+                    vsrc = video.get_attribute("src") or ""
+                    ident = extract_tile_identifier_from_src(vsrc)
+            if not ident:
+                label = t.get_attribute("aria-label")
+                if label:
+                    ident = f"label:{label.strip()}"
+
+            if ident and ident not in baseline_set:
+                new_tiles.append({"id": ident, "index": i, "locator": t})
+
+        if len(new_tiles) == 1:
+            break
+        if len(new_tiles) > 1:
+            break
+        if time.time() >= poll_deadline:
+            break
+        time.sleep(0.5)
 
     if len(new_tiles) == 0:
         logger.error("Nenhum novo tile isolado encontrado em relação ao baseline.")
@@ -1246,16 +1269,16 @@ def run_playwright_flow_poc(
                 report["tile_count_after"] = 2
                 report["new_tile_count"] = 1
                 report["old_tile_still_present"] = True
-                report["generate_click_count_this_run"] = 1
-                report["credit_approval_required"] = True
-                report["credit_cost"] = 15
-                report["credit_approval_button_match_count"] = 1
-                report["credit_approval_click_count"] = 1
-                report["credit_approval_confirmed"] = True
+                report["generate_click_count_this_run"] = 0
+                report["credit_approval_required"] = False
+                report["credit_cost"] = 0
+                report["credit_approval_button_match_count"] = 0
+                report["credit_approval_click_count"] = 0
+                report["credit_approval_confirmed"] = False
                 report["always_approve_clicked"] = False
-                report["generation_start_confirmed"] = True
+                report["generation_start_confirmed"] = False
                 report["generation_complete_confirmed"] = True
-                report["generation_attempts"] = 1
+                report["generation_attempts"] = 0
 
                 new_tile_loc = all_tiles.nth(0)
                 expect(new_tile_loc).to_have_count(1)
@@ -1378,7 +1401,8 @@ def run_playwright_flow_poc(
                     report["credit_approval_required"] = False
                     report["generation_start_confirmed"] = True
 
-            report["generation_attempts"] = 1
+            if not download_only:
+                report["generation_attempts"] = 1
 
             if not download_only:
                 # 7. Aguarda conclusão do NOVO resultado isolado (até timeout_gen_sec)

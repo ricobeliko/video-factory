@@ -21,10 +21,7 @@ Cobre os requisitos estritos da fase e correções da revisão:
 
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.models.schema import VideoParams
 from app.services import ambient_bgm, bgm as bgm_service, copyright_gate
@@ -157,7 +154,7 @@ def test_ambient_generator_failure_fails_soft_real():
         video_count=1,
     )
 
-    with patch("app.services.video.combine_videos") as mock_combine, \
+    with patch("app.services.video.combine_videos"), \
          patch("app.services.video.generate_video", return_value=True) as mock_gen_video, \
          patch.object(ambient_bgm, "generate_bgm", side_effect=ambient_bgm.AmbientBgmError("FFmpeg synth error")):
         final_paths, comb_paths, warnings = task.generate_final_videos(

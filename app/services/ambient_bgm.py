@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 import unicodedata
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 from loguru import logger
 

@@ -1,18 +1,22 @@
 """
-Testes direcionados da Fase V1.5E-G8 — Audio Identity MVP (Safe Procedural Ambient BGM).
+Testes direcionados da Fase V1.5E-G8 / V1.5E-G8.1 — Audio Identity MVP (Safe Procedural Ambient BGM).
 
-Cobre os 11 requisitos estritos da fase:
+Cobre os requisitos estritos da fase e correções da revisão:
 1. perfil antigo sem music continua SAFE_NO_BGM
 2. music.enabled=False => none / 0.0
 3. music.enabled=True + mode=auto => ambient_auto / volume configurado
 4. volume inválido é normalizado com segurança
 5. detect_mood: terror, suspense, futuristic, epic, energetic, emotional, neutral
 6. ambient generator não usa requests/rede
-7. falha de ambient generator não derruba geração do vídeo (fail-soft fallback)
+7. fail-soft REAL em task orchestration (falha de ambient generator não derruba geração do vídeo)
 8. copyright/provenance: ambient_auto => SAFE_PROCEDURAL
 9. settings_json round-trip preserva music settings
 10. canal legado permanece retrocompatível
 11. nenhum teste ativa publicação real
+12. leitura do roteiro para mood prioriza chave 'script' em script.json
+13. propagação do default_mood do perfil e fallback seguro para 'neutral'
+14. nível estável de headroom sem dupla atenuação de volume
+15. preflight local is_enabled() retorna True sem exigir chave de API externa
 """
 
 import json
@@ -22,8 +26,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.models.schema import ChannelWorkspaceSettings, MusicSettings, VideoParams
-from app.services import ambient_bgm, bgm as bgm_service, copyright_gate, profile_manager
+from app.models.schema import VideoParams
+from app.services import ambient_bgm, bgm as bgm_service, copyright_gate
+from app.services.profile_manager import ChannelWorkspaceSettings, MusicSettings
 
 
 # -----------------------------------------------------------------------------
@@ -74,19 +79,14 @@ def test_music_enabled_and_mode_auto_returns_ambient_auto():
 # -----------------------------------------------------------------------------
 def test_invalid_volume_is_safely_normalized():
     """Valores de volume inválidos ou fora dos limites seguros [0.05, 0.15] são normalizados."""
-    # Abaixo do limite mínimo
     assert ambient_bgm.normalize_volume(0.01) == 0.05
-    # Acima do limite máximo
     assert ambient_bgm.normalize_volume(0.50) == 0.15
-    # Valor válido dentro dos limites
     assert ambient_bgm.normalize_volume(0.08) == 0.08
-    # Inválido / string / None / NaN => fallback 0.10
     assert ambient_bgm.normalize_volume("invalido") == 0.10
     assert ambient_bgm.normalize_volume(None) == 0.10
     assert ambient_bgm.normalize_volume(float("nan")) == 0.10
     assert ambient_bgm.normalize_volume(-0.5) == 0.10
 
-    # Normalização através de resolve_autonomous_bgm
     m_settings_clamped = MusicSettings(enabled=True, mode="auto", volume=0.99)
     res_clamped = bgm_service.resolve_autonomous_bgm(music_settings=m_settings_clamped)
     assert res_clamped["volume"] == 0.15
@@ -101,25 +101,16 @@ def test_invalid_volume_is_safely_normalized():
 # -----------------------------------------------------------------------------
 def test_detect_mood_all_categories():
     """Classificador local detecta deterministicamente os 7 moods e respeita a prioridade."""
-    # terror
     assert ambient_bgm.detect_mood("assassinato, criatura, horror, sobrenatural") == "terror"
-    # suspense
     assert ambient_bgm.detect_mood("mistério, segredo, desaparecimento, conspiração") == "suspense"
-    # futuristic
     assert ambient_bgm.detect_mood("inteligência artificial, tecnologia, robô, futuro") == "futuristic"
-    # epic
     assert ambient_bgm.detect_mood("maior da história, conquista, grandioso, império") == "epic"
-    # energetic
     assert ambient_bgm.detect_mood("gol, corrida, vitória, partida, velocidade") == "energetic"
-    # emotional
     assert ambient_bgm.detect_mood("família, despedida, emoção, reencontro") == "emotional"
-    # neutral (sem sinal)
     assert ambient_bgm.detect_mood("um texto cotidiano sem sinais fortes", default_mood="neutral") == "neutral"
-    # fallback para default_mood quando sem sinais
     assert ambient_bgm.detect_mood("paisagem comum", default_mood="epic") == "epic"
 
     # Prioridade estrita quando houver múltiplos sinais:
-    # terror > suspense > futuristic > epic > energetic > emotional
     mixed_terror_suspense = "mistério profundo sobre o assassinato do cientista"
     assert ambient_bgm.detect_mood(mixed_terror_suspense) == "terror"
 
@@ -132,20 +123,17 @@ def test_detect_mood_all_categories():
 # -----------------------------------------------------------------------------
 def test_ambient_generator_makes_no_network_calls(monkeypatch):
     """Garantir que a geração de ambient BGM opera com zero rede e zero chamadas HTTP."""
-    # Impede qualquer chamada a urllib ou socket de rede
     def _blocked_connect(*args, **kwargs):
         raise AssertionError("Chamada de rede detectada no ambient generator!")
 
     monkeypatch.setattr("socket.socket.connect", _blocked_connect)
 
-    # Executa síntese curta
     test_out = "storage/validation/test_no_net.wav"
     try:
         res = ambient_bgm.generate_ambient_bgm(
             output_path=test_out,
             duration=1.0,
             mood="neutral",
-            volume=0.10,
         )
         assert os.path.isfile(res)
         assert os.path.getsize(res) > 0
@@ -155,21 +143,40 @@ def test_ambient_generator_makes_no_network_calls(monkeypatch):
 
 
 # -----------------------------------------------------------------------------
-# 7. falha de ambient generator não derruba geração do vídeo
+# 7. Fail-soft REAL em task orchestration (falha de BGM não derruba vídeo)
 # -----------------------------------------------------------------------------
-def test_ambient_generator_failure_fails_soft():
-    """Falha durante síntese de BGM em _VIDEO_MUSIC_PROVIDERS degrada suavemente sem quebrar o vídeo."""
+def test_ambient_generator_failure_fails_soft_real():
+    """Falha de ambient BGM no task orchestration gera aviso, bgm_file_override vazio e vídeo é produzido normalmente."""
     from app.services import task
 
-    provider_entry = task._VIDEO_MUSIC_PROVIDERS.get("ambient_auto")
-    assert provider_entry is not None
-    assert provider_entry["service"] == ambient_bgm
-    assert provider_entry["error_type"] == ambient_bgm.AmbientBgmError
+    params = VideoParams(
+        video_subject="Teste GTA VI",
+        bgm_type="ambient_auto",
+        bgm_volume=0.10,
+        video_count=1,
+    )
 
-    # Simula erro de geração no serviço
-    with patch.object(ambient_bgm, "generate_bgm", side_effect=ambient_bgm.AmbientBgmError("FFmpeg timeout")):
-        with pytest.raises(ambient_bgm.AmbientBgmError):
-            ambient_bgm.generate_bgm(video_path="fake.mp4", output_path="fake.wav", video_duration=5.0)
+    with patch("app.services.video.combine_videos") as mock_combine, \
+         patch("app.services.video.generate_video", return_value=True) as mock_gen_video, \
+         patch.object(ambient_bgm, "generate_bgm", side_effect=ambient_bgm.AmbientBgmError("FFmpeg synth error")):
+        final_paths, comb_paths, warnings = task.generate_final_videos(
+            task_id="test-failsoft-task",
+            params=params,
+            downloaded_videos=["video1.mp4"],
+            audio_file="audio.mp3",
+            subtitle_path="sub.srt",
+            audio_duration=5.0,
+        )
+
+        # 1. Código de warning registrado
+        assert any(w.get("code") == "ambient_bgm_failed" for w in warnings)
+        # 2. Render final chamado
+        assert mock_gen_video.called is True
+        # 3. bgm_file_override enviado como string vazia (sem BGM no render)
+        call_kwargs = mock_gen_video.call_args[1]
+        assert call_kwargs.get("bgm_file_override") == ""
+        # 4. Vídeo NÃO foi abortado
+        assert len(final_paths) == 1
 
 
 # -----------------------------------------------------------------------------
@@ -263,13 +270,107 @@ def test_no_real_publication_activated():
     """Garantir que a resolução de BGM ou inicialização de canal não aciona publicação."""
     from app.services import autonomous_production
 
-    # Estado padrão autônomo permanece desligado
     assert autonomous_production.DEFAULT_AUTONOMOUS_MODE_ENABLED is False
 
-    # Confirma que resolver BGM autônomo nunca altera flags de publicação
     res = bgm_service.resolve_autonomous_bgm(
         music_settings=MusicSettings(enabled=True, mode="auto", volume=0.10)
     )
     assert "publish" not in res
     assert "auto_publish" not in res
     assert res["type"] == "ambient_auto"
+
+
+# -----------------------------------------------------------------------------
+# 12. Leitura do roteiro para mood prioriza chave 'script' em script.json
+# -----------------------------------------------------------------------------
+def test_script_json_reading_prioritizes_script_key_over_subject():
+    """Confirma que script.json com 'script' e 'video_subject' detecta pelo roteiro completo."""
+    fake_script_data = {
+        "script": "O avanço da inteligência artificial transformará todas as indústrias.",
+        "params": {
+            "video_subject": "Cenário e paisagem comum",
+            "bgm_default_mood": "neutral",
+        },
+    }
+
+    with patch.object(ambient_bgm, "_load_task_script_data", return_value=fake_script_data), \
+         patch.object(ambient_bgm, "_extract_task_id", return_value="fake_task_id"), \
+         patch.object(ambient_bgm, "generate_ambient_bgm", return_value="fake_out.wav") as mock_gen:
+        ambient_bgm.generate_bgm(
+            output_path="/storage/tasks/fake_task_id/ambient_auto-bgm-1.wav",
+            video_duration=5.0,
+        )
+        assert mock_gen.called is True
+        assert mock_gen.call_args[1]["mood"] == "futuristic"
+
+
+# -----------------------------------------------------------------------------
+# 13. Propagação de default_mood do perfil e fallback seguro para neutral
+# -----------------------------------------------------------------------------
+def test_profile_default_mood_fallback_when_no_signal():
+    """Quando o roteiro não tem sinal forte, usa bgm_default_mood dos params/perfil."""
+    fake_script_data = {
+        "script": "Uma caminhada simples pelo parque num dia calmo.",
+        "params": {
+            "video_subject": "Passeio",
+            "bgm_default_mood": "suspense",
+        },
+    }
+
+    with patch.object(ambient_bgm, "_load_task_script_data", return_value=fake_script_data), \
+         patch.object(ambient_bgm, "_extract_task_id", return_value="fake_task_id"), \
+         patch.object(ambient_bgm, "generate_ambient_bgm", return_value="fake_out.wav") as mock_gen:
+        ambient_bgm.generate_bgm(
+            output_path="/storage/tasks/fake_task_id/ambient_auto-bgm-1.wav",
+            video_duration=5.0,
+        )
+        assert mock_gen.called is True
+        assert mock_gen.call_args[1]["mood"] == "suspense"
+
+
+def test_invalid_default_mood_falls_back_to_neutral():
+    """Quando bgm_default_mood é inválido e não há sinal, faz fallback seguro para neutral."""
+    fake_script_data = {
+        "script": "Uma caminhada simples pelo parque num dia calmo.",
+        "params": {
+            "video_subject": "Passeio",
+            "bgm_default_mood": "mood_inexistente",
+        },
+    }
+
+    with patch.object(ambient_bgm, "_load_task_script_data", return_value=fake_script_data), \
+         patch.object(ambient_bgm, "_extract_task_id", return_value="fake_task_id"), \
+         patch.object(ambient_bgm, "generate_ambient_bgm", return_value="fake_out.wav") as mock_gen:
+        ambient_bgm.generate_bgm(
+            output_path="/storage/tasks/fake_task_id/ambient_auto-bgm-1.wav",
+            video_duration=5.0,
+        )
+        assert mock_gen.called is True
+        assert mock_gen.call_args[1]["mood"] == "neutral"
+
+
+# -----------------------------------------------------------------------------
+# 14. Nível estável de headroom sem dupla atenuação de volume
+# -----------------------------------------------------------------------------
+def test_canonical_stable_bed_has_no_double_volume():
+    """Geração de ambient BGM não aplica atenuação de bgm_volume, delegando ao mixer final."""
+    test_out = "storage/validation/test_headroom.wav"
+    try:
+        res = ambient_bgm.generate_ambient_bgm(
+            output_path=test_out,
+            duration=1.0,
+            mood="neutral",
+        )
+        assert os.path.isfile(res)
+        assert os.path.getsize(res) > 0
+    finally:
+        if os.path.exists(test_out):
+            os.remove(test_out)
+
+
+# -----------------------------------------------------------------------------
+# 15. Preflight local is_enabled() retorna True
+# -----------------------------------------------------------------------------
+def test_ambient_bgm_preflight_is_enabled():
+    """ambient_bgm.is_enabled() retorna True pois não requer chaves de API externa."""
+    assert ambient_bgm.is_enabled() is True

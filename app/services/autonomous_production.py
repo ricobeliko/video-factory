@@ -1661,6 +1661,7 @@ def build_autonomous_video_params(
     bgm_type = auto_bgm["type"]
     bgm_file = auto_bgm["file"]
     bgm_volume = auto_bgm["volume"]
+    bgm_default_mood = auto_bgm.get("default_mood", "neutral")
 
     params = VideoParams(
         video_subject=topic,
@@ -1700,6 +1701,7 @@ def build_autonomous_video_params(
         bgm_type=bgm_type,
         bgm_file=bgm_file,
         bgm_volume=bgm_volume,
+        bgm_default_mood=bgm_default_mood,
         # Channel Factory / Flow Integration (Fase V1.5E-E)
         visual_director_enabled=bool(ctx.get("visual_director_enabled", False)),
         visual_style_brief=str(ctx.get("visual_style_brief") or ""),

@@ -194,26 +194,29 @@ def detect_mood(text: str, default_mood: str = DEFAULT_MOOD) -> str:
 
 
 def is_enabled() -> bool:
-    """Verifica se o gerador local está disponível (requer binário FFmpeg no host)."""
-    ffmpeg_bin = utils.get_ffmpeg_binary()
-    return bool(ffmpeg_bin and os.path.isfile(ffmpeg_bin))
+    """
+    Retorna True: provedor 100% local que não exige chave externa ou credencial de API.
+    A disponibilidade do binário FFmpeg é validada pelo preflight canônico subsequente.
+    """
+    return True
 
 
 def generate_ambient_bgm(
     output_path: str,
     duration: float,
     mood: str = DEFAULT_MOOD,
-    volume: float = DEFAULT_BGM_VOLUME,
+    volume: float = 1.0,
     fade_in: float = FADE_IN_SECONDS,
     fade_out: float = FADE_OUT_SECONDS,
 ) -> str:
     """
-    Sintetiza um sound bed procedural contínuo usando FFmpeg local.
+    Sintetiza um sound bed procedural contínuo usando FFmpeg local em nível canônico estável.
 
     - 100% local e determinístico
     - Sem melodia invasiva
-    - Volume normalizado para não disputar atenção com a narração
-    - Fade-in e Fade-out suaves
+    - Nível estável de headroom seguro (o bgm_volume configurado pelo operador é aplicado
+      uma única vez pelo mixer final video.generate_video / _mix_audio_ffmpeg, evitando atenuação dupla)
+    - Fade-in e Fade-out suaves preservados
     """
     if duration <= 0:
         raise AmbientBgmError(f"Duração inválida para síntese de BGM: {duration}s")
@@ -225,7 +228,6 @@ def generate_ambient_bgm(
     synth_def = _MOOD_SYNTHESIS_DEFINITIONS[clean_mood]
     expr_l, expr_r, filter_chain = synth_def
 
-    norm_vol = normalize_volume(volume)
     ffmpeg_bin = utils.get_ffmpeg_binary()
     if not ffmpeg_bin:
         raise AmbientBgmError("Binário do FFmpeg não encontrado para síntese procedural de BGM.")
@@ -240,7 +242,6 @@ def generate_ambient_bgm(
     lavfi_filter = (
         f"aevalsrc=exprs={expr_l}|{expr_r}:s=44100:d={duration},"
         f"{filter_chain},"
-        f"volume={norm_vol:.4f},"
         f"afade=t=in:ss=0:d={actual_fade_in:.2f},"
         f"afade=t=out:st={fade_out_start:.2f}:d={actual_fade_out:.2f}"
     )
@@ -305,14 +306,17 @@ def generate_bgm(
         if task_id:
             script_data = _load_task_script_data(task_id)
             if script_data:
-                script_text = script_data.get("video_script", "")
-                subject = script_data.get("video_subject") or script_data.get("params", {}).get("video_subject", "")
+                script_text = script_data.get("script") or script_data.get("video_script", "")
+                params_dict = script_data.get("params") if isinstance(script_data.get("params"), dict) else {}
+                subject = params_dict.get("video_subject") or script_data.get("video_subject", "")
                 default_m = (
-                    script_data.get("params", {}).get("default_mood")
-                    or script_data.get("params", {}).get("bgm_mood")
+                    params_dict.get("bgm_default_mood")
+                    or params_dict.get("default_mood")
+                    or script_data.get("bgm_default_mood")
                     or DEFAULT_MOOD
                 )
-                selected_mood = detect_mood(f"{script_text} {subject}", default_mood=default_m)
+                combined_text = f"{script_text} {subject}".strip()
+                selected_mood = detect_mood(combined_text, default_mood=default_m)
 
     # Persiste metadados no script.json da task sem nova tabela
     task_id = _extract_task_id(output_path)
@@ -332,7 +336,6 @@ def generate_bgm(
         output_path=output_path,
         duration=video_duration,
         mood=selected_mood,
-        volume=volume,
     )
 
 

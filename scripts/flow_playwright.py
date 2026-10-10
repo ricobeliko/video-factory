@@ -1049,24 +1049,59 @@ def _persist_download(
     try:
         download.save_as(output_path)
         if os.path.exists(output_path):
-            persisted = True
+            val_save = validate_clip_file(output_path)
+            if val_save.get("valid"):
+                persisted = True
+            else:
+                save_as_err = f"INVALID_MEDIA: {val_save.get('error')}"
+                logger.warning(
+                    f"download.save_as() produziu arquivo inválido em {output_path} ({val_save.get('error')}). "
+                    "Removendo arquivo inválido e continuando para fallback..."
+                )
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+                persisted = False
     except Exception as exc:
         save_as_err = str(exc)
         logger.warning(
             f"download.save_as() falhou ({type(exc).__name__}: {exc}). "
             "Tentando persistência via staging de download controlado..."
         )
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
 
-    # Tentativa B: download.path() se save_as não persistiu arquivo
+    # Tentativa B: download.path() se save_as não persistiu arquivo válido
     if not persisted or not os.path.exists(output_path):
         try:
             p_val = download.path()
             if p_val and os.path.exists(str(p_val)):
                 shutil.copy2(str(p_val), output_path)
                 if os.path.exists(output_path):
-                    persisted = True
+                    val_path = validate_clip_file(output_path)
+                    if val_path.get("valid"):
+                        persisted = True
+                    else:
+                        logger.warning(
+                            f"download.path() produziu arquivo inválido em {output_path} ({val_path.get('error')}). "
+                            "Removendo arquivo inválido e continuando para fallback..."
+                        )
+                        try:
+                            os.remove(output_path)
+                        except Exception:
+                            pass
+                        persisted = False
         except Exception as path_err:
             logger.debug(f"download.path() indisponível: {path_err}")
+            if os.path.exists(output_path) and not persisted:
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
 
     # Tentativa C: Fallback em staging_dir se o contexto/target fechou durante o download
     if (not persisted or not os.path.exists(output_path)) and staging_dir and os.path.exists(staging_dir):

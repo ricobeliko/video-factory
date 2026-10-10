@@ -17,6 +17,7 @@ from scripts.flow_playwright import (
     check_generate_actionable,
     check_login_state,
     check_pending_credit_approval,
+    _persist_download,
     download_generated_clip,
     ensure_studio_surface,
     ensure_video_generation_mode,
@@ -201,29 +202,37 @@ class TestFlowPlaywright(unittest.TestCase):
 
     def test_download_generated_clip_expect_download(self):
         """Download utiliza expect_download nativo e salva com download.save_as."""
-        mock_page = MagicMock()
-        mock_tile = MagicMock()
-        mock_tile.count.return_value = 1
-        mock_btn = MagicMock()
-        mock_btn.count.return_value = 1
-        mock_btn.is_visible.return_value = True
-        mock_tile.locator.return_value = mock_btn
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
+            mock_btn = MagicMock()
+            mock_btn.count.return_value = 1
+            mock_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_btn
 
-        mock_download = MagicMock()
-        mock_download.suggested_filename = "flow_video.mp4"
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "flow_video.mp4"
+            def _fake_save(p):
+                with open(p, "wb") as f:
+                    f.write(b"flow_video_bytes")
+            mock_download.save_as.side_effect = _fake_save
 
-        mock_download_info = MagicMock()
-        mock_download_info.value = mock_download
+            mock_download_info = MagicMock()
+            mock_download_info.value = mock_download
 
-        mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
-        mock_page.expect_download.return_value.__exit__.return_value = None
+            mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
 
-        with patch("scripts.flow_playwright.expect"):
-            ok, err = download_generated_clip(mock_page, "storage/output.mp4", tile_locator=mock_tile)
-            self.assertTrue(ok)
-            self.assertIsNone(err)
-            mock_btn.click.assert_called_once()
-            mock_download.save_as.assert_called_once_with("storage/output.mp4")
+            with patch("scripts.flow_playwright.expect"), \
+                 patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}):
+                ok, err = download_generated_clip(mock_page, out_file, tile_locator=mock_tile)
+                self.assertTrue(ok)
+                self.assertIsNone(err)
+                mock_btn.click.assert_called_once()
+                mock_download.save_as.assert_called_once_with(out_file)
 
     def test_approval_present_does_not_mean_generation_started(self):
         """1. A presença de Aprovar significa apenas aprovação requerida, NÃO geração iniciada."""
@@ -532,29 +541,38 @@ class TestFlowPlaywright(unittest.TestCase):
 
     def test_download_requires_or_receives_specific_tile(self):
         """5. Download recebe tile_locator específico e busca elementos dentro dele."""
-        mock_page = MagicMock()
-        mock_tile = MagicMock()
-        mock_tile.count.return_value = 1
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
 
-        mock_dl_btn = MagicMock()
-        mock_dl_btn.count.return_value = 1
-        mock_dl_btn.is_visible.return_value = True
-        mock_tile.locator.return_value = mock_dl_btn
+            mock_dl_btn = MagicMock()
+            mock_dl_btn.count.return_value = 1
+            mock_dl_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_dl_btn
 
-        mock_download = MagicMock()
-        mock_download.suggested_filename = "clip.mp4"
-        mock_download_info = MagicMock()
-        mock_download_info.value = mock_download
-        mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
-        mock_page.expect_download.return_value.__exit__.return_value = None
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "clip.mp4"
+            def _fake_save(p):
+                with open(p, "wb") as f:
+                    f.write(b"clip_bytes")
+            mock_download.save_as.side_effect = _fake_save
 
-        with patch("scripts.flow_playwright.expect"):
-            ok, err = download_generated_clip(mock_page, "storage/output.mp4", tile_locator=mock_tile)
-            self.assertTrue(ok)
-            self.assertIsNone(err)
-            mock_tile.hover.assert_called_once()
-            mock_dl_btn.click.assert_called_once()
-            mock_download.save_as.assert_called_once_with("storage/output.mp4")
+            mock_download_info = MagicMock()
+            mock_download_info.value = mock_download
+            mock_page.expect_download.return_value.__enter__.return_value = mock_download_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
+
+            with patch("scripts.flow_playwright.expect"), \
+                 patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}):
+                ok, err = download_generated_clip(mock_page, out_file, tile_locator=mock_tile)
+                self.assertTrue(ok)
+                self.assertIsNone(err)
+                mock_tile.hover.assert_called_once()
+                mock_dl_btn.click.assert_called_once()
+                mock_download.save_as.assert_called_once_with(out_file)
 
     def test_two_tiles_does_not_arbitrarily_pick_first(self):
         """6. Se houver 2 tiles existentes e nenhum tile_locator específico, download bloqueia fail-closed sem usar .first."""
@@ -1196,6 +1214,62 @@ class TestFlowPlaywright(unittest.TestCase):
 
             self.assertFalse(ok)
             self.assertIn("INVALID_STAGING_DOWNLOAD_CLIP", str(err))
+            self.assertFalse(os.path.exists(out_file))
+
+    def test_persist_download_never_returns_true_without_valid_output_file(self):
+        """Bloqueio 2: _persist_download NUNCA retorna True sem output_path existente e comprovadamente válido (zero bypass de mock)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+
+            # Caso A: mock_download não cria arquivo -> retorna False, DOWNLOAD_FAILED (sem exceção de mock)
+            mock_dl = MagicMock()
+            mock_dl.suggested_filename = "test.mp4"
+            mock_dl.path.return_value = None
+            ok, err = _persist_download(mock_dl, out_file)
+            self.assertFalse(ok)
+            self.assertIn("DOWNLOAD_FAILED", str(err))
+
+            # Caso B: arquivo gravado no disco mas validate_clip_file diz inválido -> retorna False
+            def _write_bad(p):
+                with open(p, "wb") as f:
+                    f.write(b"bad_bytes")
+            mock_dl.save_as.side_effect = _write_bad
+
+            with patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": False, "error": "CORRUPT_MEDIA"}):
+                ok, err = _persist_download(mock_dl, out_file)
+                self.assertFalse(ok)
+                self.assertEqual(err, "INVALID_OUTPUT_MEDIA: CORRUPT_MEDIA")
+
+            # Caso C: arquivo gravado e validate_clip_file diz válido -> retorna True
+            def _write_good(p):
+                with open(p, "wb") as f:
+                    f.write(b"good_bytes")
+            mock_dl.save_as.side_effect = _write_good
+
+            with patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}):
+                ok, err = _persist_download(mock_dl, out_file)
+                self.assertTrue(ok)
+                self.assertIsNone(err)
+
+    def test_context_close_not_recoverable_solely_by_downloads_path_config(self):
+        """Bloqueio 1: Fechamento de contexto NÃO é recuperável apenas por downloads_path configurado; sem artefato válido no staging, fail-closed."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "staging_downloads")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            mock_dl = MagicMock()
+            mock_dl.suggested_filename = "flow.mp4"
+            mock_dl.save_as.side_effect = Exception("Target page, context or browser has been closed")
+            mock_dl.path.side_effect = Exception("Target page, context or browser has been closed")
+
+            # Staging configurado, mas vazio (ou purgado pelo encerramento do context Playwright)
+            ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir)
+            self.assertFalse(ok)
+            self.assertIn("DOWNLOAD_FAILED", str(err))
+            self.assertIn("Target page, context or browser has been closed", str(err))
             self.assertFalse(os.path.exists(out_file))
 
     # 6. nenhum segundo clique Generate após falha de download

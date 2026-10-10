@@ -945,7 +945,7 @@ def _clean_staging_dir(staging_dir: str) -> None:
 def _persist_download(
     download: Any,
     output_path: str,
-    staging_dir: str,
+    staging_dir: Optional[str] = None,
     timeout_ms: int = DEFAULT_TIMEOUT_DOWNLOAD_MS,
 ) -> Tuple[bool, Optional[str]]:
     """
@@ -1048,11 +1048,6 @@ def _persist_download(
     if save_as_err:
         return False, f"DOWNLOAD_FAILED: {save_as_err}"
 
-    # Compatibilidade com MagicMock em testes unitários que não criam arquivo em disco
-    is_mock = type(download).__name__ in ("MagicMock", "Mock") or hasattr(download, "_mock_return_value")
-    if is_mock:
-        return True, None
-
     return False, "DOWNLOAD_FAILED: ARTIFACT_NOT_PERSISTED"
 
 
@@ -1076,6 +1071,26 @@ def download_generated_clip(
     os.makedirs(out_dir, exist_ok=True)
     effective_staging = staging_dir or os.path.join(out_dir, "staging_downloads")
     os.makedirs(effective_staging, exist_ok=True)
+
+    # Garante que CDP direciona downloads nativos do Chromium para effective_staging
+    # (gravação durável que sobrevive a fechamentos abruptos de contexto/target)
+    if hasattr(page, "context") and page.context:
+        try:
+            cdp = page.context.new_cdp_session(page)
+            cdp.send("Page.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": effective_staging,
+            })
+            try:
+                cdp.send("Browser.setDownloadBehavior", {
+                    "behavior": "allow",
+                    "downloadPath": effective_staging,
+                    "eventsEnabled": True,
+                })
+            except Exception:
+                pass
+        except Exception as cdp_err:
+            logger.debug(f"CDP download routing in download_generated_clip (não-bloqueante): {cdp_err}")
 
     if tile_locator is None:
         all_tiles = page.locator("flow-grid-tile-container")

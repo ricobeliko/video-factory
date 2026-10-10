@@ -53,7 +53,7 @@ class TestAnalytics(unittest.TestCase):
         base_time = datetime(2026, 9, 1, 10, 0, 0, tzinfo=timezone.utc)
         
         # Snapshot 24h
-        s1 = analytics.save_snapshot(
+        analytics.save_snapshot(
             task_id="task-multi",
             platform="youtube",
             views=500,
@@ -64,7 +64,7 @@ class TestAnalytics(unittest.TestCase):
         )
         
         # Snapshot 72h
-        s2 = analytics.save_snapshot(
+        analytics.save_snapshot(
             task_id="task-multi",
             platform="youtube",
             views=1200,

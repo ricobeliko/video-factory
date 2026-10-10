@@ -35,7 +35,6 @@ Cobre os requisitos de revisão e burn-in:
 """
 from datetime import datetime, timezone
 import os
-import shutil
 import subprocess
 import tempfile
 import unittest

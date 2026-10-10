@@ -18,7 +18,6 @@ Cobre:
 14. Operações estritamente read-only / passivas
 """
 import os
-import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -30,7 +29,6 @@ from app.services import (
     profile_manager,
     scheduler,
 )
-from app.utils import utils
 
 
 class TestProductionHealth(unittest.TestCase):
@@ -252,8 +250,8 @@ class TestProductionHealth(unittest.TestCase):
         test_b_dir = os.path.join(self.tmp_dir.name, "health_backups_passive")
         os.makedirs(test_b_dir, exist_ok=True)
 
-        health = production_health.get_production_health(db_path=self.test_db_path, backup_dir=test_b_dir)
-        readiness = production_health.get_production_readiness(db_path=self.test_db_path)
+        production_health.get_production_health(db_path=self.test_db_path, backup_dir=test_b_dir)
+        production_health.get_production_readiness(db_path=self.test_db_path)
 
         # Diretório deve continuar estritamente vazio
         files = os.listdir(test_b_dir)

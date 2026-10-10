@@ -12,10 +12,8 @@ Requirements validated:
 9. TikTok remains strictly OFF: destination eligibility check rejects TikTok, no posts created.
 10. State pointers and messages remain isolated: current_task, waiting_task, state per profile.
 """
-import os
 import socket
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 

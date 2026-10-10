@@ -1,19 +1,17 @@
 import gc
 import json
 import os
-import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from io import StringIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from loguru import logger
 
 from app.config import config
 from app.models import const
 from app.services import scheduler
-from app.services import state as sm
 from app.services import task as tm
 from app.services.state import MemoryState
 from app.utils import utils
@@ -380,7 +378,7 @@ class TestSchedulerExecutionEngine(unittest.TestCase):
         self._insert_scheduled_post("task-newer", "tiktok", now - timedelta(minutes=5))
         self._insert_scheduled_post("task-older", "tiktok", now - timedelta(minutes=25))
 
-        with patch("app.services.upload_post.cross_post_video", return_value={"success": True, "request_id": "req-1"}) as mock_upload:
+        with patch("app.services.upload_post.cross_post_video", return_value={"success": True, "request_id": "req-1"}):
             res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.tasks_base_dir)
             self.assertEqual(res["task_id"], "task-older")
 
@@ -532,7 +530,7 @@ class TestSchedulerExecutionEngine(unittest.TestCase):
         # Task planejada apenas para youtube
         self._create_task("task-only-yt", ["youtube"])
         # Mas post foi agendado para tiktok
-        post_id = self._insert_scheduled_post("task-only-yt", "tiktok", now - timedelta(minutes=5))
+        self._insert_scheduled_post("task-only-yt", "tiktok", now - timedelta(minutes=5))
 
         with patch("app.services.upload_post.cross_post_video") as mock_upload:
             res = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path, task_base_dir=self.tasks_base_dir)

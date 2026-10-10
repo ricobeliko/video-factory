@@ -4,9 +4,8 @@ import sqlite3
 import unicodedata
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from loguru import logger
 
 from app.models import const
 from app.utils import utils

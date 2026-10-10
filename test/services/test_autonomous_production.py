@@ -27,11 +27,11 @@ import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.config import config
 from app.models import const
-from app.models.schema import VideoAspect, VideoParams
+from app.models.schema import VideoAspect
 from app.services import (
     autonomous_production,
     operator_console,
@@ -41,7 +41,6 @@ from app.services import (
     scheduler,
     trend_radar,
     voice,
-    webui_task,
 )
 from app.services import state as sm
 
@@ -1251,7 +1250,6 @@ class TestAutonomousProductionLoop(unittest.TestCase):
 
     def test_reboot_without_streamlit_session_state_resolves_params(self):
         """8. reinício sem Streamlit/session_state => parâmetros continuam resolvidos corretamente"""
-        import sys
         # Garante ausência ou não dependência de st.session_state
         params = autonomous_production.build_autonomous_video_params("Tema Post-Reboot", db_path=self.db_path)
         self.assertIsNotNone(params)

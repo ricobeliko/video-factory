@@ -64,7 +64,6 @@ Cobertura completa dos 60 requisitos individuais:
 60. REJECTED heuristic não renderiza
 """
 import os
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -72,13 +71,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from app.services import (
-    clip_discovery,
     clip_mode,
     clip_rendering,
     operator_console,
     profile_manager,
 )
-from app.utils import utils
 
 
 class TestClipRendering(unittest.TestCase):
@@ -848,7 +845,7 @@ class TestClipRendering(unittest.TestCase):
         base_dir = os.path.join(self.tmp_dir.name, "target_render_dir")
         os.makedirs(base_dir, exist_ok=True)
         empty_file = os.path.join(base_dir, "empty.mp4")
-        with open(empty_file, "wb") as f:
+        with open(empty_file, "wb"):
             pass
         with self.assertRaises(clip_rendering.ClipRenderError) as ctx:
             clip_rendering.validate_rendered_output(empty_file, 30.0, True, expected_dir=base_dir)

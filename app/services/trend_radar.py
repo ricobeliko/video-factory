@@ -12,15 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from app.models import const
 from app.services.trends.base import (
     CONFIDENCE_HIGH,
     CONFIDENCE_LOW,
     CONFIDENCE_MEDIUM,
     STATUS_APPROVED,
     STATUS_NEW,
-    STATUS_REJECTED,
-    STATUS_REVIEW,
     STATUS_USED,
     VALID_STATUSES,
     VERIFICATION_MULTI,

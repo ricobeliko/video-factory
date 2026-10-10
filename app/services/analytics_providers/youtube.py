@@ -14,7 +14,6 @@ from app.services.analytics_providers.base import (
     NormalizedAnalytics,
     STATUS_CONFIGURED,
     STATUS_NOT_CONFIGURED,
-    STATUS_HEALTHY,
     ERR_AUTH,
     ERR_INVALID_RESPONSE,
     ERR_NOT_FOUND,

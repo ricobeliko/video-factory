@@ -5,7 +5,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.models import const
 from app.services import scheduler
 
 
@@ -138,7 +137,7 @@ class TestSchedulerTimezone(unittest.TestCase):
         scheduler.save_task_platforms("task_transient", ["tiktok"], db_path=self.db_path)
 
         local_now = datetime(2026, 9, 16, 20, 0, 0, tzinfo=self.tz_br)
-        post_id = self._insert_post("task_transient", "tiktok", scheduler._to_iso(local_now))
+        self._insert_post("task_transient", "tiktok", scheduler._to_iso(local_now))
 
         with patch("app.services.task.publish_task", return_value=(False, "HTTP 429 Too Many Requests")):
             res = scheduler.run_scheduler_cycle(now=local_now, db_path=self.db_path, task_base_dir=self.test_dir)
@@ -161,14 +160,13 @@ class TestSchedulerTimezone(unittest.TestCase):
         local_now = datetime(2026, 9, 16, 20, 0, 0, tzinfo=self.tz_br)
         # Inserindo post com attempts=1
         with scheduler.get_connection(self.db_path) as conn:
-            cur = conn.execute(
+            conn.execute(
                 """
                 INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at, attempts)
                 VALUES (?, ?, ?, 'ready', ?, 1);
                 """,
                 ("task_transient_2", "tiktok", scheduler._to_iso(local_now), scheduler._to_iso(local_now)),
             )
-            post_id = cur.lastrowid
 
         with patch("app.services.task.publish_task", return_value=(False, "Connection timed out")):
             res = scheduler.run_scheduler_cycle(now=local_now, db_path=self.db_path, task_base_dir=self.test_dir)

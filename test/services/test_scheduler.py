@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.config import config
 from app.models import const
@@ -384,7 +384,7 @@ class TestScheduler(unittest.TestCase):
             "subject": "Vídeo Antigo",
         }
         # Não deve falhar nem agendar nada
-        res = scheduler.plan_schedule([legacy_task], now=now, db_path=self.db_path)
+        scheduler.plan_schedule([legacy_task], now=now, db_path=self.db_path)
     def _create_dummy_video(self, task_id: str) -> str:
         v_path = os.path.join(self.temp_dir.name, f"{task_id}.mp4")
         with open(v_path, "wb") as f:
@@ -453,7 +453,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(len(adoptable), 0)
 
     def test_26_adopt_tiktok_only(self):
-        v_path = self._create_dummy_video("adopt-tk")
+        self._create_dummy_video("adopt-tk")
         count = scheduler.adopt_tasks_into_scheduler(["adopt-tk"], ["tiktok"], db_path=self.db_path)
         self.assertEqual(count, 1)
 
@@ -461,7 +461,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(platforms, ["tiktok"])
 
     def test_27_adopt_youtube_only(self):
-        v_path = self._create_dummy_video("adopt-yt")
+        self._create_dummy_video("adopt-yt")
         count = scheduler.adopt_tasks_into_scheduler(["adopt-yt"], ["youtube"], db_path=self.db_path)
         self.assertEqual(count, 1)
 
@@ -469,7 +469,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(platforms, ["youtube"])
 
     def test_28_adopt_tiktok_and_youtube(self):
-        v_path = self._create_dummy_video("adopt-both")
+        self._create_dummy_video("adopt-both")
         count = scheduler.adopt_tasks_into_scheduler(["adopt-both"], ["tiktok", "youtube"], db_path=self.db_path)
         self.assertEqual(count, 1)
 
@@ -477,7 +477,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(set(platforms), {"tiktok", "youtube"})
 
     def test_29_repeated_adoption_does_not_duplicate(self):
-        v_path = self._create_dummy_video("adopt-dup")
+        self._create_dummy_video("adopt-dup")
         scheduler.adopt_tasks_into_scheduler(["adopt-dup"], ["tiktok", "youtube"], db_path=self.db_path)
         # Segunda chamada repetida
         scheduler.adopt_tasks_into_scheduler(["adopt-dup"], ["tiktok", "youtube"], db_path=self.db_path)

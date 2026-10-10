@@ -15,7 +15,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.models.schema import SceneMaterialSelection
 from scripts.flow_playwright import (
@@ -543,7 +543,7 @@ class TestFlowWorkflow(unittest.TestCase):
                 duration=8.0,
                 credits_consumed=15,
             )
-            res = generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
+            generate_pending_flow_scenes(manifest_path=prep["manifest_path"])
 
             # Cena 3 foi gerada, mas cenas 1 e 2 NÃO foram regeneradas
             self.assertEqual(mock_gen.call_count, 1)

@@ -31,7 +31,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.models import const
 from app.models.schema import (
@@ -46,7 +46,6 @@ from app.services import (
     flow_bridge,
     profile_manager,
     task,
-    visual_director,
 )
 from scripts import flow_workflow
 
@@ -89,8 +88,7 @@ class TestFlowPipelineIntegration(unittest.TestCase):
             flow_enabled=False,
             scene_based_generation_enabled=True,
         )
-        task_id = "task_flow_off_001"
-        scene_plan = self._create_sample_scene_plan(4)
+        self._create_sample_scene_plan(4)
 
         with patch("app.services.flow_bridge.resolve_flow_materials_for_task") as mock_bridge, \
              patch("app.services.scene_material.resolve_scene_materials") as mock_scene_mat, \
@@ -631,7 +629,7 @@ class TestFlowPipelineIntegration(unittest.TestCase):
             visual_director_enabled=True,
             scene_based_generation_enabled=True,
         )
-        scene_plan = self._create_sample_scene_plan(3)
+        self._create_sample_scene_plan(3)
 
         with patch("app.services.visual_director.direct_scenes") as mock_direct, \
              patch("app.services.flow_bridge.resolve_flow_materials_for_task") as mock_bridge:

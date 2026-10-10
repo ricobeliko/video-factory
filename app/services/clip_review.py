@@ -8,14 +8,10 @@ Inclui promoção atômica, isolamento de falhas, idempotência e workflow de go
 """
 from datetime import datetime, timezone
 import hashlib
-import json
 import os
-from pathlib import Path
-import shutil
-import sqlite3
 import subprocess
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import uuid
 
 from loguru import logger
@@ -25,7 +21,6 @@ from app.services import (
     clip_mode,
     clip_rendering,
     operator_console,
-    profile_manager,
 )
 from app.utils import utils
 

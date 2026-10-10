@@ -20,10 +20,8 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
 
-from app.models import const
-from app.services import flow_diagnostics, quality_score, scheduler
+from app.services import flow_diagnostics
 from scripts import diagnose_v15b
 
 

@@ -4,25 +4,20 @@ ZERO chamadas de rede real: todas as interações HTTP são 100% mockadas.
 NENHUMA API Key real utilizada.
 """
 
-import json
 import os
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.services import post_for_me
 from app.services.post_for_me import (
     CHANNEL_DEFAULT_YT_ID,
     CHANNEL_MYSTERY_YT_ID,
     PostForMeAccountDisconnectedError,
     PostForMeAccountNotFoundError,
     PostForMeAmbiguousAccountError,
-    PostForMeAmbiguousPostError,
     PostForMeAmbiguousResultError,
-    PostForMeAuthError,
     PostForMeClient,
     PostForMeTimeoutError,
-    PostForMeUploadError,
     extract_post_result,
     extract_youtube_video_id,
     resolve_target_youtube_channel_id,
@@ -1700,7 +1695,7 @@ class TestPostForMeClient(unittest.TestCase):
             patch.object(client, "create_media_upload_url") as mock_up,
             patch.object(client, "upload_media_binary") as mock_bin,
             patch.object(client, "create_social_post") as mock_create,
-            patch.object(client, "poll_social_post", return_value={"id": "sp_active_unk_priv", "status": "processed"}) as mock_poll,
+            patch.object(client, "poll_social_post", return_value={"id": "sp_active_unk_priv", "status": "processed"}),
             patch.object(client, "get_post_result_for_account", return_value={
                 "id": "spr_act_unk",
                 "post_id": "sp_active_unk_priv",

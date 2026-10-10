@@ -16,11 +16,10 @@ Cobertura estrita dos 12 requisitos da política de testes:
 12. nenhuma publicação.
 """
 
-import os
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
@@ -166,7 +165,7 @@ def test_6_segments_never_overlap_and_within_duration():
 
 def test_7_subtitle_remains_above_presenter_z_order():
     """Garante que a composição coloca o layer de legendas ACIMA do presenter."""
-    from moviepy import ColorClip, ImageClip, TextClip, CompositeVideoClip
+    from moviepy import ColorClip, ImageClip, CompositeVideoClip
 
     bg_clip = ColorClip(size=(100, 100), color=(0, 0, 0), duration=2.0)
     with tempfile.TemporaryDirectory() as tmp_dir:

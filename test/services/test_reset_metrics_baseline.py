@@ -28,8 +28,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.models import const
-from app.services import (
+from app.models import const  # noqa: E402
+from app.services import (  # noqa: E402
     analytics,
     analytics_scheduler,
     autonomous_production,
@@ -40,7 +40,7 @@ from app.services import (
     state as sm,
     trend_radar,
 )
-from scripts import reset_metrics_baseline
+from scripts import reset_metrics_baseline  # noqa: E402
 
 
 class TestResetMetricsBaseline(unittest.TestCase):

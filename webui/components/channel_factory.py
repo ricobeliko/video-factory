@@ -7,7 +7,7 @@ Apresenta a experiência de Channel Factory:
 - Default seguro: produção autônoma sempre nasce pausada até ação explícita do operador
 - Gerenciamento e edição de configurações de canais existentes
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import streamlit as st
 
 from app.config import config
@@ -76,7 +76,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                 height=68,
             )
         with c_lang:
-            lang_val = st.selectbox("Idioma", options=["pt-BR"], index=0, key="cf_new_ch_lang", disabled=True)
+            st.selectbox("Idioma", options=["pt-BR"], index=0, key="cf_new_ch_lang", disabled=True)
 
         # 2. Publicação (Post for Me / YouTube) - Fail-Closed
         st.markdown("##### 2. Publicação e Destino")

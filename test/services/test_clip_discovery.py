@@ -36,7 +36,7 @@ Cobre os requisitos 31 a 60:
 import os
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services import (
     clip_discovery,
@@ -397,7 +397,7 @@ class TestClipDiscovery(unittest.TestCase):
             db_path=self.db_path,
         )
 
-        candidates = clip_discovery.discover_clip_candidates(transcript_id, db_path=self.db_path)
+        clip_discovery.discover_clip_candidates(transcript_id, db_path=self.db_path)
         persisted_manual = clip_mode.get_clip_segment(manual_seg["segment_id"], db_path=self.db_path)
         self.assertIsNotNone(persisted_manual)
         self.assertEqual(persisted_manual["selection_method"], "manual")
@@ -524,7 +524,7 @@ class TestClipDiscovery(unittest.TestCase):
 
         with clip_mode.get_connection(self.db_path) as conn:
             # Verifica que nenhuma publicação foi criada
-            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_analytics';")
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_analytics';")
             # Nenhuma tabela de publicação/analytics tem alterações provenientes do discovery
             self.assertGreater(len(candidates), 0)
 

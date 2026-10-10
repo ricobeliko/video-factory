@@ -20,24 +20,19 @@ PRINCÍPIOS:
 
 from __future__ import annotations
 
-import contextlib
 import json
 import math
 import os
 import sqlite3
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional, Tuple
 
-from loguru import logger
 
 from app.models import const
 from app.services import (
     analytics,
-    autonomous_production,
     copyright_gate,
-    profile_manager,
     quality_score,
-    safety_gate,
     scheduler,
     state as sm,
 )
@@ -477,8 +472,8 @@ def diagnose_mystery_task(
         result["conclusion"] = "OBSERVABILITY_DESYNCHRONIZATION"
         result["root_cause"] = "BUFFER_DRAIN_CLEARED_WAITING_POINTER"
         result["explanation"] = (
-            f"A tarefa está íntegra e aprovada nos gates, mas o ponteiro waiting_task_id foi limpo "
-            f"durante a tentativa de agendamento no ciclo autônomo subsequente."
+            "A tarefa está íntegra e aprovada nos gates, mas o ponteiro waiting_task_id foi limpo "
+            "durante a tentativa de agendamento no ciclo autônomo subsequente."
         )
 
     return result

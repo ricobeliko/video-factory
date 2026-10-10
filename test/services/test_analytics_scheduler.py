@@ -53,13 +53,12 @@ import json
 import os
 import tempfile
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services import (
     analytics,
-    analytics_ingestion,
     analytics_scheduler,
     operator_console,
     profile_manager,
@@ -69,7 +68,6 @@ from app.services.analytics_providers import (
     AnalyticsProvider,
     AnalyticsProviderError,
     ERR_AUTH,
-    ERR_INVALID_RESPONSE,
     ERR_NOT_FOUND,
     ERR_RATE_LIMIT,
     ERR_TEMPORARY,

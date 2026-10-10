@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from loguru import logger
 
@@ -71,7 +71,7 @@ def resolve_flow_materials_for_task(
     if not os.path.exists(manifest_path):
         os.makedirs(flow_dir, exist_ok=True)
         logger.info(f"[FLOW_BRIDGE] Criando novo manifesto Flow para task '{task_id}' em {flow_dir}...")
-        prep_res = flow_workflow.prepare_project(
+        flow_workflow.prepare_project(
             script_text=video_script,
             project_name="flow",
             video_subject=params.video_subject,
@@ -90,7 +90,7 @@ def resolve_flow_materials_for_task(
         logger.info(f"[FLOW_BRIDGE] Reutilizando manifesto existente em {manifest_path} (zero re-planejamento).")
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest_data = json.load(f)
+                json.load(f)
         except Exception as json_err:
             logger.error(f"[FLOW_BRIDGE] Manifesto corrompido em {manifest_path}: {json_err}")
             raise ValueError(f"FLOW_MANIFEST_INVALID: Manifesto corrompido em {manifest_path}. Intervenção manual obrigatória.")

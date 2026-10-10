@@ -339,7 +339,7 @@ def test_scene_based_loop_avoids_gc_and_executes_single_post_loop_gc():
 
             filtered_logs = []
             for marker in expected_markers:
-                match = [l for l in scene_logs if marker in l]
+                match = [log_line for log_line in scene_logs if marker in log_line]
                 assert len(match) >= 1, f"Marker {marker} not found in logs: {scene_logs}"
                 filtered_logs.append(match[0])
 

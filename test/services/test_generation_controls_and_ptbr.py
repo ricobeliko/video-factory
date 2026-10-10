@@ -1,7 +1,7 @@
 import ast
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.controllers.manager.memory_manager import InMemoryTaskManager
 from app.models import const

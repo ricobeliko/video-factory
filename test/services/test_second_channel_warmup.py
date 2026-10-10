@@ -8,7 +8,6 @@ Requirements:
 - NÃO misturar histórico/analytics/learning/estoque entre canais.
 - Somente testes direcionados.
 """
-import os
 import socket
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch

@@ -8,20 +8,15 @@ transações curtas BEGIN IMMEDIATE e validação técnica do arquivo gerado.
 """
 from datetime import datetime, timezone
 import hashlib
-import json
 import os
-from pathlib import Path
-import re
-import shutil
-import sqlite3
 import subprocess
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import uuid
 
 from loguru import logger
 
-from app.services import clip_mode, operator_console, profile_manager
+from app.services import clip_mode, operator_console
 from app.utils import utils
 
 # Lock de processo para sincronização da seção crítica de início de renderização

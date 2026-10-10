@@ -10,7 +10,6 @@ a partir de transcrições completas com timestamps, sem utilização de LLM/IA:
 """
 from datetime import datetime, timezone
 import re
-import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
@@ -139,7 +138,7 @@ def score_candidate_window(
     if any(q in lower_start for q in HOOK_QUESTIONS):
         hook_score = 15.0
         reasons.append("gancho: pergunta de abertura")
-    elif any(l in lower_start for l in HOOK_LISTS):
+    elif any(item in lower_start for item in HOOK_LISTS):
         hook_score = 12.0
         reasons.append("gancho: sinal de lista/número")
     elif any(c in lower_start for c in HOOK_CONTRASTS):

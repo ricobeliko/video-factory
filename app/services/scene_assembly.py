@@ -12,7 +12,6 @@ e fail-closed em caso de corrupção ou inconsistência estrutural.
 
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 
 from loguru import logger
@@ -92,7 +91,6 @@ def assemble_scene_clips(
     if params and hasattr(params, "video_fit_mode"):
         fit_mode = getattr(params.video_fit_mode, "value", str(params.video_fit_mode))
 
-    total_scenes = len(scene_plan.scenes)
     # Cálculo das durações por cena
     durations: List[float] = []
     if audio_duration > 0.0:

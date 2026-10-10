@@ -4,7 +4,7 @@ import re
 import threading
 import unicodedata
 from timeit import default_timer as timer
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 try:
     from faster_whisper import WhisperModel

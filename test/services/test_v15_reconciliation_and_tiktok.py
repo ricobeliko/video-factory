@@ -17,9 +17,8 @@ import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from app.models import const
 from app.services import (
     autonomous_production,
     operator_console,
@@ -28,7 +27,6 @@ from app.services import (
     scheduler,
     youtube_publisher,
 )
-from app.services import state as sm
 
 
 class TestV15ReconciliationAndTikTok(unittest.TestCase):

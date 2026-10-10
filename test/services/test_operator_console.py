@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.models import const
 from app.models.schema import VideoParams
@@ -107,7 +107,7 @@ class TestOperatorConsole(unittest.TestCase):
         task_id = "task-no-failed"
         sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=10)
         operator_console.request_task_cancel(task_id, db_path=self.db_path)
-        cancel_res = task_module._check_cancellation(task_id, "before_render", progress=50)
+        task_module._check_cancellation(task_id, "before_render", progress=50)
         
         t = sm.state.get_task(task_id)
         self.assertEqual(t["state"], const.TASK_STATE_CANCELLED)

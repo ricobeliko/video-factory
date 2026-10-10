@@ -15,7 +15,6 @@ Transforma a Video Factory em uma fábrica de conteúdo autônoma e self-feeding
 import math
 import os
 import shutil
-import sqlite3
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -23,7 +22,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
-from app.config import config
 from app.models import const
 from app.models.schema import (
     VideoAspect,
@@ -44,7 +42,6 @@ from app.services import (
     safety_gate,
     scheduler,
     trend_radar,
-    voice,
     webui_task,
 )
 from app.utils import utils
@@ -2424,7 +2421,6 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Guarda 6: Provedores Críticos Requeridos (FFmpeg, Storage, LLM, TTS, Media)
     # -----------------------------------------------------------------------
-    active_profile_id = target_profile_id
     try:
         probe_params = build_autonomous_video_params(
             topic="probe",

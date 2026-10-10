@@ -1,9 +1,8 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import UUID
 
 from app.config import config
-from app.models import const
 from app.models.schema import VideoParams
 from app.services import state as sm
 from app.services import webui_task

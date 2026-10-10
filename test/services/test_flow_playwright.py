@@ -19,7 +19,6 @@ from scripts.flow_playwright import (
     check_pending_credit_approval,
     _persist_download,
     download_generated_clip,
-    MIN_TILE_EVIDENCE_CHARS,
     normalize_tile_label,
     match_tile_label_to_scene,
     ensure_studio_surface,
@@ -1292,7 +1291,7 @@ class TestFlowPlaywright(unittest.TestCase):
             mock_dl = MagicMock()
             mock_dl.suggested_filename = "valid_staged.mp4"
             def _empty_save_as(p):
-                with open(p, "wb") as f:
+                with open(p, "wb"):
                     pass  # 0 bytes
             mock_dl.save_as.side_effect = _empty_save_as
             mock_dl.path.return_value = None

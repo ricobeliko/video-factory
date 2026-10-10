@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 
 from app.models import const
 from app.models.schema import VideoAspect, VideoParams
-from app.services import autonomous_production, media_quality, task as tm, task_artifacts
+from app.services import autonomous_production, media_quality, task as tm
 from app.services import state as sm
 from app.utils import utils
 
@@ -107,7 +107,7 @@ class TestV16_3FinalMediaQualityGate(unittest.TestCase):
     def test_03_zero_bytes_blocks(self):
         """3. Arquivo vazio (0 bytes) -> BLOCK com FINAL_MEDIA_EMPTY."""
         empty_file = os.path.join(self.tmp_dir, "empty.mp4")
-        with open(empty_file, "wb") as f:
+        with open(empty_file, "wb"):
             pass
         res = media_quality.evaluate_final_media_quality(video_path=empty_file, required=True)
         self.assertEqual(res["status"], "BLOCK")
@@ -497,7 +497,7 @@ class TestV16_3FinalMediaQualityGate(unittest.TestCase):
                  patch("app.services.task.get_video_materials", return_value=["mat1.mp4"]), \
                  patch("app.services.task.generate_final_videos", return_value=([valid_mp4], [valid_mp4], [])), \
                  patch("app.services.media_quality.evaluate_final_media_quality", return_value=mock_eval), \
-                 patch("app.services.task._schedule_cross_post", return_value=None) as mock_cross_post:
+                 patch("app.services.task._schedule_cross_post", return_value=None):
 
                 res = tm.start(task_id, params, stop_at="video")
                 task_record = sm.state.get_task(task_id) or {}
@@ -778,7 +778,7 @@ class TestV16_3FinalMediaQualityGate(unittest.TestCase):
                  patch("app.services.media_quality.evaluate_final_media_quality", return_value=mock_eval), \
                  patch("app.services.task._schedule_cross_post", return_value=None):
 
-                res = tm.start(task_id, params, stop_at="video")
+                tm.start(task_id, params, stop_at="video")
                 task_record = sm.state.get_task(task_id) or {}
                 self.assertEqual(task_record.get("state"), const.TASK_STATE_COMPLETE)
         finally:

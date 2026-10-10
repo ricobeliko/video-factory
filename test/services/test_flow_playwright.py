@@ -978,7 +978,10 @@ class TestFlowPlaywright(unittest.TestCase):
             mock_tiles = MagicMock()
             mock_tiles.count.return_value = 2
             mock_t0 = MagicMock()
-            mock_tiles.nth.return_value = mock_t0
+            mock_t0.get_attribute.side_effect = lambda a: "test prompt" if a == "aria-label" else ""
+            mock_t1 = MagicMock()
+            mock_t1.get_attribute.side_effect = lambda a: "other scene" if a == "aria-label" else ""
+            mock_tiles.nth.side_effect = lambda idx: mock_t0 if idx == 0 else mock_t1
             mock_page.locator.return_value = mock_tiles
 
             with patch("scripts.flow_playwright.expect"):
@@ -994,6 +997,329 @@ class TestFlowPlaywright(unittest.TestCase):
             self.assertEqual(res["generation_attempts"], 0)
             mock_gen_btn.click.assert_not_called()
 
+    # 1. download normal: expect_download -> persistência -> arquivo válido -> SUCCESS
+    def test_download_normal_persistence_valid_clip(self):
+        """1. Download normal: expect_download -> save_as persiste -> clipe validado -> SUCCESS."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
+            mock_dl_btn = MagicMock()
+            mock_dl_btn.count.return_value = 1
+            mock_dl_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_dl_btn
+
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "flow_clip.mp4"
+
+            # Simula save_as gravando um arquivo no disco
+            def _fake_save_as(path):
+                with open(path, "wb") as f:
+                    f.write(b"mp4_content")
+            mock_download.save_as.side_effect = _fake_save_as
+
+            mock_info = MagicMock()
+            mock_info.value = mock_download
+            mock_page.expect_download.return_value.__enter__.return_value = mock_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
+
+            with patch("scripts.flow_playwright.expect"), \
+                 patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}):
+                ok, err = download_generated_clip(mock_page, out_file, tile_locator=mock_tile)
+
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(os.path.exists(out_file))
+
+    # 2. TargetClosedError durante save_as sem artefato => DOWNLOAD_FAILED / recovery
+    def test_download_target_closed_no_staging_fails_closed(self):
+        """2. TargetClosedError durante save_as sem artefato em staging -> fail-closed (DOWNLOAD_FAILED)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "staging_downloads")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
+            mock_dl_btn = MagicMock()
+            mock_dl_btn.count.return_value = 1
+            mock_dl_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_dl_btn
+
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "flow_clip.mp4"
+            mock_download.save_as.side_effect = Exception("Target page, context or browser has been closed")
+            mock_download.path.side_effect = Exception("Target page, context or browser has been closed")
+
+            mock_info = MagicMock()
+            mock_info.value = mock_download
+            mock_page.expect_download.return_value.__enter__.return_value = mock_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
+
+            with patch("scripts.flow_playwright.expect"):
+                ok, err = download_generated_clip(
+                    mock_page, out_file, tile_locator=mock_tile, staging_dir=staging_dir
+                )
+
+            self.assertFalse(ok)
+            self.assertIn("DOWNLOAD_FAILED", str(err))
+            self.assertIn("Target page, context or browser has been closed", str(err))
+            self.assertFalse(os.path.exists(out_file))
+
+    # 3. TargetClosedError com artefato válido concluído no staging => recuperado com sucesso
+    def test_download_target_closed_recovered_from_staging_valid_clip(self):
+        """3. TargetClosedError durante save_as, mas staging possui clipe válido -> recuperado e canonical criado."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "staging_downloads")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            # Coloca um artefato válido concluído no staging
+            staged_file = os.path.join(staging_dir, "Neural_network_clip_123.mp4")
+            with open(staged_file, "wb") as f:
+                f.write(b"valid_staged_content")
+
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
+            mock_dl_btn = MagicMock()
+            mock_dl_btn.count.return_value = 1
+            mock_dl_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_dl_btn
+
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "Neural_network_clip_123.mp4"
+            mock_download.save_as.side_effect = Exception("Target page, context or browser has been closed")
+            mock_download.path.side_effect = Exception("Target page, context or browser has been closed")
+
+            mock_info = MagicMock()
+            mock_info.value = mock_download
+            mock_page.expect_download.return_value.__enter__.return_value = mock_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
+
+            with patch("scripts.flow_playwright.expect"), \
+                 patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}):
+                ok, err = download_generated_clip(
+                    mock_page, out_file, tile_locator=mock_tile, staging_dir=staging_dir
+                )
+
+            self.assertTrue(ok)
+            self.assertIsNone(err)
+            self.assertTrue(os.path.exists(out_file))
+            with open(out_file, "rb") as f:
+                self.assertEqual(f.read(), b"valid_staged_content")
+            # Staging limpo após recuperação
+            self.assertEqual(len(os.listdir(staging_dir)), 0)
+
+    # 4. staging com mais de um candidato => fail-closed (AMBIGUOUS_STAGING_DOWNLOAD_CANDIDATES)
+    def test_download_staging_multiple_candidates_fails_closed(self):
+        """4. Staging com múltiplos candidatos -> bloqueia fail-closed sem adivinhação."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "staging_downloads")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            with open(os.path.join(staging_dir, "cand1.mp4"), "wb") as f:
+                f.write(b"cand1")
+            with open(os.path.join(staging_dir, "cand2.mp4"), "wb") as f:
+                f.write(b"cand2")
+
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
+            mock_dl_btn = MagicMock()
+            mock_dl_btn.count.return_value = 1
+            mock_dl_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_dl_btn
+
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "flow.mp4"
+            mock_download.save_as.side_effect = Exception("TargetClosedError")
+            mock_download.path.side_effect = Exception("TargetClosedError")
+
+            mock_info = MagicMock()
+            mock_info.value = mock_download
+            mock_page.expect_download.return_value.__enter__.return_value = mock_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
+
+            with patch("scripts.flow_playwright.expect"):
+                ok, err = download_generated_clip(
+                    mock_page, out_file, tile_locator=mock_tile, staging_dir=staging_dir
+                )
+
+            self.assertFalse(ok)
+            self.assertEqual(err, "AMBIGUOUS_STAGING_DOWNLOAD_CANDIDATES")
+            self.assertFalse(os.path.exists(out_file))
+
+    # 5. staging com arquivo inválido => fail-closed (INVALID_STAGING_DOWNLOAD_CLIP)
+    def test_download_staging_invalid_candidate_fails_closed(self):
+        """5. Staging com arquivo inválido/corrompido -> fail-closed sem copiar para canonical."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "staging_downloads")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            with open(os.path.join(staging_dir, "corrupt.mp4"), "wb") as f:
+                f.write(b"corrupt")
+
+            mock_page = MagicMock()
+            mock_tile = MagicMock()
+            mock_tile.count.return_value = 1
+            mock_dl_btn = MagicMock()
+            mock_dl_btn.count.return_value = 1
+            mock_dl_btn.is_visible.return_value = True
+            mock_tile.locator.return_value = mock_dl_btn
+
+            mock_download = MagicMock()
+            mock_download.suggested_filename = "corrupt.mp4"
+            mock_download.save_as.side_effect = Exception("TargetClosedError")
+            mock_download.path.side_effect = Exception("TargetClosedError")
+
+            mock_info = MagicMock()
+            mock_info.value = mock_download
+            mock_page.expect_download.return_value.__enter__.return_value = mock_info
+            mock_page.expect_download.return_value.__exit__.return_value = None
+
+            with patch("scripts.flow_playwright.expect"), \
+                 patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": False, "error": "CORRUPT_HEADER"}):
+                ok, err = download_generated_clip(
+                    mock_page, out_file, tile_locator=mock_tile, staging_dir=staging_dir
+                )
+
+            self.assertFalse(ok)
+            self.assertIn("INVALID_STAGING_DOWNLOAD_CLIP", str(err))
+            self.assertFalse(os.path.exists(out_file))
+
+    # 6. nenhum segundo clique Generate após falha de download
+    def test_no_second_generate_click_after_download_failure(self):
+        """6. Falha no download resulta em exatamente 1 clique Generate (zero retry/segundo clique)."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button") as mock_get_gen, \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline") as mock_base, \
+             patch("scripts.flow_playwright.wait_for_generation_complete", return_value=(True, MagicMock(), None)), \
+             patch("scripts.flow_playwright.download_generated_clip", return_value=(False, "DOWNLOAD_FAILED: TargetClosedError")), \
+             patch("os.path.exists", side_effect=lambda p: True if "dummy" in str(p) or "manifest" in str(p) else False), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 5, "prompt_en": "test prompt", "expected_clip": "flow_scene_05.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_page.wait_for_function.return_value.json_value.return_value = "GENERATION_STARTED"
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+
+            mock_gen_btn = MagicMock()
+            mock_get_gen.return_value = mock_gen_btn
+            mock_base.side_effect = [{"tile_old"}, {"tile_old", "tile_new"}]
+
+            res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=5)
+
+            self.assertEqual(res["status"], "DOWNLOAD_FAILED")
+            self.assertEqual(res["generate_click_count_this_run"], 1)
+            mock_gen_btn.click.assert_called_once()
+
+    # 8. multi-tile download-only: nunca selecionar tile arbitrariamente
+    def test_multi_tile_download_only_never_selects_arbitrary_tile(self):
+        """8. Multi-tile download-only: match determinístico seleciona tile correto; ambiguidade bloqueia fail-closed."""
+        # 8a: match determinístico seleciona tile correto em grade de 3 tiles
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"t1", "t2", "t5"}), \
+             patch("scripts.flow_playwright.download_generated_clip", return_value=(True, None)), \
+             patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [
+                     {"scene_index": 1, "prompt_en": "Cena um cidade", "expected_clip": "flow_scene_01.mp4"},
+                     {"scene_index": 2, "prompt_en": "Cena dois praia", "expected_clip": "flow_scene_02.mp4"},
+                     {"scene_index": 5, "prompt_en": "Cena cinco neural network", "expected_clip": "flow_scene_05.mp4"},
+                 ]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+
+            mock_tiles = MagicMock()
+            mock_tiles.count.return_value = 3
+            mock_t1 = MagicMock()
+            mock_t1.get_attribute.side_effect = lambda a: "Cena um cidade" if a == "aria-label" else ""
+            mock_t2 = MagicMock()
+            mock_t2.get_attribute.side_effect = lambda a: "Cena dois praia" if a == "aria-label" else ""
+            mock_t5 = MagicMock()
+            mock_t5.get_attribute.side_effect = lambda a: "Cena cinco neural network" if a == "aria-label" else ""
+
+            def _nth(idx):
+                return [mock_t1, mock_t2, mock_t5][idx]
+            mock_tiles.nth.side_effect = _nth
+            mock_page.locator.return_value = mock_tiles
+
+            with patch("scripts.flow_playwright.expect"):
+                res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=5, download_only=True)
+
+            self.assertEqual(res["status"], "SUCCESS")
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            self.assertEqual(res["generation_attempts"], 0)
+
+        # 8b: grade com 3 tiles mas sem nenhum match de prompt para cena 5 -> fail-closed (sem pegar nth(0))
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"t1", "t2", "t3"}), \
+             patch("os.path.exists", side_effect=lambda p: True if "dummy" in str(p) or "manifest" in str(p) else False), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 5, "prompt_en": "Cena cinco neural", "expected_clip": "flow_scene_05.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+
+            mock_tiles = MagicMock()
+            mock_tiles.count.return_value = 3
+            mock_tx = MagicMock()
+            mock_tx.get_attribute.side_effect = lambda a: "outro prompt qualquer" if a == "aria-label" else ""
+            mock_tiles.nth.return_value = mock_tx
+            mock_page.locator.return_value = mock_tiles
+
+            res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=5, download_only=True)
+
+            self.assertEqual(res["status"], "AMBIGUOUS_TILE_TARGET_FOR_SCENE_5")
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            self.assertEqual(res["generation_attempts"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

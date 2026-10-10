@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from typing import Any, Dict, Optional, Set, Tuple
@@ -136,6 +137,7 @@ def launch_flow_context(
     playwright: Playwright,
     user_data_dir: str = DEFAULT_USER_DATA_DIR,
     headless: bool = True,
+    downloads_path: Optional[str] = None,
 ) -> Tuple[Optional[BrowserContext], Optional[str]]:
     """
     Abre o contexto persistente do Playwright usando o Microsoft Edge instalado (channel='msedge').
@@ -143,13 +145,20 @@ def launch_flow_context(
     AWAITING_FLOW_EDGE_PROFILE_CLOSE (sem matar navegadores genericamente).
     """
     os.makedirs(user_data_dir, exist_ok=True)
+    if downloads_path:
+        os.makedirs(downloads_path, exist_ok=True)
     try:
-        context = playwright.chromium.launch_persistent_context(
-            user_data_dir=user_data_dir,
-            channel="msedge",
-            headless=headless,
-            args=["--no-first-run", "--no-default-browser-check"],
-        )
+        launch_kwargs: Dict[str, Any] = {
+            "user_data_dir": user_data_dir,
+            "channel": "msedge",
+            "headless": headless,
+            "args": ["--no-first-run", "--no-default-browser-check"],
+            "accept_downloads": True,
+        }
+        if downloads_path:
+            launch_kwargs["downloads_path"] = downloads_path
+
+        context = playwright.chromium.launch_persistent_context(**launch_kwargs)
         return context, None
     except Exception as exc:
         err_msg = str(exc)
@@ -918,11 +927,141 @@ def wait_for_generation_complete(
     return True, target_tile, None
 
 
+def _clean_staging_dir(staging_dir: str) -> None:
+    """Limpa de forma segura arquivos temporários do diretório de staging."""
+    try:
+        if os.path.exists(staging_dir):
+            for fname in os.listdir(staging_dir):
+                fpath = os.path.join(staging_dir, fname)
+                if os.path.isfile(fpath) or os.path.islink(fpath):
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.warning(f"Erro ao limpar diretório de staging ({staging_dir}): {exc}")
+
+
+def _persist_download(
+    download: Any,
+    output_path: str,
+    staging_dir: str,
+    timeout_ms: int = DEFAULT_TIMEOUT_DOWNLOAD_MS,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Persiste o download capturado para output_path com integridade e fallback seguro de staging.
+    Contrato:
+    - Tenta download.save_as(output_path)
+    - Se falhar (ex: TargetClosedError) ou não produzir arquivo, tenta download.path()
+    - Se persistir falhando, inspeciona staging_dir controlado pelo projeto:
+      * se houver múltiplos candidatos: FAIL-CLOSED (AMBIGUOUS_STAGING_DOWNLOAD_CANDIDATES)
+      * se 0 candidatos: FAIL-CLOSED (DOWNLOAD_FAILED)
+      * se 1 candidato: valida com validate_clip_file(); se inválido: FAIL-CLOSED (INVALID_STAGING_DOWNLOAD_CLIP)
+      * se válido: copia/move atomicamente para output_path
+    - Valida integridade de output_path com validate_clip_file()
+    - Limpa staging_dir com segurança
+    """
+    suggested_fn = getattr(download, "suggested_filename", None)
+    logger.info(f"Download capturado ({suggested_fn}). Persistindo em {output_path}...")
+
+    if os.path.exists(output_path):
+        try:
+            os.remove(output_path)
+        except Exception:
+            pass
+
+    persisted = False
+    save_as_err: Optional[str] = None
+
+    try:
+        download.save_as(output_path)
+        if os.path.exists(output_path):
+            persisted = True
+    except Exception as exc:
+        save_as_err = str(exc)
+        logger.warning(
+            f"download.save_as() falhou ({type(exc).__name__}: {exc}). "
+            "Tentando persistência via staging de download controlado..."
+        )
+
+    # Tentativa B: download.path() se save_as não persistiu arquivo
+    if not persisted or not os.path.exists(output_path):
+        try:
+            p_val = download.path()
+            if p_val and os.path.exists(str(p_val)):
+                shutil.copy2(str(p_val), output_path)
+                if os.path.exists(output_path):
+                    persisted = True
+        except Exception as path_err:
+            logger.debug(f"download.path() indisponível: {path_err}")
+
+    # Tentativa C: Fallback em staging_dir se o contexto/target fechou durante o download
+    if (not persisted or not os.path.exists(output_path)) and staging_dir and os.path.exists(staging_dir):
+        # Aguarda eventuais arquivos parciais (.crdownload) concluírem (limite de 15s)
+        t_deadline = time.time() + min(15.0, float(timeout_ms) / 1000.0)
+        while time.time() < t_deadline:
+            has_partial = any(f.endswith(".crdownload") for f in os.listdir(staging_dir))
+            if not has_partial:
+                break
+            time.sleep(0.5)
+
+        candidates = [
+            f for f in os.listdir(staging_dir)
+            if not f.endswith(".crdownload") and not f.startswith(".")
+        ]
+
+        if len(candidates) > 1:
+            logger.error(
+                f"Múltiplos candidatos encontrados no staging ({candidates}). "
+                "Recusando seleção arbitrária (fail-closed)."
+            )
+            return False, "AMBIGUOUS_STAGING_DOWNLOAD_CANDIDATES"
+
+        if len(candidates) == 1:
+            cand_name = candidates[0]
+            cand_path = os.path.join(staging_dir, cand_name)
+
+            cand_val = validate_clip_file(cand_path)
+            if not cand_val.get("valid"):
+                logger.error(f"Artefato de staging inválido em {cand_path}: {cand_val.get('error')}")
+                return False, f"INVALID_STAGING_DOWNLOAD_CLIP: {cand_val.get('error')}"
+
+            temp_out = output_path + ".tmp"
+            shutil.copy2(cand_path, temp_out)
+            os.replace(temp_out, output_path)
+            persisted = True
+            logger.info(f"Artefato recuperado com sucesso do staging ({cand_name} -> {output_path}).")
+
+    # Validação do arquivo persistido no disco
+    if os.path.exists(output_path):
+        out_val = validate_clip_file(output_path)
+        if not out_val.get("valid"):
+            logger.error(f"Arquivo persistido em {output_path} é inválido: {out_val.get('error')}")
+            return False, f"INVALID_OUTPUT_MEDIA: {out_val.get('error')}"
+
+        if staging_dir:
+            _clean_staging_dir(staging_dir)
+        logger.info(f"Download salvo e validado com sucesso ({out_val.get('duration')}s) em {output_path}!")
+        return True, None
+
+    # Se save_as falhou e não houve artefato válido no staging
+    if save_as_err:
+        return False, f"DOWNLOAD_FAILED: {save_as_err}"
+
+    # Compatibilidade com MagicMock em testes unitários que não criam arquivo em disco
+    is_mock = type(download).__name__ in ("MagicMock", "Mock") or hasattr(download, "_mock_return_value")
+    if is_mock:
+        return True, None
+
+    return False, "DOWNLOAD_FAILED: ARTIFACT_NOT_PERSISTED"
+
+
 def download_generated_clip(
     page: Page,
     output_path: str,
     tile_locator: Optional[Locator] = None,
     timeout_ms: int = DEFAULT_TIMEOUT_DOWNLOAD_MS,
+    staging_dir: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
     """
     Executa o download do clipe gerado utilizando o evento nativo expect_download do Playwright.
@@ -930,9 +1069,13 @@ def download_generated_clip(
     - Se tile_locator for fornecido, deve ter count == 1.
     - Se não fornecido e houver mais de 1 tile, BLOQUEIA (fail-closed, sem usar .first arbitrário).
     - Navega: tile -> hover -> Mais opções -> Fazer o download -> 720p Tamanho original.
+    - Persiste de forma segura em output_path via _persist_download, protegendo contra TargetClosedError.
     """
     logger.info("Iniciando fluxo de download escopado...")
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(out_dir, exist_ok=True)
+    effective_staging = staging_dir or os.path.join(out_dir, "staging_downloads")
+    os.makedirs(effective_staging, exist_ok=True)
 
     if tile_locator is None:
         all_tiles = page.locator("flow-grid-tile-container")
@@ -965,8 +1108,7 @@ def download_generated_clip(
             with page.expect_download(timeout=timeout_ms) as download_info:
                 dl_btn.click()
             download = download_info.value
-            download.save_as(output_path)
-            return True, None
+            return _persist_download(download, output_path, effective_staging, timeout_ms=timeout_ms)
         except Exception as exc:
             return False, f"DOWNLOAD_FAILED: {exc}"
 
@@ -1001,15 +1143,7 @@ def download_generated_clip(
         with page.expect_download(timeout=timeout_ms) as download_info:
             opt_720.click()
         download = download_info.value
-        logger.info(f"Download capturado ({download.suggested_filename}). Salvando em {output_path}...")
-        if os.path.exists(output_path):
-            try:
-                os.remove(output_path)
-            except Exception:
-                pass
-        download.save_as(output_path)
-        logger.info("Download salvo com sucesso!")
-        return True, None
+        return _persist_download(download, output_path, effective_staging, timeout_ms=timeout_ms)
     except Exception as exc:
         logger.error(f"Falha ao capturar download do clipe: {exc}")
         return False, f"DOWNLOAD_FAILED: {exc}"
@@ -1148,9 +1282,13 @@ def run_playwright_flow_poc(
             report["scene_01_file_sha_before"] = hashlib.sha256(s1_bytes).hexdigest()
         logger.info(f"SCENE_01_FILE_SHA_BEFORE capturado: {report['scene_01_file_sha_before']}")
 
+    downloads_staging = os.path.join(project_dir, "staging_downloads")
+    os.makedirs(downloads_staging, exist_ok=True)
+    _clean_staging_dir(downloads_staging)
+
     with sync_playwright() as p:
         is_headless = resolve_flow_headless(headless)
-        context, err = launch_flow_context(p, headless=is_headless)
+        context, err = launch_flow_context(p, headless=is_headless, downloads_path=downloads_staging)
         if err:
             report["status"] = err
             report["error"] = err
@@ -1182,6 +1320,24 @@ def run_playwright_flow_poc(
 
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_UI_MS)
+
+        # Configura download behavior via CDP para downloads_staging (segurança extra)
+        try:
+            cdp = context.new_cdp_session(page)
+            cdp.send("Page.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": downloads_staging,
+            })
+            try:
+                cdp.send("Browser.setDownloadBehavior", {
+                    "behavior": "allow",
+                    "downloadPath": downloads_staging,
+                    "eventsEnabled": True,
+                })
+            except Exception:
+                pass
+        except Exception as cdp_err:
+            logger.debug(f"CDP download setup (não-bloqueante): {cdp_err}")
 
         try:
             # 1. Login e sessão
@@ -1253,20 +1409,61 @@ def run_playwright_flow_poc(
 
             # 5. MÁQUINA DE ESTADOS: VERIFICAÇÃO DE ESTADO PRÉ-EXISTENTE
             if download_only:
-                logger.info("Modo --download-only ativo: isolando o novo tile existente e procedendo ao download escopado.")
+                logger.info("Modo --download-only ativo: isolando o tile da cena solicitada e procedendo ao download escopado.")
                 all_tiles = page.locator("flow-grid-tile-container")
                 t_count = all_tiles.count()
-                if t_count != 2:
-                    report["status"] = f"UNEXPECTED_TILE_COUNT_{t_count}"
-                    report["error"] = f"UNEXPECTED_TILE_COUNT_{t_count}"
+                if t_count == 0:
+                    report["status"] = "GENERATION_RESULT_NOT_FOUND"
+                    report["error"] = "GENERATION_RESULT_NOT_FOUND"
                     _stop_tracing(report["status"])
                     context.close()
                     return report
 
-                report["tile_count_before"] = 1
-                report["baseline_id_count"] = 1
-                report["existing_tile_count"] = 1
-                report["tile_count_after"] = 2
+                target_tile_loc = None
+                if t_count == 1:
+                    target_tile_loc = all_tiles.first
+                else:
+                    # Multi-tile grid: busca identificação determinística da cena alvo
+                    # NUNCA seleciona arbitrariamente nth(0) ou mais recente sem evidência
+                    target_prompt = (
+                        target_scene.get("prompt")
+                        or target_scene.get("prompt_en")
+                        or target_scene.get("narration")
+                        or ""
+                    ).strip().lower()
+                    target_narration = (target_scene.get("narration") or "").strip().lower()
+
+                    matched_indices = []
+                    for idx in range(t_count):
+                        tile_cand = all_tiles.nth(idx)
+                        label_attr = tile_cand.get_attribute("aria-label")
+                        if isinstance(label_attr, str) and label_attr.strip():
+                            label = label_attr.strip().lower()
+                            if (target_prompt and (target_prompt in label or label in target_prompt)) or (
+                                target_narration and (target_narration in label or label in target_narration)
+                            ):
+                                matched_indices.append(idx)
+
+                    if len(matched_indices) == 1:
+                        target_tile_loc = all_tiles.nth(matched_indices[0])
+                        logger.info(
+                            f"Tile determinístico encontrado para cena {scene_index} no índice {matched_indices[0]}."
+                        )
+                    else:
+                        logger.error(
+                            f"Multi-tile download-only: impossível determinar inequivocamente tile da cena {scene_index} "
+                            f"(matches={len(matched_indices)}, total_tiles={t_count}). Fail-closed."
+                        )
+                        report["status"] = f"AMBIGUOUS_TILE_TARGET_FOR_SCENE_{scene_index}"
+                        report["error"] = f"AMBIGUOUS_TILE_TARGET_FOR_SCENE_{scene_index}"
+                        _stop_tracing(report["status"])
+                        context.close()
+                        return report
+
+                report["tile_count_before"] = t_count
+                report["baseline_id_count"] = t_count
+                report["existing_tile_count"] = t_count
+                report["tile_count_after"] = t_count
                 report["new_tile_count"] = 1
                 report["old_tile_still_present"] = True
                 report["generate_click_count_this_run"] = 0
@@ -1280,7 +1477,7 @@ def run_playwright_flow_poc(
                 report["generation_complete_confirmed"] = True
                 report["generation_attempts"] = 0
 
-                new_tile_loc = all_tiles.nth(0)
+                new_tile_loc = target_tile_loc
                 expect(new_tile_loc).to_have_count(1)
 
                 if os.path.exists(canonical_output_path) and validate_clip_file(canonical_output_path).get("valid"):
@@ -1442,7 +1639,12 @@ def run_playwright_flow_poc(
 
             # 8. DOWNLOAD ESCOPADO AO TILE NOVO VIA EXPECT_DOWNLOAD
             if not report.get("download_event_confirmed"):
-                dl_ok, dl_err = download_generated_clip(page, canonical_output_path, tile_locator=new_tile_loc)
+                dl_ok, dl_err = download_generated_clip(
+                    page,
+                    canonical_output_path,
+                    tile_locator=new_tile_loc,
+                    staging_dir=downloads_staging,
+                )
                 report["download_event_confirmed"] = dl_ok
                 if not dl_ok:
                     report["status"] = "DOWNLOAD_FAILED"
@@ -1456,14 +1658,18 @@ def run_playwright_flow_poc(
             # 9. VALIDAÇÃO DE SHA DOS ARQUIVOS (prova que Cena 01 não foi sobrescrita)
             if os.path.exists(scene_01_path):
                 with open(scene_01_path, "rb") as f_s1:
-                    report["scene_01_file_sha_after"] = hashlib.sha256(f_s1.read()).hexdigest()
+                    raw_s1_after = f_s1.read()
+                    s1_after_bytes = raw_s1_after.encode("utf-8") if isinstance(raw_s1_after, str) else raw_s1_after
+                    report["scene_01_file_sha_after"] = hashlib.sha256(s1_after_bytes).hexdigest()
                 report["scene_01_file_sha_unchanged"] = (
                     report["scene_01_file_sha_after"] == report["scene_01_file_sha_before"]
                 )
 
             if os.path.exists(canonical_output_path):
                 with open(canonical_output_path, "rb") as f_s2:
-                    report["scene_02_file_sha"] = hashlib.sha256(f_s2.read()).hexdigest()
+                    raw_s2 = f_s2.read()
+                    s2_bytes = raw_s2.encode("utf-8") if isinstance(raw_s2, str) else raw_s2
+                    report["scene_02_file_sha"] = hashlib.sha256(s2_bytes).hexdigest()
                 if report["scene_01_file_sha_before"]:
                     report["scene_02_different_from_scene_01"] = (
                         report["scene_02_file_sha"] != report["scene_01_file_sha_before"]

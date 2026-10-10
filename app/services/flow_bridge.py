@@ -94,19 +94,6 @@ def resolve_flow_materials_for_task(
         except Exception as json_err:
             logger.error(f"[FLOW_BRIDGE] Manifesto corrompido em {manifest_path}: {json_err}")
             raise ValueError(f"FLOW_MANIFEST_INVALID: Manifesto corrompido em {manifest_path}. Intervenção manual obrigatória.")
-
-        # Recovery guard no bridge antes de qualquer tentativa de execução
-        flow_gen = manifest_data.get("flow_generation", {})
-        if flow_gen.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY":
-            logger.error(
-                f"[FLOW_BRIDGE] Task '{task_id}' em estado FLOW_GENERATION_NEEDS_RECOVERY. "
-                "Bloqueando execução para evitar re-consumo indevido de créditos."
-            )
-            raise RuntimeError(
-                f"FLOW_GENERATION_NEEDS_RECOVERY: Projeto da task '{task_id}' requer recuperação manual. "
-                f"URL do projeto: {manifest_data.get('flow_project_url')}"
-            )
-
     # 2. Execução sequencial das cenas pendentes sob FLOW_CONCURRENCY_LOCK
     logger.info(f"[FLOW_BRIDGE] Adquirindo trava de concorrência Flow para task '{task_id}'...")
     acquired = FLOW_CONCURRENCY_LOCK.acquire(blocking=True, timeout=120.0)

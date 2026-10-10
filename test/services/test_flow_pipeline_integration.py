@@ -348,6 +348,140 @@ class TestFlowPipelineIntegration(unittest.TestCase):
             self.assertIn("FLOW_GENERATION_NEEDS_RECOVERY", str(ctx.exception))
             self.assertEqual(mock_gen_bridge.call_count, 0)
 
+    def test_11c_recovery_reconciled_valid_clip_flow_bridge(self):
+        """11c. FLOW_GENERATION_NEEDS_RECOVERY + cena 2 válida reconcilia no bridge, reutiliza 1 e 2 e gera apenas cena 5."""
+        task_id = "task_recovery_reconciled_103"
+        task_dir = os.path.join(self.test_dir, task_id)
+        flow_dir = os.path.join(task_dir, "flow")
+        clips_dir = os.path.join(flow_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+        manifest_path = os.path.join(flow_dir, "manifest.json")
+
+        manifest_data = {
+            "project_name": "flow",
+            "flow_project_url": "https://flow.google.com/project/rec_proj_123",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1"},
+                {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2"},
+                {"scene_index": 5, "expected_clip": "flow_scene_05.mp4", "is_flow_premium": True, "narration": "Cena 5"},
+            ],
+            "flow_generation": {
+                "status": "FLOW_GENERATION_NEEDS_RECOVERY",
+                "completed_scenes": [1],
+                "last_scene": 2,
+            },
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f)
+
+        # Cria clipes válidos para cena 1 e 2; cena 5 permanece ausente
+        clip1_path = os.path.join(clips_dir, "flow_scene_01.mp4")
+        clip2_path = os.path.join(clips_dir, "flow_scene_02.mp4")
+        with open(clip1_path, "wb") as f:
+            f.write(b"clip1_valid")
+        with open(clip2_path, "wb") as f:
+            f.write(b"clip2_valid")
+
+        params = VideoParams(video_subject="Recovery Test", flow_enabled=True)
+        scene_plan = self._create_sample_scene_plan(5)
+
+        with patch("app.utils.utils.task_dir", return_value=task_dir), \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("scripts.flow_workflow.generate_flow_scene") as mock_gen_bridge, \
+             patch("scripts.flow_workflow.prepare_project") as mock_prep:
+
+            from scripts.flow_playwright import FlowSceneResult
+            mock_gen_bridge.return_value = FlowSceneResult(
+                status="SUCCESS",
+                scene_index=5,
+                output_file=os.path.join(clips_dir, "flow_scene_05.mp4"),
+                output_valid=True,
+                duration=8.0,
+                credits_consumed=15,
+            )
+
+            # Executa através do flow_bridge (caminho REAL)
+            materials, meta = flow_bridge.resolve_flow_materials_for_task(
+                task_id=task_id,
+                params=params,
+                video_script="Roteiro",
+                scene_plan=scene_plan,
+            )
+
+            # 1. Zero re-planejamento
+            mock_prep.assert_not_called()
+
+            # 2. Apenas cena 5 deve ser gerada; cenas 1 e 2 foram ALREADY_COMPLETE (zero regeneração)
+            mock_gen_bridge.assert_called_once()
+            self.assertEqual(mock_gen_bridge.call_args[1]["scene_index"], 5)
+
+            # 3. Checkpoint no disco reconciliado com [1, 2, 5]
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                saved_manifest = json.load(f)
+            self.assertEqual(saved_manifest["flow_generation"]["completed_scenes"], [1, 2, 5])
+            self.assertEqual(saved_manifest["flow_generation"]["status"], "COMPLETE")
+
+            # 4. Materiais resolvidos contêm cenas esperadas sem duplicação
+            self.assertGreaterEqual(len(materials), 3)
+            self.assertEqual(meta["flow_status"], "COMPLETE")
+
+    def test_11d_recovery_all_scenes_ready_through_flow_bridge(self):
+        """11d. FLOW_GENERATION_NEEDS_RECOVERY com todas as cenas Flow válidas no disco -> bridge conclui com zero browser e COMPLETE."""
+        task_id = "task_recovery_all_ready_104"
+        task_dir = os.path.join(self.test_dir, task_id)
+        flow_dir = os.path.join(task_dir, "flow")
+        clips_dir = os.path.join(flow_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+        manifest_path = os.path.join(flow_dir, "manifest.json")
+
+        manifest_data = {
+            "project_name": "flow",
+            "flow_project_url": "https://flow.google.com/project/rec_proj_all_ready",
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "narration": "Cena 1"},
+                {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "narration": "Cena 2"},
+            ],
+            "flow_generation": {
+                "status": "FLOW_GENERATION_NEEDS_RECOVERY",
+                "completed_scenes": [1],
+                "last_scene": 2,
+            },
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f)
+
+        # Ambas as cenas 1 e 2 existem e são válidas
+        clip1_path = os.path.join(clips_dir, "flow_scene_01.mp4")
+        clip2_path = os.path.join(clips_dir, "flow_scene_02.mp4")
+        with open(clip1_path, "wb") as f:
+            f.write(b"clip1_valid")
+        with open(clip2_path, "wb") as f:
+            f.write(b"clip2_valid")
+
+        params = VideoParams(video_subject="Recovery Test All Ready", flow_enabled=True)
+        scene_plan = self._create_sample_scene_plan(2)
+
+        with patch("app.utils.utils.task_dir", return_value=task_dir), \
+             patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("scripts.flow_workflow.generate_flow_scene") as mock_gen_bridge, \
+             patch("scripts.flow_workflow.prepare_project") as mock_prep:
+
+            materials, meta = flow_bridge.resolve_flow_materials_for_task(
+                task_id=task_id,
+                params=params,
+                video_script="Roteiro",
+                scene_plan=scene_plan,
+            )
+
+            mock_prep.assert_not_called()
+            mock_gen_bridge.assert_not_called()
+            self.assertEqual(meta["flow_status"], "COMPLETE")
+
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                saved_manifest = json.load(f)
+            self.assertEqual(saved_manifest["flow_generation"]["status"], "COMPLETE")
+            self.assertEqual(saved_manifest["flow_generation"]["completed_scenes"], [1, 2])
+
     # 12. corrupt manifest -> fail closed (prepare_project = 0, browser = 0)
     def test_12_corrupt_manifest_fail_closed(self):
         task_id = "task_corrupt_102"

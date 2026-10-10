@@ -19,6 +19,9 @@ from scripts.flow_playwright import (
     check_pending_credit_approval,
     _persist_download,
     download_generated_clip,
+    MIN_TILE_EVIDENCE_CHARS,
+    normalize_tile_label,
+    match_tile_label_to_scene,
     ensure_studio_surface,
     ensure_video_generation_mode,
     execute_credit_approval,
@@ -1385,6 +1388,152 @@ class TestFlowPlaywright(unittest.TestCase):
             mock_tx = MagicMock()
             mock_tx.get_attribute.side_effect = lambda a: "outro prompt qualquer" if a == "aria-label" else ""
             mock_tiles.nth.return_value = mock_tx
+            mock_page.locator.return_value = mock_tiles
+
+            res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=5, download_only=True)
+
+            self.assertEqual(res["status"], "AMBIGUOUS_TILE_TARGET_FOR_SCENE_5")
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            self.assertEqual(res["generation_attempts"], 0)
+
+    def test_normalize_tile_label_rules(self):
+        """1. Valida normalização: lower, trim, normalização de espaços, remoção de U+2026 e '...'."""
+        # U+2026 terminal
+        self.assertEqual(
+            normalize_tile_label("  Neural network and human silhoue…  "),
+            "neural network and human silhoue",
+        )
+        # '...' terminal
+        self.assertEqual(
+            normalize_tile_label("Neural network and human silhoue..."),
+            "neural network and human silhoue",
+        )
+        # Múltiplos espaços internos
+        self.assertEqual(
+            normalize_tile_label("Neural   network   and   human   silhoue…"),
+            "neural network and human silhoue",
+        )
+        # Sem truncamento terminal
+        self.assertEqual(
+            normalize_tile_label("Cena um cidade"),
+            "cena um cidade",
+        )
+
+    def test_match_tile_label_truncated_u2026_and_triple_dots(self):
+        """1 e 2. aria-label truncado com U+2026 ou '...' encontra exatamente a cena correta."""
+        target_scene = {
+            "scene_index": 5,
+            "prompt_en": "Neural network and human silhouette surrounded by glowing data streams",
+            "expected_clip": "flow_scene_05.mp4",
+        }
+        # U+2026 terminal
+        self.assertTrue(
+            match_tile_label_to_scene("Neural network and human silhoue…", target_scene)
+        )
+        # '...' terminal
+        self.assertTrue(
+            match_tile_label_to_scene("Neural network and human silhoue...", target_scene)
+        )
+
+    def test_match_tile_label_short_generic_rejected(self):
+        """3. Label curto/genérico (< 24 chars úteis) NÃO é aceito por casamento de prefixo."""
+        target_scene = {
+            "scene_index": 5,
+            "prompt_en": "Neural network and human silhouette surrounded by glowing data streams",
+        }
+        # 14 chars < 24
+        self.assertFalse(
+            match_tile_label_to_scene("Neural network…", target_scene)
+        )
+        # 10 chars < 24
+        self.assertFalse(
+            match_tile_label_to_scene("Neural net...", target_scene)
+        )
+
+    def test_multi_tile_download_only_truncated_label_finds_scene_5(self):
+        """Multi-tile download-only: aria-label truncado real com U+2026 isola e baixa cena 5 determinística."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"t1", "t2", "t5"}), \
+             patch("scripts.flow_playwright.download_generated_clip", return_value=(True, None)), \
+             patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("os.path.exists", side_effect=lambda p: True if "dummy" in str(p) or "manifest" in str(p) or "clips" in str(p) else False), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [
+                     {"scene_index": 1, "prompt_en": "City skyline at night with neon lights", "expected_clip": "flow_scene_01.mp4"},
+                     {"scene_index": 2, "prompt_en": "Tropical beach with palms and golden sunset", "expected_clip": "flow_scene_02.mp4"},
+                     {"scene_index": 5, "prompt_en": "Neural network and human silhouette surrounded by glowing data streams", "expected_clip": "flow_scene_05.mp4"},
+                 ]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+
+            mock_tiles = MagicMock()
+            mock_tiles.count.return_value = 3
+            mock_t1 = MagicMock()
+            mock_t1.get_attribute.side_effect = lambda a: "City skyline at night with neon lights…" if a == "aria-label" else ""
+            mock_t2 = MagicMock()
+            mock_t2.get_attribute.side_effect = lambda a: "Tropical beach with palms and golden sunset…" if a == "aria-label" else ""
+            mock_t5 = MagicMock()
+            # Rótulo truncado real com U+2026
+            mock_t5.get_attribute.side_effect = lambda a: "Neural network and human silhoue…" if a == "aria-label" else ""
+
+            def _nth(idx):
+                return [mock_t1, mock_t2, mock_t5][idx]
+            mock_tiles.nth.side_effect = _nth
+            mock_page.locator.return_value = mock_tiles
+
+            with patch("scripts.flow_playwright.expect"):
+                res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=5, download_only=True)
+
+            self.assertEqual(res["status"], "SUCCESS")
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            self.assertEqual(res["generation_attempts"], 0)
+
+    def test_multi_tile_download_only_two_tiles_same_prefix_fails_closed(self):
+        """4. Dois tiles com mesmo prefixo suficiente bloqueiam fail-closed por ambiguidade (zero clique Generate)."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"t1", "t2", "t3"}), \
+             patch("os.path.exists", side_effect=lambda p: True if "dummy" in str(p) or "manifest" in str(p) else False), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 5, "prompt_en": "Neural network and human silhouette", "expected_clip": "flow_scene_05.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+
+            mock_tiles = MagicMock()
+            mock_tiles.count.return_value = 3
+            mock_t1 = MagicMock()
+            mock_t1.get_attribute.side_effect = lambda a: "Neural network and human silhoue…" if a == "aria-label" else ""
+            mock_t2 = MagicMock()
+            mock_t2.get_attribute.side_effect = lambda a: "Neural network and human silhoue…" if a == "aria-label" else ""
+            mock_t3 = MagicMock()
+            mock_t3.get_attribute.side_effect = lambda a: "Other scene prompt…" if a == "aria-label" else ""
+
+            def _nth(idx):
+                return [mock_t1, mock_t2, mock_t3][idx]
+            mock_tiles.nth.side_effect = _nth
             mock_page.locator.return_value = mock_tiles
 
             res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=5, download_only=True)

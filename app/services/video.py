@@ -832,7 +832,7 @@ def _open_video_clip_quietly(video_path: str, audio: bool = False):
     return clip
 
 
-def close_clip(clip):
+def close_clip(clip, *, collect_garbage: bool = True):
     if clip is None:
         return
         
@@ -857,7 +857,7 @@ def close_clip(clip):
         if hasattr(clip, 'clips') and clip.clips:
             for child_clip in clip.clips:
                 if child_clip is not clip:  # avoid possible circular references
-                    close_clip(child_clip)
+                    close_clip(child_clip, collect_garbage=False)
             
         # clear clip list
         if hasattr(clip, 'clips'):
@@ -867,7 +867,8 @@ def close_clip(clip):
         logger.error(f"failed to close clip: {str(e)}")
     
     del clip
-    gc.collect()
+    if collect_garbage:
+        gc.collect()
 
 def delete_files(files: List[str] | str):
     if isinstance(files, str):
@@ -1006,7 +1007,7 @@ def combine_videos(
         # audio_clip。读取完成后立即关闭，避免早退或异常路径泄漏文件句柄。
         audio_duration = audio_clip.duration
     finally:
-        close_clip(audio_clip)
+        close_clip(audio_clip, collect_garbage=False)
     logger.info(f"audio duration: {audio_duration} seconds")
     logger.info(f"maximum clip duration: {max_clip_duration} seconds")
     required_video_duration = _get_required_video_duration(audio_duration)
@@ -1077,8 +1078,10 @@ def combine_videos(
             else:
                 scene_target_duration = base_dur
 
+            logger.info(f"[SCENE_RENDER][SCENE_START] scene={scene_idx}")
             try:
                 raw_clip = _open_video_clip_quietly(mat_path)
+                clip = None
                 try:
                     needed_source_dur = scene_target_duration * normalized_clip_speed
                     if isinstance(raw_clip, ImageClip) or raw_clip.duration is None:
@@ -1143,8 +1146,10 @@ def combine_videos(
                         fps=fps,
                         threads=threads or 2,
                     )
+                    logger.info(f"[SCENE_RENDER][SCENE_WRITTEN] scene={scene_idx}")
                     clip_duration_saved = clip.duration
-                    close_clip(clip)
+                    close_clip(clip, collect_garbage=False)
+                    clip = None
 
                     processed_clips.append(
                         SubClippedVideoClip(
@@ -1165,7 +1170,10 @@ def combine_videos(
                         progress_callback, video_duration, required_video_duration
                     )
                 finally:
-                    close_clip(raw_clip)
+                    if clip is not None:
+                        close_clip(clip, collect_garbage=False)
+                    close_clip(raw_clip, collect_garbage=False)
+                    logger.info(f"[SCENE_RENDER][SCENE_CLOSED] scene={scene_idx}")
             except Exception as e:
                 logger.error(f"[SCENE_RENDER][BLOCK] failed to process scene clip {scene_idx}: {str(e)}")
                 if isinstance(e, SceneRenderError):
@@ -1174,6 +1182,12 @@ def combine_videos(
                     f"SCENE_RENDER_FAILURE: failed to render scene {scene_idx}: {str(e)}",
                     reason_code="SCENE_RENDER_FAILURE",
                 ) from e
+
+        t_gc_start = perf_counter()
+        logger.info("[SCENE_RENDER][GC_START]")
+        gc_collected = gc.collect()
+        gc_duration = perf_counter() - t_gc_start
+        logger.info(f"[SCENE_RENDER][GC_DONE] collected={gc_collected} duration={gc_duration:.3f}")
 
         # Validações mandatórias antes da concatenação da timeline de cenas
         if len(processed_clips) != len(scene_clip_instructions):

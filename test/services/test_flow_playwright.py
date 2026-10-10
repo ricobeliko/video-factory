@@ -1260,7 +1260,7 @@ class TestFlowPlaywright(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_file = os.path.join(tmp_dir, "output.mp4")
-            staging_dir = os.path.join(tmp_dir, "staging_downloads")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
             os.makedirs(staging_dir, exist_ok=True)
 
             mock_dl = MagicMock()
@@ -1274,6 +1274,91 @@ class TestFlowPlaywright(unittest.TestCase):
             self.assertIn("DOWNLOAD_FAILED", str(err))
             self.assertIn("Target page, context or browser has been closed", str(err))
             self.assertFalse(os.path.exists(out_file))
+
+    def test_launch_flow_context_rejects_native_download_staging_as_downloads_path(self):
+        """Regra 1: launch_persistent_context NÃO pode aceitar native_download_staging como downloads_path."""
+        mock_p = MagicMock()
+        ctx, err = launch_flow_context(
+            mock_p,
+            user_data_dir="storage/test_profile",
+            downloads_path="some/path/native_download_staging/run_1",
+        )
+        self.assertIsNone(ctx)
+        self.assertEqual(err, "INVALID_PLAYWRIGHT_DOWNLOADS_PATH")
+        mock_p.chromium.launch_persistent_context.assert_not_called()
+
+    def test_persist_download_crdownload_timeout_fails_closed(self):
+        """Regra 6: .crdownload não concluído no timeout resulta em fail-closed."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = os.path.join(tmp_dir, "output.mp4")
+            staging_dir = os.path.join(tmp_dir, "native_download_staging", "run_1")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            with open(os.path.join(staging_dir, "file.mp4.crdownload"), "wb") as f:
+                f.write(b"partial")
+
+            mock_dl = MagicMock()
+            mock_dl.save_as.side_effect = Exception("TargetClosedError")
+            mock_dl.path.side_effect = Exception("TargetClosedError")
+
+            ok, err = _persist_download(mock_dl, out_file, staging_dir=staging_dir, timeout_ms=500)
+            self.assertFalse(ok)
+            self.assertEqual(err, "DOWNLOAD_TIMEOUT_INCOMPLETE_CRDOWNLOAD")
+            self.assertFalse(os.path.exists(out_file))
+
+    def test_run_playwright_flow_poc_isolates_playwright_and_native_staging_dirs(self):
+        """Regras 1, 2, 3: Playwright recebe playwright_downloads; CDP e download recebem native_download_staging."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": True, "changed": False, "generation_type": "VIDEO"}), \
+             patch("scripts.flow_playwright.check_pending_credit_approval", return_value=(False, 0, None)), \
+             patch("scripts.flow_playwright.fill_prompt"), \
+             patch("scripts.flow_playwright.get_generate_button"), \
+             patch("scripts.flow_playwright.check_generate_actionable", return_value=True), \
+             patch("scripts.flow_playwright.capture_tile_baseline", return_value={"tile_1"}), \
+             patch("scripts.flow_playwright.download_generated_clip") as mock_dl_clip, \
+             patch("scripts.flow_playwright.validate_clip_file", return_value={"valid": True, "duration": 8.0}), \
+             patch("os.path.exists", side_effect=lambda p: False if "flow_scene_01.mp4" in str(p) else True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "prompt scene 1", "expected_clip": "flow_scene_01.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_tiles = MagicMock()
+            mock_tiles.count.return_value = 1
+            mock_tiles.first = MagicMock()
+            mock_page.locator.return_value = mock_tiles
+            mock_cdp = MagicMock()
+            mock_ctx.new_cdp_session.return_value = mock_cdp
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (mock_ctx, None)
+            mock_dl_clip.return_value = (True, None)
+
+            with patch("scripts.flow_playwright.expect"):
+                res = run_playwright_flow_poc(manifest_path="dummy.json", scene_index=1, download_only=True)
+
+            self.assertEqual(res["status"], "SUCCESS")
+            # Valida que downloads_path do Playwright é playwright_downloads descartável
+            launch_args = mock_launch.call_args[1]
+            self.assertIn("playwright_downloads", launch_args.get("downloads_path", ""))
+            self.assertNotIn("native_download_staging", launch_args.get("downloads_path", ""))
+
+            # Valida que CDP aponta exclusivamente para native_download_staging/<run-id>
+            cdp_calls = mock_cdp.send.call_args_list
+            page_behavior_calls = [c for c in cdp_calls if c[0][0] == "Page.setDownloadBehavior"]
+            self.assertTrue(len(page_behavior_calls) >= 1)
+            cdp_download_path = page_behavior_calls[0][0][1]["downloadPath"]
+            self.assertIn("native_download_staging", cdp_download_path)
+            self.assertNotIn("playwright_downloads", cdp_download_path)
+
+            # Valida que download_generated_clip recebe native_download_staging
+            dl_staging = mock_dl_clip.call_args[1].get("staging_dir", "")
+            self.assertIn("native_download_staging", dl_staging)
+            self.assertNotIn("playwright_downloads", dl_staging)
 
     # 6. nenhum segundo clique Generate após falha de download
     def test_no_second_generate_click_after_download_failure(self):

@@ -20,7 +20,7 @@
 - **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
-- **CURRENT_MAIN_SHA:** `b1031c7067dede82c5272589a3e3f63792e6477b` (PR #94: hotfix fail-closed contra race condition de avaliação prematura do gate autônomo durante geração Flow em andamento)
+- **CURRENT_MAIN_SHA:** `5ef87e2b765b0cdf45cc3d3fb67c685c2325bfb1` (PR #95: fallback backward-compatible para Flow legado a partir do flow/manifest.json)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `4b19d5b09034b54be56743579a0e6cf29e4c16bb` (PR #93: hotfix de atenuação indevida de BGM no FFmpeg amix)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Task:** `02b7b85b-252e-4313-b677-7d203e17ca45` (11/10/2026)
@@ -48,7 +48,7 @@
 - **Status Operacional:** A recuperação física e publicação destas 4 tarefas depende de deploy no PC Forte (`update_production.ps1`) + reavaliação dos gates.
 
 ### Histórico Recente de Hotfixes e Merges no Main:
-- **PR #95:** `fix(flow-provenance): fallback backward-compatible para reconstrução de proveniência de Flow legado a partir do manifest` — Reconstrói `material_sources` e `visual_clips` estritamente a partir do `flow/manifest.json` e `flow/clips/` quando ausentes no `script.json`, eliminando falso negativo em tarefas legadas completas sem relaxar fail-closed.
+- **PR #95 (`5ef87e2`):** `fix(flow-provenance): fallback backward-compatible para Flow legado via manifest` — Reconstrói `material_sources` e `visual_clips` estritamente a partir do `flow/manifest.json` e `flow/clips/` quando ausentes no `script.json`, eliminando falso negativo em tarefas legadas completas sem relaxar fail-closed.
 - **PR #94 (`b1031c7`):** `fix(autonomous): prevent premature gate evaluation during ongoing video generation` — Exige evidência positiva (vídeo existe, > 0 bytes e não está PENDING/PROCESSING) antes de chamar `evaluate_completed_task_gates`; mantém `current_task_id` durante a geração.
 - **PR #93 (`4b19d5b`):** `fix(audio): disable amix input normalization and add peak limiter in _mix_audio_ffmpeg` — Desativa normalização indesejada do FFmpeg amix (`normalize=0`) e insere limiter de pico (`alimiter=limit=0.95`).
 - **PR #92 (`cc20f93`):** `fix(webui): support manual YouTube publish via Post For Me without legacy Upload-Post dependency` — Remove exigência espúria de credenciais legadas do Upload-Post no modal de publicação quando provider é `post_for_me`.

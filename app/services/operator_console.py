@@ -2329,6 +2329,266 @@ def get_publication_copyright_status_op(
     )
 
 
+def approve_legacy_task_copyright_op(
+    task_id: str,
+    note: Optional[str] = None,
+    confirm: Optional[str] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Aprova manualmente a proveniência e direitos autorais de um artefato final legado (V1.5E).
+
+    OPERAÇÃO ADMINISTRATIVA DO OPERADOR (PRIMARY ONLY, AUDITÁVEL, FAIL-CLOSED):
+    1. PRIMARY only: fail-closed via require_primary_instance.
+    2. Exige confirmação explícita: confirm == 'APPROVE_LEGACY_COPYRIGHT'.
+    3. Resolve final-1.mp4 canônico da tarefa: exige arquivo existente e tamanho > 0.
+    4. Calcula SHA-256 de final-1.mp4 e vincula criptograficamente a aprovação.
+    5. Pré-requisitos de segurança:
+       - BGM deve ser segura (SAFE_NO_BGM ou SAFE_PROCEDURAL).
+       - Zero evidência de claim, blocked ou strike.
+       - Se houver Flow no manifesto, todas as cenas Flow premium devem ser válidas e íntegras.
+       - Cenas stock legadas têm lacuna suprida pela revisão manual do operador.
+    6. Idempotente para (task_id, final_video_sha256, clean_manual).
+    7. Persiste evento auditável TASK_COPYRIGHT_MANUAL_APPROVAL em operational_events.
+    """
+    require_primary_instance(db_path=db_path)
+
+    from app.services import copyright_gate, scheduler
+
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        raise ValueError("task_id inválido ou ausente.")
+
+    clean_confirm = str(confirm or "").strip()
+    if clean_confirm != "APPROVE_LEGACY_COPYRIGHT":
+        raise ValueError(
+            "Confirmação explícita 'APPROVE_LEGACY_COPYRIGHT' é obrigatória "
+            "para aprovação manual de copyright legado."
+        )
+
+    task_dir_path = copyright_gate._resolve_task_dir(clean_task_id, task_base_dir)
+    final_video_path = os.path.join(task_dir_path, "final-1.mp4")
+
+    if not os.path.isfile(final_video_path):
+        raise ValueError(
+            f"Arquivo final-1.mp4 inexistente no disco para a task '{clean_task_id}': {final_video_path}"
+        )
+
+    try:
+        file_size = os.path.getsize(final_video_path)
+        if file_size <= 0:
+            raise ValueError(
+                f"Arquivo final-1.mp4 vazio (0 bytes) para a task '{clean_task_id}': {final_video_path}"
+            )
+    except OSError as exc:
+        raise ValueError(f"Falha ao acessar tamanho do arquivo final-1.mp4: {exc}")
+
+    final_video_sha256 = copyright_gate.calculate_file_sha256(final_video_path)
+
+    # 1. Validação de BGM
+    script_file = os.path.join(task_dir_path, "script.json")
+    script_data: Dict[str, Any] = {}
+    if os.path.isfile(script_file):
+        try:
+            with open(script_file, "r", encoding="utf-8") as f:
+                script_data = json.load(f)
+        except Exception as exc:
+            raise ValueError(f"Falha ao ler script.json da task '{clean_task_id}': {exc}")
+
+    params_data = script_data.get("params") or {}
+    asset_prov = script_data.get("asset_provenance")
+    if not asset_prov:
+        asset_prov = copyright_gate.build_asset_provenance(
+            task_id=clean_task_id,
+            params=params_data,
+            material_sources=script_data.get("material_sources"),
+            task_base_dir=task_base_dir,
+        )
+
+    bgm_info = asset_prov.get("bgm") or {}
+    bgm_type = str(copyright_gate._get_param(params_data, "bgm_type", "") or "").lower().strip()
+    bgm_enabled = bool(bgm_info.get("enabled"))
+    if bgm_enabled:
+        bgm_source = str(bgm_info.get("source") or "").lower()
+        bgm_prov = str(bgm_info.get("provenance_status") or "").upper()
+        if not (bgm_type == "ambient_auto" and (bgm_source == "procedural" or bgm_prov == "SAFE_PROCEDURAL")):
+            raise ValueError(
+                f"BGM insegura ou não auditada para aprovação manual de copyright legado "
+                f"(type={bgm_type}, source={bgm_source}, prov={bgm_prov}). "
+                "Apenas SAFE_NO_BGM ou SAFE_PROCEDURAL são permitidas."
+            )
+
+    # 2. Verificação de Evidência Conhecida de Claim / Blocked / Strike
+    scheduler.init_db(db_path)
+    init_operator_db(db_path)
+
+    pub_status = copyright_gate.get_publication_copyright_status(task_id=clean_task_id, db_path=db_path)
+    if pub_status.get("copyright_status") in (
+        copyright_gate.COPYRIGHT_STATUS_CLAIMED,
+        copyright_gate.COPYRIGHT_STATUS_BLOCKED,
+        copyright_gate.COPYRIGHT_STATUS_STRIKE,
+    ):
+        raise ValueError(
+            f"Task '{clean_task_id}' possui status de copyright adverso registrado: "
+            f"{pub_status.get('copyright_status')}"
+        )
+
+    with get_connection(db_path) as conn:
+        try:
+            adv_rows = conn.execute(
+                "SELECT metadata_json FROM operational_events WHERE task_id = ? ORDER BY id DESC;",
+                (clean_task_id,),
+            ).fetchall()
+            for r in adv_rows:
+                try:
+                    m = json.loads(r["metadata_json"] or "{}")
+                    st = str(m.get("copyright_status") or "").lower().strip()
+                    if st in (
+                        copyright_gate.COPYRIGHT_STATUS_CLAIMED,
+                        copyright_gate.COPYRIGHT_STATUS_BLOCKED,
+                        copyright_gate.COPYRIGHT_STATUS_STRIKE,
+                    ):
+                        raise ValueError(
+                            f"Task '{clean_task_id}' possui evidência de infração/claim "
+                            f"({st}) registrada em operational_events."
+                        )
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except sqlite3.OperationalError:
+            pass
+
+    # 3. Validação de Cenas Flow Premium se Flow estiver presente
+    manifest_path = os.path.join(task_dir_path, "flow", "manifest.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                manifest = json.load(mf)
+        except Exception as exc:
+            raise ValueError(f"Manifesto Flow corrompido ou ilegível na task '{clean_task_id}': {exc}")
+
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Manifesto Flow com estrutura inválida na task '{clean_task_id}'")
+
+        flow_gen = manifest.get("flow_generation")
+        if not isinstance(flow_gen, dict):
+            raise ValueError(f"flow_generation ausente no manifesto Flow da task '{clean_task_id}'")
+
+        if flow_gen.get("status") != "COMPLETE":
+            raise ValueError(
+                f"Geração Flow não está COMPLETE na task '{clean_task_id}' "
+                f"(status={flow_gen.get('status')})"
+            )
+
+        if (
+            flow_gen.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY"
+            or manifest.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY"
+        ):
+            raise ValueError(f"Geração Flow requer recovery pendente na task '{clean_task_id}'")
+
+        completed_scenes = {str(s) for s in (flow_gen.get("completed_scenes") or [])}
+        scenes = manifest.get("scenes") or []
+        if not isinstance(scenes, list):
+            raise ValueError(f"scenes com formato inválido no manifesto Flow da task '{clean_task_id}'")
+
+        clips_dir = os.path.join(task_dir_path, "flow", "clips")
+        for sc in scenes:
+            if isinstance(sc, dict) and sc.get("is_flow_premium") is True:
+                s_idx = sc.get("scene_index")
+                if s_idx is None or str(s_idx) not in completed_scenes:
+                    raise ValueError(
+                        f"Cena Flow premium {s_idx} não consta em completed_scenes na task '{clean_task_id}'"
+                    )
+                expected_clip = str(sc.get("expected_clip") or "").strip()
+                if not expected_clip:
+                    raise ValueError(f"Cena Flow premium {s_idx} sem expected_clip na task '{clean_task_id}'")
+                clip_path = os.path.join(clips_dir, expected_clip)
+                if not os.path.isfile(clip_path) or os.path.getsize(clip_path) <= 0:
+                    raise ValueError(
+                        f"Clipe físico Flow inexistente ou vazio na task '{clean_task_id}': {clip_path}"
+                    )
+                clip_dict = {
+                    "local_file": clip_path,
+                    "scene_index": s_idx,
+                }
+                valid, reason = copyright_gate.validate_flow_clip_provenance(
+                    clean_task_id, clip_dict, task_base_dir
+                )
+                if not valid:
+                    raise ValueError(
+                        f"Falha na validação de proveniência do clipe Flow '{expected_clip}' "
+                        f"na task '{clean_task_id}': {reason}"
+                    )
+
+    # 4. Idempotência
+    clean_note = str(note).strip() if note is not None else None
+    existing = copyright_gate.get_legacy_task_copyright_approval(task_id=clean_task_id, db_path=db_path)
+    if existing:
+        if (
+            existing.get("final_video_sha256") == final_video_sha256
+            and existing.get("copyright_status") == copyright_gate.COPYRIGHT_STATUS_CLEAN_MANUAL
+            and (clean_note is None or existing.get("note") == clean_note)
+        ):
+            return {
+                "success": True,
+                "idempotent": True,
+                "task_id": clean_task_id,
+                "copyright_status": copyright_gate.COPYRIGHT_STATUS_CLEAN_MANUAL,
+                "source": copyright_gate.COPYRIGHT_SOURCE_OPERATOR,
+                "scope": "legacy_final_artifact",
+                "final_video_sha256": final_video_sha256,
+                "final_video_size": file_size,
+                "timestamp": existing.get("timestamp"),
+                "note": existing.get("note"),
+            }
+
+    # 5. Persiste evento auditável
+    now_iso = datetime.now(timezone.utc).isoformat()
+    log_operational_event(
+        component="copyright",
+        severity=SEVERITY_INFO,
+        event_type="TASK_COPYRIGHT_MANUAL_APPROVAL",
+        task_id=clean_task_id,
+        message=(
+            f"Aprovação manual de copyright para artefato final legado da task {clean_task_id} "
+            f"(sha256={final_video_sha256[:12]}..., size={file_size}B) por source='operator'."
+        ),
+        metadata={
+            "task_id": clean_task_id,
+            "copyright_status": copyright_gate.COPYRIGHT_STATUS_CLEAN_MANUAL,
+            "source": copyright_gate.COPYRIGHT_SOURCE_OPERATOR,
+            "scope": "legacy_final_artifact",
+            "final_video_sha256": final_video_sha256,
+            "final_video_size": file_size,
+            "timestamp": now_iso,
+            "note": clean_note,
+        },
+        db_path=db_path,
+    )
+
+    return {
+        "success": True,
+        "idempotent": False,
+        "task_id": clean_task_id,
+        "copyright_status": copyright_gate.COPYRIGHT_STATUS_CLEAN_MANUAL,
+        "source": copyright_gate.COPYRIGHT_SOURCE_OPERATOR,
+        "scope": "legacy_final_artifact",
+        "final_video_sha256": final_video_sha256,
+        "final_video_size": file_size,
+        "timestamp": now_iso,
+        "note": clean_note,
+    }
+
+
+def get_legacy_task_copyright_approval_op(
+    task_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Consulta aprovação manual de copyright de artefato legado da tarefa (read-only)."""
+    from app.services import copyright_gate
+    return copyright_gate.get_legacy_task_copyright_approval(task_id=task_id, db_path=db_path)
+
+
+
 # ---------------------------------------------------------------------------
 # 13. Operações de Clip Mode (Fase V11-A)
 # ---------------------------------------------------------------------------

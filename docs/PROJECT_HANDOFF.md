@@ -30,24 +30,34 @@
   - **Resultado:** `WAITING RECOVERY -> SCHEDULER -> YOUTUBE PUBLICATION = PASS`. Valida a proteção contra geração duplicada/desperdício de créditos para este fluxo.
   - **Encerramento:** Após o teste, o perfil foi devolvido para `warmup`.
 - **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário).
-- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar deploy do commit atual via `scripts/update_production.ps1`, reavaliar os 4 vídeos Flow legados candidatos à recuperação (`1bc4bbbe...`, `807cd444...`, `6f945c8c...`, `d8777a50...`) que agora possuem proveniência reconstruível via manifesto, e prosseguir com a homologação do ciclo autônomo E2E.
+- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar deploy do commit atual via `scripts/update_production.ps1`, registrar a aprovação manual das 4 tasks legadas híbridas revisadas pelo operador (`1bc4bbbe...`, `807cd444...`, `6f945c8c...`, `d8777a50...`) via `approve_legacy_task_copyright_op`, reavaliar os gates e prosseguir com a homologação do ciclo autônomo E2E.
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: A interface possui configuração global/plataforma de Growth Mode e também `growth_mode` por perfil. Isso pode apresentar estados aparentemente divergentes na UI.
     - **Decisão:** `DEFERRED / NÃO BLOQUEIA ROADMAP ATUAL`. Não implementar correção no momento.
 
-### Recuperação de Tarefas Google Flow Legadas (Falso Negativo Corrigido):
-- **Causa Raiz:** Em tarefas Flow legadas geradas antes do hardening do PR #90, o `script.json` não possuía `material_sources` nem `scene_materials` (ou possuía `asset_provenance` com `visual_clips = []`), apesar de possuírem evidência canônica completa em disco (`flow/manifest.json` com `status=COMPLETE`, 6 clips com `is_flow_premium=True` em `flow/clips/`). O gate retornava falso negativo `visual_status = MISSING_CLIPS`.
+### Recuperação de Tarefas Google Flow Legadas (Manifestos Híbridos e Aprovação Manual Auditável):
+- **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas são **HÍBRIDAS** (possuem 6 clipes Google Flow premium e 3 cenas stock). O manifesto preserva os termos de busca mas não o provedor, URL ou arquivo stock utilizado, e os arquivos stock individuais não foram retidos no diretório. Portanto, não há evidência persistida suficiente para reconstruir automaticamente a proveniência das cenas stock sem inventar dados (o que é proibido).
+- **Decisão do Operador:** Como o operador revisou e aprovou os 4 vídeos finais completos, foi implementada a operação auditável `approve_legacy_task_copyright_op` vinculada criptograficamente ao SHA-256 do arquivo final (`final-1.mp4`).
+- **Garantias Fail-Closed Mantidas:**
+  - Exige confirmação explícita `confirm == 'APPROVE_LEGACY_COPYRIGHT'`.
+  - Exige nó `PRIMARY` (`require_primary_instance`).
+  - Vinculação criptográfica ao hash SHA-256 do `final-1.mp4` existente e não-vazio.
+  - BGM continua obrigada a ser segura (`SAFE_NO_BGM` ou `SAFE_PROCEDURAL`).
+  - Rejeita qualquer tarefa com registro adverso (`claimed`, `blocked`, `strike`).
+  - Se houver clipes Flow no manifesto, todos os clipes premium continuam exigidos fisicamente e validados estritamente via `validate_flow_clip_provenance()`.
+  - Apenas falha de proveniência de cenas stock legadas é suprida pela aprovação manual do operador.
+  - Jamais retorna `CONTENT_ID_SAFE`.
 - **Tarefas Identificadas para Recuperação no PC Forte:**
   1. `1bc4bbbe-fcf5-4e02-a3e3-59b55c4d1f1f`
   2. `807cd444-5cbc-44e7-a597-c28b45b69f05`
   3. `6f945c8c-4f84-4d3b-b41f-7c4d12f3d8d0`
   4. `d8777a50-c18d-4a5d-9c71-9196210cbbd9`
-- **Correção Implementada:** Fallback backward-compatible em `copyright_gate.py`: reconstrói estritamente a proveniência a partir de `flow/manifest.json` quando ausente no `script.json`, exigindo fail-closed `flow_generation.status == COMPLETE`, ausência de recovery pendente, matching de `expected_clip`, `is_flow_premium == True`, `scene_index in completed_scenes` e arquivo físico existente (> 0 B). Cada clipe continua passando pela validação estrita de `validate_flow_clip_provenance()`.
 - **Novas Gerações:** Já possuem persistência canônica atômica em `flow_bridge.py` (PR #90) com `FLOW_PROVENANCE_PERSIST_FAILED` fail-closed antes do render.
-- **Status Operacional:** A recuperação física e publicação destas 4 tarefas depende de deploy no PC Forte (`update_production.ps1`) + reavaliação dos gates.
+- **Status Operacional:** Produção no PC Forte ainda aguarda deploy do novo commit (`scripts/update_production.ps1`) + aprovação manual das 4 tasks pelo operador + reavaliação dos gates.
 
 ### Histórico Recente de Hotfixes e Merges no Main:
+- **PR #96:** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Implementa aprovação manual auditável para artefato final legado vinculada criptograficamente ao SHA-256 de `final-1.mp4`, mantendo validação estrita de Flow premium, BGM segura e zero claims.
 - **PR #95 (`5ef87e2`):** `fix(flow-provenance): fallback backward-compatible para Flow legado via manifest` — Reconstrói `material_sources` e `visual_clips` estritamente a partir do `flow/manifest.json` e `flow/clips/` quando ausentes no `script.json`, eliminando falso negativo em tarefas legadas completas sem relaxar fail-closed.
 - **PR #94 (`b1031c7`):** `fix(autonomous): prevent premature gate evaluation during ongoing video generation` — Exige evidência positiva (vídeo existe, > 0 bytes e não está PENDING/PROCESSING) antes de chamar `evaluate_completed_task_gates`; mantém `current_task_id` durante a geração.
 - **PR #93 (`4b19d5b`):** `fix(audio): disable amix input normalization and add peak limiter in _mix_audio_ffmpeg` — Desativa normalização indesejada do FFmpeg amix (`normalize=0`) e insere limiter de pico (`alimiter=limit=0.95`).

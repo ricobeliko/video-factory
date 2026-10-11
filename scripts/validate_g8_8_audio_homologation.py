@@ -35,7 +35,9 @@ from app.models.schema import (  # noqa: E402
 )
 from app.services import (  # noqa: E402
     ambient_bgm,
+    operator_console,
     scene_assembly,
+    scheduler,
     subtitle,
     task,
 )
@@ -260,6 +262,22 @@ def run_g8_8_homologation(
         progress=100,
     )
 
+    # Consultar estados operacionais reais persistentes (sem hardcode)
+    try:
+        sched_settings = scheduler.get_all_settings()
+        auto_publish_status = "ON" if sched_settings.get("auto_publish_enabled", False) else "OFF"
+    except Exception as exc:
+        logger.warning(f"Não foi possível ler auto_publish_enabled do scheduler: {exc}")
+        auto_publish_status = "UNKNOWN"
+
+    try:
+        factory_state_status = operator_console.get_factory_state()
+    except Exception as exc:
+        logger.warning(f"Não foi possível ler factory_state: {exc}")
+        factory_state_status = "UNKNOWN"
+
+    gen_worker_status = "NOT_MEASURED_STANDALONE"
+
     result_data = {
         "status": "SUCCESS",
         "source_task_id": source_task_id,
@@ -276,17 +294,19 @@ def run_g8_8_homologation(
         "existing_materials_reused": len(material_selections),
         "new_visual_assets_generated": "NO",
         "flow_calls": 0,
+        "paid_visual_api_calls": 0,
         "paid_api_calls": 0,
         "publication_calls": 0,
+        "tts_generation": "BRIAN_EXPECTED",
         "audio_file": audio_file,
         "subtitle_file": subtitle_path,
         "final_video": final_video_file,
         "final_video_exists": "YES",
         "final_video_size_mb": round(final_video_size_mb, 2),
         "original_task_modified": "NO",
-        "auto_publish": "OFF",
-        "factory": "RUNNING",
-        "gen_worker": "IDLE",
+        "auto_publish": auto_publish_status,
+        "factory": factory_state_status,
+        "gen_worker": gen_worker_status,
         "result": "AWAITING_HUMAN_REVIEW",
     }
 
@@ -317,8 +337,10 @@ EXISTING_MATERIALS_REUSED = {res['existing_materials_reused']}
 NEW_VISUAL_ASSETS_GENERATED = {res['new_visual_assets_generated']}
 
 FLOW_CALLS = {res['flow_calls']}
+PAID_VISUAL_API_CALLS = {res['paid_visual_api_calls']}
 PAID_API_CALLS = {res['paid_api_calls']}
 PUBLICATION_CALLS = {res['publication_calls']}
+TTS_GENERATION = {res['tts_generation']}
 
 AUDIO_FILE = {res['audio_file']}
 SUBTITLE_FILE = {res['subtitle_file']}

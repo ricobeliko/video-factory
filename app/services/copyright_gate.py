@@ -12,6 +12,7 @@ O objetivo é reduzir risco e garantir total auditabilidade dos ativos utilizado
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -21,6 +22,25 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from app.utils import utils
+
+# Eventos e Modos de Aprovação Manual Legada (V1.5E)
+EVENT_TASK_COPYRIGHT_MANUAL_APPROVAL = "TASK_COPYRIGHT_MANUAL_APPROVAL"
+APPROVAL_MODE_MANUAL_LEGACY = "MANUAL_LEGACY_FINAL_ARTIFACT"
+SCOPE_LEGACY_FINAL_ARTIFACT = "legacy_final_artifact"
+CONFIRM_LEGACY_COPYRIGHT = "APPROVE_LEGACY_COPYRIGHT"
+
+
+def calculate_file_sha256(file_path: str) -> str:
+    """Calcula o hash SHA-256 de um arquivo em disco em blocos de 64KB."""
+    sha = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            sha.update(chunk)
+    return sha.hexdigest()
+
 
 # Provedores visuais autorizados para o fluxo autônomo
 ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS = frozenset({"pexels", "pixabay", "coverr"})
@@ -529,6 +549,245 @@ def build_asset_provenance(
     }
 
 
+def get_legacy_task_copyright_approval(
+    task_id: str,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Consulta aprovação manual persistida em operational_events para artefato final legado (V1.5E, read-only).
+
+    Recupera o registro mais recente com event_type='TASK_COPYRIGHT_MANUAL_APPROVAL' para a task.
+    Valida que o evento pertence ao operador, possui status 'clean_manual', escopo 'legacy_final_artifact'
+    e hash SHA-256 válido gravado no metadata.
+    Retorna None se não houver aprovação válida.
+    """
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return None
+
+    try:
+        from app.services import operator_console
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
+
+    from app.services import scheduler
+    with scheduler.get_connection(db_path) as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, timestamp, metadata_json
+                FROM operational_events
+                WHERE event_type = ? AND task_id = ?
+                ORDER BY id DESC;
+                """,
+                (EVENT_TASK_COPYRIGHT_MANUAL_APPROVAL, clean_task_id),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return None
+
+        for row in rows:
+            try:
+                meta = json.loads(row["metadata_json"] or "{}")
+                if (
+                    str(meta.get("task_id") or "").strip() == clean_task_id
+                    and str(meta.get("copyright_status") or "").strip().lower() == COPYRIGHT_STATUS_CLEAN_MANUAL
+                    and str(meta.get("source") or "").strip().lower() == COPYRIGHT_SOURCE_OPERATOR
+                    and str(meta.get("scope") or "").strip().lower() == SCOPE_LEGACY_FINAL_ARTIFACT
+                    and meta.get("final_video_sha256")
+                ):
+                    return {
+                        "id": row["id"],
+                        "task_id": clean_task_id,
+                        "copyright_status": COPYRIGHT_STATUS_CLEAN_MANUAL,
+                        "source": COPYRIGHT_SOURCE_OPERATOR,
+                        "scope": SCOPE_LEGACY_FINAL_ARTIFACT,
+                        "final_video_sha256": str(meta.get("final_video_sha256")).lower().strip(),
+                        "final_video_size": meta.get("final_video_size"),
+                        "timestamp": meta.get("timestamp") or row["timestamp"],
+                        "note": meta.get("note"),
+                    }
+            except Exception:
+                continue
+
+    return None
+
+
+def _try_manual_legacy_approval_fallback(
+    task_id: str,
+    bgm_info: Dict[str, Any],
+    task_base_dir: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Optional[Tuple[bool, str, Dict[str, Any]]]:
+    """Tenta validar a aprovação manual de copyright para artefato final legado (V1.5E).
+
+    Apenas converte falha de proveniência visual em PASS se TODOS os critérios forem atendidos:
+    1. BGM deve ser SAFE_NO_BGM ou SAFE_PROCEDURAL.
+    2. Zero evidência de claim, blocked ou strike.
+    3. Existe TASK_COPYRIGHT_MANUAL_APPROVAL válida com source='operator' e copyright_status='clean_manual'.
+    4. Arquivo final-1.mp4 canônico existe, não está vazio e seu SHA-256 é IDÊNTICO ao gravado na aprovação.
+    5. Se houver cenas Flow premium no manifesto, todas devem estar fisicamente íntegras e passar
+       estritamente em validate_flow_clip_provenance().
+    6. Nunca retorna CONTENT_ID_SAFE.
+
+    Retorna None se qualquer critério falhar (fail-closed).
+    """
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return None
+
+    # 1. BGM deve continuar segura: SAFE_NO_BGM ou SAFE_PROCEDURAL
+    bgm_enabled = bool(bgm_info.get("enabled"))
+    if bgm_enabled:
+        bgm_source = str(bgm_info.get("source") or "").lower()
+        bgm_prov = str(bgm_info.get("provenance_status") or "").upper()
+        if not (bgm_source == "procedural" or bgm_prov == "SAFE_PROCEDURAL"):
+            return None
+
+    # 2. Zero evidência de claim, blocked ou strike
+    pub_status = get_publication_copyright_status(task_id=clean_task_id, db_path=db_path)
+    if pub_status.get("copyright_status") in (
+        COPYRIGHT_STATUS_CLAIMED,
+        COPYRIGHT_STATUS_BLOCKED,
+        COPYRIGHT_STATUS_STRIKE,
+    ):
+        return None
+
+    from app.services import scheduler
+    with scheduler.get_connection(db_path) as conn:
+        try:
+            adv_rows = conn.execute(
+                "SELECT metadata_json FROM operational_events WHERE task_id = ? ORDER BY id DESC;",
+                (clean_task_id,),
+            ).fetchall()
+            for r in adv_rows:
+                try:
+                    m = json.loads(r["metadata_json"] or "{}")
+                    st = str(m.get("copyright_status") or "").lower().strip()
+                    if st in (COPYRIGHT_STATUS_CLAIMED, COPYRIGHT_STATUS_BLOCKED, COPYRIGHT_STATUS_STRIKE):
+                        return None
+                except Exception:
+                    continue
+        except sqlite3.OperationalError:
+            pass
+
+    # 3. Consulta aprovação manual válida
+    approval = get_legacy_task_copyright_approval(task_id=clean_task_id, db_path=db_path)
+    if not approval:
+        return None
+
+    if approval.get("task_id") != clean_task_id:
+        return None
+    if approval.get("source") != COPYRIGHT_SOURCE_OPERATOR:
+        return None
+    if approval.get("copyright_status") != COPYRIGHT_STATUS_CLEAN_MANUAL:
+        return None
+    if approval.get("scope") != SCOPE_LEGACY_FINAL_ARTIFACT:
+        return None
+
+    approved_sha256 = approval.get("final_video_sha256")
+    if not approved_sha256:
+        return None
+
+    # 4. final-1.mp4 deve existir, tamanho > 0 e SHA-256 deve coincidir exatamente
+    task_dir_path = _resolve_task_dir(clean_task_id, task_base_dir)
+    final_video_path = os.path.join(task_dir_path, "final-1.mp4")
+    if not os.path.isfile(final_video_path):
+        return None
+    try:
+        if os.path.getsize(final_video_path) <= 0:
+            return None
+        current_sha256 = calculate_file_sha256(final_video_path)
+    except OSError:
+        return None
+
+    if current_sha256.lower() != approved_sha256.lower():
+        return None
+
+    # 5. Se houver Flow no manifesto: validar todas as cenas Flow premium estritamente
+    flow_clips_verified = 0
+    manifest_path = os.path.join(task_dir_path, "flow", "manifest.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                manifest = json.load(mf)
+        except Exception:
+            return None
+
+        if not isinstance(manifest, dict):
+            return None
+
+        flow_gen = manifest.get("flow_generation")
+        if not isinstance(flow_gen, dict):
+            return None
+
+        if flow_gen.get("status") != "COMPLETE":
+            return None
+        if (
+            flow_gen.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY"
+            or manifest.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY"
+        ):
+            return None
+
+        completed_scenes = {str(s) for s in (flow_gen.get("completed_scenes") or [])}
+        scenes = manifest.get("scenes") or []
+        if not isinstance(scenes, list):
+            return None
+
+        clips_dir = os.path.join(task_dir_path, "flow", "clips")
+        for sc in scenes:
+            if isinstance(sc, dict) and sc.get("is_flow_premium") is True:
+                s_idx = sc.get("scene_index")
+                if s_idx is None or str(s_idx) not in completed_scenes:
+                    return None
+                expected_clip = str(sc.get("expected_clip") or "").strip()
+                if not expected_clip:
+                    return None
+                clip_file = os.path.join(clips_dir, expected_clip)
+                if not os.path.isfile(clip_file):
+                    return None
+                try:
+                    if os.path.getsize(clip_file) <= 0:
+                        return None
+                except OSError:
+                    return None
+
+                clip_dict = {
+                    "local_file": clip_file,
+                    "scene_index": s_idx,
+                }
+                valid, _ = validate_flow_clip_provenance(clean_task_id, clip_dict, task_base_dir)
+                if not valid:
+                    return None
+                flow_clips_verified += 1
+
+    # 6. Retorna PASS explícito de aprovação manual (nunca CONTENT_ID_SAFE)
+    bgm_final_status = (
+        "SAFE_PROCEDURAL"
+        if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "SAFE_PROCEDURAL")
+        else "SAFE_NO_BGM"
+    )
+    details: Dict[str, Any] = {
+        "copyright_provenance_gate": "PASS",
+        "approval_mode": APPROVAL_MODE_MANUAL_LEGACY,
+        "copyright_status": COPYRIGHT_STATUS_CLEAN_MANUAL,
+        "source": COPYRIGHT_SOURCE_OPERATOR,
+        "final_video_sha256_verified": True,
+        "final_video_sha256": current_sha256,
+        "bgm_status": bgm_final_status,
+    }
+    if flow_clips_verified > 0:
+        details["flow_provenance_status"] = "GENERATED_FLOW_PROVENANCE_VERIFIED"
+        details["flow_clips_verified"] = flow_clips_verified
+    if approval.get("note"):
+        details["approval_note"] = approval["note"]
+
+    return (
+        True,
+        f"COPYRIGHT_PROVENANCE_GATE = PASS ({APPROVAL_MODE_MANUAL_LEGACY})",
+        details,
+    )
+
+
 def evaluate_copyright_provenance_gate(
     task_id: str,
     task_data: Optional[Dict[str, Any]] = None,
@@ -549,11 +808,32 @@ def evaluate_copyright_provenance_gate(
        - Provider deve estar na lista autorizada: Pexels, Pixabay, Coverr
        - Cada arquivo utilizado deve conter proveniência mínima (local_file identificado)
 
-    C. NÃO PROMETER AUSÊNCIA DE CLAIM:
+    C. APROVAÇÃO MANUAL LEGADA (V1.5E):
+       - Se automático FAIL por lacuna de proveniência visual legada E existir
+         TASK_COPYRIGHT_MANUAL_APPROVAL válida para o SHA-256 exato de final-1.mp4,
+         retorna PASS explícito (approval_mode=MANUAL_LEGACY_FINAL_ARTIFACT).
+
+    D. NÃO PROMETER AUSÊNCIA DE CLAIM:
        - O retorno expressa COPYRIGHT_PROVENANCE_GATE = PASS, jamais CONTENT_ID_SAFE.
     """
     from app.services import state as sm
     from app.services import task_artifacts
+
+    # 0. Verificação Prévia de Status Adverso Conhecido (claimed, blocked, strike)
+    pub_status = get_publication_copyright_status(task_id=task_id, db_path=db_path)
+    if pub_status.get("copyright_status") in (
+        COPYRIGHT_STATUS_CLAIMED,
+        COPYRIGHT_STATUS_BLOCKED,
+        COPYRIGHT_STATUS_STRIKE,
+    ):
+        return (
+            False,
+            f"Tarefa com status de direitos autorais adverso registrado: {pub_status.get('copyright_status')}",
+            {
+                "copyright_provenance_gate": "FAIL",
+                "copyright_status": pub_status.get("copyright_status"),
+            },
+        )
 
     # Obtém dados da memória ou do disco
     task_mem = task_data or sm.state.get_task(task_id) or {}
@@ -638,6 +918,15 @@ def evaluate_copyright_provenance_gate(
 
     # 2. Verificação de Ativos Visuais
     if not visual_clips:
+        fallback = _try_manual_legacy_approval_fallback(
+            task_id=task_id,
+            bgm_info=bgm_info,
+            task_base_dir=task_base_dir,
+            db_path=db_path,
+        )
+        if fallback is not None:
+            return fallback
+
         return (
             False,
             "Nenhum clip visual registrado na proveniência da tarefa",
@@ -651,6 +940,14 @@ def evaluate_copyright_provenance_gate(
     for idx, clip in enumerate(visual_clips):
         provider = str(clip.get("provider") or "").lower().strip()
         if not clip.get("local_file"):
+            fallback = _try_manual_legacy_approval_fallback(
+                task_id=task_id,
+                bgm_info=bgm_info,
+                task_base_dir=task_base_dir,
+                db_path=db_path,
+            )
+            if fallback is not None:
+                return fallback
             return (
                 False,
                 f"Clip #{idx + 1} sem identificação de arquivo local",
@@ -684,6 +981,14 @@ def evaluate_copyright_provenance_gate(
             # pexels, pixabay, coverr
             pass
         else:
+            fallback = _try_manual_legacy_approval_fallback(
+                task_id=task_id,
+                bgm_info=bgm_info,
+                task_base_dir=task_base_dir,
+                db_path=db_path,
+            )
+            if fallback is not None:
+                return fallback
             return (
                 False,
                 f"Provedor visual não autorizado ou sem proveniência comprovada: '{provider}' no clip #{idx + 1}. Permitidos: {sorted(ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS)} ou 'google_flow' verificado.",
@@ -824,6 +1129,12 @@ def set_publication_copyright_status_op(*args, **kwargs):
     return operator_console.set_publication_copyright_status_op(*args, **kwargs)
 
 
+def approve_legacy_task_copyright_op(*args, **kwargs):
+    """Encaminha para a aprovação manual de copyright legado em operator_console (PRIMARY only)."""
+    from app.services import operator_console
+    return operator_console.approve_legacy_task_copyright_op(*args, **kwargs)
+
+
 def get_copyright_provenance_summary(
     task_id: Optional[str] = None,
     profile_id: Optional[str] = None,
@@ -915,6 +1226,12 @@ def get_copyright_provenance_summary(
     c_status = c_info.get("copyright_status") or COPYRIGHT_STATUS_UNKNOWN
     c_source = c_info.get("source") or "—"
     c_note = c_info.get("note")
+    if c_status == COPYRIGHT_STATUS_UNKNOWN:
+        legacy_appr = get_legacy_task_copyright_approval(task_id=resolved_task_id, db_path=db_path)
+        if legacy_appr:
+            c_status = legacy_appr.get("copyright_status") or COPYRIGHT_STATUS_CLEAN_MANUAL
+            c_source = legacy_appr.get("source") or COPYRIGHT_SOURCE_OPERATOR
+            c_note = legacy_appr.get("note")
     feedback_eligible = (c_status == COPYRIGHT_STATUS_CLEAN_MANUAL)
 
     return {

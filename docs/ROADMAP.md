@@ -16,11 +16,10 @@
 - **CURRENT_PHASE** = `V1.5E`
 - **PROJECT_STATUS** = `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **ACTIVE_BRANCH** = `main`
-- **CURRENT_MAIN_SHA** = `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96)
-- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário)
+- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual intermediária: seleção/criação de tema -> criação da task -> roteiro -> narração -> geração visual / Flow -> render final -> Safety Gate -> Quality Gate -> Copyright Provenance Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> publication_events status=success -> scheduled_posts status=published, validando zero duplicação, zero regeneração desnecessária, zero override de gate, somente uma task, WARMUP preservado e TikTok OFF)
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
-- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (Divergência aparente entre Growth Mode global e por perfil na UI — adiado, não bloqueia)`
+- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (Divergência aparente entre Growth Mode global e por perfil na UI — adiado, não bloqueia); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Avaliação de substituição progressiva da UI Streamlit por API leve + frontend separado devido a lentidão por reruns amplos, preservando backend/scheduler/gates — backlog futuro, avaliar somente pós-E2E)`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -29,6 +28,7 @@
 ## Status Consolidado por Componente
 
 - **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
+- **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido e Growth Mode retornado a WARMUP)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
 - **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia` com 4 clipes Flow + fallback Coverr; novo padrão estabelecido para 6 cenas Flow por Short)

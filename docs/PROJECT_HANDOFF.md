@@ -21,40 +21,51 @@
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
 - **CURRENT_MAIN_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: aprovação manual auditável vinculada ao SHA-256 de final-1.mp4 para tasks legadas híbridas)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `4b19d5b09034b54be56743579a0e6cf29e4c16bb` (PR #93: hotfix de atenuação indevida de BGM no FFmpeg amix)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: deployado e validado no PC Forte em 11/10/2026)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
-  - **Task:** `02b7b85b-252e-4313-b677-7d203e17ca45` (11/10/2026)
-  - **Cenário:** Tarefa com vídeo já gerado e aprovado (`final-1.mp4`, 59.44 MB, 9 clips: 6 Google Flow + 3 Pexels, Copyright Provenance PASS), que aguardava capacidade/slot em `waiting_schedule`.
-  - **Ação:** O perfil `Dose Diária de Internet` foi temporariamente alterado de `warmup` para `scale`. Foi executado `Run Cycle` UMA vez.
-  - **Comportamento Validado:** O sistema recuperou/reutilizou o vídeo já existente em disco. NÃO gerou um novo vídeo (zero desperdício de créditos ou tempo). O Scheduler adotou a tarefa e executou a publicação no YouTube via Post For Me com sucesso.
-  - **Resultado:** `WAITING RECOVERY -> SCHEDULER -> YOUTUBE PUBLICATION = PASS`. Valida a proteção contra geração duplicada/desperdício de créditos para este fluxo.
-  - **Encerramento:** Após o teste, o perfil foi devolvido para `warmup`.
-- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário).
-- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar deploy do commit atual via `scripts/update_production.ps1`, registrar a aprovação manual das 4 tasks legadas híbridas revisadas pelo operador (`1bc4bbbe...`, `807cd444...`, `6f945c8c...`, `d8777a50...`) via `approve_legacy_task_copyright_op`, reavaliar os gates e prosseguir com a homologação do ciclo autônomo E2E.
+  - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
+    - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
+    - **Resultados Canônicos dos Gates:**
+      1. `1bc4bbbe-fcf5-4e02-a3e3-59b55c4d1f1f` (*"A verdade sobre o orçamento de desenvolvimento de GTA VI revelada pela Rockstar"*, perfil `profile-2095da4fbe23` / *Dose Diária de GTA VI*): Quality 74.6 GOOD, Safety PASS, Copyright PASS (`approval_mode: MANUAL_LEGACY_FINAL_ARTIFACT`) -> **PUBLICADO COM SUCESSO NO YOUTUBE**.
+      2. `6f945c8c-4f84-4d3b-b41f-7c4d12f3d8d0` (*"Por que esta cidade na Sibéria obriga todo mundo a ficar dentro de casa às 18h?"*, perfil `profile-historias-misterio` / *Dose Diária de Histórias e Mistério*): Quality 72.7 GOOD, Safety PASS, Copyright PASS (`approval_mode: MANUAL_LEGACY_FINAL_ARTIFACT`) -> **PUBLICADO COM SUCESSO NO YOUTUBE**.
+      3. `d8777a50-c18d-4a5d-9c71-9196210cbbd9` (*"Por que a Rockstar demorou mais de 10 anos exatos para anunciar a sequência de GTA V?"*, perfil `profile-2095da4fbe23` / *Dose Diária de GTA VI*): Quality 77.2 GOOD, Safety PASS, Copyright PASS (`approval_mode: MANUAL_LEGACY_FINAL_ARTIFACT`) -> **PUBLICADO COM SUCESSO NO YOUTUBE**.
+      4. `807cd444-5cbc-44e7-a597-c28b45b69f05` (*"3 animais que poderiam sobreviver ao apocalipse nuclear"*): Quality 67.8 REVIEW, Safety PASS, Copyright PASS -> **REJEITADO PELO QUALITY GATE** (Não publicado; sem override, sem redução de threshold, sem recolocar no Scheduler).
+    - **Ready Stock Confirmado Antes da Publicação:**
+      - *Dose Diária de GTA VI*: READY_COUNT = 2 (`d8777a50...`, `1bc4bbbe...`)
+      - *Dose Diária de Histórias e Mistério*: READY_COUNT = 1 (`6f945c8c...`)
+    - **Scheduler & Reutilização Sem Regeneração:**
+      - Os 3 vídeos foram reaproveitados via `Run Cycle` sem regeneração de vídeo (zero desperdício de GPU/créditos).
+      - Publicação TikTok permaneceu OFF (`tiktok = OFF`).
+      - Os 3 vídeos foram agendados e publicados com sucesso no YouTube via Post For Me (`publication_events status=success`, `scheduled_posts status=published`).
+    - **Growth Mode:**
+      - Durante a recuperação, os dois perfis foram temporariamente colocados em `SCALE` para remover limitação de slots e permitir a drenagem do estoque existente.
+      - Após as publicações: *Dose Diária de GTA VI* = `WARMUP`, *Dose Diária de Histórias e Mistério* = `WARMUP`.
+      - Estado operacional final restabelecido: **Growth Mode = WARMUP**.
+- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual durante o fluxo: seleção/criação de tema -> criação da task -> roteiro -> narração -> geração visual / Flow -> render final -> Safety Gate -> Quality Gate -> Copyright Provenance Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> `publication_events status=success` -> `scheduled_posts status=published`).
+- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar a homologação do ciclo autônomo E2E para UMA tarefa real de ponta a ponta sob os seguintes critérios canônicos:
+  - Zero duplicação;
+  - Zero regeneração desnecessária;
+  - Zero override manual de gate;
+  - TikTok OFF;
+  - Somente uma task para homologação;
+  - Preservar Growth Mode em `WARMUP`;
+  - Nenhuma intervenção humana entre o início do ciclo e a publicação final.
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: A interface possui configuração global/plataforma de Growth Mode e também `growth_mode` por perfil. Isso pode apresentar estados aparentemente divergentes na UI.
     - **Decisão:** `DEFERRED / NÃO BLOQUEIA ROADMAP ATUAL`. Não implementar correção no momento.
+  - `WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION`: Streamlit atualmente apresenta lentidão operacional perceptível devido ao crescimento da aplicação e reruns amplos da interface.
+    - **Diretriz Futura:** Preservar backend Python, Scheduler, SQLite, profiles, gates e publishers. Avaliar substituição progressiva apenas da camada de interface por API leve + frontend separado.
+    - **Decisão:** `DEFERRED / BACKLOG FUTURO`. Não iniciar esta frente antes de concluir `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`.
 
-### Recuperação de Tarefas Google Flow Legadas (Manifestos Híbridos e Aprovação Manual Auditável):
-- **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas são **HÍBRIDAS** (possuem 6 clipes Google Flow premium e 3 cenas stock). O manifesto preserva os termos de busca mas não o provedor, URL ou arquivo stock utilizado, e os arquivos stock individuais não foram retidos no diretório. Portanto, não há evidência persistida suficiente para reconstruir automaticamente a proveniência das cenas stock sem inventar dados (o que é proibido).
-- **Decisão do Operador:** Como o operador revisou e aprovou os 4 vídeos finais completos, foi implementada a operação auditável `approve_legacy_task_copyright_op` vinculada criptograficamente ao SHA-256 do arquivo final (`final-1.mp4`).
-- **Garantias Fail-Closed Mantidas:**
-  - Exige confirmação explícita `confirm == 'APPROVE_LEGACY_COPYRIGHT'`.
-  - Exige nó `PRIMARY` (`require_primary_instance`).
-  - Vinculação criptográfica ao hash SHA-256 do `final-1.mp4` existente e não-vazio.
-  - BGM continua obrigada a ser segura (`SAFE_NO_BGM` ou `SAFE_PROCEDURAL`).
-  - Rejeita qualquer tarefa com registro adverso (`claimed`, `blocked`, `strike`).
-  - Se houver clipes Flow no manifesto, todos os clipes premium continuam exigidos fisicamente e validados estritamente via `validate_flow_clip_provenance()`.
-  - Apenas falha de proveniência de cenas stock legadas é suprida pela aprovação manual do operador.
-  - Jamais retorna `CONTENT_ID_SAFE`.
-- **Tarefas Identificadas para Recuperação no PC Forte:**
-  1. `1bc4bbbe-fcf5-4e02-a3e3-59b55c4d1f1f`
-  2. `807cd444-5cbc-44e7-a597-c28b45b69f05`
-  3. `6f945c8c-4f84-4d3b-b41f-7c4d12f3d8d0`
-  4. `d8777a50-c18d-4a5d-9c71-9196210cbbd9`
+### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
+- **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.
+- **Resultado Operacional Final:**
+  - 3 tarefas aprovadas em todos os gates e **PUBLICADAS COM SUCESSO NO YOUTUBE** (`1bc4bbbe...`, `6f945c8c...`, `d8777a50...`).
+  - 1 tarefa (`807cd444...`) **REJEITADA PELO QUALITY GATE** (Quality 67.8 < 70) — sem override manual, sem alteração de thresholds e sem recolocação no Scheduler (fail-closed respeitado).
+  - Ready Stock das tarefas legadas completamente drenado/publicado.
+  - Perfis restaurados para **Growth Mode = WARMUP**.
 - **Novas Gerações:** Já possuem persistência canônica atômica em `flow_bridge.py` (PR #90) com `FLOW_PROVENANCE_PERSIST_FAILED` fail-closed antes do render.
-- **Status Operacional:** Produção no PC Forte ainda aguarda deploy do novo commit (`scripts/update_production.ps1`) + aprovação manual das 4 tasks pelo operador + reavaliação dos gates.
 
 ### Histórico Recente de Hotfixes e Merges no Main:
 - **PR #96:** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Implementa aprovação manual auditável para artefato final legado vinculada criptograficamente ao SHA-256 de `final-1.mp4`, mantendo validação estrita de Flow premium, BGM segura e zero claims.

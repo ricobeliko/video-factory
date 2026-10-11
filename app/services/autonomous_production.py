@@ -1563,12 +1563,12 @@ def build_autonomous_video_params(
 
     try:
         raw_rate = ctx.get("voice_rate") if ctx.get("voice_rate") is not None else config.ui.get("voice_rate", 1.0)
-        raw_rate = float(raw_rate)
-        # V16.5.1 Narration Recovery: velocidade natural de fala em pt-BR (0.95 - 1.30).
-        # Taxas baixas (como 0.8) degradam a naturalidade tornando a fala arrastada/robótica.
-        if raw_rate < 0.95 or raw_rate > 1.30:
+        raw_rate = round(float(raw_rate), 2)
+        # Faixa aceita de velocidade de narração: 0.80 - 1.30 (preserva 0.8 homologado no G8.8).
+        # Valores fora da faixa (< 0.80 ou > 1.30) ou corrompidos degradam a fala; normaliza para 1.0 (fail-closed).
+        if raw_rate < 0.80 or raw_rate > 1.30:
             logger.warning(
-                f"voice_rate={raw_rate} fora da faixa natural para narração pt-BR (0.95-1.30). Normalizando para 1.0."
+                f"voice_rate={raw_rate} fora da faixa aceita para narração (0.80-1.30). Normalizando para 1.0."
             )
             voice_rate = 1.0
         else:

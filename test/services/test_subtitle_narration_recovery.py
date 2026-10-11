@@ -9,7 +9,7 @@ Verifica:
 6. Margem horizontal adequada para 9:16 (85% para evitar botões de ação à direita).
 7. Contraste alto e stroke forte preservados (#FFFFFF texto, #000000 stroke, largura >= 2.0).
 8. Configurações legadas continuam suportadas (custom, center, two_thirds_bottom).
-9. Voice rate natural: taxa normalizada para 1.0 quando configurada abaixo de 0.95 (ex: 0.8 arrastado).
+9. Voice rate: taxa normalizada para 1.0 quando configurada abaixo de 0.80 (ex: 0.6 arrastado), preservando 0.8 homologado.
 10. Voz baseline anterior reproduzível (pt-BR-AntonioNeural, pt-BR-FranciscaNeural).
 11. Teste curto de síntese de áudio sem render completo de vídeo.
 12. Invariante de publicação: zero chamadas de publicação, zero deploy.
@@ -175,7 +175,19 @@ Esta é a segunda linha de teste para verificar a quebra.
         self.assertIn(",5,", center_content)  # alignment 5 = middle center
 
     def test_voice_rate_normalized_to_natural_cadence(self):
-        """7. Voice rate menor que 0.95 (ex: 0.8 arrastado) é normalizado para 1.0."""
+        """7. Voice rate menor que 0.80 (ex: 0.6) é normalizado para 1.0; 0.8 homologado e 1.05 são preservados."""
+        # Taxa abaixo de 0.80 (ex: 0.6) é normalizada para 1.0 (fail-closed contra degradação excessiva)
+        with patch.dict(
+            config.ui,
+            {
+                "voice_rate": 0.6,
+                "voice_name": "pt-BR-AntonioNeural-Male",
+            },
+        ):
+            params = autonomous_production.build_autonomous_video_params("Tema Teste", db_path=self.db_path)
+            self.assertEqual(params.voice_rate, 1.0)
+
+        # Voice rate homologado 0.8 (G8.8) é estritamente preservado
         with patch.dict(
             config.ui,
             {
@@ -184,7 +196,7 @@ Esta é a segunda linha de teste para verificar a quebra.
             },
         ):
             params = autonomous_production.build_autonomous_video_params("Tema Teste", db_path=self.db_path)
-            self.assertEqual(params.voice_rate, 1.0)
+            self.assertEqual(params.voice_rate, 0.8)
 
         # Voice rate natural (ex: 1.05) é preservado
         with patch.dict(

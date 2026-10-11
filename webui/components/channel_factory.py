@@ -281,11 +281,12 @@ def save_global_voice(voice_name: str) -> tuple[bool, str]:
 
 
 def _render_global_voice_section(is_primary: bool):
-    """Renderiza a seção de controle da Voz Global da Fábrica (Fase V1.5E-G8.9)."""
+    """Renderiza a seção de controle da Voz Global da Fábrica (Fase V1.5E-G8.9 / G8.9.1)."""
     with st.container(border=True):
         st.markdown("#### 🎙️ Voz Global da Fábrica")
         st.caption("Esta configuração define a voz TTS única utilizada por **todos** os canais da fábrica.")
 
+        # Fonte canônica da Voz Ativa é estritamente config.ui["voice_name"]
         current_global_voice = (
             config.ui.get("voice_name")
             or config.app.get("voice_name")
@@ -297,7 +298,8 @@ def _render_global_voice_section(is_primary: bool):
 
         col_curr, col_sel, col_btn = st.columns([0.30, 0.45, 0.25])
         with col_curr:
-            st.markdown(f"**Voz Ativa:**\n`{current_global_voice}`")
+            active_voice_placeholder = st.empty()
+            active_voice_placeholder.markdown(f"**Voz Ativa:**\n`{current_global_voice}`")
         with col_sel:
             voice_options = get_available_factory_voices(current_global_voice)
             cur_idx = voice_options.index(current_global_voice) if current_global_voice in voice_options else 0
@@ -320,6 +322,8 @@ def _render_global_voice_section(is_primary: bool):
             ):
                 ok, msg = save_global_voice(selected_voice)
                 if ok:
+                    active_voice_placeholder.markdown(f"**Voz Ativa:**\n`{selected_voice}`")
+                    st.session_state["cf_global_voice_selector"] = selected_voice
                     st.toast(msg)
                     st.success(msg)
                     st.rerun()

@@ -1853,31 +1853,51 @@ def _render_task_publish_dialog(task_id):
     username = config.app.get("upload_post_username", "").strip()
     platforms = config.app.get("upload_post_platforms", [])
 
-    if not is_enabled:
-        st.error(tr("Upload-Post integration is disabled"))
-        st.caption(tr("Please enable Upload-Post in Settings to publish videos."))
-        if st.button(
-            tr("Open Settings"),
-            key="open_settings_from_publish",
-            use_container_width=True,
-        ):
-            _dismiss_task_publish_dialog()
-            _open_settings_dialog("publish")
-            st.rerun(scope="app")
-        return
+    from app.services import post_for_me, youtube_publisher
 
-    if not api_key or not username:
-        st.error(tr("Upload-Post is not configured"))
-        st.caption(tr("Please configure API Key and Username in Settings."))
-        if st.button(
-            tr("Open Settings"),
-            key="open_settings_from_publish_cfg",
-            use_container_width=True,
-        ):
-            _dismiss_task_publish_dialog()
-            _open_settings_dialog("publish")
-            st.rerun(scope="app")
-        return
+    norm_platforms = [str(p).lower().strip() for p in platforms if str(p).strip()]
+    is_youtube_only = bool(norm_platforms and set(norm_platforms) == {"youtube"})
+    yt_provider = youtube_publisher.get_youtube_publish_provider()
+    is_pfm_youtube = is_youtube_only and (yt_provider == youtube_publisher.PROVIDER_POST_FOR_ME)
+
+    if is_pfm_youtube:
+        if not post_for_me.post_for_me_client.is_configured():
+            st.error(tr("Post for Me is not configured (missing POST_FOR_ME_API_KEY)"))
+            st.caption(tr("Please configure POST_FOR_ME_API_KEY to publish to YouTube."))
+            if st.button(
+                tr("Cancel"),
+                key="cancel_unconfigured_pfm_publish",
+                use_container_width=True,
+            ):
+                _dismiss_task_publish_dialog()
+                st.rerun(scope="app")
+            return
+    else:
+        if not is_enabled:
+            st.error(tr("Upload-Post integration is disabled"))
+            st.caption(tr("Please enable Upload-Post in Settings to publish videos."))
+            if st.button(
+                tr("Open Settings"),
+                key="open_settings_from_publish",
+                use_container_width=True,
+            ):
+                _dismiss_task_publish_dialog()
+                _open_settings_dialog("publish")
+                st.rerun(scope="app")
+            return
+
+        if not api_key or not username:
+            st.error(tr("Upload-Post is not configured"))
+            st.caption(tr("Please configure API Key and Username in Settings."))
+            if st.button(
+                tr("Open Settings"),
+                key="open_settings_from_publish_cfg",
+                use_container_width=True,
+            ):
+                _dismiss_task_publish_dialog()
+                _open_settings_dialog("publish")
+                st.rerun(scope="app")
+            return
 
     if not platforms:
         st.warning(tr("No Platforms Configured"))
@@ -1942,7 +1962,10 @@ def _render_task_publish_dialog(task_id):
         disabled=not is_inst_primary,
         help="Apenas a instância primária pode publicar vídeos." if not is_inst_primary else None,
     ):
-        success, error_msg = tm.publish_task(task_id)
+        if is_pfm_youtube:
+            success, error_msg = tm.publish_task(task_id, platforms=["youtube"])
+        else:
+            success, error_msg = tm.publish_task(task_id)
         _dismiss_task_publish_dialog()
         if success:
             st.session_state["task_publish_succeeded"] = True

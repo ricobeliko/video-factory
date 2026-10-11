@@ -797,8 +797,9 @@ class TestChannelFactory(unittest.TestCase):
         mock_toast,
         mock_rerun,
     ):
-        """Regressão G8.9.1: Prova que Voz Ativa é sincronizada imediatamente ao salvar Brian."""
+        """Regressão G8.9.1 / G8.9.2: Prova que Voz Ativa é sincronizada sem StreamlitAPIException pós-widget."""
         import streamlit as st
+        from streamlit.errors import StreamlitAPIException
         from app.config import config
         from webui.components.channel_factory import _render_global_voice_section
 
@@ -807,44 +808,72 @@ class TestChannelFactory(unittest.TestCase):
         config.ui["voice_name"] = "pt-BR-AntonioNeural-Male"
         st.session_state.clear()
 
-        # Configura mocks para primeira renderização (com clique em salvar Brian)
+        # Simula a proteção do Streamlit contra mutação de session_state após instanciação do widget
+        widget_instantiated = False
+
+        def selectbox_side_effect(*args, **kwargs):
+            nonlocal widget_instantiated
+            widget_instantiated = True
+            return "en-US-BrianMultilingualNeural"
+
+        original_setitem = st.session_state.__class__.__setitem__
+
+        def protected_setitem(self, key, value):
+            if widget_instantiated and key == "cf_global_voice_selector":
+                raise StreamlitAPIException(
+                    "st.session_state.cf_global_voice_selector cannot be modified after "
+                    "the widget with key cf_global_voice_selector is instantiated."
+                )
+            return original_setitem(self, key, value)
+
         mock_placeholder = MagicMock()
         mock_empty.return_value = mock_placeholder
         mock_columns.return_value = [MagicMock(), MagicMock(), MagicMock()]
-        mock_selectbox.return_value = "en-US-BrianMultilingualNeural"
+        mock_selectbox.side_effect = selectbox_side_effect
         mock_button.return_value = True  # Usuário clica em 'Salvar Voz Global'
 
         try:
-            with patch.object(config, "try_save_config", return_value=True):
-                _render_global_voice_section(is_primary=True)
+            with patch.object(st.session_state.__class__, "__setitem__", protected_setitem):
+                with patch.object(config, "try_save_config", return_value=True):
+                    # Não deve lançar StreamlitAPIException
+                    _render_global_voice_section(is_primary=True)
 
             # VALIDAR 1: config.ui["voice_name"] foi atualizado para Brian
             self.assertEqual(config.ui["voice_name"], "en-US-BrianMultilingualNeural")
 
             # VALIDAR 2: O placeholder de Voz Ativa foi atualizado para Brian
-            # Deve ter sido chamado inicialmente com Antonio e depois atualizado com Brian
             self.assertEqual(mock_placeholder.markdown.call_count, 2)
             first_call_text = mock_placeholder.markdown.call_args_list[0][0][0]
             last_call_text = mock_placeholder.markdown.call_args_list[1][0][0]
 
             self.assertIn("pt-BR-AntonioNeural-Male", first_call_text)
             self.assertIn("en-US-BrianMultilingualNeural", last_call_text)
-            # A última chamada (estado final visível antes do rerun) NÃO pode conter Antonio
             self.assertNotIn("pt-BR-AntonioNeural-Male", last_call_text)
 
             # Validar que st.rerun foi acionado
             mock_rerun.assert_called_once()
 
             # 2. SIMULAR NOVO RERUN / RELOAD
+            widget_instantiated = False
             mock_placeholder.reset_mock()
             mock_button.return_value = False  # Sem novo clique
-            _render_global_voice_section(is_primary=True)
+            mock_selectbox.side_effect = None
+            mock_selectbox.return_value = "en-US-BrianMultilingualNeural"
+
+            with patch.object(st.session_state.__class__, "__setitem__", protected_setitem):
+                _render_global_voice_section(is_primary=True)
 
             # No rerun, o placeholder é inicializado diretamente com Brian (já persistido)
             self.assertEqual(mock_placeholder.markdown.call_count, 1)
             rerun_call_text = mock_placeholder.markdown.call_args_list[0][0][0]
             self.assertIn("en-US-BrianMultilingualNeural", rerun_call_text)
             self.assertNotIn("pt-BR-AntonioNeural-Male", rerun_call_text)
+
+            # VALIDAR 3: Seletor no rerun aponta para Brian
+            _, kwargs_sb = mock_selectbox.call_args
+            options = kwargs_sb["options"]
+            index = kwargs_sb["index"]
+            self.assertEqual(options[index], "en-US-BrianMultilingualNeural")
 
         finally:
             if orig_voice is not None:

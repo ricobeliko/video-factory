@@ -323,7 +323,6 @@ def _render_global_voice_section(is_primary: bool):
                 ok, msg = save_global_voice(selected_voice)
                 if ok:
                     active_voice_placeholder.markdown(f"**Voz Ativa:**\n`{selected_voice}`")
-                    st.session_state["cf_global_voice_selector"] = selected_voice
                     st.toast(msg)
                     st.success(msg)
                     st.rerun()

@@ -58,6 +58,10 @@ DEFAULT_MANUAL_MEDIA_DIR = os.path.join(ROOT_DIR, "storage", "manual_media")
 DEFAULT_CACHE_VIDEOS_DIR = os.path.join(ROOT_DIR, "storage", "cache_videos")
 DEFAULT_LOCAL_VIDEOS_DIR = os.path.join(ROOT_DIR, "storage", "local_videos")
 
+# Provedores de stock remoto com proveniência comprovável aceitos no caminho autônomo
+# (espelha copyright_gate.ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS; local_* NÃO entram).
+_AUTONOMOUS_REMOTE_STOCK_PROVIDERS = frozenset({"pexels", "pixabay", "coverr"})
+
 
 def build_flow_prompt(
     narration: str,
@@ -781,6 +785,12 @@ def resolve_project_materials(
     material_selections: List[SceneMaterialSelection] = []
     stock_filler_pool: Optional[List[str]] = None
 
+    # Caminho AUTÔNOMO: sinal já existente no VideoParams (definido apenas pela
+    # produção autônoma). Nesse caminho, arquivos locais sem proveniência
+    # comprovada (local_cache / local_clip / stock_fallback local) NÃO são usados;
+    # o resolver canônico de stock remoto é obrigatório.
+    autonomous_mode = bool(getattr(params, "final_media_quality_required", False)) if params else False
+
     for sc in manifest.get("scenes", []):
         s_idx = sc["scene_index"]
         expected_clip = sc["expected_clip"]
@@ -831,9 +841,11 @@ def resolve_project_materials(
                         raise ValueError(f"flow_failure_policy inválida: {flow_failure_policy}")
 
                 # Resolução de material stock fallback
-                if stock_filler_pool is None:
-                    stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
-                filler = _find_stock_filler_clip(s_idx, stock_filler_pool)
+                filler = None
+                if not autonomous_mode:
+                    if stock_filler_pool is None:
+                        stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
+                    filler = _find_stock_filler_clip(s_idx, stock_filler_pool)
                 if filler and os.path.exists(filler):
                     mat_path = filler
                     provider = "stock_fallback"
@@ -891,7 +903,11 @@ def resolve_project_materials(
                 search_term_used = ""
         else:
             # Cenas STOCK FILLER:
-            if os.path.exists(flow_clip_path) and validate_clip_file(flow_clip_path).get("valid", False):
+            if (
+                not autonomous_mode
+                and os.path.exists(flow_clip_path)
+                and validate_clip_file(flow_clip_path).get("valid", False)
+            ):
                 mat_path = flow_clip_path
                 provider = "local_clip"
                 source_type = "stock"
@@ -899,9 +915,11 @@ def resolve_project_materials(
                 source_url = None
                 search_term_used = ""
             else:
-                if stock_filler_pool is None:
-                    stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
-                filler = _find_stock_filler_clip(s_idx, stock_filler_pool)
+                filler = None
+                if not autonomous_mode:
+                    if stock_filler_pool is None:
+                        stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
+                    filler = _find_stock_filler_clip(s_idx, stock_filler_pool)
                 if filler and os.path.exists(filler):
                     mat_path = filler
                     provider = "local_cache"
@@ -953,6 +971,14 @@ def resolve_project_materials(
                     source_url = getattr(resolved_selections[0], "source_url", None)
                     search_term_used = getattr(resolved_selections[0], "search_term_used", "") or ""
                     asset_id = resolved_selections[0].asset_id or os.path.basename(mat_path)
+
+        if autonomous_mode and provider != "google_flow":
+            norm_provider = str(provider or "").lower().strip()
+            if norm_provider not in _AUTONOMOUS_REMOTE_STOCK_PROVIDERS:
+                raise RuntimeError(
+                    f"FLOW_STOCK_PROVENANCE_UNVERIFIED: Cena {s_idx} resolveu provider '{provider}' sem "
+                    f"proveniência comprovada. Produção autônoma exige {sorted(_AUTONOMOUS_REMOTE_STOCK_PROVIDERS)}."
+                )
 
         material_selections.append(
             SceneMaterialSelection(

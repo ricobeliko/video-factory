@@ -13,6 +13,13 @@ F. arquivo Flow inexistente → FAIL
 G. local_cache sem origem comprovada → FAIL
 H. pexels/pixabay/coverr continuam PASS
 I. ambient_auto SAFE_PROCEDURAL continua PASS
+
+Follow-up pós-review PR #90:
+J. exceção em validate_clip_file → gate FAIL (fail-closed)
+K. basename(local_file) != expected_clip (mesmo scene_index) → gate FAIL
+L. autônomo: cache/clip local sem proveniência ignorado; resolver stock canônico usado
+M. autônomo: falha de persistência → FLOW_PROVENANCE_PERSIST_FAILED antes do render
+N. autônomo: patch_script_data sem persistir (False) → FLOW_PROVENANCE_PERSIST_FAILED
 """
 
 import json
@@ -140,7 +147,8 @@ class TestFlowProvenanceContract(unittest.TestCase):
         self.assertEqual(mat_source["provider"], "google_flow")
         self.assertEqual(mat_source["local_file"], clip_file)
         self.assertEqual(mat_source["visual_source_type"], "flow")
-        self.assertEqual(mat_source["provenance_status"], "GENERATED_FLOW_PROVENANCE_VERIFIED")
+        # Status VERIFIED só pode ser emitido pelo Copyright Gate após validação.
+        self.assertEqual(mat_source["provenance_status"], "GENERATED_FLOW_EVIDENCE_RECORDED")
 
     # =========================================================================
     # B. Google Flow válido → provenance PASS
@@ -400,6 +408,201 @@ class TestFlowProvenanceContract(unittest.TestCase):
         self.assertEqual(prov["provenance_status"], "SAFE_PROCEDURAL")
         self.assertTrue(passed, f"ambient_auto SAFE_PROCEDURAL deveria passar: {reason}")
         self.assertEqual(details.get("bgm_status"), "SAFE_PROCEDURAL")
+
+    # =========================================================================
+    # J. validate_clip_file lança exceção → gate FAIL (fail-closed)
+    # =========================================================================
+    def test_j_validator_exception_fails_gate(self):
+        clip_file = os.path.join(self.clips_dir, "flow_scene_01.mp4")
+        with open(clip_file, "wb") as f:
+            f.write(b"\x00" * 1024)
+        self._create_flow_manifest(status="COMPLETE", completed_scenes=[1])
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "material_sources": [
+                {"provider": "google_flow", "asset_id": "flow_scene_01.mp4", "local_file": clip_file, "scene_index": 1}
+            ],
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", side_effect=RuntimeError("ffprobe crashed")), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertFalse(passed)
+        self.assertEqual(details.get("copyright_provenance_gate"), "FAIL")
+        self.assertIn("fail-closed", reason)
+
+    # =========================================================================
+    # K. expected_clip deve ser EXATO (sem fallback por scene_index)
+    # =========================================================================
+    def test_k_expected_clip_must_match_exactly(self):
+        other_clip = os.path.join(self.clips_dir, "outro_nome.mp4")
+        with open(other_clip, "wb") as f:
+            f.write(b"\x00" * 1024)
+        self._create_flow_manifest(
+            status="COMPLETE", completed_scenes=[1], expected_clip="flow_scene_01.mp4", scene_index=1
+        )
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "material_sources": [
+                {"provider": "google_flow", "asset_id": "outro_nome.mp4", "local_file": other_clip, "scene_index": 1}
+            ],
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertFalse(passed)
+        self.assertEqual(details.get("copyright_provenance_gate"), "FAIL")
+        self.assertIn("expected_clip", reason)
+
+    # =========================================================================
+    # L. Autônomo: cache local sem proveniência NÃO é selecionado
+    # =========================================================================
+    def test_l_autonomous_skips_unverified_local_cache_and_uses_remote_stock(self):
+        from scripts import flow_workflow
+
+        manifest = {
+            "project_name": "flow",
+            "flow_generation": {"status": "COMPLETE", "completed_scenes": []},
+            "scenes": [
+                # Flow premium sem clipe → fallback_stock (filler local existiria)
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True,
+                 "narration": "Cena um", "duration_hint": 5.0, "search_terms": ["city"]},
+                # Stock filler com clipe local existente em clips/ (local_clip)
+                {"scene_index": 2, "expected_clip": "stock_scene_02.mp4", "is_flow_premium": False,
+                 "narration": "Cena dois", "duration_hint": 5.0, "search_terms": ["ocean"]},
+            ],
+        }
+        with open(os.path.join(self.flow_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        local_clip = os.path.join(self.clips_dir, "stock_scene_02.mp4")
+        with open(local_clip, "wb") as f:
+            f.write(b"\x00" * 1024)
+        cache_clip = os.path.join(self.test_dir, "cache_videos", "cached.mp4")
+        os.makedirs(os.path.dirname(cache_clip), exist_ok=True)
+        with open(cache_clip, "wb") as f:
+            f.write(b"\x00" * 1024)
+
+        def fake_resolver(task_id, scene_plan, params, audio_duration, strict):
+            idx = scene_plan.scenes[0].scene_index
+            return [
+                SceneMaterialSelection(
+                    scene_index=idx,
+                    material_path=os.path.join(self.task_dir, f"pexels_{idx}.mp4"),
+                    duration=5.0,
+                    provider="pexels",
+                    asset_id=f"pexels-{idx}",
+                    source_url=f"https://www.pexels.com/video/{idx}/",
+                    search_term_used=f"term-{idx}",
+                    media_type="video",
+                    visual_source_type="stock",
+                )
+            ]
+
+        params = VideoParams(
+            video_subject="Autônomo",
+            video_source="pexels",
+            final_media_quality_required=True,
+        )
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("scripts.flow_workflow._list_valid_stock_filler_clips", return_value=[cache_clip]) as mock_pool, \
+             patch("scripts.flow_workflow._find_stock_filler_clip", return_value=cache_clip), \
+             patch("app.services.material.has_material_api_keys", return_value=True), \
+             patch("app.services.scene_material.resolve_scene_materials", side_effect=fake_resolver) as mock_res:
+            selections = flow_workflow.resolve_project_materials(
+                project_dir=self.flow_dir,
+                task_id=self.task_id,
+                stock_source="pexels",
+                flow_failure_policy="fallback_stock",
+                params=params,
+            )
+
+        self.assertEqual(mock_res.call_count, 2)
+        mock_pool.assert_not_called()
+        self.assertEqual(len(selections), 2)
+        for sel in selections:
+            self.assertNotIn(sel.material_path, (local_clip, cache_clip))
+            self.assertNotIn(sel.provider, ("local_cache", "local_clip", "stock_fallback"))
+            self.assertEqual(sel.provider, "pexels")
+            self.assertEqual(sel.asset_id, f"pexels-{sel.scene_index}")
+            self.assertEqual(sel.source_url, f"https://www.pexels.com/video/{sel.scene_index}/")
+            self.assertEqual(sel.search_term_used, f"term-{sel.scene_index}")
+
+    # =========================================================================
+    # M. Autônomo: persist_scene_resolution lança exceção → fail-closed cedo
+    # =========================================================================
+    def _autonomous_bridge_inputs(self):
+        clip_file = os.path.join(self.clips_dir, "flow_scene_01.mp4")
+        with open(clip_file, "wb") as f:
+            f.write(b"\x00" * 1024)
+        self._create_flow_manifest(status="COMPLETE", completed_scenes=[1])
+        selection = SceneMaterialSelection(
+            scene_index=1,
+            material_path=clip_file,
+            duration=5.0,
+            provider="google_flow",
+            asset_id="flow_scene_01.mp4",
+            visual_source_type="flow",
+            media_type="video",
+        )
+        scene_plan = ScenePlan(
+            total_scenes=1,
+            scenes=[ScenePlanItem(scene_index=1, narration="Texto", duration_hint=5.0)],
+        )
+        params = VideoParams(video_subject="Autônomo", final_media_quality_required=True)
+        return selection, scene_plan, params
+
+    def test_m_autonomous_persist_exception_blocks_before_render(self):
+        selection, scene_plan, params = self._autonomous_bridge_inputs()
+        self._create_script_json({"params": {"video_subject": "Autônomo"}})
+
+        with patch("scripts.flow_workflow.generate_pending_flow_scenes", return_value={"status": "COMPLETE"}), \
+             patch("scripts.flow_workflow.resolve_project_materials", return_value=[selection]), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir), \
+             patch("app.services.scene_material.persist_scene_resolution", side_effect=OSError("disk full")), \
+             patch("app.services.scene_assembly.assemble_scene_clips") as mock_asm, \
+             patch("app.services.video.generate_video") as mock_render:
+            with self.assertRaises(flow_bridge.FlowProvenancePersistError) as ctx:
+                flow_bridge.resolve_flow_materials_for_task(
+                    task_id=self.task_id,
+                    params=params,
+                    video_script="Texto",
+                    scene_plan=scene_plan,
+                )
+
+        self.assertIn("FLOW_PROVENANCE_PERSIST_FAILED", str(ctx.exception))
+        self.assertEqual(getattr(ctx.exception, "reason_code", None), "FLOW_PROVENANCE_PERSIST_FAILED")
+        mock_asm.assert_not_called()
+        mock_render.assert_not_called()
+
+    # =========================================================================
+    # N. Autônomo: patch_script_data não persiste (script.json ausente) → fail-closed
+    # =========================================================================
+    def test_n_autonomous_patch_not_persisted_blocks(self):
+        selection, scene_plan, params = self._autonomous_bridge_inputs()
+        # Sem script.json → patch_script_data retorna False
+
+        with patch("scripts.flow_workflow.generate_pending_flow_scenes", return_value={"status": "COMPLETE"}), \
+             patch("scripts.flow_workflow.resolve_project_materials", return_value=[selection]), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir), \
+             patch("app.services.task_artifacts._script_file", return_value=task_artifacts.Path(os.path.join(self.task_dir, "script.json"))):
+            with self.assertRaises(flow_bridge.FlowProvenancePersistError):
+                flow_bridge.resolve_flow_materials_for_task(
+                    task_id=self.task_id,
+                    params=params,
+                    video_script="Texto",
+                    scene_plan=scene_plan,
+                )
 
 
 if __name__ == "__main__":

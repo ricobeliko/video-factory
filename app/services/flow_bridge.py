@@ -34,6 +34,14 @@ from app.utils import utils
 # execute por vez, prevenindo concorrência cruzada entre múltiplos canais.
 FLOW_CONCURRENCY_LOCK = threading.Lock()
 
+FLOW_PROVENANCE_PERSIST_FAILED = "FLOW_PROVENANCE_PERSIST_FAILED"
+
+
+class FlowProvenancePersistError(RuntimeError):
+    """Falha ao persistir scene_materials/material_sources (fail-closed antes do render)."""
+
+    reason_code = FLOW_PROVENANCE_PERSIST_FAILED
+
 
 def get_task_flow_dir(task_id: str) -> str:
     """Retorna o caminho canônico e persistente do diretório Flow para a tarefa."""
@@ -146,7 +154,7 @@ def resolve_flow_materials_for_task(
                 "scene_index": s.scene_index,
                 "source": "generated",
                 "visual_source_type": "flow",
-                "provenance_status": "GENERATED_FLOW_PROVENANCE_VERIFIED",
+                "provenance_status": "GENERATED_FLOW_EVIDENCE_RECORDED",
             }
         elif prov in ("pexels", "pixabay", "coverr"):
             record = {
@@ -179,14 +187,25 @@ def resolve_flow_materials_for_task(
         material_sources_records.append(record)
 
     # 5. Persistência canônica de scene_materials e material_sources no script.json
+    # Caminho autônomo (VideoParams.final_media_quality_required): fail-closed ANTES do render.
+    autonomous_mode = bool(getattr(params, "final_media_quality_required", False))
     try:
         from app.services import scene_material
         scene_material.persist_scene_resolution(
             task_id=task_id,
             selections=material_selections,
             material_sources=material_sources_records,
+            raise_on_error=autonomous_mode,
         )
     except Exception as p_err:
+        if autonomous_mode:
+            logger.error(
+                f"[FLOW_BRIDGE] {FLOW_PROVENANCE_PERSIST_FAILED} task '{task_id}': {p_err}"
+            )
+            raise FlowProvenancePersistError(
+                f"{FLOW_PROVENANCE_PERSIST_FAILED}: não foi possível persistir scene_materials/"
+                f"material_sources da task '{task_id}'. Render bloqueado. Detalhe: {p_err}"
+            ) from p_err
         logger.warning(f"[FLOW_BRIDGE] Falha ao persistir proveniência de materiais para task '{task_id}': {p_err}")
 
     # 6. Compilação de metadados operacionais para persistência em script.json

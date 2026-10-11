@@ -224,6 +224,109 @@ else:
             _render_onboarding_form(is_primary=is_primary, db_path=db_path)
 
 
+def get_available_factory_voices(current_voice: Optional[str] = None) -> list[str]:
+    """Retorna opções de vozes aprovadas para a fábrica a partir do catálogo Azure/Edge.
+
+    Inclui obrigatoriamente Brian (en-US-BrianMultilingualNeural) e vozes pt-BR nativas.
+    Todas as opções retornadas passam estritamente por autonomous_production.is_valid_pt_br_voice.
+    """
+    candidates = ["en-US-BrianMultilingualNeural"]
+    if current_voice and autonomous_production.is_valid_pt_br_voice(current_voice):
+        candidates.append(current_voice)
+
+    try:
+        from app.services import voice
+        for v in voice.get_all_azure_voices():
+            base_v = voice.parse_voice_name(v)
+            if autonomous_production.is_valid_pt_br_voice(v):
+                candidates.append(v)
+            if autonomous_production.is_valid_pt_br_voice(base_v):
+                candidates.append(base_v)
+    except Exception:
+        pass
+
+    static_approved = [
+        "en-US-BrianMultilingualNeural",
+        "pt-BR-AntonioNeural-Male",
+        "pt-BR-AntonioNeural",
+        "pt-BR-FranciscaNeural-Female",
+        "pt-BR-FranciscaNeural",
+        "pt-BR-ThalitaMultilingualNeural-Female",
+        "pt-BR-ThalitaMultilingualNeural",
+    ]
+    candidates.extend(static_approved)
+
+    seen = set()
+    result = []
+    for c in candidates:
+        if c not in seen and autonomous_production.is_valid_pt_br_voice(c):
+            seen.add(c)
+            result.append(c)
+    return result
+
+
+def save_global_voice(voice_name: str) -> tuple[bool, str]:
+    """Valida e persiste a nova voz global em config.ui['voice_name'].
+
+    Fail-closed: Se a voz não for aprovada por autonomous_production.is_valid_pt_br_voice,
+    não atualiza nem persiste config.ui.
+    """
+    clean_voice = str(voice_name).strip() if voice_name else ""
+    if not autonomous_production.is_valid_pt_br_voice(clean_voice):
+        return False, f"Voz '{clean_voice}' não é permitida pelo contrato de conteúdo pt-BR."
+
+    config.ui["voice_name"] = clean_voice
+    config.try_save_config()
+    return True, f"Voz global atualizada para '{clean_voice}' com sucesso!"
+
+
+def _render_global_voice_section(is_primary: bool):
+    """Renderiza a seção de controle da Voz Global da Fábrica (Fase V1.5E-G8.9)."""
+    with st.container(border=True):
+        st.markdown("#### 🎙️ Voz Global da Fábrica")
+        st.caption("Esta configuração define a voz TTS única utilizada por **todos** os canais da fábrica.")
+
+        current_global_voice = (
+            config.ui.get("voice_name")
+            or config.app.get("voice_name")
+            or "en-US-BrianMultilingualNeural"
+        )
+
+        if not is_primary:
+            st.caption("🔒 View Only — alterações da voz global devem ser realizadas no nó PRIMARY.")
+
+        col_curr, col_sel, col_btn = st.columns([0.30, 0.45, 0.25])
+        with col_curr:
+            st.markdown(f"**Voz Ativa:**\n`{current_global_voice}`")
+        with col_sel:
+            voice_options = get_available_factory_voices(current_global_voice)
+            cur_idx = voice_options.index(current_global_voice) if current_global_voice in voice_options else 0
+            selected_voice = st.selectbox(
+                "Voz Global",
+                options=voice_options,
+                index=cur_idx,
+                disabled=not is_primary,
+                key="cf_global_voice_selector",
+                label_visibility="collapsed",
+            )
+        with col_btn:
+            st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+            if st.button(
+                "💾 Salvar Voz Global",
+                key="cf_save_global_voice_btn",
+                disabled=not is_primary,
+                type="primary",
+                use_container_width=True,
+            ):
+                ok, msg = save_global_voice(selected_voice)
+                if ok:
+                    st.toast(msg)
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+
 def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[str] = None):
     """Renderiza a experiência completa de Channel Factory."""
     if is_primary is None:
@@ -262,6 +365,9 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
             key="cf_open_onboard_modal_btn",
         ):
             _open_new_channel_dialog(is_primary=is_primary, db_path=db_path)
+
+    # Seção: Voz Global da Fábrica (Fase V1.5E-G8.9)
+    _render_global_voice_section(is_primary=is_primary)
 
     # Lista de Canais Existentes
     profiles = profile_manager.list_profiles(db_path=db_path)

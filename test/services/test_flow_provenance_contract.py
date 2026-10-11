@@ -604,6 +604,115 @@ class TestFlowProvenanceContract(unittest.TestCase):
                     scene_plan=scene_plan,
                 )
 
+    # =========================================================================
+    # O. Legacy Flow: script.json sem material_sources/scene_materials,
+    #    asset_provenance com visual_clips=[] → reconstrói via manifest.json → PASS
+    # =========================================================================
+    def test_o_legacy_flow_manifest_fallback_provenance_pass(self):
+        clip_file = os.path.join(self.clips_dir, "flow_scene_01.mp4")
+        with open(clip_file, "wb") as f:
+            f.write(b"\x00" * 1024)
+
+        self._create_flow_manifest(
+            status="COMPLETE",
+            completed_scenes=[1],
+            expected_clip="flow_scene_01.mp4",
+            scene_index=1,
+            is_flow_premium=True,
+        )
+
+        # Sem material_sources, sem scene_materials, asset_provenance com visual_clips=[]
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "asset_provenance": {
+                "bgm": {
+                    "enabled": False,
+                    "filename": None,
+                    "source": "none",
+                    "license_type": "not_applicable",
+                    "provenance_status": "SAFE_NO_BGM",
+                },
+                "visual_clips": [],
+                "presenter": {"enabled": False, "mode": "none"},
+                "provenance_status": "INCOMPLETE_ASSETS",
+            },
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertTrue(passed, f"Gate deveria aprovar Flow legado reconstruído a partir do manifest: {reason}")
+        self.assertEqual(details.get("copyright_provenance_gate"), "PASS")
+        self.assertEqual(details.get("flow_provenance_status"), "GENERATED_FLOW_PROVENANCE_VERIFIED")
+        self.assertEqual(details.get("flow_clips_verified"), 1)
+
+    # =========================================================================
+    # P. Legacy Flow: se o manifesto não comprovar a cena → fail-closed FAIL
+    # =========================================================================
+    def test_p_legacy_flow_manifest_unproven_scene_fails_gate(self):
+        clip_file = os.path.join(self.clips_dir, "flow_scene_01.mp4")
+        with open(clip_file, "wb") as f:
+            f.write(b"\x00" * 1024)
+
+        # Subcaso 1: cena NÃO consta em completed_scenes
+        self._create_flow_manifest(
+            status="COMPLETE",
+            completed_scenes=[],  # cena 1 não completada
+            expected_clip="flow_scene_01.mp4",
+            scene_index=1,
+            is_flow_premium=True,
+        )
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "asset_provenance": {"visual_clips": []},
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertFalse(passed, "Gate deve reprovar se cena não estiver em completed_scenes")
+        self.assertEqual(details.get("copyright_provenance_gate"), "FAIL")
+
+        # Subcaso 2: is_flow_premium == False
+        self._create_flow_manifest(
+            status="COMPLETE",
+            completed_scenes=[1],
+            expected_clip="flow_scene_01.mp4",
+            scene_index=1,
+            is_flow_premium=False,
+        )
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+        self.assertFalse(passed, "Gate deve reprovar se is_flow_premium for False")
+
+        # Subcaso 3: flow_generation status != COMPLETE (needs recovery)
+        self._create_flow_manifest(
+            status="FLOW_GENERATION_NEEDS_RECOVERY",
+            completed_scenes=[1],
+            expected_clip="flow_scene_01.mp4",
+            scene_index=1,
+            is_flow_premium=True,
+        )
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+        self.assertFalse(passed, "Gate deve reprovar se Flow status for NEEDS_RECOVERY")
+
 
 if __name__ == "__main__":
     unittest.main()

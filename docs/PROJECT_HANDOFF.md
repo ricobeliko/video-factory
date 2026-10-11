@@ -30,13 +30,25 @@
   - **Resultado:** `WAITING RECOVERY -> SCHEDULER -> YOUTUBE PUBLICATION = PASS`. Valida a proteção contra geração duplicada/desperdício de créditos para este fluxo.
   - **Encerramento:** Após o teste, o perfil foi devolvido para `warmup`.
 - **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário).
-- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar deploy do commit `b1031c7` (PR #94) via `scripts/update_production.ps1` e rodar um ciclo autônomo E2E para homologar a geração Flow completa sem disparo prematuro de gates.
+- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar deploy do commit atual via `scripts/update_production.ps1`, reavaliar os 4 vídeos Flow legados candidatos à recuperação (`1bc4bbbe...`, `807cd444...`, `6f945c8c...`, `d8777a50...`) que agora possuem proveniência reconstruível via manifesto, e prosseguir com a homologação do ciclo autônomo E2E.
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: A interface possui configuração global/plataforma de Growth Mode e também `growth_mode` por perfil. Isso pode apresentar estados aparentemente divergentes na UI.
     - **Decisão:** `DEFERRED / NÃO BLOQUEIA ROADMAP ATUAL`. Não implementar correção no momento.
 
+### Recuperação de Tarefas Google Flow Legadas (Falso Negativo Corrigido):
+- **Causa Raiz:** Em tarefas Flow legadas geradas antes do hardening do PR #90, o `script.json` não possuía `material_sources` nem `scene_materials` (ou possuía `asset_provenance` com `visual_clips = []`), apesar de possuírem evidência canônica completa em disco (`flow/manifest.json` com `status=COMPLETE`, 6 clips com `is_flow_premium=True` em `flow/clips/`). O gate retornava falso negativo `visual_status = MISSING_CLIPS`.
+- **Tarefas Identificadas para Recuperação no PC Forte:**
+  1. `1bc4bbbe-fcf5-4e02-a3e3-59b55c4d1f1f`
+  2. `807cd444-5cbc-44e7-a597-c28b45b69f05`
+  3. `6f945c8c-4f84-4d3b-b41f-7c4d12f3d8d0`
+  4. `d8777a50-c18d-4a5d-9c71-9196210cbbd9`
+- **Correção Implementada:** Fallback backward-compatible em `copyright_gate.py`: reconstrói estritamente a proveniência a partir de `flow/manifest.json` quando ausente no `script.json`, exigindo fail-closed `flow_generation.status == COMPLETE`, ausência de recovery pendente, matching de `expected_clip`, `is_flow_premium == True`, `scene_index in completed_scenes` e arquivo físico existente (> 0 B). Cada clipe continua passando pela validação estrita de `validate_flow_clip_provenance()`.
+- **Novas Gerações:** Já possuem persistência canônica atômica em `flow_bridge.py` (PR #90) com `FLOW_PROVENANCE_PERSIST_FAILED` fail-closed antes do render.
+- **Status Operacional:** A recuperação física e publicação destas 4 tarefas depende de deploy no PC Forte (`update_production.ps1`) + reavaliação dos gates.
+
 ### Histórico Recente de Hotfixes e Merges no Main:
+- **PR #95:** `fix(flow-provenance): fallback backward-compatible para reconstrução de proveniência de Flow legado a partir do manifest` — Reconstrói `material_sources` e `visual_clips` estritamente a partir do `flow/manifest.json` e `flow/clips/` quando ausentes no `script.json`, eliminando falso negativo em tarefas legadas completas sem relaxar fail-closed.
 - **PR #94 (`b1031c7`):** `fix(autonomous): prevent premature gate evaluation during ongoing video generation` — Exige evidência positiva (vídeo existe, > 0 bytes e não está PENDING/PROCESSING) antes de chamar `evaluate_completed_task_gates`; mantém `current_task_id` durante a geração.
 - **PR #93 (`4b19d5b`):** `fix(audio): disable amix input normalization and add peak limiter in _mix_audio_ffmpeg` — Desativa normalização indesejada do FFmpeg amix (`normalize=0`) e insere limiter de pico (`alimiter=limit=0.95`).
 - **PR #92 (`cc20f93`):** `fix(webui): support manual YouTube publish via Post For Me without legacy Upload-Post dependency` — Remove exigência espúria de credenciais legadas do Upload-Post no modal de publicação quando provider é `post_for_me`.

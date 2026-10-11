@@ -176,6 +176,118 @@ def validate_flow_clip_provenance(
     return True, "GENERATED_FLOW_PROVENANCE_VERIFIED"
 
 
+def _reconstruct_legacy_flow_materials(
+    task_id: str,
+    task_base_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Reconstrói material_sources a partir do manifesto do Google Flow para tasks legadas.
+
+    Aplicável como fallback estrito quando material_sources e scene_materials estão
+    ausentes ou vazios no script.json, mas flow/manifest.json e os clipes existem.
+
+    Requisitos Fail-Closed:
+    1. flow/manifest.json deve existir e ser JSON válido.
+    2. flow_generation.status deve ser COMPLETE.
+    3. Nem flow_generation.status nem manifest.status podem ser FLOW_GENERATION_NEEDS_RECOVERY.
+    4. Cada cena utilizada deve:
+       - ter scene_index válido;
+       - ter expected_clip não-vazio;
+       - ter is_flow_premium == True;
+       - scene_index estar em completed_scenes.
+    5. O arquivo flow/clips/<expected_clip> deve existir fisicamente e ter size > 0.
+    6. Se qualquer critério falhar para qualquer cena, retorna lista vazia (fail-closed).
+    """
+    if not task_id or not str(task_id).strip():
+        return []
+
+    task_dir_path = _resolve_task_dir(task_id, task_base_dir)
+    manifest_path = os.path.join(task_dir_path, "flow", "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return []
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as mf:
+            manifest = json.load(mf)
+    except Exception as exc:
+        logger.warning(f"[COPYRIGHT_GATE] Manifesto Flow ilegível para reconstrução em {task_id}: {exc}")
+        return []
+
+    if not isinstance(manifest, dict):
+        return []
+
+    flow_gen = manifest.get("flow_generation")
+    if not isinstance(flow_gen, dict):
+        return []
+
+    flow_status = flow_gen.get("status")
+    if flow_status != "COMPLETE":
+        return []
+
+    if flow_status == "FLOW_GENERATION_NEEDS_RECOVERY" or manifest.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY":
+        return []
+
+    completed_scenes = flow_gen.get("completed_scenes")
+    if not isinstance(completed_scenes, (list, tuple)) or not completed_scenes:
+        return []
+
+    completed_set = {str(s) for s in completed_scenes}
+
+    manifest_scenes = manifest.get("scenes")
+    if not isinstance(manifest_scenes, (list, tuple)) or not manifest_scenes:
+        return []
+
+    clips_dir = os.path.join(task_dir_path, "flow", "clips")
+    reconstructed: List[Dict[str, Any]] = []
+
+    for sc in manifest_scenes:
+        if not isinstance(sc, dict):
+            return []
+
+        scene_idx = sc.get("scene_index")
+        if scene_idx is None:
+            return []
+
+        expected_clip = str(sc.get("expected_clip") or "").strip()
+        if not expected_clip:
+            return []
+
+        if sc.get("is_flow_premium") is not True:
+            return []
+
+        if str(scene_idx) not in completed_set:
+            return []
+
+        clip_path = os.path.join(clips_dir, expected_clip)
+        if not os.path.isfile(clip_path):
+            return []
+
+        try:
+            if os.path.getsize(clip_path) <= 0:
+                return []
+        except OSError:
+            return []
+
+        reconstructed.append({
+            "provider": "google_flow",
+            "asset_id": expected_clip,
+            "local_file": clip_path,
+            "source_page": None,
+            "search_term": sc.get("narration") or sc.get("prompt") or "",
+            "duration": sc.get("duration_hint", 0),
+            "used_duration_sec": sc.get("duration_hint", 0),
+            "scene_index": scene_idx,
+            "source": "generated",
+            "visual_source_type": "flow",
+            "provenance_status": "GENERATED_FLOW_EVIDENCE_RECORDED",
+        })
+
+    if not reconstructed:
+        return []
+
+    reconstructed.sort(key=lambda x: int(x.get("scene_index", 0)) if str(x.get("scene_index", 0)).isdigit() else 0)
+    return reconstructed
+
+
 def _get_param(params: Any, key: str, default: Any = None) -> Any:
     """Helper unificado para extrair campos de params seja dict ou objeto."""
     if params is None:
@@ -253,8 +365,8 @@ def build_asset_provenance(
                 "provenance_status": "UNAUDITED_LEGACY" if is_legacy else ("UNAUDITED_CUSTOM" if bgm_type == "custom" else "UNKNOWN"),
             }
 
-    # Se material_sources não foi fornecido, tenta ler do script.json
-    if material_sources is None:
+    # Se material_sources não foi fornecido ou está vazio, tenta ler do script.json
+    if not material_sources:
         base_dir = task_base_dir or utils.task_dir()
         script_file = os.path.join(base_dir, task_id, "script.json")
         script_data: Dict[str, Any] = {}
@@ -289,7 +401,13 @@ def build_asset_provenance(
                 }
                 for sm in script_data.get("scene_materials", [])
             ]
-        elif material_sources is None:
+        if not material_sources:
+            # Fallback backward-compatible para Flow legado (flow/manifest.json):
+            material_sources = _reconstruct_legacy_flow_materials(
+                task_id=task_id,
+                task_base_dir=task_base_dir,
+            )
+        if material_sources is None:
             material_sources = []
         if not params and script_data.get("params"):
             params = script_data.get("params")
@@ -357,6 +475,8 @@ def build_asset_provenance(
             clip_dict["visual_source_type"] = item["visual_source_type"]
         if "provenance_status" in item:
             clip_dict["provenance_status"] = item["provenance_status"]
+        if "source" in item:
+            clip_dict["source"] = item["source"]
         visual_clips.append(clip_dict)
 
     # Proveniência do Presenter / Character Overlay (Fase V14-C)
@@ -459,14 +579,29 @@ def evaluate_copyright_provenance_gate(
     params_data = script_data.get("params") or task_mem.get("params") or {}
     asset_prov = script_data.get("asset_provenance") or task_mem.get("asset_provenance")
 
+    mat_sources_input = script_data.get("material_sources") or task_mem.get("material_sources")
     if not asset_prov:
         # Reconstrói a partir dos metadados existentes
         asset_prov = build_asset_provenance(
             task_id=task_id,
             params=params_data,
-            material_sources=script_data.get("material_sources"),
+            material_sources=mat_sources_input,
             task_base_dir=task_base_dir,
         )
+    elif not asset_prov.get("visual_clips"):
+        # V1.5E: Se asset_provenance já existia persistido mas visual_clips está vazio
+        # (caso de tasks legadas Flow sem material_sources/scene_materials no script.json),
+        # tenta reconstrução estrita a partir do Flow manifest.
+        rebuilt = build_asset_provenance(
+            task_id=task_id,
+            params=params_data,
+            material_sources=mat_sources_input,
+            task_base_dir=task_base_dir,
+        )
+        if rebuilt.get("visual_clips"):
+            asset_prov["visual_clips"] = rebuilt["visual_clips"]
+            if rebuilt.get("provenance_status"):
+                asset_prov["provenance_status"] = rebuilt["provenance_status"]
 
     bgm_info = asset_prov.get("bgm", {})
     visual_clips = asset_prov.get("visual_clips", [])

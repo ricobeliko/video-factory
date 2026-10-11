@@ -2068,45 +2068,113 @@ def _run_autonomous_cycle(
         active_ids = webui_task.get_active_task_ids()
         msg = f"Geração em andamento (tarefas ativas: {', '.join(active_ids[:3])})"
         _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
-        return {
+        res = {
             "status": "busy",
             "state": STATE_GENERATING,
             "message": msg,
         }
+        if current_task_id:
+            res["task_id"] = current_task_id
+        return res
 
     if current_task_id:
         from app.services import state as sm
         task_data = sm.state.get_task(current_task_id) or {}
+        task_state = task_data.get("state")
         video_path = scheduler.get_task_final_video(current_task_id, task_base_dir=task_base_dir)
+        has_final_video = bool(video_path and os.path.isfile(video_path) and os.path.getsize(video_path) > 0)
+        failed_stage = task_data.get("failed_stage")
 
-        # Se não há vídeo final e nenhuma thread ativa está rodando, houve crash/reboot
-        if not video_path or not os.path.isfile(video_path):
-            task_state = task_data.get("state")
-            if task_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING):
-                interrupted_task_id = current_task_id
-                _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
-                _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
-                msg = f"Geração da tarefa {current_task_id} interrompida (reboot/crash). Vídeo final ausente."
+        # 1. Terminal explícito: FAILED
+        if task_state == const.TASK_STATE_FAILED:
+            failed_task_id = current_task_id
+            _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
+            is_interrupted = (
+                failed_stage in ("interrupted_by_restart", "generation_interrupted")
+                or "interrompida" in str(task_data.get("error", "")).lower()
+                or "interrupted" in str(task_data.get("error", "")).lower()
+            )
+            if is_interrupted:
+                msg = f"Geração da tarefa {failed_task_id} interrompida (reboot/crash). Vídeo final ausente."
                 _set_status(KEY_AUTONOMOUS_LAST_ERROR, msg)
                 _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
                 operator_console.log_operational_event(
                     component="autonomous_production",
                     severity=operator_console.SEVERITY_WARNING,
                     event_type="generation_interrupted_recovery",
-                    task_id=current_task_id,
+                    task_id=failed_task_id,
                     message=msg,
                     db_path=db_path,
                 )
-                # UMA TRANSIÇÃO POR CICLO: recovery encerra o ciclo aqui.
-                # O próximo ciclo poderá gerar reposição se o estoque estiver abaixo da meta.
                 return {
                     "status": "recovery_error",
-                    "task_id": interrupted_task_id,
+                    "task_id": failed_task_id,
                     "reason": "generation_interrupted",
                     "message": msg,
                 }
+            else:
+                err_detail = task_data.get("error") or failed_stage or "Falha na geração"
+                msg = f"Geração da tarefa {failed_task_id} falhou: {err_detail}"
+                _set_status(KEY_AUTONOMOUS_LAST_ERROR, msg)
+                _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+                operator_console.log_operational_event(
+                    component="autonomous_production",
+                    severity=operator_console.SEVERITY_ERROR,
+                    event_type="generation_failed",
+                    task_id=failed_task_id,
+                    message=msg,
+                    db_path=db_path,
+                )
+                return {
+                    "status": "error",
+                    "task_id": failed_task_id,
+                    "reason": "generation_failed",
+                    "message": msg,
+                }
 
-    if current_task_id:
+        # 2. Terminal explícito: CANCELLED
+        if task_state == const.TASK_STATE_CANCELLED or bool(task_data.get("cancelled")):
+            cancelled_task_id = current_task_id
+            _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
+            msg = f"Geração da tarefa {cancelled_task_id} cancelada."
+            _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+            operator_console.log_operational_event(
+                component="autonomous_production",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="generation_cancelled",
+                task_id=cancelled_task_id,
+                message=msg,
+                db_path=db_path,
+            )
+            return {
+                "status": "cancelled",
+                "task_id": cancelled_task_id,
+                "message": msg,
+            }
+
+        # 3. Geração em andamento / Incompleta (sem evidência positiva de conclusão)
+        # Regra FAIL-CLOSED: ausência de final-*.mp4 NÃO significa finalizada/reprovada.
+        # Exige evidência positiva: arquivo existe, tamanho > 0 bytes, e estado não está PENDING/PROCESSING.
+        is_still_generating = (
+            not has_final_video
+            or task_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING)
+            or (webui_task.has_active_generation_tasks() and current_task_id in webui_task.get_active_task_ids())
+        )
+
+        if is_still_generating:
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_GENERATING)
+            msg = f"Geração da tarefa {current_task_id} em andamento. Aguardando conclusão do vídeo..."
+            _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+            return {
+                "status": "generating",
+                "state": STATE_GENERATING,
+                "task_id": current_task_id,
+                "message": msg,
+            }
+
+        # 4. Evidência positiva de conclusão confirmada: avaliar Gates exatamente uma vez
         _set_status(KEY_AUTONOMOUS_STATE, STATE_REVIEWING)
         _set_status(KEY_AUTONOMOUS_MESSAGE, f"Avaliando Gates para tarefa {current_task_id}...")
 

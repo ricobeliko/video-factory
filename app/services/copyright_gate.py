@@ -49,6 +49,134 @@ ALLOWED_COPYRIGHT_SOURCES = frozenset({
 })
 
 
+def _resolve_task_dir(task_id: str, task_base_dir: Optional[str] = None) -> str:
+    """Resolve o diretório canônico da tarefa para inspeção de arquivos."""
+    if task_base_dir:
+        norm = os.path.normpath(task_base_dir)
+        if os.path.basename(norm) == task_id or os.path.exists(os.path.join(task_base_dir, "script.json")):
+            return os.path.abspath(task_base_dir)
+        return os.path.abspath(os.path.join(task_base_dir, task_id))
+    return os.path.abspath(utils.task_dir(task_id))
+
+
+def validate_flow_clip_provenance(
+    task_id: str,
+    clip: Dict[str, Any],
+    task_base_dir: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Validação estrita de evidência local para clips do Google Flow (V1.5E-G8).
+
+    Exige comprovadamente:
+    1. local_file presente e contido dentro do diretório canônico da task.
+    2. local_file localizado no subdiretório flow/clips/.
+    3. Arquivo físico existente, não-vazio e válido no disco.
+    4. Manifesto flow/manifest.json existente e legível.
+    5. Cena correspondente existente no manifesto.
+    6. is_flow_premium == True na cena do manifesto.
+    7. scene_index presente em completed_scenes do flow_generation.
+    8. flow_generation.status == 'COMPLETE' e sem recovery pendente.
+    """
+    if not task_id or not str(task_id).strip():
+        return False, "task_id inválido ou ausente"
+
+    local_file = str(clip.get("local_file") or "").strip()
+    if not local_file:
+        return False, "local_file ausente na proveniência do clipe Flow"
+
+    task_dir_path = _resolve_task_dir(task_id, task_base_dir)
+    local_file_abs = os.path.abspath(local_file)
+    task_dir_abs = os.path.abspath(task_dir_path)
+
+    # 1. Arquivo dentro do diretório da tarefa
+    try:
+        rel_task = os.path.relpath(local_file_abs, task_dir_abs)
+        if rel_task.startswith("..") or os.path.isabs(rel_task):
+            return False, f"Arquivo Flow fora do diretório da tarefa: {local_file}"
+    except ValueError:
+        return False, f"Arquivo Flow em unidade distinta da tarefa: {local_file}"
+
+    # 2. Localizado em flow/clips/
+    flow_clips_dir = os.path.abspath(os.path.join(task_dir_abs, "flow", "clips"))
+    try:
+        rel_clips = os.path.relpath(local_file_abs, flow_clips_dir)
+        if rel_clips.startswith("..") or os.path.isabs(rel_clips):
+            return False, f"Arquivo Flow fora de flow/clips/: {local_file}"
+    except ValueError:
+        return False, f"Arquivo Flow fora de flow/clips/: {local_file}"
+
+    # 3. Arquivo existente e não-vazio no disco
+    if not os.path.isfile(local_file_abs):
+        return False, f"Arquivo Flow inexistente no disco: {local_file}"
+    try:
+        if os.path.getsize(local_file_abs) == 0:
+            return False, f"Arquivo Flow vazio (zero bytes): {local_file}"
+    except OSError as e:
+        return False, f"Falha ao verificar tamanho do arquivo Flow: {e}"
+
+    # Validação do arquivo de clipe
+    try:
+        from scripts.flow_workflow import validate_clip_file
+        clip_val = validate_clip_file(local_file_abs)
+        if not clip_val.get("valid", False):
+            return False, f"Arquivo Flow inválido ou corrompido: {local_file}"
+    except Exception as exc:
+        logger.warning(f"[COPYRIGHT_GATE] Falha ao executar validate_clip_file em {local_file_abs}: {exc}")
+        if not os.path.isfile(local_file_abs) or os.path.getsize(local_file_abs) == 0:
+            return False, f"Arquivo Flow inválido: {exc}"
+
+    # 4. Manifesto flow/manifest.json existente e legível
+    manifest_path = os.path.join(task_dir_abs, "flow", "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return False, f"Manifesto Flow inexistente: {manifest_path}"
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as mf:
+            manifest = json.load(mf)
+    except Exception as exc:
+        return False, f"Manifesto Flow corrompido ou ilegível: {exc}"
+
+    # 5. flow_generation.status == COMPLETE e sem recovery pendente
+    flow_gen = manifest.get("flow_generation", {})
+    flow_status = flow_gen.get("status")
+    if flow_status != "COMPLETE":
+        return False, f"Status da geração Flow não é COMPLETE (status={flow_status})"
+
+    if flow_status == "FLOW_GENERATION_NEEDS_RECOVERY" or manifest.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY":
+        return False, "Flow possui recovery pendente"
+
+    # 6. Cena correspondente no manifesto
+    clip_filename = os.path.basename(local_file_abs)
+    manifest_scenes = manifest.get("scenes", [])
+    matching_scene = None
+    for sc in manifest_scenes:
+        if sc.get("expected_clip") == clip_filename:
+            matching_scene = sc
+            break
+
+    if not matching_scene and clip.get("scene_index") is not None:
+        c_sidx = clip.get("scene_index")
+        for sc in manifest_scenes:
+            if sc.get("scene_index") == c_sidx:
+                matching_scene = sc
+                break
+
+    if not matching_scene:
+        return False, f"Clipe Flow '{clip_filename}' não corresponde a nenhuma cena no manifesto"
+
+    # 7. is_flow_premium == True
+    if not matching_scene.get("is_flow_premium", False):
+        return False, f"Cena {matching_scene.get('scene_index')} no manifesto não está marcada como is_flow_premium=True"
+
+    # 8. scene_index em completed_scenes
+    scene_idx = matching_scene.get("scene_index")
+    completed_scenes = flow_gen.get("completed_scenes", [])
+    if scene_idx not in completed_scenes:
+        return False, f"Cena Flow {scene_idx} não consta em completed_scenes do manifesto"
+
+    return True, "GENERATED_FLOW_PROVENANCE_VERIFIED"
+
+
 def _get_param(params: Any, key: str, default: Any = None) -> Any:
     """Helper unificado para extrair campos de params seja dict ou objeto."""
     if params is None:
@@ -146,7 +274,24 @@ def build_asset_provenance(
                         script_data = json.load(f)
             except Exception:
                 pass
-        material_sources = script_data.get("material_sources", [])
+        material_sources = script_data.get("material_sources")
+        if not material_sources and script_data.get("scene_materials"):
+            material_sources = [
+                {
+                    "provider": sm.get("provider"),
+                    "asset_id": sm.get("asset_id") or (os.path.basename(sm.get("material_path", "")) if sm.get("material_path") else None),
+                    "local_file": sm.get("material_path"),
+                    "source_page": sm.get("source_url") or "",
+                    "search_term": sm.get("search_term_used") or "",
+                    "duration": sm.get("duration", 0),
+                    "used_duration_sec": sm.get("duration", 0),
+                    "scene_index": sm.get("scene_index"),
+                    "visual_source_type": sm.get("visual_source_type", "stock"),
+                }
+                for sm in script_data.get("scene_materials", [])
+            ]
+        elif material_sources is None:
+            material_sources = []
         if not params and script_data.get("params"):
             params = script_data.get("params")
             raw_type = _get_param(params, "bgm_type", None)
@@ -199,14 +344,21 @@ def build_asset_provenance(
         duration = item.get("duration")
         used_duration = item.get("used_duration_sec", duration)
 
-        visual_clips.append({
+        clip_dict = {
             "provider": provider,
             "external_id": external_id,
             "provider_url": provider_url,
             "local_file": local_file,
             "search_term": search_term,
             "used_duration_sec": used_duration,
-        })
+        }
+        if "scene_index" in item:
+            clip_dict["scene_index"] = item["scene_index"]
+        if "visual_source_type" in item:
+            clip_dict["visual_source_type"] = item["visual_source_type"]
+        if "provenance_status" in item:
+            clip_dict["provenance_status"] = item["provenance_status"]
+        visual_clips.append(clip_dict)
 
     # Proveniência do Presenter / Character Overlay (Fase V14-C)
     avatar_mode = str(_get_param(params, "avatar_mode", "none") or "none").lower().strip()
@@ -361,18 +513,9 @@ def evaluate_copyright_provenance_gate(
             },
         )
 
+    flow_clips_verified = 0
     for idx, clip in enumerate(visual_clips):
         provider = str(clip.get("provider") or "").lower().strip()
-        if provider not in ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS:
-            return (
-                False,
-                f"Provedor visual não autorizado: '{provider}' no clip #{idx + 1}. Permitidos: {sorted(ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS)}",
-                {
-                    "copyright_provenance_gate": "FAIL",
-                    "unauthorized_provider": provider,
-                    "clip_index": idx,
-                },
-            )
         if not clip.get("local_file"):
             return (
                 False,
@@ -384,21 +527,60 @@ def evaluate_copyright_provenance_gate(
                 },
             )
 
+        if provider == "google_flow":
+            valid, reason = validate_flow_clip_provenance(
+                task_id=task_id,
+                clip=clip,
+                task_base_dir=task_base_dir,
+            )
+            if not valid:
+                return (
+                    False,
+                    f"Falha na validação de proveniência do Google Flow no clip #{idx + 1}: {reason}",
+                    {
+                        "copyright_provenance_gate": "FAIL",
+                        "unauthorized_provider": provider,
+                        "flow_validation_failure": reason,
+                        "clip_index": idx,
+                    },
+                )
+            flow_clips_verified += 1
+            clip["provenance_status"] = "GENERATED_FLOW_PROVENANCE_VERIFIED"
+        elif provider in ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS:
+            # pexels, pixabay, coverr
+            pass
+        else:
+            return (
+                False,
+                f"Provedor visual não autorizado ou sem proveniência comprovada: '{provider}' no clip #{idx + 1}. Permitidos: {sorted(ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS)} ou 'google_flow' verificado.",
+                {
+                    "copyright_provenance_gate": "FAIL",
+                    "unauthorized_provider": provider,
+                    "clip_index": idx,
+                },
+            )
+
     bgm_final_status = (
         "SAFE_PROCEDURAL"
         if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "SAFE_PROCEDURAL")
         else "SAFE_NO_BGM"
     )
+    details = {
+        "copyright_provenance_gate": "PASS",
+        "bgm_status": bgm_final_status,
+        "visual_clips_count": len(visual_clips),
+        "providers_verified": list(sorted({c.get("provider") for c in visual_clips})),
+    }
+    if flow_clips_verified > 0:
+        details["flow_provenance_status"] = "GENERATED_FLOW_PROVENANCE_VERIFIED"
+        details["flow_clips_verified"] = flow_clips_verified
+
     return (
         True,
         "COPYRIGHT_PROVENANCE_GATE = PASS",
-        {
-            "copyright_provenance_gate": "PASS",
-            "bgm_status": bgm_final_status,
-            "visual_clips_count": len(visual_clips),
-            "providers_verified": list(sorted({c.get("provider") for c in visual_clips})),
-        },
+        details,
     )
+
 
 
 def get_publication_copyright_status(

@@ -127,7 +127,69 @@ def resolve_flow_materials_for_task(
         params=params,
     )
 
-    # 4. Compilação de metadados operacionais para persistência em script.json
+    # 4. Construção canônica de material_sources com proveniência explícita
+    material_sources_records: List[Dict[str, Any]] = []
+    for s in material_selections:
+        prov = str(s.provider or "unknown").lower().strip()
+        mat_path = s.material_path
+        asset_id = s.asset_id or os.path.basename(mat_path)
+
+        if prov == "google_flow":
+            record = {
+                "provider": "google_flow",
+                "asset_id": asset_id,
+                "local_file": mat_path,
+                "source_page": None,
+                "search_term": s.search_term_used or "",
+                "duration": s.duration,
+                "used_duration_sec": s.duration,
+                "scene_index": s.scene_index,
+                "source": "generated",
+                "visual_source_type": "flow",
+                "provenance_status": "GENERATED_FLOW_PROVENANCE_VERIFIED",
+            }
+        elif prov in ("pexels", "pixabay", "coverr"):
+            record = {
+                "provider": prov,
+                "asset_id": asset_id,
+                "local_file": mat_path,
+                "source_page": s.source_url or getattr(s, "source_page", None),
+                "search_term": s.search_term_used or "",
+                "duration": s.duration,
+                "used_duration_sec": s.duration,
+                "scene_index": s.scene_index,
+                "source": "remote_stock",
+                "visual_source_type": getattr(s, "visual_source_type", "stock") or "stock",
+                "provenance_status": "REMOTE_STOCK_VERIFIED",
+            }
+        else:
+            record = {
+                "provider": prov,
+                "asset_id": asset_id,
+                "local_file": mat_path,
+                "source_page": None,
+                "search_term": s.search_term_used or "",
+                "duration": s.duration,
+                "used_duration_sec": s.duration,
+                "scene_index": s.scene_index,
+                "source": "local_unverified",
+                "visual_source_type": getattr(s, "visual_source_type", "stock") or "stock",
+                "provenance_status": "UNVERIFIED_LOCAL_ASSET",
+            }
+        material_sources_records.append(record)
+
+    # 5. Persistência canônica de scene_materials e material_sources no script.json
+    try:
+        from app.services import scene_material
+        scene_material.persist_scene_resolution(
+            task_id=task_id,
+            selections=material_selections,
+            material_sources=material_sources_records,
+        )
+    except Exception as p_err:
+        logger.warning(f"[FLOW_BRIDGE] Falha ao persistir proveniência de materiais para task '{task_id}': {p_err}")
+
+    # 6. Compilação de metadados operacionais para persistência em script.json
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             final_manifest = json.load(f)

@@ -16,7 +16,7 @@
 - **CURRENT_PHASE** = `V1.5E`
 - **PROJECT_STATUS** = `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **ACTIVE_BRANCH** = `main`
-- **CURRENT_MAIN_SHA** = `5ef87e2b765b0cdf45cc3d3fb67c685c2325bfb1` (PR #95)
+- **CURRENT_MAIN_SHA** = `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96)
 - **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário)
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`

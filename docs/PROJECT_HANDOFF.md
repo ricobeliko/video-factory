@@ -20,7 +20,7 @@
 - **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
-- **CURRENT_MAIN_SHA:** `5ef87e2b765b0cdf45cc3d3fb67c685c2325bfb1` (PR #95: fallback backward-compatible para Flow legado a partir do flow/manifest.json)
+- **CURRENT_MAIN_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: aprovação manual auditável vinculada ao SHA-256 de final-1.mp4 para tasks legadas híbridas)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `4b19d5b09034b54be56743579a0e6cf29e4c16bb` (PR #93: hotfix de atenuação indevida de BGM no FFmpeg amix)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Task:** `02b7b85b-252e-4313-b677-7d203e17ca45` (11/10/2026)

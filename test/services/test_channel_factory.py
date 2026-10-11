@@ -682,6 +682,136 @@ class TestChannelFactory(unittest.TestCase):
         overlap = static_cf_keys.intersection(static_op_keys)
         self.assertEqual(overlap, set(), f"Colisão detectada entre chaves de widgets do Streamlit: {overlap}")
 
+    def test_global_voice_selector_uses_persisted_voice(self):
+        """1. Seletor usa a voz global persistida."""
+        from app.config import config
+        from webui.components.channel_factory import get_available_factory_voices
+
+        orig = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "pt-BR-FranciscaNeural"
+            voices = get_available_factory_voices(current_voice="pt-BR-FranciscaNeural")
+            self.assertIn("pt-BR-FranciscaNeural", voices)
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
+    def test_brian_voice_available_and_accepted(self):
+        """2. Brian aparece no catálogo e é aceita."""
+        from app.config import config
+        from webui.components.channel_factory import get_available_factory_voices, save_global_voice
+
+        voices = get_available_factory_voices()
+        self.assertIn("en-US-BrianMultilingualNeural", voices)
+
+        orig = config.ui.get("voice_name")
+        try:
+            with patch.object(config, "try_save_config", return_value=True):
+                ok, msg = save_global_voice("en-US-BrianMultilingualNeural")
+                self.assertTrue(ok)
+                self.assertEqual(config.ui["voice_name"], "en-US-BrianMultilingualNeural")
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
+    def test_incompatible_voice_rejected_fail_closed(self):
+        """3. Voz incompatível com contrato pt-BR é rejeitada fail-closed sem alterar config."""
+        from app.config import config
+        from webui.components.channel_factory import save_global_voice
+
+        orig = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+            with patch.object(config, "try_save_config") as mock_save:
+                ok, msg = save_global_voice("en-US-JennyNeural")
+                self.assertFalse(ok)
+                self.assertIn("não é permitida", msg)
+                self.assertEqual(config.ui["voice_name"], "en-US-BrianMultilingualNeural")
+                mock_save.assert_not_called()
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
+    def test_save_global_voice_alters_config_and_calls_try_save(self):
+        """4 & 5. Salvar altera config.ui['voice_name'] e chama config.try_save_config."""
+        from app.config import config
+        from webui.components.channel_factory import save_global_voice
+
+        orig = config.ui.get("voice_name")
+        try:
+            with patch.object(config, "try_save_config", return_value=True) as mock_save:
+                ok, msg = save_global_voice("pt-BR-AntonioNeural-Male")
+                self.assertTrue(ok)
+                self.assertEqual(config.ui["voice_name"], "pt-BR-AntonioNeural-Male")
+                mock_save.assert_called_once()
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
+    @patch("streamlit.container")
+    @patch("streamlit.columns")
+    @patch("streamlit.selectbox")
+    @patch("streamlit.button")
+    @patch("streamlit.markdown")
+    @patch("streamlit.caption")
+    def test_view_only_disables_mutation_controls(
+        self, mock_caption, mock_markdown, mock_button, mock_selectbox, mock_columns, mock_container
+    ):
+        """6. Nó não-PRIMARY (VIEW ONLY) desabilita seletor e botão de salvar."""
+        from webui.components.channel_factory import _render_global_voice_section
+
+        mock_columns.return_value = [MagicMock(), MagicMock(), MagicMock()]
+        _render_global_voice_section(is_primary=False)
+
+        # Selectbox deve ter disabled=True
+        self.assertTrue(mock_selectbox.called)
+        _, kwargs_sb = mock_selectbox.call_args
+        self.assertTrue(kwargs_sb.get("disabled", False))
+
+        # Button deve ter disabled=True
+        self.assertTrue(mock_button.called)
+        _, kwargs_btn = mock_button.call_args
+        self.assertTrue(kwargs_btn.get("disabled", False))
+
+    def test_all_three_profiles_resolve_global_voice(self):
+        """7. Os perfis cadastrados continuam resolvendo a voz global da fábrica."""
+        from app.config import config
+
+        p1 = profile_manager.create_profile(name="Canal 1", niche="curiosidades", db_path=self.db_path)
+        p2 = profile_manager.create_profile(name="Canal 2", niche="games", db_path=self.db_path)
+        p3 = profile_manager.create_profile(name="Canal 3", niche="tech", db_path=self.db_path)
+
+        orig = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+            for p in (p1, p2, p3):
+                ctx = profile_manager.get_generation_profile_context(p["id"], db_path=self.db_path)
+                self.assertEqual(ctx["voice_name"], "en-US-BrianMultilingualNeural")
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
+    def test_legacy_profile_settings_voice_values_ignored(self):
+        """8. Valores legacy salvos no profile settings não ganham precedência sobre a voz global."""
+        from app.config import config
+
+        p = profile_manager.create_profile(name="Canal Legado", niche="historia", db_path=self.db_path)
+        pid = p["id"]
+
+        # Salva voz legada no SQLite
+        settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        settings.voice.voice_name = "pt-BR-FranciscaNeural"
+        profile_manager.update_profile_settings(pid, settings, db_path=self.db_path)
+
+        orig = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+            ctx = profile_manager.get_generation_profile_context(pid, db_path=self.db_path)
+            self.assertEqual(ctx["voice_name"], "en-US-BrianMultilingualNeural")
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
 
 if __name__ == "__main__":
     unittest.main()

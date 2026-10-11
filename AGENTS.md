@@ -30,11 +30,13 @@ Esta política de testes prevalece sobre instruções ou referências histórica
 - Máximo inicial: 1 comando de teste direcionado.
 - Preferir arquivo específico e/ou -k.
 - Se passar, PARAR.
+- Teste local direcionado necessário passou -> não esperar CI para prosseguir/merge, salvo instrução humana explícita.
+- CI não deve ser executado ou monitorado por padrão.
 - Não expandir automaticamente para outras suítes.
 - Full regression somente com autorização humana explícita.
 - Coverage somente com autorização humana explícita.
-- CI não deve ser executado ou monitorado automaticamente.
 - Não repetir teste que já passou sem mudança posterior relevante.
+- Não executar testes redundantes apenas para atualizar documentação.
 - Não criar testes novos por reflexo; somente quando houver gap real relacionado à alteração.
 - Mudança somente documental não exige pytest.
 - Concluir um gate NÃO autoriza regressão completa.

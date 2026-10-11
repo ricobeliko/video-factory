@@ -1,14 +1,47 @@
 # PROJECT_HANDOFF — Video Factory / MoneyPrinterTurbo
 
-## Estado Atual Canônico — 09/10/2026
+> [!IMPORTANT]
+> **INSTRUÇÃO OBRIGATÓRIA PARA NOVOS AGENTES / CHATS:**
+> Leia este arquivo inteiro antes de sugerir mudanças. Apresente primeiro um **RELATÓRIO DE ALINHAMENTO** contendo:
+> - **Fase atual** e **ambientes** (DEV: `D:\Projetos\MoneyPrinterTurbo` / PROD: `C:\Projetos\MoneyPrinterTurbo`);
+> - **Último commit/deploy** e **última homologação real**;
+> - **Gate atual** e **próximo passo exato**;
+> - **Pendências conhecidas** e itens adiados.
+>
+> Se houver divergência entre este documento e o Git atual, **informe a divergência antes de agir**.
 
-- **CURRENT_FOCUS** = `PC_FORTE_PRODUCTION_RUNTIME_HARDENING`
-- **CURRENT_PHASE** = `V1.5E-N`
-- **PROJECT_STATUS** = `ACTIVE_DEV / PR_READY`
-- **ACTIVE_BRANCH** = `fix/pc-forte-production-runtime-hardening`
-- **NEXT_GATE** = `PRODUCTION_HOMOLOGATION`
-- **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
-- **BLOCKED_BY** = `NONE`
+---
+
+## START HERE — ESTADO ATUAL
+
+- **LAST_UPDATED:** `11/10/2026`
+- **CURRENT_PHASE:** `V1.5E` (Autonomous Flow Production & Publication Loop)
+- **CURRENT_FOCUS:** `HOMOLOGAÇÃO_E2E_CICLO_AUTONOMO_FLOW`
+- **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
+- **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
+- **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
+- **CURRENT_MAIN_SHA:** `b1031c7067dede82c5272589a3e3f63792e6477b` (PR #94: hotfix fail-closed contra race condition de avaliação prematura do gate autônomo durante geração Flow em andamento)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `4b19d5b09034b54be56743579a0e6cf29e4c16bb` (PR #93: hotfix de atenuação indevida de BGM no FFmpeg amix)
+- **LAST_REAL_PRODUCTION_VALIDATION:**
+  - **Task:** `02b7b85b-252e-4313-b677-7d203e17ca45` (11/10/2026)
+  - **Cenário:** Tarefa com vídeo já gerado e aprovado (`final-1.mp4`, 59.44 MB, 9 clips: 6 Google Flow + 3 Pexels, Copyright Provenance PASS), que aguardava capacidade/slot em `waiting_schedule`.
+  - **Ação:** O perfil `Dose Diária de Internet` foi temporariamente alterado de `warmup` para `scale`. Foi executado `Run Cycle` UMA vez.
+  - **Comportamento Validado:** O sistema recuperou/reutilizou o vídeo já existente em disco. NÃO gerou um novo vídeo (zero desperdício de créditos ou tempo). O Scheduler adotou a tarefa e executou a publicação no YouTube via Post For Me com sucesso.
+  - **Resultado:** `WAITING RECOVERY -> SCHEDULER -> YOUTUBE PUBLICATION = PASS`. Valida a proteção contra geração duplicada/desperdício de créditos para este fluxo.
+  - **Encerramento:** Após o teste, o perfil foi devolvido para `warmup`.
+- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário).
+- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar deploy do commit `b1031c7` (PR #94) via `scripts/update_production.ps1` e rodar um ciclo autônomo E2E para homologar a geração Flow completa sem disparo prematuro de gates.
+- **BLOCKERS:** `NONE`
+- **DEFERRED_ITEMS:**
+  - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: A interface possui configuração global/plataforma de Growth Mode e também `growth_mode` por perfil. Isso pode apresentar estados aparentemente divergentes na UI.
+    - **Decisão:** `DEFERRED / NÃO BLOQUEIA ROADMAP ATUAL`. Não implementar correção no momento.
+
+### Histórico Recente de Hotfixes e Merges no Main:
+- **PR #94 (`b1031c7`):** `fix(autonomous): prevent premature gate evaluation during ongoing video generation` — Exige evidência positiva (vídeo existe, > 0 bytes e não está PENDING/PROCESSING) antes de chamar `evaluate_completed_task_gates`; mantém `current_task_id` durante a geração.
+- **PR #93 (`4b19d5b`):** `fix(audio): disable amix input normalization and add peak limiter in _mix_audio_ffmpeg` — Desativa normalização indesejada do FFmpeg amix (`normalize=0`) e insere limiter de pico (`alimiter=limit=0.95`).
+- **PR #92 (`cc20f93`):** `fix(webui): support manual YouTube publish via Post For Me without legacy Upload-Post dependency` — Remove exigência espúria de credenciais legadas do Upload-Post no modal de publicação quando provider é `post_for_me`.
+- **PR #91 (`6dafd77`):** `fix(flow-provenance): fail-closed follow-up to PR #90 review` — Fail-closed em exceções de validação de clips e matching estrito de `expected_clip`.
+- **PR #90 (`5a1900b`):** `fix(flow-provenance): persist scene materials and enforce strict flow provenance validation` — Persiste materiais das cenas e valida proveniência de clipes Flow no Copyright Gate.
 
 ### PC Forte Production Runtime Contract:
 - **Python via .venv**: Operação e pacotes restritos ao ambiente virtual do projeto;

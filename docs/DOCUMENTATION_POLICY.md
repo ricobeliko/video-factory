@@ -22,21 +22,24 @@ docs/
 
 O agente Antigravity/Gemini deve manter os documentos atualizados ao concluir marcos relevantes.
 
-Atualizar documentação quando ocorrer:
-- nova fase
-- conclusão de fase
-- novo commit importante
-- deploy em produção
-- hotfix
-- descoberta de bug real
-- mudança de arquitetura
-- alteração de configuração operacional
-- alteração de Safety / Quality / Scheduler
-- alteração de fluxo de publicação
-- novo backup de referência
-- novo gate de homologação
-- novo risco conhecido
-- mudança de próximo passo
+> [!IMPORTANT]
+> **REGRA DE OURO — ATUALIZAÇÃO NA MESMA ENTREGA:**
+> `docs/PROJECT_HANDOFF.md` é a **porta de entrada única e memória viva** do projeto. Ele DEVE ser atualizado obrigatoriamente na **MESMA entrega** (no mesmo commit ou PR) sempre que ocorrer qualquer um dos eventos abaixo. **NUNCA deixar atualização do HANDOFF para "depois"**.
+
+Atualizar `PROJECT_HANDOFF.md` obrigatoriamente na mesma entrega quando ocorrer:
+- fase concluída ou iniciada;
+- hotfix implementado ou integrado;
+- merge importante no main;
+- deploy em produção realizado;
+- homologação real (sucesso ou falha);
+- bug real descoberto;
+- bug resolvido ou deliberadamente adiado (com registro de decisão);
+- mudança de configuração operacional relevante (Growth Mode, providers, etc.);
+- mudança de arquitetura ou persistência;
+- alteração de Safety / Quality / Scheduler / Copyright Gates;
+- alteração de fluxo de publicação;
+- novo backup de referência;
+- novo gate de homologação ou mudança de próximo passo.
 
 ---
 
@@ -133,25 +136,18 @@ Pode documentar:
 
 ## Como iniciar um novo chat
 
-No novo chat, usar:
+No novo chat, basta dizer:
 
 ```text
-Continue o projeto Video Factory a partir da documentação canônica do repositório.
-
-Leia primeiro:
-docs/PROJECT_HANDOFF.md
-docs/ROADMAP.md
-docs/PRODUCTION_RUNBOOK.md
-docs/DOCUMENTATION_POLICY.md
-
-Depois me diga:
-- estado atual
-- último commit
-- task/gate em andamento
-- próximo passo seguro
-
-Não altere produção até eu autorizar.
+Leia docs/PROJECT_HANDOFF.md do repositório video-factory e me apresente o relatório de alinhamento antes de continuarmos.
 ```
+
+O novo agente deverá ler `docs/PROJECT_HANDOFF.md` por completo e apresentar imediatamente o relatório contendo:
+- Fase atual e ambientes (DEV / PROD);
+- Último commit/deploy e última homologação real;
+- Gate atual e próximo passo exato;
+- Pendências conhecidas e itens adiados.
+- Divergências entre documento e Git, se houver.
 
 ---
 

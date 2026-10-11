@@ -10,15 +10,17 @@
 
 ---
 
-# Estado Atual Canônico — 08/10/2026
+# Estado Atual Canônico — 11/10/2026
 
-- **CURRENT_FOCUS** = `VIDEO_QUALITY_GOOGLE_FLOW`
-- **CURRENT_PHASE** = `V1.5_VISUAL_DIRECTOR`
-- **PROJECT_STATUS** = `ACTIVE_DEV / V1.4_CONCLUDED`
-- **ACTIVE_BRANCH** = `feat/v1-4c-flow-pipeline-integration`
-- **NEXT_GATE** = `V1.5_VISUAL_DIRECTOR`
+- **CURRENT_FOCUS** = `HOMOLOGAÇÃO_E2E_CICLO_AUTONOMO_FLOW`
+- **CURRENT_PHASE** = `V1.5E`
+- **PROJECT_STATUS** = `ACTIVE_DEV / HOMOLOGATION_PENDING`
+- **ACTIVE_BRANCH** = `main`
+- **CURRENT_MAIN_SHA** = `b1031c7067dede82c5272589a3e3f63792e6477b` (PR #94)
+- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM CICLO AUTÔNOMO E2E completo sem intervenção manual, desde criação/seleção da tarefa até publicação final, validando que não ocorre duplicação nem desperdício desnecessário)
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
+- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (Divergência aparente entre Growth Mode global e por perfil na UI — adiado, não bloqueia)`
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]

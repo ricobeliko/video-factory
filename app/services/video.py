@@ -1883,7 +1883,8 @@ def _mix_audio_ffmpeg(
         filter_str = (
             f"[0:a]volume={v_vol:.2f}[v];"
             f"[1:a]volume={b_vol:.2f},afade=t=out:st={fade_start:.2f}:d=3[b];"
-            f"[v][b]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+            f"[v][b]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+            f"alimiter=limit=0.95[aout]"
         )
         cmd = [ffmpeg_exe, "-y", "-i", os.path.abspath(voice_file)]
         if loop_bgm:

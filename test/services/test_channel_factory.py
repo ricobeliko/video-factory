@@ -996,6 +996,101 @@ class TestChannelFactory(unittest.TestCase):
             if orig_rate is not None:
                 config.ui["voice_rate"] = orig_rate
 
+    def test_get_canonical_global_voice_api_contract(self):
+        """13. Regressão Hotfix: get_canonical_global_voice existe, é callable e resolve canônico."""
+        from app.config import config
+
+        self.assertTrue(hasattr(autonomous_production, "get_canonical_global_voice"))
+        self.assertTrue(callable(autonomous_production.get_canonical_global_voice))
+
+        orig_voice = config.ui.get("voice_name")
+        orig_app = config.app.get("voice_name")
+        try:
+            # 1. Catalog suffix Azure/Edge strip gender
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural-Male"
+            self.assertEqual(
+                autonomous_production.get_canonical_global_voice(),
+                "en-US-BrianMultilingualNeural",
+            )
+
+            # 2. Já canônico permanece idêntico
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+            self.assertEqual(
+                autonomous_production.get_canonical_global_voice(),
+                "en-US-BrianMultilingualNeural",
+            )
+
+            # 3. Voz pt-BR com sufixo normaliza
+            config.ui["voice_name"] = "pt-BR-AntonioNeural-Male"
+            self.assertEqual(
+                autonomous_production.get_canonical_global_voice(),
+                "pt-BR-AntonioNeural",
+            )
+
+            # 4. Providers especiais não-Azure permanecem intactos
+            for special in ["gemini:Achernar-Soft", "minimax:Voice123", "custom:/path/audio.mp3"]:
+                config.ui["voice_name"] = special
+                self.assertEqual(autonomous_production.get_canonical_global_voice(), special)
+
+            # 5. Fallback seguro quando vazio ou None
+            config.ui["voice_name"] = ""
+            config.app["voice_name"] = ""
+            self.assertEqual(
+                autonomous_production.get_canonical_global_voice(),
+                "en-US-BrianMultilingualNeural",
+            )
+        finally:
+            if orig_voice is not None:
+                config.ui["voice_name"] = orig_voice
+            if orig_app is not None:
+                config.app["voice_name"] = orig_app
+
+    def test_channel_factory_onboarding_form_calls_canonical_global_voice(self):
+        """14. Regressão Hotfix: _render_onboarding_form executa get_canonical_global_voice sem erro."""
+        from webui.components import channel_factory
+
+        def _mock_cols(spec, *args, **kwargs):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [MagicMock() for _ in range(count)]
+
+        with patch.object(
+            autonomous_production,
+            "get_canonical_global_voice",
+            wraps=autonomous_production.get_canonical_global_voice,
+        ) as mock_get_voice:
+            with patch("streamlit.form"), patch("streamlit.markdown"), patch("streamlit.caption"), \
+                 patch("streamlit.columns", side_effect=_mock_cols), \
+                 patch("streamlit.text_input") as mock_txt, patch("streamlit.text_area"), \
+                 patch("streamlit.selectbox"), patch("streamlit.number_input"), \
+                 patch("streamlit.checkbox"), patch("streamlit.slider"), patch("streamlit.button"):
+                channel_factory._render_onboarding_form(is_primary=True, db_path=self.db_path)
+                mock_get_voice.assert_called_once()
+                calls = [str(c) for c in mock_txt.call_args_list if "Voz Global da Fábrica" in str(c)]
+                self.assertTrue(len(calls) > 0)
+                self.assertIn("en-US-BrianMultilingualNeural", calls[0])
+
+    def test_render_channel_factory_renders_without_attribute_error(self):
+        """15. Regressão Hotfix: render_channel_factory executa sem AttributeError ao acessar voz global."""
+        from webui.components import channel_factory
+
+        def _mock_cols(spec, *args, **kwargs):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [MagicMock() for _ in range(count)]
+
+        profile_manager.create_profile(name="Test Canal", niche="games", db_path=self.db_path)
+        with patch.object(
+            autonomous_production,
+            "get_canonical_global_voice",
+            wraps=autonomous_production.get_canonical_global_voice,
+        ) as mock_get_voice:
+            with patch("streamlit.container"), patch("streamlit.markdown"), patch("streamlit.caption"), \
+                 patch("streamlit.columns", side_effect=_mock_cols), \
+                 patch("streamlit.empty"), patch("streamlit.expander"), patch("streamlit.text_input"), \
+                 patch("streamlit.text_area"), patch("streamlit.selectbox"), patch("streamlit.number_input"), \
+                 patch("streamlit.checkbox"), patch("streamlit.slider"), patch("streamlit.button", return_value=False):
+                channel_factory.render_channel_factory(is_primary=True, db_path=self.db_path)
+                mock_get_voice.assert_called()
+
 
 if __name__ == "__main__":
     unittest.main()

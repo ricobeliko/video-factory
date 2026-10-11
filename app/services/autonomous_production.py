@@ -1490,6 +1490,28 @@ def evaluate_completed_task_gates(
 
 
 
+def get_canonical_global_voice() -> str:
+    """Retorna a voz global canônica da fábrica (com sufixos de gênero normalizados).
+
+    Lê a fonte global existente:
+    config.ui["voice_name"]
+    fallback config.app["voice_name"]
+    fallback "en-US-BrianMultilingualNeural"
+
+    Passa o resultado por voice.canonicalize_voice_name(...)
+    Retorna sempre a identidade canônica.
+    """
+    from app.config import config
+    from app.services import voice
+
+    raw = (
+        config.ui.get("voice_name")
+        or config.app.get("voice_name")
+        or "en-US-BrianMultilingualNeural"
+    )
+    return voice.canonicalize_voice_name(raw) or "en-US-BrianMultilingualNeural"
+
+
 def build_autonomous_video_params(
     topic: str,
     profile_id: Optional[str] = None,

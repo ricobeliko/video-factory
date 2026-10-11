@@ -919,6 +919,27 @@ class TestChannelFactory(unittest.TestCase):
             if orig is not None:
                 config.ui["voice_name"] = orig
 
+    def test_profile_context_resolves_canonical_voice_when_config_has_gender_suffix(self):
+        """9. Config.ui com sufixo de gênero é normalizado para forma canônica no profile context."""
+        from app.config import config
+
+        p = profile_manager.create_profile(name="Canal Teste", niche="games", db_path=self.db_path)
+        pid = p["id"]
+
+        orig = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural-Male"
+            ctx = profile_manager.get_generation_profile_context(pid, db_path=self.db_path)
+            self.assertEqual(ctx["voice_name"], "en-US-BrianMultilingualNeural")
+
+            config.ui["voice_name"] = "pt-BR-AntonioNeural-Male"
+            ctx2 = profile_manager.get_generation_profile_context(pid, db_path=self.db_path)
+            self.assertEqual(ctx2["voice_name"], "pt-BR-AntonioNeural")
+        finally:
+            if orig is not None:
+                config.ui["voice_name"] = orig
+
+
 
 if __name__ == "__main__":
     unittest.main()

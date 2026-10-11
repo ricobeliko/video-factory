@@ -6987,6 +6987,22 @@ def _render_audio_settings(panel, params):
                     saved_voice_name,
                 )
 
+            # Azure TTS: Se o nome salvo for canônico (ex: en-US-BrianMultilingualNeural),
+            # mapeia para a representação do catálogo da UI (ex: en-US-BrianMultilingualNeural-Male)
+            if (
+                selected_tts_server in ("azure-tts-v1", "azure-tts-v2")
+                and saved_voice_name not in friendly_names
+            ):
+                canonical_saved = voice.parse_voice_name(saved_voice_name)
+                saved_voice_name = next(
+                    (
+                        candidate
+                        for candidate in filtered_voices
+                        if voice.parse_voice_name(candidate) == canonical_saved
+                    ),
+                    saved_voice_name,
+                )
+
             saved_voice_name_index = 0
 
             # 检查保存的声音是否在当前筛选的声音列表中
@@ -7036,7 +7052,10 @@ def _render_audio_settings(panel, params):
                 if not voice.is_no_voice(voice_name):
                     # 占位 sentinel 仅用于非自动模式的禁用展示，不覆盖用户上一次
                     # 真正选择的音色，切回自动配音后可以恢复原设置。
-                    _set_runtime_config("ui", "voice_name", voice_name)
+                    canonical_voice_to_save = voice.canonicalize_voice_name(
+                        voice_name, selected_tts_server
+                    )
+                    _set_runtime_config("ui", "voice_name", canonical_voice_to_save)
             elif tts_mode_enabled:
                 # 如果没有声音可选，显示提示信息
                 st.warning(

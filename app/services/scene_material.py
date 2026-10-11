@@ -581,8 +581,13 @@ def persist_scene_resolution(
     selections: List[SceneMaterialSelection],
     material_sources: List[dict[str, Any]],
     visual_summary: Optional[dict[str, Any]] = None,
+    raise_on_error: bool = False,
 ) -> None:
-    """Persiste dados de materiais de cenas, proveniência e resumo visual no script_data."""
+    """Persiste dados de materiais de cenas, proveniência e resumo visual no script_data.
+
+    Com ``raise_on_error=True`` qualquer falha (inclusive ``patch_script_data``
+    retornando ``False``) é propagada para o chamador (fail-closed).
+    """
     try:
         serialized_materials = [
             {
@@ -627,11 +632,17 @@ def persist_scene_resolution(
         if visual_summary:
             patch_kwargs["visual_summary"] = visual_summary
 
-        task_artifacts.patch_script_data(
+        persisted = task_artifacts.patch_script_data(
             task_id,
             **patch_kwargs,
         )
+        if raise_on_error and persisted is not True:
+            raise RuntimeError(
+                f"patch_script_data não persistiu scene_materials/material_sources (task_id={task_id})"
+            )
     except Exception as exc:
+        if raise_on_error:
+            raise
         logger.warning(
             f"failed to persist scene material resolution in script_data: {exc}"
         )

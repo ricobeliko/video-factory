@@ -114,16 +114,15 @@ def validate_flow_clip_provenance(
     except OSError as e:
         return False, f"Falha ao verificar tamanho do arquivo Flow: {e}"
 
-    # Validação do arquivo de clipe
+    # Validação do arquivo de clipe (fail-closed: qualquer exceção reprova)
     try:
         from scripts.flow_workflow import validate_clip_file
         clip_val = validate_clip_file(local_file_abs)
-        if not clip_val.get("valid", False):
-            return False, f"Arquivo Flow inválido ou corrompido: {local_file}"
     except Exception as exc:
         logger.warning(f"[COPYRIGHT_GATE] Falha ao executar validate_clip_file em {local_file_abs}: {exc}")
-        if not os.path.isfile(local_file_abs) or os.path.getsize(local_file_abs) == 0:
-            return False, f"Arquivo Flow inválido: {exc}"
+        return False, f"Falha ao validar arquivo Flow (fail-closed): {exc}"
+    if not isinstance(clip_val, dict) or not clip_val.get("valid", False):
+        return False, f"Arquivo Flow inválido ou corrompido: {local_file}"
 
     # 4. Manifesto flow/manifest.json existente e legível
     manifest_path = os.path.join(task_dir_abs, "flow", "manifest.json")
@@ -145,24 +144,24 @@ def validate_flow_clip_provenance(
     if flow_status == "FLOW_GENERATION_NEEDS_RECOVERY" or manifest.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY":
         return False, "Flow possui recovery pendente"
 
-    # 6. Cena correspondente no manifesto
+    # 6. Cena correspondente no manifesto (match EXATO por expected_clip; sem fallback)
     clip_filename = os.path.basename(local_file_abs)
-    manifest_scenes = manifest.get("scenes", [])
+    manifest_scenes = manifest.get("scenes", []) or []
     matching_scene = None
     for sc in manifest_scenes:
-        if sc.get("expected_clip") == clip_filename:
+        if isinstance(sc, dict) and sc.get("expected_clip") == clip_filename:
             matching_scene = sc
             break
 
-    if not matching_scene and clip.get("scene_index") is not None:
-        c_sidx = clip.get("scene_index")
-        for sc in manifest_scenes:
-            if sc.get("scene_index") == c_sidx:
-                matching_scene = sc
-                break
-
     if not matching_scene:
-        return False, f"Clipe Flow '{clip_filename}' não corresponde a nenhuma cena no manifesto"
+        return False, f"Clipe Flow '{clip_filename}' não corresponde exatamente a nenhum expected_clip do manifesto"
+
+    c_sidx = clip.get("scene_index")
+    if c_sidx is not None and str(c_sidx) != str(matching_scene.get("scene_index")):
+        return False, (
+            f"scene_index do clipe ({c_sidx}) diverge do manifesto "
+            f"({matching_scene.get('scene_index')}) para '{clip_filename}'"
+        )
 
     # 7. is_flow_premium == True
     if not matching_scene.get("is_flow_premium", False):

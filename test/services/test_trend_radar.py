@@ -499,6 +499,16 @@ class TestTrendRadar(unittest.TestCase):
         self.assertEqual(ranked[0]["title"], sig_curiosity.title)
         self.assertGreater(ranked[0]["opportunity_score"], ranked[1]["opportunity_score"])
 
+    def test_status_constants_exported(self):
+        """Verifica se todos os status esperados pelo WebUI e serviços estão expostos no módulo."""
+        self.assertEqual(trend_radar.STATUS_NEW, "NEW")
+        self.assertEqual(trend_radar.STATUS_REVIEW, "REVIEW")
+        self.assertEqual(trend_radar.STATUS_APPROVED, "APPROVED")
+        self.assertEqual(trend_radar.STATUS_REJECTED, "REJECTED")
+        self.assertEqual(trend_radar.STATUS_USED, "USED")
+        self.assertIn("REJECTED", trend_radar.VALID_STATUSES)
+
 
 if __name__ == "__main__":
     unittest.main()
+

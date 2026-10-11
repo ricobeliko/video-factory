@@ -2108,6 +2108,35 @@ class TestElevenLabsVoice(unittest.TestCase):
             called_text = mock_single.call_args[1].get("text") or mock_single.call_args[0][0]
             self.assertEqual(called_text, original_text)
 
+    def test_canonicalize_voice_name_azure_strips_gender_suffix(self):
+        """canonicalize_voice_name deve normalizar vozes Azure/Edge removendo sufixos de gênero."""
+        self.assertEqual(
+            vs.canonicalize_voice_name("en-US-BrianMultilingualNeural-Male"),
+            "en-US-BrianMultilingualNeural",
+        )
+        self.assertEqual(
+            vs.canonicalize_voice_name("pt-BR-AntonioNeural-Male"),
+            "pt-BR-AntonioNeural",
+        )
+        self.assertEqual(
+            vs.canonicalize_voice_name("pt-BR-FranciscaNeural-Female"),
+            "pt-BR-FranciscaNeural",
+        )
+        self.assertEqual(
+            vs.canonicalize_voice_name("en-US-BrianMultilingualNeural"),
+            "en-US-BrianMultilingualNeural",
+        )
+
+    def test_canonicalize_voice_name_preserves_special_prefixes_and_empty(self):
+        """canonicalize_voice_name preserva provedores especiais (gemini, minimax, custom, none) e vazios."""
+        self.assertEqual(vs.canonicalize_voice_name("gemini:Achernar-Soft"), "gemini:Achernar-Soft")
+        self.assertEqual(vs.canonicalize_voice_name("minimax:Voice123"), "minimax:Voice123")
+        self.assertEqual(vs.canonicalize_voice_name("custom:/path/audio.mp3"), "custom:/path/audio.mp3")
+        self.assertEqual(vs.canonicalize_voice_name("no_voice"), "no_voice")
+        self.assertEqual(vs.canonicalize_voice_name(""), "")
+        self.assertEqual(vs.canonicalize_voice_name(None), "")
+
+
 
 if __name__ == "__main__":
     # python -m unittest test.services.test_voice.TestVoiceService.test_azure_tts_v1

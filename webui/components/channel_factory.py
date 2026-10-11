@@ -97,7 +97,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
         # 3. Produção & Visual
         st.markdown("##### 3. Produção & Visual")
-        global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
+        global_voice = autonomous_production.get_canonical_global_voice()
         c_voice, c_stock = st.columns(2)
         with c_voice:
             st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key="cf_new_ch_voice", disabled=True)
@@ -433,7 +433,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
 
                 m_brief = st.text_area("Tema / Linha Editorial", value=settings.editorial.topic_brief or "", key=f"m_brief_{p_id}", disabled=not is_primary)
 
-                global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
+                global_voice = autonomous_production.get_canonical_global_voice()
                 c_m_v, c_m_stk = st.columns(2)
                 with c_m_v:
                     st.text_input("Voz Global da Fábrica", value=f"Global: {global_voice}", key=f"m_voice_{p_id}", disabled=True)

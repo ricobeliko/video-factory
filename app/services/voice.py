@@ -371,6 +371,42 @@ def parse_voice_name(name: str):
     return name
 
 
+def is_azure_catalog_voice(voice_name: str | None) -> bool:
+    """Verifica se o voice_name corresponde comprovadamente a uma entrada de catálogo Azure com sufixo de gênero."""
+    if not voice_name or not isinstance(voice_name, str):
+        return False
+    # Providers não-Azure usam namespace com dois pontos
+    if voice_name.startswith((
+        "gemini:",
+        "elevenlabs:",
+        "fish_audio:",
+        "kokoro:",
+        "mimo:",
+        "minimax:",
+        "siliconflow:",
+        "chatterbox:",
+        "voxcpm:",
+    )):
+        return False
+    if not (voice_name.endswith("-Male") or voice_name.endswith("-Female")):
+        return False
+    return voice_name in get_all_azure_voices()
+
+
+def canonicalize_voice_name(voice_name: str | None, tts_server: str | None = None) -> str:
+    """Retorna a identidade canônica da voz para persistência e contratos.
+
+    Para Azure/Edge, se a voz contiver sufixo de catálogo (-Male/-Female),
+    normaliza para o nome canônico via parse_voice_name().
+    Para outros providers (Gemini, ElevenLabs, Kokoro, etc.), preserva o valor intacto.
+    """
+    if not voice_name or not isinstance(voice_name, str):
+        return ""
+    if (tts_server in ("azure-tts-v1", "azure-tts-v2")) or is_azure_catalog_voice(voice_name):
+        return parse_voice_name(voice_name)
+    return voice_name
+
+
 def is_azure_v2_voice(voice_name: str):
     voice_name = parse_voice_name(voice_name)
     if voice_name.endswith("-V2"):

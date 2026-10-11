@@ -939,6 +939,62 @@ class TestChannelFactory(unittest.TestCase):
             if orig is not None:
                 config.ui["voice_name"] = orig
 
+    def test_all_three_profiles_resolve_homologated_voice_rate_0_8(self):
+        """10. Regressão Hotfix: os 3 perfis resolvem voice_rate=0.8 sem normalização indevida."""
+        from app.config import config
+
+        p1 = profile_manager.create_profile(name="GTA Daily DEV", niche="games", db_path=self.db_path)
+        p2 = profile_manager.create_profile(name="Tech Daily DEV", niche="tech", db_path=self.db_path)
+        p3 = profile_manager.create_profile(name="Curiosidades DEV", niche="curiosidades", db_path=self.db_path)
+
+        orig_rate = config.ui.get("voice_rate")
+        orig_voice = config.ui.get("voice_name")
+        try:
+            config.ui["voice_rate"] = 0.8
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+
+            for p in (p1, p2, p3):
+                # 1. Contexto do perfil resolve 0.8
+                ctx = profile_manager.get_generation_profile_context(p["id"], db_path=self.db_path)
+                self.assertEqual(ctx["voice_rate"], 0.8)
+
+                # 2. build_autonomous_video_params preserva 0.8
+                params = autonomous_production.build_autonomous_video_params(
+                    "Tema Teste", profile_id=p["id"], db_path=self.db_path
+                )
+                self.assertEqual(params.voice_rate, 0.8)
+        finally:
+            if orig_rate is not None:
+                config.ui["voice_rate"] = orig_rate
+            if orig_voice is not None:
+                config.ui["voice_name"] = orig_voice
+
+    def test_profile_specific_voice_rate_0_8_preserved(self):
+        """11. Regressão Hotfix: profile settings com voice_rate=0.8 preservado em build_autonomous_video_params."""
+        p = profile_manager.create_profile(name="Canal Custom", niche="games", db_path=self.db_path)
+        pid = p["id"]
+
+        settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        settings.voice.voice_rate = 0.8
+        profile_manager.update_profile_settings(pid, settings, db_path=self.db_path)
+
+        params = autonomous_production.build_autonomous_video_params(
+            "Tema Teste", profile_id=pid, db_path=self.db_path
+        )
+        self.assertEqual(params.voice_rate, 0.8)
+
+    def test_voice_rate_fail_closed_for_corrupted_or_out_of_range_values(self):
+        """12. Regressão Hotfix: valores absurdos/corrompidos (< 0.80 ou > 1.30) normalizam para 1.0 fail-closed."""
+        from app.config import config
+        orig_rate = config.ui.get("voice_rate")
+        try:
+            for bad_rate in [0.79, 0.5, 0.0, -1.0, 1.31, 2.0, "invalid"]:
+                config.ui["voice_rate"] = bad_rate
+                params = autonomous_production.build_autonomous_video_params("Tema Teste", db_path=self.db_path)
+                self.assertEqual(params.voice_rate, 1.0)
+        finally:
+            if orig_rate is not None:
+                config.ui["voice_rate"] = orig_rate
 
 
 if __name__ == "__main__":

@@ -1131,10 +1131,16 @@ def get_generation_profile_context(
     voice_name = voice.canonicalize_voice_name(global_voice) or "en-US-BrianMultilingualNeural"
 
     global_rate = config.ui.get("voice_rate") or config.app.get("voice_rate") or 1.0
-    voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else float(global_rate)
+    try:
+        voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else float(global_rate)
+    except (ValueError, TypeError):
+        voice_rate = 1.0
 
     global_volume = config.ui.get("voice_volume") or config.app.get("voice_volume") or 1.0
-    voice_volume = settings.voice.voice_volume if settings.voice.voice_volume is not None else float(global_volume)
+    try:
+        voice_volume = settings.voice.voice_volume if settings.voice.voice_volume is not None else float(global_volume)
+    except (ValueError, TypeError):
+        voice_volume = 1.0
 
     # 2. Visual / Flow (canais legados com settings_json vazio NÃO habilitam Flow nem Visual Director implicitamente)
     flow_enabled = bool(settings.visual.flow_enabled) if settings.visual.flow_enabled is not None else False

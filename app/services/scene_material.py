@@ -566,7 +566,7 @@ def resolve_scene_materials(
     from app.services import hybrid_visual
 
     visual_summary = hybrid_visual.compute_video_visual_summary(selections)
-    _persist_scene_resolution(
+    persist_scene_resolution(
         task_id=task_id,
         selections=selections,
         material_sources=material_sources_records,
@@ -576,7 +576,7 @@ def resolve_scene_materials(
     return selections
 
 
-def _persist_scene_resolution(
+def persist_scene_resolution(
     task_id: str,
     selections: List[SceneMaterialSelection],
     material_sources: List[dict[str, Any]],
@@ -635,3 +635,6 @@ def _persist_scene_resolution(
         logger.warning(
             f"failed to persist scene material resolution in script_data: {exc}"
         )
+
+
+_persist_scene_resolution = persist_scene_resolution

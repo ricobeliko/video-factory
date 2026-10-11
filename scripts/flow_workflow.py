@@ -19,7 +19,7 @@ import json
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
@@ -28,7 +28,6 @@ if ROOT_DIR not in sys.path:
 from loguru import logger  # noqa: E402
 from app.services.task_artifacts import atomic_write_json  # noqa: E402
 from scripts.flow_playwright import (  # noqa: E402
-    FlowSceneResult,
     generate_flow_scene,
     validate_clip_file,
 )
@@ -42,7 +41,6 @@ from app.services.visual_director import (  # noqa: E402
 from app.config import config  # noqa: E402
 from app.models import const  # noqa: E402
 from app.models.schema import (  # noqa: E402
-    SceneClipInstruction,
     SceneMaterialSelection,
     ScenePlan,
     ScenePlanItem,
@@ -51,7 +49,7 @@ from app.models.schema import (  # noqa: E402
     VideoFitMode,
     VideoParams,
 )
-from app.services import scene_assembly, scene_planner, task, video, voice  # noqa: E402
+from app.services import scene_assembly, scene_planner, task, video  # noqa: E402
 from app.services import state as sm  # noqa: E402
 from app.utils import utils  # noqa: E402
 
@@ -296,7 +294,7 @@ def prepare_project(
                 f"### Cena {s_idx:02d} — [FLOW PREMIUM] (Estimativa: ~{scene.duration_hint:.1f}s)",
                 f"- **Arquivo Esperado:** `{clip_filename}`",
                 f"- **Narração (pt-BR):** \"{scene.narration}\"",
-                f"- **Prompt para o Flow (copiar e colar):**",
+                "- **Prompt para o Flow (copiar e colar):**",
                 "```text",
                 prompt_en,
                 "```",
@@ -788,6 +786,9 @@ def resolve_project_materials(
         expected_clip = sc["expected_clip"]
         is_flow = sc.get("is_flow_premium", True)
         flow_clip_path = os.path.join(clips_dir, expected_clip)
+        source_url = None
+        search_term_used = ""
+        asset_id = None
 
         if is_flow:
             flow_exists = os.path.exists(flow_clip_path)
@@ -837,6 +838,7 @@ def resolve_project_materials(
                     mat_path = filler
                     provider = "stock_fallback"
                     source_type = "stock_fallback"
+                    asset_id = os.path.basename(mat_path)
                 else:
                     from app.services import material, scene_material
 
@@ -875,18 +877,27 @@ def resolve_project_materials(
                     if not resolved_selections or not resolved_selections[0].material_path:
                         raise RuntimeError(f"Falha ao resolver material stock fallback para a cena {s_idx}")
                     mat_path = resolved_selections[0].material_path
-                    provider = "stock_fallback"
+                    provider = resolved_selections[0].provider
                     source_type = "stock_fallback"
+                    source_url = getattr(resolved_selections[0], "source_url", None)
+                    search_term_used = getattr(resolved_selections[0], "search_term_used", "") or ""
+                    asset_id = resolved_selections[0].asset_id or os.path.basename(mat_path)
             else:
                 mat_path = flow_clip_path
                 provider = "google_flow"
                 source_type = "flow"
+                asset_id = os.path.basename(mat_path)
+                source_url = None
+                search_term_used = ""
         else:
             # Cenas STOCK FILLER:
             if os.path.exists(flow_clip_path) and validate_clip_file(flow_clip_path).get("valid", False):
                 mat_path = flow_clip_path
                 provider = "local_clip"
                 source_type = "stock"
+                asset_id = os.path.basename(mat_path)
+                source_url = None
+                search_term_used = ""
             else:
                 if stock_filler_pool is None:
                     stock_filler_pool = _list_valid_stock_filler_clips(max_valid_clips=max_scene_idx)
@@ -895,6 +906,9 @@ def resolve_project_materials(
                     mat_path = filler
                     provider = "local_cache"
                     source_type = "stock"
+                    asset_id = os.path.basename(mat_path)
+                    source_url = None
+                    search_term_used = ""
                 else:
                     from app.services import material, scene_material
 
@@ -936,6 +950,9 @@ def resolve_project_materials(
                     mat_path = resolved_selections[0].material_path
                     provider = resolved_selections[0].provider
                     source_type = "stock"
+                    source_url = getattr(resolved_selections[0], "source_url", None)
+                    search_term_used = getattr(resolved_selections[0], "search_term_used", "") or ""
+                    asset_id = resolved_selections[0].asset_id or os.path.basename(mat_path)
 
         material_selections.append(
             SceneMaterialSelection(
@@ -943,7 +960,9 @@ def resolve_project_materials(
                 material_path=mat_path,
                 duration=float(sc.get("duration_hint", 8.0)),
                 provider=provider,
-                asset_id=os.path.basename(mat_path),
+                asset_id=asset_id,
+                source_url=source_url,
+                search_term_used=search_term_used,
                 media_type="video",
                 visual_source_type=source_type,
             )
@@ -975,7 +994,6 @@ def render_project(
 
     project_name = manifest.get("project_name", "flow_project")
     effective_task_id = task_id or f"task_{project_name}"
-    clips_dir = os.path.join(project_dir, "clips")
     out_dir = output_dir or os.path.join(project_dir, "final")
     os.makedirs(out_dir, exist_ok=True)
 

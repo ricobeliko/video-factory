@@ -1429,14 +1429,16 @@ class TestAutonomousProductionLoop(unittest.TestCase):
             # Zero geração adicional no mesmo ciclo
             mock_sub.assert_not_called()
 
-    # T6: current_task interrompida (PROCESSING, sem vídeo) => recovery_error, zero geração
+    # T6: current_task interrompida (FAILED com interrupted_by_restart pós-reboot) => recovery_error, zero geração
     def test_v12e21_t6_interrupted_task_recovery_error_no_new_generation(self):
-        """Tarefa em PROCESSING sem vídeo final => recovery_error, zero submit_generation no mesmo ciclo."""
+        """Tarefa reconciliada pós-reboot sem vídeo final => recovery_error, zero submit_generation no mesmo ciclo."""
         task_id = "v12e21-t6-interrupted"
-        # Não cria vídeo de propósito para simular crash
+        # Simula crash reconciliado pós-restart
         sm.state.update_task(
             task_id,
-            state=const.TASK_STATE_PROCESSING,
+            state=const.TASK_STATE_FAILED,
+            failed_stage="interrupted_by_restart",
+            error="Execução interrompida pela reinicialização do sistema",
             progress=50,
             video_subject="Tarefa Interrompida",
             profile_id=profile_manager.DEFAULT_PROFILE_ID,

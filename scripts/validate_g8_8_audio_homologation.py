@@ -46,6 +46,17 @@ from app.utils import utils  # noqa: E402
 from scripts import flow_workflow  # noqa: E402
 
 
+def _normalize_scene_plan(raw_scene_plan: Any) -> ScenePlan:
+    if isinstance(raw_scene_plan, list):
+        return ScenePlan(
+            scenes=raw_scene_plan,
+            total_scenes=len(raw_scene_plan),
+        )
+    elif isinstance(raw_scene_plan, dict):
+        return ScenePlan.model_validate(raw_scene_plan)
+    raise ValueError(f"Formato de ScenePlan inválido: {type(raw_scene_plan)}")
+
+
 def run_g8_8_homologation(
     source_task_id: str = "8909befc-7ec5-47bd-829d-b3412041beb2",
     profile_id: str = "profile-2095da4fbe23",
@@ -83,7 +94,7 @@ def run_g8_8_homologation(
     if not raw_scene_plan:
         raise ValueError("scene_plan ausente no script.json da task original.")
 
-    scene_plan = ScenePlan.model_validate(raw_scene_plan)
+    scene_plan = _normalize_scene_plan(raw_scene_plan)
     if not scene_plan.scenes:
         raise ValueError("scene_plan validado contém 0 cenas.")
 

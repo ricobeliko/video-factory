@@ -13,8 +13,12 @@ from unittest.mock import MagicMock, patch
 
 from app.models.schema import (
     SceneClipInstruction,
+    ScenePlan,
 )
-from scripts.validate_g8_8_audio_homologation import run_g8_8_homologation
+from scripts.validate_g8_8_audio_homologation import (
+    _normalize_scene_plan,
+    run_g8_8_homologation,
+)
 
 
 class TestG88AudioHomologation(unittest.TestCase):
@@ -368,6 +372,148 @@ class TestG88AudioHomologation(unittest.TestCase):
         self.assertEqual(res2["auto_publish"], "OFF")
         self.assertEqual(res2["factory"], "RUNNING")
         self.assertEqual(res2["gen_worker"], "NOT_MEASURED_STANDALONE")
+
+    def test_normalize_scene_plan_formats(self):
+        """Valida que _normalize_scene_plan aceita formato dict moderno e formato list histórico."""
+        # Dict moderno
+        sp_dict = _normalize_scene_plan(self.scene_plan_data)
+        self.assertIsInstance(sp_dict, ScenePlan)
+        self.assertEqual(sp_dict.total_scenes, 2)
+        self.assertEqual(len(sp_dict.scenes), 2)
+
+        # List histórico
+        raw_list = [
+            {"scene_index": 1, "narration": "A"},
+            {"scene_index": 2, "narration": "B"},
+        ]
+        sp_list = _normalize_scene_plan(raw_list)
+        self.assertIsInstance(sp_list, ScenePlan)
+        self.assertEqual(sp_list.total_scenes, 2)
+        self.assertEqual(len(sp_list.scenes), 2)
+
+        # Formato inválido levanta ValueError fail-closed
+        with self.assertRaises(ValueError):
+            _normalize_scene_plan("string_invalida")
+
+    @patch("scripts.flow_workflow.generate_pending_flow_scenes")
+    @patch("scripts.flow_workflow.validate_clip_file")
+    @patch("app.services.task.generate_audio")
+    @patch("app.services.task.generate_subtitle")
+    @patch("app.services.subtitle.validate_subtitle_file")
+    @patch("app.services.scene_assembly.assemble_scene_clips")
+    @patch("app.services.scene_assembly.get_ordered_video_paths")
+    @patch("app.services.task.generate_final_videos")
+    @patch("app.utils.utils.task_dir")
+    def test_historical_scene_plan_list_is_supported(
+        self,
+        mock_task_dir,
+        mock_generate_final_videos,
+        mock_get_ordered_video_paths,
+        mock_assemble_scene_clips,
+        mock_validate_sub,
+        mock_generate_subtitle,
+        mock_generate_audio,
+        mock_validate_clip,
+        mock_generate_pending_flow_scenes,
+    ):
+        """Valida suporte a scene_plan no formato histórico de lista [ {...}, {...} ]."""
+        val_task_id = "g8-audio-validation-test-historical"
+        val_dir = os.path.join(self.test_dir, "storage", "tasks", val_task_id)
+        os.makedirs(val_dir, exist_ok=True)
+        mock_task_dir.return_value = val_dir
+
+        mock_validate_clip.return_value = {"valid": True}
+
+        # Mock áudio gerado
+        mock_audio_path = os.path.join(val_dir, "audio.mp3")
+        with open(mock_audio_path, "wb") as f:
+            f.write(b"MOCK_AUDIO" * 50)
+        mock_generate_audio.return_value = (mock_audio_path, 10.0, MagicMock())
+
+        # Mock legenda gerada
+        mock_sub_path = os.path.join(val_dir, "subtitle.srt")
+        with open(mock_sub_path, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:00,000 --> 00:00:05,000\nTeste legenda histórica\n")
+        mock_generate_subtitle.return_value = mock_sub_path
+        mock_validate_sub.return_value = {"valid": True}
+
+        # Mock instruções e paths de vídeo
+        clip1_path = os.path.join(self.clips_dir, "flow_scene_01.mp4")
+        clip2_path = os.path.join(self.clips_dir, "flow_scene_02.mp4")
+        mock_instructions = [
+            SceneClipInstruction(
+                scene_index=1,
+                material_path=clip1_path,
+                start_time_seconds=0.0,
+                duration_seconds=5.0,
+            ),
+            SceneClipInstruction(
+                scene_index=2,
+                material_path=clip2_path,
+                start_time_seconds=0.0,
+                duration_seconds=5.0,
+            ),
+        ]
+        mock_assemble_scene_clips.return_value = mock_instructions
+        mock_get_ordered_video_paths.return_value = [clip1_path, clip2_path]
+
+        # Mock render final
+        mock_final_path = os.path.join(val_dir, "final-1.mp4")
+        with open(mock_final_path, "wb") as f:
+            f.write(b"MOCK_FINAL_VIDEO_BYTES" * 1024 * 50)
+        mock_generate_final_videos.return_value = ([mock_final_path], [], [])
+
+        # Substituir scene_plan no script.json pelo formato histórico de lista
+        historical_scene_plan = [
+            {
+                "scene_index": 1,
+                "narration": "Cena 1 narração inicial histórica",
+                "duration_hint": 5.0,
+                "search_terms": ["gta", "vice city"],
+            },
+            {
+                "scene_index": 2,
+                "narration": "Cena 2 narração final histórica",
+                "duration_hint": 5.0,
+                "search_terms": ["gta", "rockstar"],
+            },
+        ]
+        historical_script_data = dict(self.original_script_data)
+        historical_script_data["scene_plan"] = historical_scene_plan
+        with open(os.path.join(self.source_task_dir, "script.json"), "w", encoding="utf-8") as f:
+            json.dump(historical_script_data, f)
+
+        res = run_g8_8_homologation(
+            source_task_id=self.source_task_id,
+            validation_task_id=val_task_id,
+            base_dir=self.test_dir,
+        )
+
+        # 1. Prova que generate_pending_flow_scenes NÃO foi chamado
+        mock_generate_pending_flow_scenes.assert_not_called()
+
+        # 2. Prova que ScenePlan foi normalizado corretamente
+        called_scene_plan = mock_assemble_scene_clips.call_args.kwargs["scene_plan"]
+        self.assertIsInstance(called_scene_plan, ScenePlan)
+        self.assertEqual(called_scene_plan.total_scenes, 2)
+        self.assertEqual(len(called_scene_plan.scenes), 2)
+        self.assertEqual(called_scene_plan.scenes[0].scene_index, 1)
+        self.assertEqual(called_scene_plan.scenes[1].scene_index, 2)
+
+        # 3. Prova que pipeline controlado continuou com sucesso
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["scenes"], 2)
+        self.assertEqual(res["flow_calls"], 0)
+        self.assertEqual(res["paid_visual_api_calls"], 0)
+        self.assertEqual(res["final_video_exists"], "YES")
+
+        # 4. Prova que metadados persistidos no novo script.json contêm o ScenePlan normalizado
+        val_script_file = os.path.join(val_dir, "script.json")
+        self.assertTrue(os.path.isfile(val_script_file))
+        with open(val_script_file, "r", encoding="utf-8") as f:
+            saved_val_data = json.load(f)
+        self.assertEqual(saved_val_data["scene_plan"]["total_scenes"], 2)
+        self.assertEqual(len(saved_val_data["scene_plan"]["scenes"]), 2)
 
 
 if __name__ == "__main__":

@@ -15,8 +15,10 @@
 ## START HERE — ESTADO ATUAL
 
 - **LAST_UPDATED:** `11/10/2026`
-- **CURRENT_PHASE:** `V1.5E` (Autonomous Flow Production & Publication Loop)
-- **CURRENT_FOCUS:** `HOMOLOGAÇÃO_E2E_CICLO_AUTONOMO_FLOW`
+- **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop)
+- **CURRENT_FOCUS:** `HOMOLOGAÇÃO_E2E_PILOTO_AUTONOMO_INTERNET`
+- **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
+- **FLOW_TRACK:** `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro).
 - **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
@@ -49,15 +51,36 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual durante o fluxo: seleção/criação de tema -> criação da task -> roteiro -> narração -> geração visual / Flow -> render final -> Safety Gate -> Quality Gate -> Copyright Provenance Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> `publication_events status=success` -> `scheduled_posts status=published`).
-- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar a homologação do ciclo autônomo E2E para UMA tarefa real de ponta a ponta sob os seguintes critérios canônicos:
-  - Zero duplicação;
-  - Zero regeneração desnecessária;
-  - Zero override manual de gate;
-  - TikTok OFF;
-  - Somente uma task para homologação;
-  - Preservar Growth Mode em `WARMUP` no canal homologado (usar canal padrão em `WARMUP`, ex: *Dose Diária de Histórias e Mistério*; NÃO usar GTA VI enquanto durar a exceção temporária);
-  - Nenhuma intervenção humana entre o início do ciclo e a publicação final.
+- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual durante o fluxo para o canal **Dose Diária De Internet**: seleção/criação de tema -> criação da task -> roteiro -> narração -> pipeline visual atualmente disponível -> render final -> Safety Gate -> Quality Gate -> Copyright Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> `publication_events status=success` -> `scheduled_posts status=published`).
+- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar **PRE-FLIGHT READ-ONLY** específico do canal **Dose Diária De Internet** antes de autorizar qualquer geração.
+  - **Objetivo do Pre-Flight (ZERO MUTAÇÕES / ZERO GERAÇÃO / ZERO PUBLICAÇÃO):**
+    - Identificar `profile_id`;
+    - Identificar YouTube `channel_id`;
+    - Confirmar canal ativo;
+    - Confirmar `external_account_id` / publisher binding;
+    - Confirmar Growth Mode efetivo (`WARMUP`);
+    - Confirmar Autonomous state;
+    - Confirmar Scheduler ON;
+    - Confirmar Auto Publish ON;
+    - Confirmar YouTube ON;
+    - Confirmar TikTok OFF;
+    - Verificar Ready Stock atual;
+    - Verificar tasks ativas/pending do perfil;
+    - Verificar `scheduled_posts` pendentes;
+    - Verificar publicações recentes;
+    - Verificar se existe alguma condição que possa causar duplicação.
+  - **Critérios para Homologação E2E (após pre-flight PASS):**
+    - Colocar PRIMEIRO o canal *Dose Diária De Internet* operando autonomamente de ponta a ponta;
+    - Zero duplicação;
+    - Zero regeneração desnecessária;
+    - Zero override manual de gate;
+    - TikTok OFF;
+    - Somente UMA task para homologação;
+    - Nenhuma intervenção humana entre o início do ciclo e a publicação final.
+  - **Demais Canais:**
+    - *Dose Diária de Histórias e Mistério*: Preservar configuração atual (não é o canal piloto desta homologação).
+    - *Dose Diária de GTA VI*: Continua excluído do piloto enquanto durar a `TEMPORARY_PRODUCTION_EXCEPTION` (`growth_mode = SCALE` até 11/10/2026 às 22:11; retornar a `WARMUP` pós-publicação).
+  - **Transição Pós-E2E PASS:** Após o primeiro ciclo E2E PASS, manter *Dose Diária De Internet* como primeiro canal autônomo real, observar 1–2 transições/ciclos adicionais e somente depois iniciar `WEB_UI_V2_AND_CODE_CONSOLIDATION`.
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: Existe seletor global de Growth Mode no Streamlit que pode mudar o estado visual exibido, mas não altera efetivamente o Growth Mode operacional dos perfis. A fonte operacional canônica real é o Growth Mode configurado por perfil/canal (`profile growth_mode`). Exemplo confirmado em produção: *Dose Diária de GTA VI* com perfil em `SCALE` é considerado como `SCALE` pelo Scheduler e Autonomous loop. Portanto: `GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA`.

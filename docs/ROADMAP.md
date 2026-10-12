@@ -12,11 +12,13 @@
 
 # Estado Atual Canônico — 11/10/2026
 
-- **CURRENT_FOCUS** = `HOMOLOGAÇÃO_E2E_CICLO_AUTONOMO_FLOW`
+- **CURRENT_FOCUS** = `HOMOLOGAÇÃO_E2E_PILOTO_AUTONOMO_INTERNET`
 - **CURRENT_PHASE** = `V1.5E`
+- **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
+- **FLOW_TRACK** = `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro)
 - **PROJECT_STATUS** = `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual intermediária: seleção/criação de tema -> criação da task -> roteiro -> narração -> geração visual / Flow -> render final -> Safety Gate -> Quality Gate -> Copyright Provenance Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> publication_events status=success -> scheduled_posts status=published, validando zero duplicação, zero regeneração desnecessária, zero override de gate, somente uma task, WARMUP preservado e TikTok OFF)
+- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual intermediária para o canal Dose Diária De Internet: seleção/criação de tema -> criação da task -> roteiro -> narração -> pipeline visual disponível -> render final -> Safety Gate -> Quality Gate -> Copyright Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> publication_events status=success -> scheduled_posts status=published, precedido obrigatoriamente por PRE-FLIGHT READ-ONLY específico do canal, validando zero duplicação, zero regeneração desnecessária, zero override de gate, somente uma task, WARMUP preservado e TikTok OFF)
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
@@ -29,7 +31,8 @@
 
 ## Status Consolidado por Componente
 
-- **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
+- **Piloto Autônomo E2E (Dose Diária De Internet)** = ACTIVE (CURRENT_FOCUS)
+- **Google Flow / External Video Quality Track** = FROZEN / DEFERRED (Implementação existente preservada intacta; sem trabalho de melhoria neste momento; retomada futura explícita)
 - **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido; canal Histórias retornado a WARMUP e GTA VI mantido temporariamente em SCALE até confirmação da publicação das 22:11)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)

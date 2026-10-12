@@ -18,13 +18,13 @@
 - **FLOW_TRACK** = `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro)
 - **PROJECT_STATUS** = `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual intermediária para o canal Dose Diária De Internet: seleção/criação de tema -> criação da task -> roteiro -> narração -> pipeline visual disponível -> render final -> Safety Gate -> Quality Gate -> Copyright Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> publication_events status=success -> scheduled_posts status=published, precedido obrigatoriamente por PRE-FLIGHT READ-ONLY específico do canal, validando zero duplicação, zero regeneração desnecessária, zero override de gate, somente uma task, WARMUP preservado e TikTok OFF)
+- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (STATUS: `BLOCKED_BY_HOTFIX` — Piloto autônomo pausado pelo operador para hotfix de precedência de voz e teto seguro do Warmup na branch `hotfix/autonomous-profile-contract`)
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
-- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, avaliar pós-E2E, ver UI-003)`
-- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 5 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `CFG-004`)
-- **BLOCKED_BY** = `NONE`
+- **DEFERRED_ITEMS** = `CFG-005 (Preset cross_platform em destino YouTube-only com restrições TikTok Rewards adiado); GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, avaliar pós-E2E, ver UI-003)`
+- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 6 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `CFG-004`, `CFG-005`)
+- **BLOCKED_BY** = `HOTFIX_AUTONOMOUS_PROFILE_CONTRACT`
 
 > [!IMPORTANT]
 > **Precedência Canônica:** Esta seção reflete o estado real, auditado e vigente da fábrica de vídeos. Ela prevalece formalmente sobre quaisquer menções, metas pendentes ou notas de snapshots históricos mantidos nas seções inferiores para rastreabilidade de engenharia.
@@ -32,7 +32,7 @@
 ## Status Consolidado por Componente
 
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
-- **Piloto Autônomo E2E (Dose Diária De Internet)** = ACTIVE (CURRENT_FOCUS)
+- **Piloto Autônomo E2E (Dose Diária De Internet)** = BLOCKED_BY_HOTFIX (AUTONOMOUS_CYCLE_E2E_HOMOLOGATION = BLOCKED_BY_HOTFIX)
 - **Google Flow / External Video Quality Track** = FROZEN / DEFERRED (Implementação existente preservada intacta; sem trabalho de melhoria neste momento; retomada futura explícita)
 - **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido; canal Histórias retornado a WARMUP e GTA VI mantido temporariamente em SCALE até confirmação da publicação das 22:11)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA

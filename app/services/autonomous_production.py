@@ -229,6 +229,12 @@ def get_profile_growth_mode(profile_id: Optional[str] = None, db_path: Optional[
         except Exception:
             pass
     try:
+        prof = profile_manager.get_profile(profile_manager.DEFAULT_PROFILE_ID, db_path=db_path)
+        if prof and prof.get("growth_mode"):
+            return str(prof.get("growth_mode")).lower().strip()
+    except Exception:
+        pass
+    try:
         gm = scheduler.get_growth_mode("youtube", db_path=db_path)
         if gm:
             return str(gm).lower().strip()
@@ -310,9 +316,11 @@ def get_max_tasks_per_cycle(db_path: Optional[str] = None) -> int:
 def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
     """Retorna o teto de gerações aprovadas em 24h para um perfil específico (ou default).
 
-    Regras V12-F.5:
-    - WARMUP: 2 / 24h
-    - SCALE: 5 / 24h
+    Regras V12-F.5 / Fail-Safe Hotfix:
+    - Growth Mode define o TETO MÁXIMO de segurança:
+      * WARMUP: approved cap = 2
+      * SCALE: approved cap = 5
+    - Override persistido pode REDUZIR o teto, mas NÃO pode AUMENTAR o teto do modo.
     - Configuração isolada por perfil: autonomous_max_generations_24h:<profile_id>
     - Perfil default mantém compatibilidade com KEY_AUTONOMOUS_MAX_24H quando não houver override.
     """
@@ -328,17 +336,23 @@ def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[
         if stored is None:
             stored = get_autonomous_setting(KEY_AUTONOMOUS_MAX_24H, None, db_path=db_path)
 
+    parsed_stored = None
     if stored is not None:
         try:
-            return max(1, int(stored))
+            parsed_stored = max(1, int(stored))
         except (ValueError, TypeError):
-            pass
+            parsed_stored = None
 
     gm = get_profile_growth_mode(clean_p, db_path=db_path)
-    if gm == const.GROWTH_MODE_SCALE:
-        return 5
-    elif gm == const.GROWTH_MODE_WARMUP:
-        return 2
+    if gm == const.GROWTH_MODE_WARMUP:
+        mode_cap = 2
+        return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
+    elif gm == const.GROWTH_MODE_SCALE:
+        mode_cap = 5
+        return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
+
+    if parsed_stored is not None:
+        return parsed_stored
     return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H if is_default else 2
 
 
@@ -385,9 +399,11 @@ def get_consecutive_rejections(db_path: Optional[str] = None, profile_id: Option
 def get_max_attempts_24h(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
     """Retorna o teto de tentativas totais de geração em 24h para um perfil específico (ou default).
 
-    Regras V12-F.5:
-    - WARMUP: 8 / 24h
-    - SCALE: 15 / 24h
+    Regras V12-F.5 / Fail-Safe Hotfix:
+    - Growth Mode define o TETO MÁXIMO de segurança:
+      * WARMUP: attempt cap = 8
+      * SCALE: attempt cap = 15
+    - Override persistido pode REDUZIR o teto, mas NÃO pode AUMENTAR o teto do modo.
     - Configuração isolada por perfil: autonomous_max_attempts_24h:<profile_id>
     - Perfil default mantém compatibilidade com KEY_AUTONOMOUS_MAX_ATTEMPTS_24H quando não houver override.
     """
@@ -403,17 +419,23 @@ def get_max_attempts_24h(profile_id: Optional[str] = None, db_path: Optional[str
         if stored is None:
             stored = get_autonomous_setting(KEY_AUTONOMOUS_MAX_ATTEMPTS_24H, None, db_path=db_path)
 
+    parsed_stored = None
     if stored is not None:
         try:
-            return max(1, int(stored))
+            parsed_stored = max(1, int(stored))
         except (ValueError, TypeError):
-            pass
+            parsed_stored = None
 
     gm = get_profile_growth_mode(clean_p, db_path=db_path)
-    if gm == const.GROWTH_MODE_SCALE:
-        return 15
-    elif gm == const.GROWTH_MODE_WARMUP:
-        return 8
+    if gm == const.GROWTH_MODE_WARMUP:
+        mode_cap = 8
+        return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
+    elif gm == const.GROWTH_MODE_SCALE:
+        mode_cap = 15
+        return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
+
+    if parsed_stored is not None:
+        return parsed_stored
     return DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H if is_default else 8
 
 

@@ -1124,11 +1124,16 @@ def get_generation_profile_context(
     fallback_preset = const.DEFAULT_MONETIZATION_PRESET
     fallback_growth = const.DEFAULT_GROWTH_MODE
 
-    # Precedência: Voz GLOBAL da aplicação (V1.5E-G8.6: Brian como voz global para todos os canais da fábrica)
-    # 1. Voice
+    # 1. Voice - Precedência: Profile Settings -> Global UI -> Global App -> Safe Default
+    profile_voice = (
+        str(settings.voice.voice_name).strip()
+        if (settings and settings.voice and settings.voice.voice_name and str(settings.voice.voice_name).strip())
+        else None
+    )
     global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
+    raw_voice = profile_voice or global_voice
     from app.services import voice
-    voice_name = voice.canonicalize_voice_name(global_voice) or "en-US-BrianMultilingualNeural"
+    voice_name = voice.canonicalize_voice_name(raw_voice) or "en-US-BrianMultilingualNeural"
 
     global_rate = config.ui.get("voice_rate") or config.app.get("voice_rate") or 1.0
     try:

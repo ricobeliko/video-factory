@@ -51,8 +51,20 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual durante o fluxo para o canal **Dose Diária De Internet**: seleção/criação de tema -> criação da task -> roteiro -> narração -> pipeline visual atualmente disponível -> render final -> Safety Gate -> Quality Gate -> Copyright Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> `publication_events status=success` -> `scheduled_posts status=published`).
-- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar **PRE-FLIGHT READ-ONLY** específico do canal **Dose Diária De Internet** antes de autorizar qualquer geração.
+- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (STATUS: `BLOCKED_BY_HOTFIX`)
+- **AUTONOMOUS_PILOT_STATUS:** `PAUSED_FOR_HOTFIX`
+  - **Motivo da Pausa:** Piloto autônomo pausado pelo operador em produção após auditoria identificar:
+    1. *Profile Voice Precedence Bug*: `settings.voice.voice_name` persistido no perfil (`pt-BR-FranciscaNeural`) estava sendo ignorado pelo `get_generation_profile_context`, caindo na voz global (`en-US-BrianMultilingualNeural`) e falhando no TTS;
+    2. *Growth Mode Safety Cap Bypass*: Override legado persistido (`autonomous_max_generations_24h = 5`) no banco ultrapassava o teto de segurança documentado do modo Warmup (2 aprovações / 24h, 8 tentativas / 24h).
+  - **Preservações Obrigatórias (Zero Manipulação / Zero Reset):**
+    - Vídeos aprovados existentes em produção permanecem 100% intactos:
+      - `1439ab1b-7dd1-4d76-a507-e3e5416ea5a5` (Quality 75.3, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
+      - `cdc09729-22df-466c-b6d2-50f816d20060` (Quality 71.2, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
+    - Scheduler, `publication_events`, `scheduled_posts` e histórico de publicações preservados.
+  - **Hotfix Implementado na branch `hotfix/autonomous-profile-contract`:**
+    - Precedência de voz estrita: Profile Settings -> Global UI -> Global App -> Safe Default (com canonicalização mantida);
+    - Fail-safe cap no getter: Growth Mode define teto máximo inultrapassável (Warmup: 2 aprovados / 8 tentativas; Scale: 5 aprovados / 15 tentativas; override armazenado só pode reduzir, nunca aumentar).
+- **NEXT_EXACT_STEP:** Após homologação/merge do hotfix, retomar preparação do piloto autônomo e executar **PRE-FLIGHT READ-ONLY** específico do canal **Dose Diária De Internet** antes de autorizar qualquer geração.
   - **Objetivo do Pre-Flight (ZERO MUTAÇÕES / ZERO GERAÇÃO / ZERO PUBLICAÇÃO):**
     - Identificar `profile_id`;
     - Identificar YouTube `channel_id`;
@@ -81,14 +93,18 @@
     - *Dose Diária de Histórias e Mistério*: Preservar configuração atual (não é o canal piloto desta homologação).
     - *Dose Diária de GTA VI*: Continua excluído do piloto enquanto durar a `TEMPORARY_PRODUCTION_EXCEPTION` (`growth_mode = SCALE` até 11/10/2026 às 22:11; retornar a `WARMUP` pós-publicação).
   - **Transição Pós-E2E PASS:** Após o primeiro ciclo E2E PASS, manter *Dose Diária De Internet* como primeiro canal autônomo real, observar 1–2 transições/ciclos adicionais e somente depois iniciar `WEB_UI_V2_AND_CODE_CONSOLIDATION`.
-- **BLOCKERS:** `NONE`
+- **BLOCKERS:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION = BLOCKED_BY_HOTFIX` (Hotfix em validação na branch `hotfix/autonomous-profile-contract`)
 - **DEFERRED_ITEMS:**
+  - `CFG-005 — YouTube-only destination using cross_platform preset`:
+    - **Descrição:** O destino operacional atual é YouTube-only, porém o preset `cross_platform` mantém restrições de TikTok Rewards e pode causar rejeições desnecessárias (ex.: task de 58s rejeitada pelo Safety Gate porque Cross Platform exige >= 60s).
+    - **Status:** `DEFERRED`.
+    - **Decisão Futura:** Avaliar se o profile default deve usar `youtube_original` enquanto TikTok OFF. Nenhuma regra de gate ou threshold alterada neste hotfix.
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: Existe seletor global de Growth Mode no Streamlit que pode mudar o estado visual exibido, mas não altera efetivamente o Growth Mode operacional dos perfis. A fonte operacional canônica real é o Growth Mode configurado por perfil/canal (`profile growth_mode`). Exemplo confirmado em produção: *Dose Diária de GTA VI* com perfil em `SCALE` é considerado como `SCALE` pelo Scheduler e Autonomous loop. Portanto: `GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA`.
     - **Decisão:** `DEFERRED / NÃO BLOQUEIA PRODUÇÃO`. Não corrigir agora, não remover agora, não alterar backend agora. Mapeado no checklist de migração como `UI-001` e `UI-002`.
   - `WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION`: Streamlit atualmente apresenta lentidão operacional perceptível devido ao crescimento da aplicação e reruns amplos da interface.
     - **Diretriz Futura:** Preservar backend Python, Scheduler, SQLite, profiles, gates e publishers. Avaliar substituição progressiva apenas da camada de interface por API leve + frontend separado.
     - **Decisão:** `DEFERRED / BACKLOG FUTURO`. Não iniciar esta frente antes de concluir `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`. Mapeado no checklist de migração como `UI-003`.
-- **MIGRATION_CHECKLIST_STATUS:** ATIVO em [docs/ROADMAP.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/ROADMAP.md#web-ui-v2--code-consolidation--migration-checklist) e especificado detalhadamente em [docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md). Contém os itens `UI-001`, `UI-002`, `UI-003`, `UI-004` e `CFG-004`.
+- **MIGRATION_CHECKLIST_STATUS:** ATIVO em [docs/ROADMAP.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/ROADMAP.md#web-ui-v2--code-consolidation--migration-checklist) e especificado detalhadamente em [docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md). Contém os itens `UI-001`, `UI-002`, `UI-003`, `UI-004`, `CFG-004` e `CFG-005`.
 - **R4A_WEB_UI_V2_DISCOVERY_STATUS:** Concluído documentalmente em paralelo ([docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md)), mapeando o monólito Streamlit (14.315 linhas, 34 funções operacionais e proposta de API fina FastAPI preservando backend), com ZERO alteração funcional, ZERO impacto no banco operacional e ZERO interferência no piloto autônomo em andamento.
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):

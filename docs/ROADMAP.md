@@ -10,20 +10,22 @@
 
 ---
 
-# Estado Atual Canônico — 11/10/2026
+# Estado Atual Canônico — 12/10/2026
 
-- **CURRENT_FOCUS** = `HOMOLOGAÇÃO_E2E_PILOTO_AUTONOMO_INTERNET`
+- **CURRENT_FOCUS** = `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL FOUNDATION (CONCLUÍDO)`
 - **CURRENT_PHASE** = `V1.5E`
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
-- **FLOW_TRACK** = `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro)
-- **PROJECT_STATUS** = `ACTIVE_DEV / HOMOLOGATION_PENDING`
-- **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual intermediária para o canal Dose Diária De Internet: seleção/criação de tema -> criação da task -> roteiro -> narração -> pipeline visual disponível -> render final -> Safety Gate -> Quality Gate -> Copyright Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> publication_events status=success -> scheduled_posts status=published, precedido obrigatoriamente por PRE-FLIGHT READ-ONLY específico do canal, validando zero duplicação, zero regeneração desnecessária, zero override de gate, somente uma task, WARMUP preservado e TikTok OFF)
+- **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas e failover seguro implementados em DEV)`
+- **PROJECT_STATUS** = `ACTIVE_DEV / FLOW-MA1_IMPLEMENTED`
+- **ACTIVE_BRANCH** = `feat/web-ui-v2-read-api`
+- **NEXT_GATE** = `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT / RETOMADA DO PILOTO AUTÔNOMO`
+- **FLOW_MA1_STATUS** = `MERGED / READY_FOR_PRODUCTION_DEPLOY`
+- **FLOW_UI_001_STATUS** = `OPEN (Requisito futuro para exibir telemetria de contas e créditos no Factory Live da Web UI V2; Web UI V2 congelada temporariamente em R6A.2)`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
-- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, avaliar pós-E2E, ver UI-003)`
-- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 6 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005`, `CFG-004`)
+- **DEFERRED_ITEMS** = `CFG-005 (Preset cross_platform em destino YouTube-only com restrições TikTok Rewards adiado); GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, ver UI-003)`
+- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 7 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005`, `CFG-004`, `CFG-005`)
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -31,13 +33,14 @@
 
 ## Status Consolidado por Componente
 
+- **FLOW-MA1 Multi-Account Provider Pool** = MERGED / READY_FOR_PRODUCTION_DEPLOY (Pool de contas com user_data_dir isolado, login humano inicial via Edge nativo, zero senhas persistidas, stickiness da task, failover seguro pré-dispatch, telemetria de créditos FLOW_UI_VERIFIED / LOCAL_ESTIMATE / UNKNOWN, CLI operacional em `flow_account_pool.py`, Flow estritamente single-flight)
+- **FLOW-UI-001 Multi-Account Credit Telemetry in UI** = OPEN (Backlog para integração visual no Factory Live quando a branch `feat/web-ui-v2-read-api` for retomada)
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
 - **R5A Web UI V2 Thin Read-Only API MVP** = COMPLETE (6 endpoints GET montados em /api/v2 via FastAPI existente, zero regras de negócio duplicadas, zero endpoints WRITE, autenticação verify_token preservada, teste direcionado 8/8 PASS; zero impacto no piloto autônomo em execução)
 - **R5B Live Multi-Channel Execution Contract / UI-005** = DEV COMPLETED (Contrato read-only e causal para tela Factory Live com endpoints /api/v2/executions/live e /executions/{task_id}, grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS; zero impacto no piloto autônomo)
 - **R6A Web UI V2 Frontend Scaffold + Factory Live** = DEV COMPLETED (Scaffold React 18 + Vite 6 + @xyflow/react isolado em webui-v2, tela Factory Live com cards dinâmicos, lanes horizontais dos 12 estágios, trace causal e drawer de execução, polling 3s, zero inferência, build PASS 112 kB gzip; zero alteração no backend ou Streamlit)
-- **Piloto Autônomo E2E (Dose Diária De Internet)** = ACTIVE (CURRENT_FOCUS)
-
-- **Google Flow / External Video Quality Track** = FROZEN / DEFERRED (Implementação existente preservada intacta; sem trabalho de melhoria neste momento; retomada futura explícita)
+- **Piloto Autônomo E2E (Dose Diária De Internet)** = PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP (Hotfix merged / pronto para deploy; piloto pausado intencionalmente aguardando setup/deploy das contas Flow em produção)
+- **Google Flow / External Video Quality Track** = ACTIVE (FLOW-MA1 foundation concluída; Flow permanece single-flight via FLOW_CONCURRENCY_LOCK)
 - **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido; canal Histórias retornado a WARMUP e GTA VI mantido temporariamente em SCALE até confirmação da publicação das 22:11)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)

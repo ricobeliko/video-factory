@@ -342,6 +342,8 @@ class TestFlowPlaywright(unittest.TestCase):
         }
         with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
              patch("os.path.exists", return_value=True), \
+             patch("scripts.flow_playwright.atomic_write_json"), \
+             patch("app.services.flow_account_pool.atomic_write_json"), \
              patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
                  "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
              }))):
@@ -365,6 +367,8 @@ class TestFlowPlaywright(unittest.TestCase):
         }
         with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
              patch("os.path.exists", return_value=True), \
+             patch("scripts.flow_playwright.atomic_write_json"), \
+             patch("app.services.flow_account_pool.atomic_write_json"), \
              patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
                  "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
              }))):
@@ -1810,6 +1814,57 @@ class TestFlowPlaywright(unittest.TestCase):
             self.assertEqual(res["status"], "AMBIGUOUS_TILE_TARGET_FOR_SCENE_5")
             self.assertEqual(res["generate_click_count_this_run"], 0)
             self.assertEqual(res["generation_attempts"], 0)
+
+    def test_run_playwright_flow_poc_passes_custom_user_data_dir(self):
+        """FLOW-MA1: run_playwright_flow_poc repassa user_data_dir customizado ao launch_flow_context."""
+        with patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test prompt", "expected_clip": "flow_scene_01.mp4"}]
+             }))), \
+             patch("scripts.flow_playwright.sync_playwright") as mock_pw, \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch:
+
+            mock_ctx = MagicMock()
+            mock_page = MagicMock()
+            mock_ctx.pages = [mock_page]
+            mock_launch.return_value = (None, "MOCK_LAUNCH_HALT")
+
+            res = run_playwright_flow_poc(
+                manifest_path="dummy.json",
+                scene_index=1,
+                user_data_dir="storage/flow_browser_profiles/flow-b",
+                flow_account_id="flow-b",
+            )
+
+            mock_launch.assert_called_once()
+            _, kwargs = mock_launch.call_args
+            self.assertEqual(kwargs.get("user_data_dir"), "storage/flow_browser_profiles/flow-b")
+            self.assertEqual(res.get("flow_account_id"), "flow-b")
+
+    def test_generate_flow_scene_populates_account_telemetry_details(self):
+        """FLOW-MA1: generate_flow_scene inclui telemetria de conta e crédito nos details."""
+        raw_res = {
+            "status": "SUCCESS",
+            "output_file": "flow_scene_01.mp4",
+            "output_valid": True,
+            "output_duration": 5.0,
+            "generation_start_confirmed": True,
+            "credit_cost": 15,
+        }
+        with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}]
+             }))), \
+             patch("scripts.flow_playwright.atomic_write_json"), \
+             patch("app.services.flow_account_pool.atomic_write_json"):
+            res = generate_flow_scene("dummy_manifest.json", scene_index=1)
+            self.assertEqual(res.status, "SUCCESS")
+            self.assertIn("flow_account_id", res.details)
+            self.assertIn("flow_account_status", res.details)
+            self.assertIn("credits_source", res.details)
+            self.assertIn("credits_before", res.details)
+            self.assertIn("credits_after_estimated", res.details)
 
 
 if __name__ == "__main__":

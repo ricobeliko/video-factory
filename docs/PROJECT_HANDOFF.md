@@ -51,44 +51,33 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual durante o fluxo para o canal **Dose Diária De Internet**: seleção/criação de tema -> criação da task -> roteiro -> narração -> pipeline visual atualmente disponível -> render final -> Safety Gate -> Quality Gate -> Copyright Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> `publication_events status=success` -> `scheduled_posts status=published`).
-- **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar **PRE-FLIGHT READ-ONLY** específico do canal **Dose Diária De Internet** antes de autorizar qualquer geração.
-  - **Objetivo do Pre-Flight (ZERO MUTAÇÕES / ZERO GERAÇÃO / ZERO PUBLICAÇÃO):**
-    - Identificar `profile_id`;
-    - Identificar YouTube `channel_id`;
-    - Confirmar canal ativo;
-    - Confirmar `external_account_id` / publisher binding;
-    - Confirmar Growth Mode efetivo (`WARMUP`);
-    - Confirmar Autonomous state;
-    - Confirmar Scheduler ON;
-    - Confirmar Auto Publish ON;
-    - Confirmar YouTube ON;
-    - Confirmar TikTok OFF;
-    - Verificar Ready Stock atual;
-    - Verificar tasks ativas/pending do perfil;
-    - Verificar `scheduled_posts` pendentes;
-    - Verificar publicações recentes;
-    - Verificar se existe alguma condição que possa causar duplicação.
-  - **Critérios para Homologação E2E (após pre-flight PASS):**
-    - Colocar PRIMEIRO o canal *Dose Diária De Internet* operando autonomamente de ponta a ponta;
-    - Zero duplicação;
-    - Zero regeneração desnecessária;
-    - Zero override manual de gate;
-    - TikTok OFF;
-    - Somente UMA task para homologação;
-    - Nenhuma intervenção humana entre o início do ciclo e a publicação final.
-  - **Demais Canais:**
-    - *Dose Diária de Histórias e Mistério*: Preservar configuração atual (não é o canal piloto desta homologação).
-    - *Dose Diária de GTA VI*: Continua excluído do piloto enquanto durar a `TEMPORARY_PRODUCTION_EXCEPTION` (`growth_mode = SCALE` até 11/10/2026 às 22:11; retornar a `WARMUP` pós-publicação).
-  - **Transição Pós-E2E PASS:** Após o primeiro ciclo E2E PASS, manter *Dose Diária De Internet* como primeiro canal autônomo real, observar 1–2 transições/ciclos adicionais e somente depois iniciar `WEB_UI_V2_AND_CODE_CONSOLIDATION`.
+- **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL (MERGED)` (Próximo: `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT`)
+- **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
+- **FLOW_UI_001_STATUS:** `OPEN` (Exibição de telemetria de múltiplas contas e saldo de créditos no Factory Live da Web UI V2 — backlog futuro)
+- **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP`
+  - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`) e a infraestrutura FLOW-MA1 foi implementada em DEV.
+  - **Hotfix Autonomous Safety Contract:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`
+    - Precedência de voz estrita: Profile Settings -> Global UI -> Global App -> Safe Default (com canonicalização mantida);
+    - Fail-safe cap no getter: Growth Mode define teto máximo inultrapassável (Warmup: 2 aprovados / 8 tentativas; Scale: 5 aprovados / 15 tentativas; override armazenado só pode reduzir, nunca aumentar).
+  - **Preservações Obrigatórias em Produção (Zero Manipulação / Zero Reset):**
+    - Vídeos aprovados existentes em produção permanecem 100% intactos:
+      - `1439ab1b-7dd1-4d76-a507-e3e5416ea5a5` (Quality 75.3, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
+      - `cdc09729-22df-466c-b6d2-50f816d20060` (Quality 71.2, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
+    - Scheduler, `publication_events`, `scheduled_posts` e histórico de publicações preservados.
+    - Autonomous do profile default permanece PAUSADO após o deploy.
+- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION`
+- **WEB_UI_V2_STATUS:** `FROZEN TEMPORARILY AT R6A.2` (Isolada na branch `feat/web-ui-v2-read-api`; zero alterações na main).
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
+  - `CFG-005 — YouTube-only destination using cross_platform preset`:
+    - **Descrição:** O destino operacional atual é YouTube-only, porém o preset `cross_platform` mantém restrições de TikTok Rewards e pode causar rejeições desnecessárias (ex.: task de 58s rejeitada pelo Safety Gate porque Cross Platform exige >= 60s).
+    - **Status:** `DEFERRED`.
+    - **Decisão Futura:** Avaliar se o profile default deve usar `youtube_original` enquanto TikTok OFF. Nenhuma regra de gate ou threshold alterada neste hotfix.
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: Existe seletor global de Growth Mode no Streamlit que pode mudar o estado visual exibido, mas não altera efetivamente o Growth Mode operacional dos perfis. A fonte operacional canônica real é o Growth Mode configurado por perfil/canal (`profile growth_mode`). Exemplo confirmado em produção: *Dose Diária de GTA VI* com perfil em `SCALE` é considerado como `SCALE` pelo Scheduler e Autonomous loop. Portanto: `GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA`.
     - **Decisão:** `DEFERRED / NÃO BLOQUEIA PRODUÇÃO`. Não corrigir agora, não remover agora, não alterar backend agora. Mapeado no checklist de migração como `UI-001` e `UI-002`.
   - `WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION`: Streamlit atualmente apresenta lentidão operacional perceptível devido ao crescimento da aplicação e reruns amplos da interface.
-    - **Diretriz Futura:** Preservar backend Python, Scheduler, SQLite, profiles, gates e publishers. Avaliar substituição progressiva apenas da camada de interface por API leve + frontend separado.
-    - **Decisão:** `DEFERRED / BACKLOG FUTURO`. Não iniciar esta frente antes de concluir `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`. Mapeado no checklist de migração como `UI-003`.
-- **MIGRATION_CHECKLIST_STATUS:** ATIVO em [docs/ROADMAP.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/ROADMAP.md#web-ui-v2--code-consolidation--migration-checklist) e especificado detalhadamente em [docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md). Contém os itens `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005` e `CFG-004`.
+    - **Decisão:** `DEFERRED / BACKLOG FUTURO`. Mapeado no checklist de migração como `UI-003`.
+- **MIGRATION_CHECKLIST_STATUS:** ATIVO em [docs/ROADMAP.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/ROADMAP.md#web-ui-v2--code-consolidation--migration-checklist) e especificado detalhadamente em [docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md). Contém os itens `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005`, `CFG-004` e `CFG-005`.
 - **R4A_WEB_UI_V2_DISCOVERY_STATUS:** Concluído documentalmente em paralelo ([docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md)), mapeando o monólito Streamlit (14.315 linhas, 34 funções operacionais e proposta de API fina FastAPI preservando backend), com ZERO alteração funcional, ZERO impacto no banco operacional e ZERO interferência no piloto autônomo em andamento.
 - **R5B_LIVE_EXECUTION_CONTRACT_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), contrato read-only e causal para tela Factory Live (UI-005) com 2 novos endpoints GET (`/api/v2/executions/live` e `/api/v2/executions/{task_id}`), grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS.
 - **R6A_WEB_UI_V2_FACTORY_LIVE_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), primeira interface desacoplada Web UI V2 em `webui-v2/` (React 18, Vite 6, `@xyflow/react` v12, Vanilla CSS) com tela Factory Live (cards de canal dinâmicos, grafo em lanes horizontais dos 12 estágios, trace causal e drawer de execução com terminal YouTube state, polling 3s, build PASS 112 kB gzip; zero alteração no backend ou Streamlit). NEXT_GATE de produção permanece estritamente `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` no PC Forte.
@@ -100,7 +89,31 @@
   - 1 tarefa (`807cd444...`) **REJEITADA PELO QUALITY GATE** (Quality 67.8 < 70) — sem override manual, sem alteração de thresholds e sem recolocação no Scheduler (fail-closed respeitado).
   - Ready Stock das tarefas legadas completamente drenado/publicado.
   - Perfis restaurados para **Growth Mode = WARMUP**.
-- **Novas Gerações:** Já possuem persistência canônica atômica em `flow_bridge.py` (PR #90) com `FLOW_PROVENANCE_PERSIST_FAILED` fail-closed antes do render.
+### FLOW-MA1 — Multi-Account Provider Pool & Telemetria de Créditos (CONCLUÍDO):
+- **Implementação:** `app/services/flow_account_pool.py`, `scripts/flow_playwright.py`, `test/services/test_flow_account_pool.py`.
+- **Princípios Canônicos:**
+  - **user_data_dir separado por conta:** Cada conta cadastrada possui seu próprio diretório de perfil persistente (`storage/flow_browser_profiles/<account_id>/`). A conta primária legada (`flow-primary`) preserva estritamente `storage/flow_browser_profile` (sessão atualmente homologada).
+  - **Onboarding Canônico de Novas Contas (FLOW-MA1-HOTFIX):**
+    - Fluxo obrigatório: `ADD` → `LOGIN VIA EDGE NORMAL` → `FECHAR EDGE` → `VERIFY HEADLESS` → `AUTHENTICATED`
+    - 1. Adicionar: `python -m app.services.flow_account_pool add --account-id <id> --display-name "..."`
+    - 2. Login humano: `python -m app.services.flow_account_pool login --account-id <id>` (abre Microsoft Edge NORMAL com `--user-data-dir` isolado; zero Playwright; login manual pelo operador)
+    - 3. Fechar completamente a janela do Microsoft Edge após o login
+    - 4. Validar: `python -m app.services.flow_account_pool verify --account-id <id>` (valida sessão persistida via Playwright HEADLESS; zero manifest, zero geração, zero consumo de crédito)
+    - **Regra Explícita de Segurança Google:** O login Google inicial NÃO deve ser executado pelo Playwright (evita bloqueio do Google por navegador potencialmente inseguro).
+  - **Zero senhas/segredos no projeto:** Nenhuma senha, token, chave de API ou cookie do Google é armazenado no repositório, em arquivos JSON ou no banco de dados. Os cookies e sessões residem exclusivamente dentro do perfil local do Microsoft Edge.
+  - **Task stickiness:** Uma tarefa/projeto do Flow fica vinculada estritamente à conta atribuída no `manifest.json` (`flow_account_id`). Após criação do projeto (`flow_project_url`), conclusão de qualquer cena ou confirmação de início de geração/aprovação de créditos, a conta é imutável.
+  - **Failover seguro somente pré-dispatch:** Failover automático para a próxima conta elegível no pool só é permitido antes do consumo ou início de geração (máximo 1 tentativa automática de failover por cena).
+  - **Flow permanece single-flight:** Concorrência global mantida em 1 através de `FLOW_CONCURRENCY_LOCK`. Zero paralelismo de navegadores ou consumo simultâneo.
+  - **Telemetria de créditos confiável:**
+    - `FLOW_UI_VERIFIED` quando o saldo restante é lido diretamente da interface do Flow (menu da conta / UI);
+    - `LOCAL_ESTIMATE` após consumo confirmado de créditos até a próxima leitura na UI;
+    - `UNKNOWN` quando não houver evidência textual inequívoca;
+    - **Regra de Ouro:** NUNCA inventar créditos, nunca assumir 1000, nunca tratar UNKNOWN como erro fatal.
+  - **Detecção conservadora de esgotamento:** Se houver evidência visível e inequívoca de créditos insuficientes no DOM antes do dispatch, a conta é marcada como `EXHAUSTED` com zero aprovação e zero clique no Generate.
+  - **CLI Operacional Mínimo:** Suporte a `python -m app.services.flow_account_pool` com comandos `list`, `add`, `login`, `verify`, `disable`, `enable`, `status`.
+- **Requisito Futuro Web UI (FLOW-UI-001):**
+  - **Status:** `OPEN` (Backlog da Web UI V2).
+  - **Objetivo:** Exibir no Factory Live a lista de contas Flow com display name, status operacional (`AVAILABLE`, `EXHAUSTED`, etc.), saldo de créditos (`VERIFIED` vs `ESTIMATED`), data da última verificação e vínculo da tarefa ativa. A Web UI V2 permanece temporariamente congelada em R6A.2 na branch `feat/web-ui-v2-read-api`.
 
 ### Histórico Recente de Hotfixes e Merges no Main:
 - **PR #96:** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Implementa aprovação manual auditável para artefato final legado vinculada criptograficamente ao SHA-256 de `final-1.mp4`, mantendo validação estrita de Flow premium, BGM segura e zero claims.

@@ -17,9 +17,9 @@
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
 - **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas e failover seguro implementados em DEV)`
 - **PROJECT_STATUS** = `ACTIVE_DEV / FLOW-MA1_IMPLEMENTED`
-- **ACTIVE_BRANCH** = `feat/flow-multi-account-pool`
-- **NEXT_GATE** = `HOMOLOGAÇÃO OPERACIONAL FLOW-MA1 / RETOMADA DO PILOTO AUTÔNOMO`
-- **FLOW_MA1_STATUS** = `COMPLETED (Pool multi-contas, perfis independentes, task stickiness, safe failover pré-dispatch, telemetria de créditos UI-verified + local-estimate, single-flight mantido)`
+- **ACTIVE_BRANCH** = `main`
+- **NEXT_GATE** = `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT / RETOMADA DO PILOTO AUTÔNOMO`
+- **FLOW_MA1_STATUS** = `MERGED / READY_FOR_PRODUCTION_DEPLOY`
 - **FLOW_UI_001_STATUS** = `OPEN (Requisito futuro para exibir telemetria de contas e créditos no Factory Live da Web UI V2; Web UI V2 congelada temporariamente em R6A.2)`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
@@ -33,10 +33,10 @@
 
 ## Status Consolidado por Componente
 
-- **FLOW-MA1 Multi-Account Provider Pool** = COMPLETED (Pool de contas com user_data_dir isolado, login humano inicial, zero senhas persistidas, stickiness da task, failover seguro pré-dispatch, telemetria de créditos FLOW_UI_VERIFIED / LOCAL_ESTIMATE / UNKNOWN, CLI operacional em `flow_account_pool.py`, Flow estritamente single-flight)
+- **FLOW-MA1 Multi-Account Provider Pool** = MERGED / READY_FOR_PRODUCTION_DEPLOY (Pool de contas com user_data_dir isolado, login humano inicial via Edge nativo, zero senhas persistidas, stickiness da task, failover seguro pré-dispatch, telemetria de créditos FLOW_UI_VERIFIED / LOCAL_ESTIMATE / UNKNOWN, CLI operacional em `flow_account_pool.py`, Flow estritamente single-flight)
 - **FLOW-UI-001 Multi-Account Credit Telemetry in UI** = OPEN (Backlog para integração visual no Factory Live quando a branch `feat/web-ui-v2-read-api` for retomada)
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
-- **Piloto Autônomo E2E (Dose Diária De Internet)** = PAUSED_PENDING_FLOW_MULTI_ACCOUNT_HOMOLOGATION (Hotfix merged / pronto para deploy; piloto pausado intencionalmente aguardando homologação operacional das contas Flow)
+- **Piloto Autônomo E2E (Dose Diária De Internet)** = PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP (Hotfix merged / pronto para deploy; piloto pausado intencionalmente aguardando setup/deploy das contas Flow em produção)
 - **Google Flow / External Video Quality Track** = ACTIVE (FLOW-MA1 foundation concluída; Flow permanece single-flight via FLOW_CONCURRENCY_LOCK)
 - **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido; canal Histórias retornado a WARMUP e GTA VI mantido temporariamente em SCALE até confirmação da publicação das 22:11)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA

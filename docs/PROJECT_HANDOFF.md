@@ -51,10 +51,10 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL FOUNDATION (CONCLUÍDO)` (Próximo: `HOMOLOGAÇÃO / RETOMADA DO PILOTO AUTÔNOMO`)
-- **FLOW_MA1_STATUS:** `IMPLEMENTED / VALIDATED` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
+- **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL (MERGED)` (Próximo: `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT`)
+- **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
 - **FLOW_UI_001_STATUS:** `OPEN` (Exibição de telemetria de múltiplas contas e saldo de créditos no Factory Live da Web UI V2 — backlog futuro)
-- **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_HOMOLOGATION`
+- **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP`
   - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`) e a infraestrutura FLOW-MA1 foi implementada em DEV.
   - **Hotfix Autonomous Safety Contract:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`
     - Precedência de voz estrita: Profile Settings -> Global UI -> Global App -> Safe Default (com canonicalização mantida);

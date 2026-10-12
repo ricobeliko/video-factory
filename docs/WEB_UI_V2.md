@@ -5,7 +5,8 @@
 `FASE R5A: THIN READ-ONLY API MVP (COMPLETED)`
 `FASE R5B: LIVE MULTI-CHANNEL EXECUTION CONTRACT / UI-005 (COMPLETED)`
 `FASE R6A: WEB UI V2 / FACTORY LIVE MVP (COMPLETED)`
-`FASE R6A.3: VISUAL IDENTITY + METRICS + MULTI-CHANNEL LIVE (DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL)`
+`FASE R6A.3: VISUAL IDENTITY + METRICS + MULTI-CHANNEL LIVE (COMPLETED)`
+`FASE R6A.5: VISUAL IDENTITY SYSTEM + SINGLE-FOCUS PIPELINE (DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL)`
 `FLOW-UI-001: GOOGLE FLOW TELEMETRY IN FACTORY LIVE = DEV VALIDATED`
 `FLOW-CREDIT-002: REAL BALANCE EXTRACTION VIA VERIFY = DEV VALIDATED`
 
@@ -688,3 +689,50 @@ Após validação visual do operador, o layout linear contínuo de 12 estágios 
 4. **Navegação Estável:**
    - Desativado qualquer auto-zoom, recenter automático, `fitView` ou reposicionamento acionado pelo ciclo de polling (~3s).
    - Viewport permanece estável durante toda a operação.
+
+---
+
+### G. FASE R6A.5 — Factory Live Visual Identity System + Single-Focus Pipeline (DEV IMPLEMENTED)
+
+1. **Single-Focus Pipeline Architecture (Escalabilidade Extrema):**
+   - O grafo de execução inferior (`FactoryLiveGraph`) renderiza estritamente **1 pipeline detalhado por vez**, desacoplando a quantidade N de canais do tamanho do canvas.
+   - Resolução determinística de seleção:
+     - 1. Seleção manual do operador (clique no card superior ou botão "Ver Pipeline");
+     - 2. Fallback dinâmico: canal com task ativa `RUNNING`;
+     - 3. Fallback estático: primeiro canal da lista (`channels[0]`).
+   - Cards do Channels Deck ganham destaque ativo em foco (`active-focused`, borda ciano/neon, badge `● EM FOCO` e background gradiente).
+
+2. **Preenchimento Tonal e Linguagem Visual por Etapa:**
+   - Eliminação de caixas neutras: cada uma das 12 etapas recebeu tonal background (`tonalBg`) e borda tonal (`tonalBorder`) exclusivas integradas à paleta da etapa (indigo, violeta, fúcsia, ciano, âmbar, esmeralda, topázio, teal, cobalto, rubi).
+   - O status operacional (`RUNNING`, `SUCCESS`, `BLOCKED`, `FAILED`, `IDLE`) atua como modulador semântico de primeiro nível.
+
+3. **Autonomous Agent Persona System (Mascotes/Bots Tech-Factory):**
+   - Mapeamento de 12 agentes operacionais especializados:
+     - `Scout-01` (Ideator / Radar de Tendências) — `💡 / 🧭`
+     - `Scribe-02` (Roteirista Algorítmico) — `📝 / 🖋️`
+     - `Vocal-03` (Sintetizador de Voz) — `🎙️ / 🎧`
+     - `Cine-04` (Diretor Visual Flow) — `🎬 / 🎥`
+     - `Forge-05` (Motor de Render GPU) — `⚡ / ⚙️`
+     - `Sentinel-06` (Guardião de Políticas) — `🛡️`
+     - `Auditor-07` (Avaliador de Retenção) — `✨ / 💎`
+     - `Notary-08` (Custodiante de Autoria) — `⚖️ / 📜`
+     - `Vault-09` (Guarda-Estoque) — `📦 / 🗄️`
+     - `Chronos-10` (Despachante Temporal) — `📅 / ⏱️`
+     - `Relay-11` (Transmissor Multi-Rede) — `🚀 / 🛰️`
+     - `Herald-12` (Embaixador do Canal) — `▶️ / 📺`
+   - Chips de persona integrados a cada nó (`node-persona-chip`) e cards detalhados no drawer lateral (`agent-persona-card`).
+
+4. **Conexões / Edges com Semântica de Estado:**
+   - Edges dinâmicas baseadas na transição real de estados:
+     - `RUNNING`: ciano vivo (`#38bdf8`), animado com efeito de fluxo, drop-shadow neon;
+     - `COMPLETED`: verde esmeralda (`#10b981`), traço contínuo sólido;
+     - `BLOCKED` / `WAITING`: âmbar (`#f59e0b`), traço tracejado;
+     - `FAILED`: vermelho (`#ef4444`), traço sólido;
+     - `DIMMED` / `PENDING`: ardósia escuro (`#334155`), traço sutil e discreto.
+
+5. **Upgrade Visual da Seção Google Flow:**
+   - Estilização em formato "AI Compute Vault".
+   - Tipografia de alto impacto para saldo numérico verificado (`balance-number` com glow ciano).
+   - Gauge qualitativo e slot preparado para futura cota/capacidade percentual quando houver denominador canônico.
+   - Total verificado de 1.214 créditos em destaque.
+

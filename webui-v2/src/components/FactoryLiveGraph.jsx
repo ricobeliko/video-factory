@@ -1,14 +1,13 @@
 import React, { useMemo } from 'react';
 import {
   ReactFlow,
-  Background,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 import ExecutionNode from './ExecutionNode';
 import LaneHeaderNode from './LaneHeaderNode';
-import { STAGE_DEFINITIONS } from '../utils/stageVisuals';
+import { STAGE_DEFINITIONS, getEdgeSemantics } from '../utils/stageVisuals';
 
 const nodeTypes = {
   executionNode: ExecutionNode,
@@ -16,220 +15,248 @@ const nodeTypes = {
 };
 
 /**
- * FactoryLiveGraph — 2 Rows x 6 Stages Snake Layout per Channel (R6A.3)
+ * FactoryLiveGraph — Single-Focus 2x6 Snake Pipeline for the Selected Channel (R6A.5).
+ * Renders ONLY the focused channel's detailed 12-stage pipeline for maximum scalability:
  * Row 1 (L->R): 1. TOPIC -> 2. SCRIPT -> 3. NARRATION -> 4. VISUALS -> 5. RENDER -> 6. SAFETY
  *                                                                                        |
  * Row 2 (R->L): 12. YOUTUBE <- 11. PUBLISHER <- 10. SCHEDULER <- 9. READY <- 8. CPR <- 7. QUAL
  */
-export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
-  const { nodes, edges, totalHeight } = useMemo(() => {
+export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
+  const { nodes, edges } = useMemo(() => {
+    if (!channel) {
+      return { nodes: [], edges: [] };
+    }
+
     const calculatedNodes = [];
     const calculatedEdges = [];
 
-    // Layout constants
+    // Layout coordinates
     const START_X = 40;
     const STEP_X = 200; // 180px node + 20px gap
-    const CHANNEL_BLOCK_HEIGHT = 330;
+    const headerY = 20;
+    const row1Y = 88;
+    const row2Y = 208;
 
-    channels.forEach((channel, cIndex) => {
-      const channelY = cIndex * CHANNEL_BLOCK_HEIGHT + 25;
-      const channelId = channel.channel_id || channel.profile_id;
-      const execution = channel.execution;
-      const activeStage = execution?.pipeline_stage;
-      const executionStatus = execution?.status || 'IDLE';
+    const channelId = channel.channel_id || channel.profile_id;
+    const execution = channel.execution;
+    const activeStage = execution?.pipeline_stage;
+    const executionStatus = execution?.status || 'IDLE';
 
-      // 1. Calculate status for all 12 stages to compute completed count strictly
-      const stageEvaluations = STAGE_DEFINITIONS.map((stageDef) => {
-        let stageStatus = 'PENDING';
-        let progress = null;
-        let isGap = false;
-        let provider = null;
+    // 1. Calculate status for all 12 stages
+    const stageEvaluations = STAGE_DEFINITIONS.map((stageDef) => {
+      let stageStatus = 'PENDING';
+      let progress = null;
+      let isGap = false;
+      let provider = null;
 
-        if (executionStatus === 'IDLE') {
-          stageStatus = 'IDLE';
-        } else if (activeStage === stageDef.code) {
-          stageStatus = executionStatus;
-          progress = execution?.progress;
-          provider = execution?.provider;
-        } else if (
-          executionStatus === 'RUNNING' &&
-          !activeStage &&
-          ['SCRIPT', 'NARRATION', 'VISUALS'].includes(stageDef.code)
-        ) {
-          stageStatus = 'RUNNING';
-          isGap = true;
-          progress = execution?.progress;
-        } else if (
-          stageDef.code === 'YOUTUBE' &&
-          execution?.publication_state?.status === 'success'
-        ) {
-          stageStatus = 'SUCCESS';
-        } else if (
-          stageDef.code === 'READY_STOCK' &&
-          (channel.ready_stock > 0 || channel.stock > 0) &&
-          executionStatus === 'IDLE'
-        ) {
-          stageStatus = 'SUCCESS';
-        }
+      if (executionStatus === 'IDLE') {
+        stageStatus = 'IDLE';
+      } else if (activeStage === stageDef.code) {
+        stageStatus = executionStatus;
+        progress = execution?.progress;
+        provider = execution?.provider;
+      } else if (
+        executionStatus === 'RUNNING' &&
+        !activeStage &&
+        ['SCRIPT', 'NARRATION', 'VISUALS'].includes(stageDef.code)
+      ) {
+        stageStatus = 'RUNNING';
+        isGap = true;
+        progress = execution?.progress;
+      } else if (
+        stageDef.code === 'YOUTUBE' &&
+        execution?.publication_state?.status === 'success'
+      ) {
+        stageStatus = 'SUCCESS';
+      } else if (
+        stageDef.code === 'READY_STOCK' &&
+        (channel.ready_stock > 0 || channel.stock > 0) &&
+        executionStatus === 'IDLE'
+      ) {
+        stageStatus = 'SUCCESS';
+      }
 
-        return {
-          stageDef,
-          stageStatus,
+      return {
+        stageDef,
+        stageStatus,
+        progress,
+        isGap,
+        provider,
+      };
+    });
+
+    // Count strictly terminal positive REAL states
+    const completedCount = stageEvaluations.filter(
+      (e) => e.stageStatus === 'SUCCESS' || e.stageStatus === 'COMPLETE'
+    ).length;
+
+    // 2. Channel Section Header Banner
+    const headerNodeId = `header-${channelId}`;
+    calculatedNodes.push({
+      id: headerNodeId,
+      type: 'laneHeader',
+      position: { x: START_X, y: headerY },
+      data: {
+        profileName: channel.profile_name,
+        channelName: channel.channel_name,
+        channelId: channel.channel_id,
+        profileId: channel.profile_id,
+        platform: channel.platform,
+        isAutonomous: channel.autonomous_enabled,
+        growthMode: channel.growth_mode,
+        readyStock: channel.ready_stock,
+        targetStock: channel.target_stock,
+        status: executionStatus,
+        topic: execution?.topic,
+        completedStagesCount: completedCount,
+        onOpenDrawer: () => onSelectChannelTask(channel, execution?.task_id),
+      },
+      selectable: true,
+    });
+
+    // 3. 12 Pipeline Stage Nodes in 2x6 Snake Grid
+    const stageNodeIds = {};
+
+    stageEvaluations.forEach(({ stageDef, stageStatus, progress, isGap, provider }) => {
+      const stepNum = stageDef.step;
+      const nodeId = `node-${channelId}-${stageDef.code}`;
+      stageNodeIds[stepNum] = nodeId;
+
+      // Position: 1..6 on Row 1 (col 0..5), 7..12 on Row 2 (col 5..0)
+      let x;
+      let y;
+
+      if (stepNum <= 6) {
+        const colIndex = stepNum - 1; // 0..5
+        x = START_X + colIndex * STEP_X;
+        y = row1Y;
+      } else {
+        const colIndex = 12 - stepNum; // 5..0
+        x = START_X + colIndex * STEP_X;
+        y = row2Y;
+      }
+
+      calculatedNodes.push({
+        id: nodeId,
+        type: 'executionNode',
+        position: { x, y },
+        data: {
+          stepNumber: stepNum,
+          stage: stageDef.code,
+          stageLabel: stageDef.label,
+          status: stageStatus,
           progress,
           isGap,
           provider,
-        };
-      });
-
-      // Requirement 4: completed_count is strictly terminal positive REAL states
-      const completedCount = stageEvaluations.filter(
-        (e) => e.stageStatus === 'SUCCESS' || e.stageStatus === 'COMPLETE'
-      ).length;
-
-      // 2. Channel Section Header Banner (Spanning above the 2x6 grid)
-      const headerNodeId = `header-${channelId}`;
-      calculatedNodes.push({
-        id: headerNodeId,
-        type: 'laneHeader',
-        position: { x: START_X, y: channelY },
-        data: {
-          profileName: channel.profile_name,
-          channelName: channel.channel_name,
-          channelId: channel.channel_id,
-          profileId: channel.profile_id,
-          platform: channel.platform,
-          isAutonomous: channel.autonomous_enabled,
-          growthMode: channel.growth_mode,
-          readyStock: channel.ready_stock,
-          targetStock: channel.target_stock,
-          status: executionStatus,
-          topic: execution?.topic,
-          completedStagesCount: completedCount,
+          channelData: channel,
+          taskId: execution?.task_id,
         },
         selectable: true,
       });
-
-      // 3. 12 Pipeline Stage Nodes in 2x6 Snake Grid
-      const stageNodeIds = {};
-      const row1Y = channelY + 68;
-      const row2Y = channelY + 188;
-
-      stageEvaluations.forEach(({ stageDef, stageStatus, progress, isGap, provider }) => {
-        const stepNum = stageDef.step;
-        const nodeId = `node-${channelId}-${stageDef.code}`;
-        stageNodeIds[stepNum] = nodeId;
-
-        // Position calculation: 1..6 on Row 1 (col 0..5), 7..12 on Row 2 (col 5..0)
-        let x;
-        let y;
-
-        if (stepNum <= 6) {
-          const colIndex = stepNum - 1; // 0..5
-          x = START_X + colIndex * STEP_X;
-          y = row1Y;
-        } else {
-          const colIndex = 12 - stepNum; // 5..0
-          x = START_X + colIndex * STEP_X;
-          y = row2Y;
-        }
-
-        calculatedNodes.push({
-          id: nodeId,
-          type: 'executionNode',
-          position: { x, y },
-          data: {
-            stepNumber: stepNum,
-            stage: stageDef.code,
-            stageLabel: stageDef.label,
-            status: stageStatus,
-            progress,
-            isGap,
-            provider,
-            channelData: channel,
-            taskId: execution?.task_id,
-          },
-          selectable: true,
-        });
-      });
-
-      // 4. Edges connecting the Snake sequence (1 -> 2 -> ... -> 12)
-      calculatedEdges.push({
-        id: `edge-${headerNodeId}-topic`,
-        source: headerNodeId,
-        sourceHandle: 'header-source',
-        target: stageNodeIds[1],
-        targetHandle: 'target-top',
-        type: 'smoothstep',
-        style: { stroke: '#475569', strokeWidth: 1.5, strokeDasharray: '3 3' },
-      });
-
-      // Internal snake edges
-      for (let s = 1; s < 12; s++) {
-        const fromStep = s;
-        const toStep = s + 1;
-        const fromId = stageNodeIds[fromStep];
-        const toId = stageNodeIds[toStep];
-        const fromStageCode = STAGE_DEFINITIONS[fromStep - 1].code;
-
-        let sourceHandle;
-        let targetHandle;
-
-        if (fromStep < 6) {
-          sourceHandle = 'source-right';
-          targetHandle = 'target-left';
-        } else if (fromStep === 6) {
-          sourceHandle = 'source-bottom';
-          targetHandle = 'target-top';
-        } else {
-          sourceHandle = 'source-left';
-          targetHandle = 'target-right';
-        }
-
-        const isEdgeActive =
-          activeStage === fromStageCode && executionStatus === 'RUNNING';
-
-        calculatedEdges.push({
-          id: `edge-${fromId}-${toId}`,
-          source: fromId,
-          sourceHandle,
-          target: toId,
-          targetHandle,
-          type: 'smoothstep',
-          className: isEdgeActive ? 'active-edge' : '',
-          animated: isEdgeActive,
-          style: {
-            stroke: isEdgeActive ? '#38bdf8' : '#334155',
-            strokeWidth: isEdgeActive ? 2.5 : 2,
-          },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 12,
-            height: 12,
-            color: isEdgeActive ? '#38bdf8' : '#475569',
-          },
-        });
-      }
     });
 
-    const computedHeight = Math.max(500, channels.length * CHANNEL_BLOCK_HEIGHT + 80);
+    // 4. Edges with state semantics (R6A.5 requirement 4)
+    // Edge from Header to Stage #1 (TOPIC)
+    const topicStatus = stageEvaluations[0]?.stageStatus || 'IDLE';
+    const isTopicActive = topicStatus === 'RUNNING' || executionStatus === 'RUNNING';
+    calculatedEdges.push({
+      id: `edge-${headerNodeId}-topic`,
+      source: headerNodeId,
+      sourceHandle: 'header-source',
+      target: stageNodeIds[1],
+      targetHandle: 'target-top',
+      type: 'smoothstep',
+      className: isTopicActive ? 'active-edge edge-running' : 'edge-dimmed',
+      animated: isTopicActive,
+      style: {
+        stroke: isTopicActive ? '#38bdf8' : '#334155',
+        strokeWidth: isTopicActive ? 2 : 1.5,
+        strokeDasharray: isTopicActive ? undefined : '3 3',
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 10,
+        height: 10,
+        color: isTopicActive ? '#38bdf8' : '#475569',
+      },
+    });
+
+    // Internal snake edges for steps 1..11 -> 2..12
+    for (let s = 1; s < 12; s++) {
+      const fromStep = s;
+      const toStep = s + 1;
+      const fromId = stageNodeIds[fromStep];
+      const toId = stageNodeIds[toStep];
+      const fromEval = stageEvaluations[fromStep - 1];
+      const toEval = stageEvaluations[toStep - 1];
+
+      let sourceHandle;
+      let targetHandle;
+
+      if (fromStep < 6) {
+        sourceHandle = 'source-right';
+        targetHandle = 'target-left';
+      } else if (fromStep === 6) {
+        sourceHandle = 'source-bottom';
+        targetHandle = 'target-top';
+      } else {
+        sourceHandle = 'source-left';
+        targetHandle = 'target-right';
+      }
+
+      // Compute edge semantics based on real statuses
+      const edgeSemantics = getEdgeSemantics(fromEval.stageStatus, toEval.stageStatus);
+
+      calculatedEdges.push({
+        id: `edge-${fromId}-${toId}`,
+        source: fromId,
+        sourceHandle,
+        target: toId,
+        targetHandle,
+        type: 'smoothstep',
+        className: edgeSemantics.className,
+        animated: edgeSemantics.animated,
+        style: {
+          stroke: edgeSemantics.stroke,
+          strokeWidth: edgeSemantics.strokeWidth,
+          strokeDasharray: edgeSemantics.strokeDasharray,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 12,
+          height: 12,
+          color: edgeSemantics.markerColor,
+        },
+      });
+    }
+
     return {
       nodes: calculatedNodes,
       edges: calculatedEdges,
-      totalHeight: computedHeight,
     };
-  }, [channels]);
+  }, [channel, onSelectChannelTask]);
 
   const handleNodeClick = (_, node) => {
+    if (!channel) return;
     if (node.type === 'laneHeader') {
-      const channel = channels.find((c) => `header-${c.channel_id || c.profile_id}` === node.id);
-      if (channel) onSelectChannelTask(channel);
-    } else if (node.type === 'executionNode' && node.data?.channelData) {
-      onSelectChannelTask(node.data.channelData, node.data.taskId);
+      onSelectChannelTask(channel, channel.execution?.task_id);
+    } else if (node.type === 'executionNode') {
+      onSelectChannelTask(channel, node.data.taskId, node.data.stage);
     }
   };
 
+  if (!channel) {
+    return (
+      <div className="graph-container empty-graph" style={{ height: '340px' }}>
+        <div className="graph-empty-message">
+          <span>⚙️ Selecione um canal acima para inspecionar o pipeline em tempo real</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="graph-container" style={{ height: `${totalHeight}px` }}>
+    <div className="graph-container" style={{ height: '335px' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -247,9 +274,7 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
         zoomOnDoubleClick={false}
         panOnDrag={false}
         preventScrolling={false}
-      >
-        <Background color="#1e293b" gap={20} size={1} />
-      </ReactFlow>
+      />
     </div>
   );
 }

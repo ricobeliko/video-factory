@@ -1,15 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { getExecutionDetail } from '../api';
+import { STAGE_BY_CODE } from '../utils/stageVisuals';
 
 /**
- * ExecutionDrawer — Side panel displaying detailed execution snapshot,
- * causal trace ("Quem chamou quem"), and operational timeline.
+ * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5).
+ * Features:
+ * - Active Agent Persona Card with avatar, bio, and operational role.
+ * - Deep Causal Trace ("Quem chamou quem").
+ * - Execution snapshot and chronological timeline.
+ * - Terminal publication confirmation with direct YouTube link.
  */
 export default function ExecutionDrawer({
   isOpen,
   onClose,
   channelData,
   taskId: propTaskId,
+  selectedStage: propSelectedStage,
 }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -60,26 +66,55 @@ export default function ExecutionDrawer({
   const publication = detail?.publication || execution?.publication_state;
   const timeline = detail?.timeline || [];
 
-  const isPublishedSuccess = publication?.status === 'success' || execution?.status === 'SUCCESS' && publication?.published_at;
+  const isPublishedSuccess = publication?.status === 'success' || (execution?.status === 'SUCCESS' && publication?.published_at);
+
+  // Determine stage and active persona
+  const activeStageCode = propSelectedStage || execution?.pipeline_stage || detail?.task?.pipeline_stage || 'TOPIC';
+  const stageDef = STAGE_BY_CODE[activeStageCode] || STAGE_BY_CODE.TOPIC;
+  const persona = stageDef.persona || {};
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <div className="execution-drawer" onClick={(e) => e.stopPropagation()}>
+        {/* Drawer Header */}
         <div className="drawer-header">
           <div>
             <div className="drawer-title">
-              📺 {channelData?.profile_name || channelData?.channel_name || 'Detalhes da Execução'}
+              📺 {channelData?.channel_name || channelData?.profile_name || 'Painel de Execução'}
             </div>
-            <div style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
-              {channelData?.channel_name ? `${channelData.channel_name} • ` : ''}Perfil: {channelData?.profile_id}
+            <div className="drawer-subtitle">
+              {channelData?.channel_name ? `${channelData.channel_name} • ` : ''}Perfil: <code>{channelData?.profile_id}</code>
             </div>
           </div>
-          <button className="drawer-close-btn" onClick={onClose} title="Fechar">
+          <button className="drawer-close-btn" onClick={onClose} title="Fechar painel">
             ✕
           </button>
         </div>
 
         <div className="drawer-body">
+          {/* Active Agent Persona Card */}
+          <div className="agent-persona-card" style={{ borderColor: stageDef.accentColor }}>
+            <div className="agent-persona-top">
+              <div className="agent-persona-avatar-wrap" style={{ background: stageDef.tonalBg }}>
+                <span className="agent-persona-avatar">{persona.avatar || '🤖'}</span>
+              </div>
+              <div className="agent-persona-meta">
+                <div className="agent-persona-code-row">
+                  <span className="agent-code-badge" style={{ backgroundColor: stageDef.accentColor }}>
+                    {persona.code || activeStageCode}
+                  </span>
+                  <span className="agent-badge-tag">{persona.badge || 'OPERATOR'}</span>
+                </div>
+                <div className="agent-persona-name">
+                  {persona.name || stageDef.label} — <span className="agent-persona-role">{persona.role}</span>
+                </div>
+              </div>
+            </div>
+            <div className="agent-persona-bio">
+              {persona.bio || 'Módulo operacional integrado à esteira de produção autônoma.'}
+            </div>
+          </div>
+
           {/* Publication Terminal Success Banner */}
           {isPublishedSuccess && (
             <div className="publication-banner">
@@ -126,11 +161,7 @@ export default function ExecutionDrawer({
               <div className="info-box">
                 <div className="info-box-label">Etapa Canônica</div>
                 <div className="info-box-value">
-                  {execution?.pipeline_stage_label || execution?.pipeline_stage || detail?.task?.pipeline_stage || (
-                    <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>
-                      Não informada pelo backend
-                    </span>
-                  )}
+                  {stageDef.label} ({stageDef.code})
                 </div>
               </div>
 
@@ -174,7 +205,7 @@ export default function ExecutionDrawer({
             </div>
           </div>
 
-          {/* Causal Trace (Quem chamou quem) */}
+          {/* Causal Trace Flow */}
           <div className="drawer-section">
             <span className="section-label">Trace Causal ("Quem chamou quem")</span>
             <div className="causal-trace">

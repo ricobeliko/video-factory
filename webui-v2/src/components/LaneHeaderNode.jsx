@@ -2,8 +2,12 @@ import React from 'react';
 import { Handle, Position } from '@xyflow/react';
 
 /**
- * LaneHeaderNode — Channel Section Header positioned directly above each channel's 2x6 pipeline (R6A.3).
- * Prioritizes channelName as primary identity, with real stock and pipeline metrics.
+ * LaneHeaderNode — Channel Mission Control Banner above the 2x6 pipeline (R6A.5).
+ * Features:
+ * - Channel primary identity with platform badge.
+ * - Real Ready Stock and Pipeline progress metrics.
+ * - Active topic pill and status chip.
+ * - Focus indicator and drawer inspection trigger.
  */
 export default function LaneHeaderNode({ data }) {
   const {
@@ -18,6 +22,7 @@ export default function LaneHeaderNode({ data }) {
     status = 'IDLE',
     topic,
     completedStagesCount = 0,
+    onOpenDrawer,
   } = data;
 
   const primaryName = channelName || profileName || channelId;
@@ -44,6 +49,7 @@ export default function LaneHeaderNode({ data }) {
         <div className="lane-channel-info">
           <div className="lane-channel-title" title={primaryName}>
             {primaryName}
+            <span className="lane-live-indicator">LIVE PIPELINE</span>
           </div>
           <div className="lane-channel-subtitle">
             {secondaryDetails} • Perfil: <code>{profileId}</code>
@@ -80,6 +86,19 @@ export default function LaneHeaderNode({ data }) {
           <span className={`mini-badge status-${status}`}>
             {status}
           </span>
+
+          {onOpenDrawer && (
+            <button
+              className="lane-drawer-trigger-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDrawer();
+              }}
+              title="Abrir painel narrativo detalhado"
+            >
+              Trace Causal 🔍
+            </button>
+          )}
         </div>
       </div>
 

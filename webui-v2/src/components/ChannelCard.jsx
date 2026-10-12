@@ -1,10 +1,19 @@
 import React from 'react';
 
 /**
- * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.3).
- * Prioritizes channel_name as primary identity, with real mathematical stock percentage.
+ * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.5).
+ * Features:
+ * - Prioritizes channel_name as primary identity.
+ * - Strong focus state when selected for detailed pipeline view.
+ * - Real mathematical stock percentage and mini progress bar.
+ * - Quick action to open causal execution drawer.
  */
-export default function ChannelCard({ channel, isSelected, onClick }) {
+export default function ChannelCard({
+  channel,
+  isFocused,
+  onSelectFocus,
+  onOpenDrawer,
+}) {
   const {
     profile_id,
     profile_name,
@@ -28,7 +37,7 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
   const secondarySubtitle = `${platformLabel} • ${channel_id || profile_id}`;
   const profileMeta = `Perfil: ${profile_id || 'default'}`;
 
-  // Ready Stock real mathematical percentage calculation (Section 3)
+  // Ready Stock real mathematical percentage calculation
   const stockCount = typeof ready_stock === 'number' ? ready_stock : (channel.stock || 0);
   const hasTargetStock = typeof target_stock === 'number' && target_stock > 0;
   const stockPct = hasTargetStock
@@ -41,28 +50,41 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
     if (stockPct >= 100) {
       stockBarColor = '#10b981';
     } else if (stockPct > 0) {
-      stockBarColor = '#3b82f6';
+      stockBarColor = '#38bdf8';
     }
   }
 
+  const isRunning = execution?.status === 'RUNNING';
+
   return (
     <div
-      className={`channel-card ${isSelected ? 'active-selected' : ''}`}
-      onClick={onClick}
+      className={`channel-card ${isFocused ? 'active-focused' : ''} ${isRunning ? 'has-running-task' : ''}`}
+      onClick={onSelectFocus}
       role="button"
       tabIndex={0}
       aria-label={`Canal ${primaryTitle}`}
+      aria-selected={isFocused}
     >
+      {/* Top Banner: Identity, Badges and Focused Indicator */}
       <div className="channel-card-top">
         <div className="channel-identity-group">
-          <div className="channel-name" title={primaryTitle}>
-            📺 {primaryTitle}
+          <div className="channel-name-row">
+            <span className="channel-icon">📺</span>
+            <span className="channel-name" title={primaryTitle}>
+              {primaryTitle}
+            </span>
           </div>
           <div className="channel-sub-id" title={`${secondarySubtitle} • ${profileMeta}`}>
             {secondarySubtitle} • <span className="profile-id-sub">{profileMeta}</span>
           </div>
         </div>
+
         <div className="channel-badges">
+          {isFocused && (
+            <span className="mini-badge focused-badge" title="Canal com pipeline em exibição abaixo">
+              ● EM FOCO
+            </span>
+          )}
           <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
             {isAutonomous ? 'AUTO' : 'MANUAL'}
           </span>
@@ -101,6 +123,7 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
           )}
         </div>
 
+        {/* Task Execution Status or IDLE */}
         {isIdle ? (
           <div className="task-idle-note">
             <span className="idle-indicator">⚪ {status === 'BLOCKED' ? 'BLOQUEADO' : 'IDLE'}</span>
@@ -127,6 +150,31 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
             </div>
           </div>
         )}
+
+        {/* Quick Action Bar */}
+        <div className="channel-card-actions">
+          <button
+            className="card-action-btn view-pipeline-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectFocus();
+            }}
+            title="Exibir pipeline detalhado deste canal"
+          >
+            {isFocused ? '✓ Pipeline Ativo' : 'Ver Pipeline →'}
+          </button>
+
+          <button
+            className="card-action-btn inspect-drawer-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onOpenDrawer) onOpenDrawer();
+            }}
+            title="Abrir painel lateral de execução"
+          >
+            Trace Causal 🔍
+          </button>
+        </div>
       </div>
     </div>
   );

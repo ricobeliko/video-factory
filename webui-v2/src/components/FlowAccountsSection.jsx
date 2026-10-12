@@ -1,8 +1,8 @@
 import React from 'react';
 
 /**
- * Mapeamento semântico centralizado de status do Google Flow (R6A.3).
- * Cores harmonizadas com o design system do Factory Live.
+ * Mapeamento semântico centralizado de status do Google Flow (R6A.5).
+ * Design system de sala de controle / AI Compute Vault.
  */
 const STATUS_CONFIG = {
   AVAILABLE: {
@@ -16,8 +16,8 @@ const STATUS_CONFIG = {
     badgeClass: 'status-unknown-credits',
   },
   BUSY: {
-    label: 'Ocupada',
-    dotColor: '#3b82f6',
+    label: 'Ocupada em Geração',
+    dotColor: '#38bdf8',
     badgeClass: 'status-busy',
   },
   LOW_CREDITS: {
@@ -26,7 +26,7 @@ const STATUS_CONFIG = {
     badgeClass: 'status-low-credits',
   },
   COOLDOWN: {
-    label: 'Cooldown',
+    label: 'Cooldown de Segurança',
     dotColor: '#f97316',
     badgeClass: 'status-cooldown',
   },
@@ -64,47 +64,51 @@ function getStatusDetails(status, creditsSource, creditsRemaining) {
 }
 
 /**
- * Regra canônica obrigatória de exibição de créditos (R6A.3 / FLOW-CREDIT-002):
- * - FLOW_UI_VERIFIED & != null -> "1.050 créditos" [VERIFIED]
- * - LOCAL_ESTIMATE & != null -> "~805 créditos" [ESTIMATED]
- * - UNKNOWN ou null -> "Saldo indisponível" [UNKNOWN]
- * NUNCA exibir percentual de plano ou denominador inventado (ex: NÃO mostrar 16% ou 100%).
+ * Regra canônica de créditos (R6A.5):
+ * NUNCA exibir percentual de plano ou denominador inventado (sem credit_limit canônico).
+ * Exibir com destaque numérico claro.
  */
-function formatCredits(remaining, source) {
+function getCreditDisplay(remaining, source) {
   if (source === 'FLOW_UI_VERIFIED' && remaining !== null && remaining !== undefined) {
     return {
-      text: `${Number(remaining).toLocaleString('pt-BR')} créditos`,
+      formattedNumber: Number(remaining).toLocaleString('pt-BR'),
+      unit: 'créditos',
       sourceLabel: 'VERIFIED',
       sourceClass: 'source-verified',
+      isKnown: true,
     };
   }
 
   if (source === 'LOCAL_ESTIMATE' && remaining !== null && remaining !== undefined) {
     return {
-      text: `~${Number(remaining).toLocaleString('pt-BR')} créditos`,
+      formattedNumber: `~${Number(remaining).toLocaleString('pt-BR')}`,
+      unit: 'créditos (est.)',
       sourceLabel: 'ESTIMATED',
       sourceClass: 'source-estimated',
+      isKnown: true,
     };
   }
 
   return {
-    text: 'Saldo indisponível',
+    formattedNumber: '—',
+    unit: 'saldo não lido',
     sourceLabel: 'UNKNOWN',
     sourceClass: 'source-unknown',
+    isKnown: false,
   };
 }
 
 function formatCurrentTask(taskId) {
   if (!taskId) {
-    return { label: 'Livre', isBusy: false };
+    return { label: 'Livre para dispatch', isBusy: false };
   }
   const compactId = taskId.length > 10 ? `${taskId.slice(0, 8)}...` : taskId;
-  return { label: `Em uso (${compactId})`, isBusy: true, fullId: taskId };
+  return { label: `Ocupada (${compactId})`, isBusy: true, fullId: taskId };
 }
 
 /**
- * FlowAccountsSection — Seção visual do Google Flow Multi-Account Pool no Factory Live.
- * Control room visual, estritamente READ-ONLY, zero percentuais artificiais.
+ * FlowAccountsSection — AI Compute Vault / Google Flow Pool (R6A.5).
+ * Read-only visual upgrade with prominent balance metrics and structured capacity layout.
  */
 export default function FlowAccountsSection({ flowPool }) {
   if (!flowPool || flowPool.error) {
@@ -132,7 +136,7 @@ export default function FlowAccountsSection({ flowPool }) {
     <section className="flow-pool-section" aria-label="Google Flow Provider Pool">
       <div className="flow-section-header">
         <div className="flow-title-group">
-          <span className="flow-title-icon">🎬</span>
+          <span className="flow-title-icon">⚡</span>
           <span className="flow-title">Google Flow</span>
           <span className="flow-subtitle">Multi-Account Pool</span>
           <span className="flow-count-badge">
@@ -141,10 +145,10 @@ export default function FlowAccountsSection({ flowPool }) {
         </div>
 
         {total_known_credits !== null && total_known_credits !== undefined && (
-          <div className="flow-credits-summary" title="Total somado de saldos conhecidos">
-            <span className="summary-label">Créditos conhecidos:</span>
+          <div className="flow-credits-summary" title="Total somado de saldos verificados em memória">
+            <span className="summary-label">Pool Total Verificado:</span>
             <strong className="summary-value">
-              {Number(total_known_credits).toLocaleString('pt-BR')}
+              {Number(total_known_credits).toLocaleString('pt-BR')} créditos
             </strong>
           </div>
         )}
@@ -159,34 +163,43 @@ export default function FlowAccountsSection({ flowPool }) {
           accounts.map((acct) => {
             const isActive = acct.account_id === active_account_id;
             const statusInfo = getStatusDetails(acct.status, acct.credits_source, acct.credits_remaining);
-            const creditsInfo = formatCredits(acct.credits_remaining, acct.credits_source);
+            const creditDisplay = getCreditDisplay(acct.credits_remaining, acct.credits_source);
             const taskInfo = formatCurrentTask(acct.current_task_id);
+
+            // Future-proof capacity percentage check (only if backend canonically sends credit_limit)
+            const hasCanonicalLimit = typeof acct.credit_limit === 'number' && acct.credit_limit > 0;
+            const canonicalPct = hasCanonicalLimit
+              ? Math.min(100, Math.round((acct.credits_remaining / acct.credit_limit) * 100))
+              : null;
 
             return (
               <div
                 key={acct.account_id}
                 className={`flow-account-card ${isActive ? 'is-active-account' : ''} ${acct.enabled === false ? 'is-disabled' : ''}`}
               >
-                {/* Discrete qualitative status accent line (Requirement 8: NOT a percentage bar) */}
+                {/* Top Qualitative Status Bar */}
                 <div
                   className="flow-qualitative-status-bar"
                   style={{ backgroundColor: statusInfo.dotColor }}
                 />
 
-                {/* Cabeçalho do Card: Display Name + Active Badge + ID secundário */}
+                {/* Identity Header */}
                 <div className="flow-card-top">
                   <div className="flow-card-identity">
-                    <div className="flow-display-name" title={acct.display_name || acct.account_id}>
-                      {acct.display_name || acct.account_id}
+                    <div className="flow-display-name-row">
+                      <span className="flow-account-icon">{isActive ? '⚡' : '👤'}</span>
+                      <span className="flow-display-name" title={acct.display_name || acct.account_id}>
+                        {acct.display_name || acct.account_id}
+                      </span>
                     </div>
                     <div className="flow-account-id" title={acct.account_id}>
-                      {acct.account_id}
+                      <code>{acct.account_id}</code> • Prioridade: {acct.priority ?? 100}
                     </div>
                   </div>
 
                   <div className="flow-card-badges">
                     {isActive && (
-                      <span className="flow-badge-active" title="Conta ativa selecionada por maior saldo conhecido">
+                      <span className="flow-badge-active" title="Conta ativa prioritária (maior saldo verificado)">
                         ★ ATIVA
                       </span>
                     )}
@@ -196,36 +209,56 @@ export default function FlowAccountsSection({ flowPool }) {
                   </div>
                 </div>
 
-                {/* Status Operacional */}
-                <div className="flow-status-row">
-                  <span
-                    className="flow-status-dot"
-                    style={{ backgroundColor: statusInfo.dotColor }}
-                  />
-                  <span className={`flow-status-text ${statusInfo.badgeClass}`}>
-                    {statusInfo.label}
+                {/* Prominent Balance Metric Box */}
+                <div className="flow-balance-hero">
+                  <div className="flow-balance-value-row">
+                    <span className="balance-number">{creditDisplay.formattedNumber}</span>
+                    <span className="balance-unit">{creditDisplay.unit}</span>
+                  </div>
+                  <span className={`flow-source-badge ${creditDisplay.sourceClass}`}>
+                    {creditDisplay.sourceLabel}
                   </span>
                 </div>
 
-                {/* Saldo de Créditos + Fonte (Verified / Estimated / Unknown) */}
-                <div className="flow-credits-row">
-                  <span className="flow-credits-value">
-                    {creditsInfo.text}
-                  </span>
-                  <span className={`flow-source-badge ${creditsInfo.sourceClass}`}>
-                    {creditsInfo.sourceLabel}
-                  </span>
+                {/* Qualitative / Future Capacity Track */}
+                <div className="flow-capacity-slot">
+                  <div className="flow-gauge-track">
+                    <div
+                      className="flow-gauge-fill"
+                      style={{
+                        width: canonicalPct !== null ? `${canonicalPct}%` : '100%',
+                        backgroundColor: statusInfo.dotColor,
+                        opacity: canonicalPct !== null ? 1 : 0.85,
+                      }}
+                    />
+                  </div>
+                  <div className="flow-capacity-subtext">
+                    {canonicalPct !== null ? (
+                      <span>{canonicalPct}% da cota ({acct.credits_remaining} / {acct.credit_limit})</span>
+                    ) : (
+                      <span>Saldo factual verificado no Google Flow</span>
+                    )}
+                  </div>
                 </div>
 
-                {/* Task Atual / Disponibilidade */}
-                <div className="flow-task-row">
-                  <span className="flow-task-label">Execução:</span>
-                  <span
-                    className={`flow-task-value ${taskInfo.isBusy ? 'in-use' : 'idle'}`}
-                    title={taskInfo.fullId || 'Livre'}
+                {/* Operational Status & Active Task */}
+                <div className="flow-footer-meta">
+                  <div className="flow-status-row">
+                    <span
+                      className="flow-status-dot"
+                      style={{ backgroundColor: statusInfo.dotColor }}
+                    />
+                    <span className={`flow-status-text ${statusInfo.badgeClass}`}>
+                      {statusInfo.label}
+                    </span>
+                  </div>
+
+                  <div
+                    className={`flow-task-status ${taskInfo.isBusy ? 'in-use' : 'idle'}`}
+                    title={taskInfo.fullId || 'Pronta'}
                   >
                     {taskInfo.label}
-                  </span>
+                  </div>
                 </div>
               </div>
             );

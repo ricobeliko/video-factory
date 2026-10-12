@@ -3041,4 +3041,509 @@ def get_recent_publications(
         return [dict(row) for row in rows]
 
 
+# ---------------------------------------------------------------------------
+# 19. Live Multi-Channel Execution Telemetry (Fase R5B / UI-005)
+# ---------------------------------------------------------------------------
+
+STAGE_LABELS: Dict[str, str] = {
+    "TOPIC": "Ideação do Tema",
+    "SCRIPT": "Roteiro",
+    "NARRATION": "Narração (TTS)",
+    "VISUALS": "Materiais Visuais",
+    "RENDER": "Renderização",
+    "SAFETY": "Safety Gate",
+    "QUALITY": "Quality Gate",
+    "COPYRIGHT": "Copyright Gate",
+    "READY_STOCK": "Estoque Pronto",
+    "SCHEDULER": "Agendador",
+    "PUBLISHER": "Publicador",
+    "YOUTUBE": "Publicado no YouTube",
+    "UNKNOWN": "Em Processamento",
+}
+
+
+def normalize_pipeline_stage(raw_stage: Optional[str]) -> Optional[str]:
+    """Normaliza nomes reais de estágios persistidos para os 12 estágios canônicos.
+
+    Retorna None se raw_stage for vazio/None. NUNCA infere estágio a partir de progresso!
+    """
+    if not raw_stage:
+        return None
+    s = str(raw_stage).strip().upper()
+    if s in ("TOPIC", "PREFLIGHT"):
+        return "TOPIC"
+    if s in ("SCRIPT", "VIDEO_SCRIPT"):
+        return "SCRIPT"
+    if s in ("AUDIO", "TTS", "NARRATION"):
+        return "NARRATION"
+    if s in ("MATERIALS", "MATERIAL", "VISUALS", "FLOW_CLIPS", "DOWNLOAD_VIDEOS"):
+        return "VISUALS"
+    if s in (
+        "RENDER", "SCENE_RENDER", "VIDEO", "SUBTITLE",
+        "SCENE_RENDER_PREP", "SCENE_RENDER_CLIPS", "CONCAT",
+        "FINAL_RENDER_AUDIO", "FINAL_RENDER_SUBTITLE",
+        "FINAL_RENDER_ENCODE", "FINAL_RENDER"
+    ):
+        return "RENDER"
+    if s in ("SAFETY", "SAFETY_GATE", "MONETIZATION_SAFETY"):
+        return "SAFETY"
+    if s in ("QUALITY", "QUALITY_GATE", "QUALITY_SCORE"):
+        return "QUALITY"
+    if s in ("COPYRIGHT", "COPYRIGHT_GATE", "PROVENANCE"):
+        return "COPYRIGHT"
+    if s in ("READY_STOCK", "READY", "STOCK"):
+        return "READY_STOCK"
+    if s in ("SCHEDULER", "SCHEDULED"):
+        return "SCHEDULER"
+    if s in ("PUBLISHER", "POST_FOR_ME"):
+        return "PUBLISHER"
+    if s in ("YOUTUBE", "PUBLISHED"):
+        return "YOUTUBE"
+    return "UNKNOWN"
+
+
+def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna visão consolidada e em tempo real da execução de todos os perfis/canais ativos.
+
+    Backend = Source of Truth.
+    Frontend = Presentation Only.
+    Zero inferência de stage ou provider.
+    """
+    init_operator_db(db_path)
+    from app.services import autonomous_production, profile_manager, scheduler
+    from app.services import state as sm
+
+    profile_manager.init_profile_db(db_path)
+    scheduler.init_db(db_path)
+
+    profiles = profile_manager.list_profiles(db_path=db_path)
+    channels_list = profile_manager.list_channels(db_path=db_path)
+
+    # Mapeamento de canais por perfil
+    channels_by_prof: Dict[str, List[Dict[str, Any]]] = {}
+    for c in channels_list:
+        pid = c.get("profile_id")
+        if pid:
+            channels_by_prof.setdefault(pid, []).append(c)
+
+    results = []
+
+    for prof in profiles:
+        pid = prof.get("id")
+        pname = prof.get("name")
+        growth_mode = prof.get("growth_mode", "warmup")
+
+        # Primary channel for this profile
+        chans = channels_by_prof.get(pid, [])
+        primary_ch = chans[0] if chans else None
+        cid = primary_ch.get("id") if primary_ch else None
+        cname = primary_ch.get("channel_name") if primary_ch else None
+
+        auto_status = autonomous_production.get_autonomous_status(profile_id=pid, db_path=db_path)
+        auto_enabled = auto_status.get("enabled", False)
+        auto_state = auto_status.get("state", "disabled")
+        auto_msg = auto_status.get("message", "")
+        current_task_id = auto_status.get("current_task_id")
+        waiting_task_id = auto_status.get("waiting_task_id")
+
+        execution = None
+        status = "IDLE"
+
+        # 1. Verifica se há task em execução ativa (current_task_id)
+        if current_task_id:
+            task = sm.state.get_task(current_task_id)
+            if task:
+                t_state = task.get("state")
+                topic = task.get("video_subject") or task.get("topic") or "Geração em andamento"
+                progress = task.get("progress")
+                raw_stage = task.get("stage")
+                failed_stage = task.get("failed_stage")
+                error_msg = task.get("error")
+
+                if t_state == const.TASK_STATE_PROCESSING:
+                    status = "RUNNING"
+                    # Regra de ouro: Não inventar stage se raw_stage for ausente!
+                    if raw_stage:
+                        pipeline_stage = normalize_pipeline_stage(raw_stage)
+                        component = "task"
+                        provider = "ffmpeg" if pipeline_stage == "RENDER" else None
+                        next_stage = "SAFETY" if pipeline_stage == "RENDER" else None
+                    else:
+                        pipeline_stage = None
+                        component = "task"
+                        provider = None
+                        next_stage = None
+
+                    execution = {
+                        "task_id": current_task_id,
+                        "profile_id": pid,
+                        "profile_name": pname,
+                        "channel_id": cid,
+                        "channel_name": cname,
+                        "topic": topic,
+                        "pipeline_stage": pipeline_stage,
+                        "pipeline_stage_label": STAGE_LABELS.get(pipeline_stage, "Em Processamento") if pipeline_stage else None,
+                        "status": "RUNNING",
+                        "progress": progress,
+                        "component": component,
+                        "provider": provider,
+                        "started_at": task.get("created_at"),
+                        "updated_at": None,
+                        "elapsed_seconds": None,
+                        "message": auto_msg or "Executando pipeline de vídeo",
+                        "retry_state": None,
+                        "fallback_state": None,
+                        "next_stage": next_stage,
+                        "error": None,
+                        "publication_state": None,
+                    }
+                elif t_state == const.TASK_STATE_FAILED:
+                    status = "FAILED"
+                    pipeline_stage = normalize_pipeline_stage(failed_stage) if failed_stage else None
+                    execution = {
+                        "task_id": current_task_id,
+                        "profile_id": pid,
+                        "profile_name": pname,
+                        "channel_id": cid,
+                        "channel_name": cname,
+                        "topic": topic,
+                        "pipeline_stage": pipeline_stage,
+                        "pipeline_stage_label": STAGE_LABELS.get(pipeline_stage, "Falha") if pipeline_stage else None,
+                        "status": "FAILED",
+                        "progress": progress,
+                        "component": "task",
+                        "provider": None,
+                        "started_at": task.get("created_at"),
+                        "updated_at": None,
+                        "elapsed_seconds": None,
+                        "message": error_msg or "Tarefa falhou",
+                        "retry_state": None,
+                        "fallback_state": None,
+                        "next_stage": None,
+                        "error": error_msg,
+                        "publication_state": None,
+                    }
+                elif t_state == const.TASK_STATE_COMPLETE:
+                    status = "WAITING"
+                    execution = {
+                        "task_id": current_task_id,
+                        "profile_id": pid,
+                        "profile_name": pname,
+                        "channel_id": cid,
+                        "channel_name": cname,
+                        "topic": topic,
+                        "pipeline_stage": "READY_STOCK",
+                        "pipeline_stage_label": STAGE_LABELS["READY_STOCK"],
+                        "status": "WAITING",
+                        "progress": 100,
+                        "component": "autonomous_production",
+                        "provider": None,
+                        "started_at": task.get("created_at"),
+                        "updated_at": None,
+                        "elapsed_seconds": None,
+                        "message": "Vídeo pronto aguardando agendamento",
+                        "retry_state": None,
+                        "fallback_state": None,
+                        "next_stage": "SCHEDULER",
+                        "error": None,
+                        "publication_state": None,
+                    }
+
+        # 2. Se não há current_task ativo, verifica waiting_task_id
+        if not execution and waiting_task_id:
+            w_task = sm.state.get_task(waiting_task_id)
+            w_topic = w_task.get("video_subject") if w_task else "Vídeo em estoque aguardando agendamento"
+            status = "WAITING"
+            execution = {
+                "task_id": waiting_task_id,
+                "profile_id": pid,
+                "profile_name": pname,
+                "channel_id": cid,
+                "channel_name": cname,
+                "topic": w_topic,
+                "pipeline_stage": "READY_STOCK",
+                "pipeline_stage_label": STAGE_LABELS["READY_STOCK"],
+                "status": "WAITING",
+                "progress": 100,
+                "component": "autonomous_production",
+                "provider": None,
+                "started_at": w_task.get("created_at") if w_task else None,
+                "updated_at": None,
+                "elapsed_seconds": None,
+                "message": auto_msg or "Aguardando próximo slot de publicação",
+                "retry_state": None,
+                "fallback_state": None,
+                "next_stage": "SCHEDULER",
+                "error": None,
+                "publication_state": None,
+            }
+
+        # 3. Se não há task em geração/waiting, verifica agendamentos pendentes ou retrying em scheduled_posts
+        if not execution:
+            with get_connection(db_path) as conn:
+                sched_row = conn.execute(
+                    """
+                    SELECT id, task_id, scheduled_at, status, attempts, last_error
+                    FROM scheduled_posts
+                    WHERE profile_id = ? AND status IN ('pending', 'failed')
+                    ORDER BY scheduled_at ASC LIMIT 1;
+                    """,
+                    (pid,)
+                ).fetchone()
+
+                if sched_row:
+                    s_dict = dict(sched_row)
+                    s_task_id = s_dict["task_id"]
+                    s_attempts = s_dict.get("attempts", 0)
+                    s_err = s_dict.get("last_error")
+
+                    # REGRA 9 (STALE STATUS): Verifica se na verdade já houve publicação terminal com sucesso!
+                    pub_row = conn.execute(
+                        """
+                        SELECT id, published_at, status, external_url
+                        FROM publication_events
+                        WHERE task_id = ? AND status = 'success'
+                        ORDER BY id DESC LIMIT 1;
+                        """,
+                        (s_task_id,)
+                    ).fetchone()
+
+                    if pub_row:
+                        p_dict = dict(pub_row)
+                        status = "SUCCESS"
+                        execution = {
+                            "task_id": s_task_id,
+                            "profile_id": pid,
+                            "profile_name": pname,
+                            "channel_id": cid,
+                            "channel_name": cname,
+                            "topic": "Publicado no YouTube",
+                            "pipeline_stage": "YOUTUBE",
+                            "pipeline_stage_label": STAGE_LABELS["YOUTUBE"],
+                            "status": "SUCCESS",
+                            "progress": 100,
+                            "component": "scheduler_worker",
+                            "provider": "post_for_me",
+                            "started_at": None,
+                            "updated_at": p_dict.get("published_at"),
+                            "elapsed_seconds": None,
+                            "message": "Publicado com sucesso no YouTube",
+                            "retry_state": None,
+                            "fallback_state": None,
+                            "next_stage": None,
+                            "error": None,
+                            "publication_state": {
+                                "status": "success",
+                                "published_at": p_dict.get("published_at"),
+                                "external_url": p_dict.get("external_url"),
+                            },
+                        }
+                    else:
+                        is_retrying = s_attempts > 0
+                        status = "RETRYING" if is_retrying else "SCHEDULED"
+                        execution = {
+                            "task_id": s_task_id,
+                            "profile_id": pid,
+                            "profile_name": pname,
+                            "channel_id": cid,
+                            "channel_name": cname,
+                            "topic": "Vídeo agendado",
+                            "pipeline_stage": "SCHEDULER",
+                            "pipeline_stage_label": STAGE_LABELS["SCHEDULER"],
+                            "status": status,
+                            "progress": 100,
+                            "component": "scheduler_worker",
+                            "provider": "post_for_me",
+                            "started_at": s_dict.get("scheduled_at"),
+                            "updated_at": None,
+                            "elapsed_seconds": None,
+                            "message": f"Retry {s_attempts}: {s_err}" if is_retrying and s_err else f"Agendado para {s_dict.get('scheduled_at')}",
+                            "retry_state": {"attempts": s_attempts, "is_retrying": is_retrying, "error": s_err} if is_retrying else None,
+                            "fallback_state": None,
+                            "next_stage": "PUBLISHER",
+                            "error": s_err if s_dict.get("status") == "failed" else None,
+                            "publication_state": None,
+                        }
+
+        # 4. Se não há execução ativa ou agendada, canal está IDLE / BLOCKED / WAITING
+        if not execution:
+            if auto_state == "blocked":
+                status = "BLOCKED"
+            elif auto_state == "cooldown":
+                status = "WAITING"
+            elif not auto_enabled or auto_state == "disabled":
+                status = "IDLE"
+            else:
+                status = "IDLE"
+
+        results.append({
+            "profile_id": pid,
+            "profile_name": pname,
+            "channel_id": cid,
+            "channel_name": cname,
+            "autonomous_enabled": auto_enabled,
+            "growth_mode": growth_mode,
+            "status": status,
+            "execution": execution,
+        })
+
+    return {"channels": results, "total": len(results)}
+
+
+def get_execution_detail(task_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Retorna trace detalhado de execução de uma tarefa baseado estritamente em fatos persistidos."""
+    init_operator_db(db_path)
+    from app.services import profile_manager, scheduler
+    from app.services import state as sm
+
+    profile_manager.init_profile_db(db_path)
+    scheduler.init_db(db_path)
+
+    task = sm.state.get_task(task_id)
+    profile_id = None
+    if task:
+        profile_id = task.get("profile_id")
+    if not profile_id:
+        profile_id = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+
+    profile = profile_manager.get_profile(profile_id, db_path=db_path) if profile_id else None
+    channels = profile_manager.list_channels(profile_id=profile_id, db_path=db_path) if profile_id else []
+    primary_ch = channels[0] if channels else None
+
+    with get_connection(db_path) as conn:
+        sched_row = conn.execute(
+            "SELECT * FROM scheduled_posts WHERE task_id = ? ORDER BY id DESC LIMIT 1;",
+            (task_id,)
+        ).fetchone()
+        sched_dict = dict(sched_row) if sched_row else None
+
+        pub_row = conn.execute(
+            "SELECT * FROM publication_events WHERE task_id = ? ORDER BY id DESC LIMIT 1;",
+            (task_id,)
+        ).fetchone()
+        pub_dict = dict(pub_row) if pub_row else None
+
+        op_events = conn.execute(
+            """
+            SELECT id, timestamp, component, severity, event_type, message, metadata_json
+            FROM operational_events
+            WHERE task_id = ?
+            ORDER BY id ASC;
+            """,
+            (task_id,)
+        ).fetchall()
+        events_timeline = []
+        for r in op_events:
+            d = dict(r)
+            if d.get("metadata_json"):
+                try:
+                    d["metadata"] = json.loads(d["metadata_json"])
+                except Exception:
+                    d["metadata"] = {}
+            events_timeline.append(d)
+
+    if not task and not sched_dict and not pub_dict and not events_timeline:
+        return None
+
+    # Trace causal: CHANNEL -> AUTONOMOUS_PRODUCTION -> SERVICE -> PROVIDER -> RESULT -> NEXT_SERVICE
+    trace = []
+
+    trace.append({
+        "node": "CHANNEL",
+        "name": primary_ch.get("channel_name") if primary_ch else (profile.get("name") if profile else "Default Channel"),
+        "profile_id": profile_id,
+        "channel_id": primary_ch.get("id") if primary_ch else None,
+        "growth_mode": profile.get("growth_mode") if profile else "warmup",
+    })
+
+    trace.append({
+        "node": "AUTONOMOUS_PRODUCTION",
+        "component": "autonomous_production",
+        "action": "trigger_generation",
+    })
+
+    current_service = "task"
+    if pub_dict and pub_dict.get("status") == "success":
+        current_service = "youtube_publisher"
+    elif sched_dict:
+        current_service = "scheduler_worker"
+
+    trace.append({
+        "node": "SERVICE",
+        "name": current_service,
+        "stage": normalize_pipeline_stage(task.get("stage")) if task else None,
+    })
+
+    provider_name = None
+    if pub_dict:
+        provider_name = "post_for_me / youtube"
+    elif task:
+        if task.get("stage") and "RENDER" in task.get("stage"):
+            provider_name = "ffmpeg"
+        elif task.get("voice_name"):
+            provider_name = f"tts ({task.get('voice_name')})"
+    trace.append({
+        "node": "PROVIDER",
+        "name": provider_name or "internal",
+    })
+
+    final_status = "UNKNOWN"
+    if pub_dict and pub_dict.get("status") == "success":
+        final_status = "SUCCESS"
+    elif task and task.get("state") == const.TASK_STATE_FAILED:
+        final_status = "FAILED"
+    elif task and task.get("state") == const.TASK_STATE_COMPLETE:
+        final_status = "COMPLETE"
+    elif task and task.get("state") == const.TASK_STATE_PROCESSING:
+        final_status = "PROCESSING"
+    elif sched_dict:
+        final_status = sched_dict.get("status", "SCHEDULED").upper()
+
+    trace.append({
+        "node": "RESULT",
+        "status": final_status,
+        "error": task.get("error") if task else (sched_dict.get("last_error") if sched_dict else None),
+    })
+
+    next_srv = None
+    if final_status == "PROCESSING":
+        next_srv = "safety_gate"
+    elif final_status == "COMPLETE" and not sched_dict and not pub_dict:
+        next_srv = "scheduler"
+    elif final_status in ("SCHEDULED", "PENDING"):
+        next_srv = "publisher"
+
+    trace.append({
+        "node": "NEXT_SERVICE",
+        "name": next_srv,
+    })
+
+    return {
+        "task_id": task_id,
+        "profile": profile,
+        "channel": primary_ch,
+        "topic": task.get("video_subject") if task else None,
+        "task_snapshot": {
+            "state": task.get("state") if task else None,
+            "progress": task.get("progress") if task else None,
+            "stage": task.get("stage") if task else None,
+            "normalized_stage": normalize_pipeline_stage(task.get("stage")) if task else None,
+            "failed_stage": task.get("failed_stage") if task else None,
+            "error": task.get("error") if task else None,
+            "created_at": task.get("created_at") if task else None,
+            "has_script": bool(task.get("script") or task.get("video_script")) if task else False,
+            "has_audio": bool(task.get("audio_file")) if task else False,
+            "materials_count": len(task.get("video_materials", [])) if task else 0,
+            "safety_status": task.get("safety_status") if task else None,
+            "quality_score": task.get("quality_score") if task else None,
+            "copyright_status": task.get("copyright_status") if task else None,
+        } if task else None,
+        "scheduler_entry": sched_dict,
+        "publication_event": pub_dict,
+        "events_timeline": events_timeline,
+        "execution_trace": trace,
+    }
+
+
+
 

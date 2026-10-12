@@ -23,7 +23,7 @@
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
 - **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, avaliar pós-E2E, ver UI-003)`
-- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 5 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `CFG-004`)
+- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 6 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005`, `CFG-004`)
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -32,7 +32,9 @@
 ## Status Consolidado por Componente
 
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
-- **R5A Web UI V2 Thin Read-Only API MVP** = DEV COMPLETED (6 endpoints GET montados em /api/v2 via FastAPI existente, zero regras de negócio duplicadas, zero endpoints WRITE, autenticação verify_token preservada, teste direcionado 8/8 PASS; zero impacto no piloto autônomo em execução)
+- **R5A Web UI V2 Thin Read-Only API MVP** = COMPLETE (6 endpoints GET montados em /api/v2 via FastAPI existente, zero regras de negócio duplicadas, zero endpoints WRITE, autenticação verify_token preservada, teste direcionado 8/8 PASS; zero impacto no piloto autônomo em execução)
+- **R5B Live Multi-Channel Execution Contract / UI-005** = DEV COMPLETED (Contrato read-only e causal para tela Factory Live com endpoints /api/v2/executions/live e /executions/{task_id}, grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS; zero impacto no piloto autônomo)
+- **R6A Web UI V2 Frontend Scaffold + Factory Live** = PLANNED (Próxima fase de UI: scaffold React/Vite priorizando a tela Factory Live desacoplada do Streamlit)
 - **Piloto Autônomo E2E (Dose Diária De Internet)** = ACTIVE (CURRENT_FOCUS)
 
 - **Google Flow / External Video Quality Track** = FROZEN / DEFERRED (Implementação existente preservada intacta; sem trabalho de melhoria neste momento; retomada futura explícita)
@@ -193,6 +195,17 @@ A existência de um item no checklist **NÃO significa que o código deve ser re
 - **PLANNED_ACTION:** Na Web UI v2 definir fonte canônica de status operacional e separar: provider processing, scheduler retry, terminal success, terminal failure, evitando status visual stale.
 - **TARGET_PHASE:** `R4 / R5 / R6`
 - **STATUS:** `OPEN`
+
+#### UI-005
+- **ID:** `UI-005`
+- **AREA:** `Factory Live / Execution Telemetry Graph`
+- **PROBLEM:** O stepper do Streamlit utilizava inferências legadas genéricas para tasks em processamento (`stage = "Processando etapa do pipeline"`, `stage_idx = 4`, `progress = 50%`) e não apresentava visibilidade causal multicanal em tempo real.
+- **CURRENT_BEHAVIOR:** Backend possui dados reais suficientes para compor o estado dos 12 estágios e o traço causal sem inferir etapas intermediárias ausentes.
+- **KNOWN_CANONICAL_SOURCE:** `app.services.operator_console.get_live_execution_overview` e `get_execution_detail`.
+- **CURRENT_RISK:** `LOW` (read-only em DEV).
+- **PLANNED_ACTION:** Contrato backend entregue em R5B. Próximo passo na R6A: construir a tela Factory Live na Web UI V2 (React/Vite).
+- **TARGET_PHASE:** `R5B / R6A`
+- **STATUS:** `MAPPED / DEV_COMPLETED`
 
 #### CFG-004
 - **ID:** `CFG-004`

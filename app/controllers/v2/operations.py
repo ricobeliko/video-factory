@@ -114,3 +114,29 @@ def list_publications(
 def get_provider_health(request: Request):
     health = operator_console.get_provider_health_summary()
     return utils.get_response(200, health)
+
+
+@router.get(
+    "/executions/live",
+    summary="Get live multi-channel execution overview (UI-005)",
+)
+def get_live_executions(request: Request):
+    overview = operator_console.get_live_execution_overview()
+    return utils.get_response(200, overview)
+
+
+@router.get(
+    "/executions/{task_id}",
+    summary="Get execution trace detail for a specific task (UI-005)",
+)
+def get_task_execution(request: Request, task_id: str):
+    request_id = base.get_task_id(request)
+    detail = operator_console.get_execution_detail(task_id)
+    if not detail:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Execution for task '{task_id}' not found",
+        )
+    return utils.get_response(200, detail)
+

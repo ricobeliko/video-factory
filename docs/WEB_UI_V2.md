@@ -3,6 +3,7 @@
 ## Status
 `FASE R4A: DISCOVERY / READ-ONLY AUDIT (COMPLETED)`
 `FASE R5A: THIN READ-ONLY API MVP (COMPLETED)`
+`FASE R5B: LIVE MULTI-CHANNEL EXECUTION CONTRACT / UI-005 (COMPLETED)`
 
 ---
 
@@ -409,4 +410,149 @@ Todos os endpoints montados em `app/asgi.py` através do roteador central `app/r
 - Teste unitário direcionado: `test/services/test_api_v2_readonly.py` (8 testes aprovados, cobrindo rotas, imutabilidade, 404, validação 400, autenticação, sanitização e status terminal).
 - Zero impacto no banco de dados SQLite operacional (schema inalterado).
 - Zero impacto no piloto autônomo em execução no canal *Dose Diária De Internet*.
+
+---
+
+## 16. Phase R5B — Live Multi-Channel Execution Contract / UI-005 (Entregue em 11/10/2026)
+
+### A. Registro Formal: UI-005 — Live Multi-Channel Execution Graph
+
+- **ITEM:** `UI-005`
+- **TITLE:** `LIVE MULTI-CHANNEL EXECUTION GRAPH`
+- **PRIORITY:** `P0 / MVP`
+- **OBJECTIVE:** Provide a real-time visual representation of what every autonomous channel is currently doing and which canonical backend component/provider owns the current execution step.
+- **PRIMARY SCREEN:** `FACTORY LIVE`
+
+#### 1. Princípio Arquitetural
+- `BACKEND = SOURCE OF TRUTH`
+- `FRONTEND = PRESENTATION ONLY`
+- O frontend nunca deverá inventar stage, progress ou status.
+- **Regra de Não-Inferência Estrita:** Se o backend conhece apenas `state=PROCESSING` e `progress=40%`, a API retorna `pipeline_stage=null` e `pipeline_stage_label=null`. É terminantemente proibido inferir `stage="VISUALS"` baseando-se em heurísticas ou porcentagens.
+
+#### 2. Pipeline Primário Canônico (12 Estágios)
+O grafo de execução modela o ciclo de vida completo de cada vídeo gerado:
+```
+TOPIC → SCRIPT → NARRATION → VISUALS → RENDER → SAFETY → QUALITY → COPYRIGHT → READY STOCK → SCHEDULER → PUBLISHER → YOUTUBE
+```
+
+#### 3. Estados Visuais Canônicos Permitidos
+- `PENDING`
+- `RUNNING`
+- `SUCCESS`
+- `WAITING`
+- `SCHEDULED`
+- `RETRYING`
+- `BLOCKED`
+- `FAILED`
+- `IDLE`
+
+#### 4. Campos Expostos por Task / Canal
+Cada execução expõe canonicamente:
+- `task_id` (identificador único da task em processamento ou aguardando)
+- `profile_id` (identificador do perfil)
+- `profile_name` (nome do canal/perfil)
+- `channel_id` (identificador do canal YouTube)
+- `channel_name` (nome legível do canal)
+- `topic` (assunto do vídeo / título)
+- `pipeline_stage` (código normalizado do estágio canônico: `TOPIC`, `SCRIPT`, `NARRATION`, etc., ou `null`)
+- `pipeline_stage_label` (label legível para apresentação na UI)
+- `status` (`PENDING`, `RUNNING`, `SUCCESS`, `WAITING`, `SCHEDULED`, `RETRYING`, `BLOCKED`, `FAILED`, `IDLE`)
+- `progress` (0 a 100 inteiro)
+- `component` (componente backend dono da etapa: `autonomous_production`, `task`, `scheduler`, `publisher`, `quality_score`, etc.)
+- `provider` (provedor ativo: `edge_tts`, `gemini`, `ffmpeg`, `post_for_me`, etc., quando houver evidência real)
+- `started_at` / `updated_at` (timestamps ISO ou epoch)
+- `elapsed_seconds` (tempo decorrido calculado quando disponível)
+- `message` (mensagem legível de progresso ou erro)
+- `retry_state` (`null` ou objeto com contagem e tentativas de retry)
+- `fallback_state` (`null` ou indicador de fallback ativo)
+- `next_stage` (próxima etapa lógica esperada)
+- `error` (mensagem de falha quando em estado FAILED ou BLOCKED)
+- `publication_state` (snapshot do estado de publicação no YouTube quando aplicável)
+
+---
+
+### B. Auditoria Streamlit — Descoberta de Inferências Legadas (Stepper)
+
+Durante a auditoria de `webui/components/operator_console.py` (linhas 420-435), foi identificado que para qualquer tarefa em estado real `PROCESSING`, o Stepper da UI legada utilizava valores genéricos e inferidos hardcoded:
+```python
+# CÓDIGO LEGADO AUDITADO NO STREAMLIT (NÃO-CANÔNICO):
+stage = "Processando etapa do pipeline"
+stage_idx = 4
+progress = int(t.get("progress") or 50)
+safety_status = t.get("safety_status") or "PASS"
+quality_score = t.get("quality_score") or 75
+```
+**Decisão Arquitetural:**
+Essa inferência arbitrária do Streamlit foi classificada como apresentação legada enganosa. A Web UI V2 **rejeita categoricamente** essas inferências. Se um dado não estiver explicitamente gravado na tarefa ou nos eventos operacionais, ele é retornado como `null` e exibido na UI como "Não reportado / Em processamento".
+
+---
+
+### C. Matriz de Cobertura de Telemetria (12 Estágios Canônicos)
+
+| PIPELINE_STAGE | CURRENT_SOURCE | CURRENT_FIELD/EVENT | REAL_OR_INFERRED | PROVIDER_AVAILABLE | TIMING_AVAILABLE | GAP | ACTION |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **TOPIC** | `autonomous_production` / `tasks` | `tasks.video_subject`, `video_script` | REAL | SIM (`gemini` / `deepseek` / `manual`) | SIM (`tasks.created_at`) | Nenhum | `CANONICAL_NOW` |
+| **SCRIPT** | `tasks` / `storage/tasks/*/script.json` | `task.video_script` | PARTIAL | SIM (config do LLM) | SIM (`task.created_at`) | Durante a geração ao vivo, a sub-etapa in-flight não atualiza campo `stage` persistido | `PARTIAL` (expor quando gerado; gap de instrumentação in-flight) |
+| **NARRATION** | `tasks` / `storage/tasks/*/audio.mp3` | Presença de áudio em storage / eventos | PARTIAL | SIM (`edge_tts`, `azure`, `cosyvoice`) | SIM (`operational_events`) | Sub-etapa de áudio em andamento não possui callback gravando `task['stage'] = 'tts'` em tempo real | `PARTIAL` |
+| **VISUALS** | `tasks` / `flow_manifest` / `material` | Materiais locais / storage | PARTIAL | SIM (`pexels`, `pixabay`, `flow`) | SIM (`operational_events`) | Coleta e download de vídeo em andamento sem status granular persistido no banco | `PARTIAL` |
+| **RENDER** | `tasks` / `operational_events` | `tasks.state='PROCESSING'/'COMPLETE'` | REAL | SIM (`ffmpeg` / `moviepy`) | SIM (`operational_events`, `task.created_at`) | Nenhum | `CANONICAL_NOW` |
+| **SAFETY** | `tasks` / `operational_events` | `tasks.safety_status`, `safety_details` | REAL | SIM (`gemini` / `rule_engine`) | SIM (`operational_events`) | Nenhum | `CANONICAL_NOW` |
+| **QUALITY** | `tasks` / `operational_events` | `tasks.quality_score`, `quality_details` | REAL | SIM (`internal_scorer`) | SIM (`operational_events`) | Nenhum | `CANONICAL_NOW` |
+| **COPYRIGHT** | `tasks` / `operational_events` | `tasks.copyright_status`, `copyright_manifest` | REAL | SIM (`provenance_engine`) | SIM (`operational_events`) | Nenhum | `CANONICAL_NOW` |
+| **READY_STOCK** | `operator_console` / `tasks` | `tasks.state=1` + arquivo `final-1.mp4` verificado | REAL | NÃO (local filesystem / sqlite) | SIM (`task.created_at`) | Nenhum | `CANONICAL_NOW` |
+| **SCHEDULER** | `scheduled_posts` | `scheduled_posts.status`, `scheduled_at` | REAL | SIM (`scheduler_worker`) | SIM (`scheduled_posts.created_at`, `scheduled_at`) | Nenhum | `CANONICAL_NOW` |
+| **PUBLISHER** | `scheduled_posts` / `publication_events` | `scheduled_posts.status='retrying'`, `last_error` | REAL | SIM (`post_for_me` / `youtube_api`) | SIM (`scheduled_posts.updated_at`) | Nenhum | `CANONICAL_NOW` |
+| **YOUTUBE** | `publication_events` | `publication_events.status='success'`, `video_url` | REAL | SIM (`post_for_me` / `youtube`) | SIM (`publication_events.created_at`) | Nenhum | `CANONICAL_NOW` |
+
+#### Resumo de Classificação dos Estágios:
+- **CANONICAL_NOW (9 estágios):** `TOPIC`, `RENDER`, `SAFETY`, `QUALITY`, `COPYRIGHT`, `READY_STOCK`, `SCHEDULER`, `PUBLISHER`, `YOUTUBE`.
+- **PARTIAL (3 estágios):** `SCRIPT`, `NARRATION`, `VISUALS` (os artefatos finais são reais e persistidos, mas durante o processamento em tempo real o backend não persiste a sub-etapa ativa na task, apenas em logs).
+- **MISSING (0 estágios):** Nenhuma etapa é fabricada ou inexistente.
+
+---
+
+### D. Endpoints Implementados (2 Novos GETs)
+
+Ambos montados em `/api/v2/executions`:
+
+#### 1. `GET /api/v2/executions/live`
+- **Objetivo:** Fornecer visão agregada multicanal em tempo real para a tela Factory Live.
+- **Serviço Canônico:** `operator_console.get_live_execution_overview(db_path=None)`.
+- **Comportamento:**
+  - Itera sobre todos os perfis ativos;
+  - Resolve se o perfil possui task em execução ativa (`autonomous_current_task_id`), task aguardando pós-geração (`autonomous_waiting_task_id`), ou post agendado/publicado recente;
+  - Se não houver atividade, retorna `status='IDLE'` limpo;
+  - Se houver task em processamento, extrai apenas dados reais persistidos (zero inferência);
+  - **Resolução Canônica de UI-004:** Sucesso terminal em `publication_events` (`status='success'`) tem precedência absoluta sobre retries antigos ou mensagens de timeout em `scheduled_posts`;
+  - Performance: Zero chamadas externas pagas, zero locks concorrentes, query leve otimizada para polling de 2–5 segundos na futura UI.
+
+#### 2. `GET /api/v2/executions/{task_id}`
+- **Objetivo:** Traço causal detalhado de uma tarefa específica ("Quem chamou quem").
+- **Serviço Canônico:** `operator_console.get_execution_detail(task_id, db_path=None)`.
+- **Trace Causal Reconstruído com Fatos Existentes:**
+  - `CHANNEL`: Perfil e canal de destino associados à task;
+  - `TRIGGER / AUTONOMOUS_PRODUCTION`: Identifica se a tarefa foi disparada pelo Autonomous Worker (compara com `autonomous_current_task_id` ou `autonomous_waiting_task_id`) ou submetida via manual/webui;
+  - `COMPONENT`: Componente backend responsável pelo estágio atual (`task_service`, `scheduler`, `publisher`, `quality_score`);
+  - `PROVIDER`: Provedor real registrado nos metadados ou na configuração;
+  - `RESULT`: Estado terminal consolidado (Gates, Ready Stock, Publicação);
+  - `TIMELINE`: Timeline cronológica de eventos operacionais reais registrados para a task;
+  - `SCHEDULER & PUBLICATION`: Detalhes dos registros em `scheduled_posts` e `publication_events`.
+
+---
+
+### E. Validação e Impacto em Produção
+- **Arquivo de Teste Estendido:** `test/services/test_api_v2_readonly.py` (total de 15 testes aprovados: 8 da R5A + 7 da R5B).
+- **Garantias Validadas nos Testes:**
+  - `/api/v2/executions/live` e `/api/v2/executions/{task_id}` retornam HTTP 200 e dados estruturados;
+  - Métodos mutantes (`POST`, `PUT`, `DELETE`) retornam HTTP 405 Method Not Allowed;
+  - Tasks são isoladas por profile/channel correspondente;
+  - Estágios reais persistidos são normalizados fielmente;
+  - Estágios ausentes NÃO são adivinhados (retornam `null`);
+  - Sucesso terminal em `publication_events` sobrepõe status de retry antigo em `scheduled_posts`;
+  - Perfis ociosos retornam `IDLE` de forma limpa;
+  - Zero secrets expostos nas respostas.
+- **Produção:**
+  - Zero impacto no banco de dados SQLite operacional (schema inalterado).
+  - Zero alteração no piloto autônomo em execução no PC Forte.
+
 

@@ -33,6 +33,7 @@ class TestApiV2ReadOnly(unittest.TestCase):
         # Inicializa o banco temporário
         scheduler.init_db(self.db_path)
         profile_manager.init_profile_db(self.db_path)
+        profile_manager.ensure_default_profile(self.db_path)
         operator_console.init_operator_db(self.db_path)
 
         self.client = TestClient(asgi.app)
@@ -54,6 +55,8 @@ class TestApiV2ReadOnly(unittest.TestCase):
             "/api/v2/scheduler/posts",
             "/api/v2/publications",
             "/api/v2/providers/health",
+            "/api/v2/executions/live",
+            "/api/v2/executions/{task_id}",
         ]
 
         for route in expected_routes:
@@ -129,6 +132,8 @@ class TestApiV2ReadOnly(unittest.TestCase):
             "/api/v2/scheduler/posts",
             "/api/v2/publications",
             "/api/v2/providers/health",
+            "/api/v2/executions/live",
+            "/api/v2/executions/task-test-auth-123",
         ]
 
         for ep in endpoints:
@@ -210,6 +215,218 @@ class TestApiV2ReadOnly(unittest.TestCase):
             self.assertEqual(pub["platform"], "youtube")
             self.assertIsNone(pub.get("error_code"))
 
+    def test_executions_live_exists_and_is_readonly(self):
+        """9. /api/v2/executions/live existe e é estritamente read-only."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+
+            with scheduler.get_connection(self.db_path) as conn:
+                posts_before = conn.execute("SELECT COUNT(*) FROM scheduled_posts;").fetchone()[0]
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertIn("channels", data)
+
+            with scheduler.get_connection(self.db_path) as conn:
+                posts_after = conn.execute("SELECT COUNT(*) FROM scheduled_posts;").fetchone()[0]
+            self.assertEqual(posts_before, posts_after)
+
+    def test_live_execution_channel_mapping_and_idle_state(self):
+        """10. Perfis sem atividade retornam IDLE e execution=None de forma limpa."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.state.state.get_task", return_value=None):
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            channels = data.get("channels", [])
+            self.assertGreater(len(channels), 0)
+
+            for ch in channels:
+                self.assertIn("profile_id", ch)
+                self.assertIn("status", ch)
+                if ch["status"] == "IDLE":
+                    self.assertIsNone(ch["execution"])
+
+    def test_live_execution_task_belongs_to_correct_profile(self):
+        """11. Tarefa em execução pertence exclusivamente ao perfil correto."""
+        from app.models import const
+        fake_task = {
+            "task_id": "task-prof-internet-456",
+            "profile_id": "default",
+            "state": const.TASK_STATE_PROCESSING,
+            "progress": 35,
+            "video_subject": "Novidades da Web",
+            "stage": None,
+        }
+
+        mock_status_internet = {
+            "enabled": True,
+            "state": "generating",
+            "message": "Gerando vídeo",
+            "current_task_id": "task-prof-internet-456",
+            "waiting_task_id": None,
+        }
+
+        def mock_auto_status(profile_id=None, db_path=None):
+            if profile_id == "default":
+                return mock_status_internet
+            return {"enabled": False, "state": "idle", "message": "Idle", "current_task_id": None, "waiting_task_id": None}
+
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.autonomous_production.get_autonomous_status", side_effect=mock_auto_status), \
+             patch("app.services.state.state.get_task", return_value=fake_task):
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            channels = resp.json().get("data", {}).get("channels", [])
+
+            # Verifica que a task aparece no perfil default e não em outros perfis
+            default_ch = next((c for c in channels if c["profile_id"] == "default"), None)
+            self.assertIsNotNone(default_ch)
+            self.assertEqual(default_ch["status"], "RUNNING")
+            self.assertEqual(default_ch["execution"]["task_id"], "task-prof-internet-456")
+            self.assertEqual(default_ch["execution"]["topic"], "Novidades da Web")
+
+            other_chs = [c for c in channels if c["profile_id"] != "default"]
+            for oc in other_chs:
+                self.assertNotEqual(oc["status"], "RUNNING")
+
+    def test_live_execution_real_stage_used_when_available(self):
+        """12. Processamento com stage persistido mapeia para o estágio canônico e provedor real."""
+        from app.models import const
+        rendered_task = {
+            "task_id": "task-render-789",
+            "profile_id": "default",
+            "state": const.TASK_STATE_PROCESSING,
+            "progress": 70,
+            "video_subject": "GTA VI Lançamento",
+            "stage": "SCENE_RENDER_CLIPS",
+        }
+
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.autonomous_production.get_autonomous_status", return_value={
+                 "enabled": True, "state": "generating", "message": "Renderizando", "current_task_id": "task-render-789"
+             }), \
+             patch("app.services.state.state.get_task", return_value=rendered_task):
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            ch = next(c for c in resp.json()["data"]["channels"] if c["profile_id"] == "default")
+            self.assertEqual(ch["status"], "RUNNING")
+            self.assertEqual(ch["execution"]["pipeline_stage"], "RENDER")
+            self.assertEqual(ch["execution"]["provider"], "ffmpeg")
+            self.assertEqual(ch["execution"]["next_stage"], "SAFETY")
+
+    def test_live_execution_stage_not_invented_when_absent(self):
+        """13. Se o estágio não foi persistido, pipeline_stage é None / UNKNOWN, NUNCA inferido pelo progress."""
+        from app.models import const
+        unindexed_task = {
+            "task_id": "task-unknown-stage-111",
+            "profile_id": "default",
+            "state": const.TASK_STATE_PROCESSING,
+            "progress": 40,  # 40% não deve ser inferido como VISUALS!
+            "video_subject": "Mistérios Antigos",
+            "stage": None,
+        }
+
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.autonomous_production.get_autonomous_status", return_value={
+                 "enabled": True, "state": "generating", "message": "Gerando", "current_task_id": "task-unknown-stage-111"
+             }), \
+             patch("app.services.state.state.get_task", return_value=unindexed_task):
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            ch = next(c for c in resp.json()["data"]["channels"] if c["profile_id"] == "default")
+            self.assertEqual(ch["status"], "RUNNING")
+            self.assertIsNone(ch["execution"]["pipeline_stage"])
+            self.assertIsNone(ch["execution"]["provider"])
+            self.assertNotEqual(ch["execution"]["pipeline_stage"], "VISUALS")
+
+    def test_publication_success_overrides_stale_retry_in_live_view(self):
+        """14. publication_events status='success' prevalece sobre tentativas antigas do scheduler (UI-004)."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.autonomous_production.get_autonomous_status", return_value={
+                 "enabled": True, "state": "idle", "current_task_id": None, "waiting_task_id": None
+             }), \
+             patch("app.services.state.state.get_task", return_value=None):
+
+            with scheduler.get_connection(self.db_path) as conn:
+                # Scheduler com retry antigo
+                conn.execute(
+                    """
+                    INSERT INTO scheduled_posts (
+                        task_id, platform, scheduled_at, status, created_at, attempts, last_error, profile_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    ("task-stale-retry-999", "youtube", "2026-10-11T22:15:00Z", "pending", "2026-10-11T22:00:00Z", 2, "Timeout anterior", "default")
+                )
+                # Mas publicação já concluída com sucesso!
+                conn.execute(
+                    """
+                    INSERT INTO publication_events (
+                        task_id, platform, published_at, status, external_url, profile_id
+                    ) VALUES (?, ?, ?, ?, ?, ?);
+                    """,
+                    ("task-stale-retry-999", "youtube", "2026-10-11T22:20:00Z", "success", "https://youtube.com/shorts/xyz", "default")
+                )
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            ch = next(c for c in resp.json()["data"]["channels"] if c["profile_id"] == "default")
+            self.assertEqual(ch["status"], "SUCCESS")
+            self.assertEqual(ch["execution"]["pipeline_stage"], "YOUTUBE")
+            self.assertIsNotNone(ch["execution"]["publication_state"])
+            self.assertEqual(ch["execution"]["publication_state"]["status"], "success")
+
+    def test_execution_detail_endpoint(self):
+        """15. /api/v2/executions/{task_id} retorna o trace causal completo e 404 para task inexistente."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+
+            # 404 para task inexistente
+            r_404 = self.client.get("/api/v2/executions/non-existent-task-000")
+            self.assertEqual(r_404.status_code, 404)
+
+            # Cria evento para task existente
+            with scheduler.get_connection(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO publication_events (
+                        task_id, platform, published_at, status, external_url, profile_id
+                    ) VALUES (?, ?, ?, ?, ?, ?);
+                    """,
+                    ("task-trace-detail-123", "youtube", "2026-10-11T22:00:00Z", "success", "https://youtube.com/shorts/trace123", "default")
+                )
+
+            r_ok = self.client.get("/api/v2/executions/task-trace-detail-123")
+            self.assertEqual(r_ok.status_code, 200)
+            data = r_ok.json().get("data", {})
+            self.assertEqual(data["task_id"], "task-trace-detail-123")
+            self.assertIn("execution_trace", data)
+            nodes = [n["node"] for n in data["execution_trace"]]
+            self.assertIn("CHANNEL", nodes)
+            self.assertIn("AUTONOMOUS_PRODUCTION", nodes)
+            self.assertIn("SERVICE", nodes)
+            self.assertIn("PROVIDER", nodes)
+            self.assertIn("RESULT", nodes)
+            self.assertIn("NEXT_SERVICE", nodes)
+
 
 if __name__ == "__main__":
     unittest.main()
+

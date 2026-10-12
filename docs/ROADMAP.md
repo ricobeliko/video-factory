@@ -23,7 +23,7 @@
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
 - **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, avaliar pós-E2E, ver UI-003)`
-- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo; 3 itens iniciais: `UI-001`, `UI-002`, `UI-003`)
+- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 5 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `CFG-004`)
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -31,6 +31,7 @@
 
 ## Status Consolidado por Componente
 
+- **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
 - **Piloto Autônomo E2E (Dose Diária De Internet)** = ACTIVE (CURRENT_FOCUS)
 - **Google Flow / External Video Quality Track** = FROZEN / DEFERRED (Implementação existente preservada intacta; sem trabalho de melhoria neste momento; retomada futura explícita)
 - **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido; canal Histórias retornado a WARMUP e GTA VI mantido temporariamente em SCALE até confirmação da publicação das 22:11)
@@ -178,6 +179,28 @@ A existência de um item no checklist **NÃO significa que o código deve ser re
 - **CURRENT_RISK:** `LOW` para backend / `MEDIUM` para operação/usabilidade.
 - **PLANNED_ACTION:** Migrar gradualmente para Web UI v2 com API leve e frontend separado, preservando toda regra de negócio existente.
 - **TARGET_PHASE:** `R4 / R5 / R6 / R7`
+- **STATUS:** `OPEN`
+
+#### UI-004
+- **ID:** `UI-004`
+- **AREA:** `Operational status / Scheduler UI`
+- **PROBLEM:** Streamlit pode continuar mostrando timeout/retry de publicação mesmo depois de o backend já ter registrado `publication_events.status='success'` e a fila `scheduled_posts` estar sem pendências.
+- **CURRENT_BEHAVIOR:** Post For Me apresentou timeout local após 120s e Retry 1/3 na UI, porém o banco posteriormente registrou publicação YouTube com sucesso e `SCHEDULED_ROWS=0`.
+- **KNOWN_CANONICAL_SOURCE:** SQLite `publication_events.status='success'`.
+- **CURRENT_RISK:** `LOW` para backend / `MEDIUM` para operação/UI porque pode induzir o operador a agir sobre estado antigo.
+- **PLANNED_ACTION:** Na Web UI v2 definir fonte canônica de status operacional e separar: provider processing, scheduler retry, terminal success, terminal failure, evitando status visual stale.
+- **TARGET_PHASE:** `R4 / R5 / R6`
+- **STATUS:** `OPEN`
+
+#### CFG-004
+- **ID:** `CFG-004`
+- **AREA:** `Publishing Channel / Post For Me binding`
+- **PROBLEM:** O profile default / *Dose Diária De Internet* possui `channel_id = channel-default-youtube` e `external_account_id = NULL`, mas a publicação funciona por fallback/mapeamento legado estático no código (`channel-default-youtube -> UCss-ng7mkGuB2v-5KKtIN9A`).
+- **CURRENT_BEHAVIOR:** A configuração do canal não está completamente auto-contida no workspace/database.
+- **KNOWN_CANONICAL_SOURCE:** SQLite `publishing_channels.external_account_id`.
+- **CURRENT_RISK:** `LOW` enquanto fallback homologado existir.
+- **PLANNED_ACTION:** Durante consolidação, avaliar migração segura para binding persistido por channel e remover mapa estático apenas após validação.
+- **TARGET_PHASE:** `R4 / R5 / R8`
 - **STATUS:** `OPEN`
 
 ---

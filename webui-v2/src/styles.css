@@ -3024,10 +3024,29 @@ body {
   color: #f87171;
 }
 
-.status-success, .status-passed {
+.status-success, .status-passed, .status-done {
   background: rgba(16, 185, 129, 0.2);
   color: #34d399;
 }
+
+.status-active, .status-running {
+  background: rgba(6, 182, 212, 0.2);
+  color: #22d3ee;
+}
+
+.entry-duration-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid var(--border-subtle);
+  color: #94a3b8;
+  font-family: var(--font-mono);
+}
+
 
 .entry-action-headline {
   font-size: 13px;

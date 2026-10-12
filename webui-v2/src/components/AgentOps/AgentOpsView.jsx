@@ -208,7 +208,7 @@ export default function AgentOpsView() {
           <div className="mission-metric-item">
             <span className="metric-label">TEMPO DECORRIDO</span>
             <span className="metric-value font-mono">
-              {mission?.elapsed_formatted || '00:00'}
+              {mission?.elapsed_formatted || '—'}
             </span>
             <span className="metric-sub">
               {mission?.started_at ? `Início: ${String(mission.started_at).slice(11, 19)}` : 'Início desconhecido'}
@@ -218,7 +218,7 @@ export default function AgentOpsView() {
           <div className="mission-metric-item">
             <span className="metric-label">GIT BRANCH</span>
             <span className="metric-value font-mono branch-name" title={mission?.branch || ''}>
-              {mission?.branch || 'desconhecida'}
+              {mission?.branch || '—'}
             </span>
             <span className="metric-sub">Ambiente DEV isolado</span>
           </div>
@@ -467,6 +467,12 @@ export default function AgentOpsView() {
                         {evt.relative_path && (
                           <span className="entry-path-pill font-mono" title={evt.relative_path}>
                             📄 {evt.relative_path}
+                          </span>
+                        )}
+
+                        {evt.duration && (
+                          <span className="entry-duration-pill font-mono" title={`Duração: ${evt.duration}`}>
+                            ⏱ {evt.duration}
                           </span>
                         )}
 

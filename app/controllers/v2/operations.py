@@ -140,3 +140,13 @@ def get_task_execution(request: Request, task_id: str):
         )
     return utils.get_response(200, detail)
 
+
+@router.get(
+    "/agent-ops",
+    summary="Get Agent Ops live observability snapshot (Agent Ops V1.1)",
+)
+def get_agent_ops(request: Request):
+    from app.services import agent_ops
+    snapshot = agent_ops.get_agent_ops_snapshot()
+    return utils.get_response(200, snapshot)
+

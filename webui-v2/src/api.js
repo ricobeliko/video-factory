@@ -72,3 +72,7 @@ export async function getPublications(limit = 10, profileId = null) {
 export async function getProviderHealth() {
   return fetchJson('/api/v2/providers/health');
 }
+
+export async function getAgentOps() {
+  return fetchJson('/api/v2/agent-ops');
+}

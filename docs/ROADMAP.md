@@ -96,6 +96,7 @@
 - **avatar_mode**: `none`
 - **TikTok**: OFF / NOT HOMOLOGATED
 - **V15-A Production Observability Baseline** = DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
+- **Agent Ops V1.1 — Live Agent Observability** = DEV IMPLEMENTED (Aba independente no Web UI V2 com telemetria real do AgentBridge, feed sanitizado de atividades, 4 papéis de agentes e endpoint read-only)
 
 ## WEB UI V2 / CODE CONSOLIDATION — MIGRATION CHECKLIST
 

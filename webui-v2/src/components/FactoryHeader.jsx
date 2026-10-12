@@ -13,6 +13,8 @@ export default function FactoryHeader({
   lastUpdated,
   isApiOnline,
   onRefresh,
+  activeTab = 'factory-live',
+  onSelectTab,
 }) {
   const isPaused = Boolean(systemStatus?.is_paused);
   const workerRunning = Boolean(systemStatus?.worker_running);
@@ -26,8 +28,28 @@ export default function FactoryHeader({
         <div className="header-brand">
           <div className="brand-title">
             <span>⚙️ VIDEO FACTORY</span>
-            <span className="brand-badge">Factory Live</span>
+            <span className="brand-badge">{activeTab === 'agent-ops' ? 'Agent Ops' : 'Factory Live'}</span>
           </div>
+
+          {/* Navigation Tab Switcher: Factory Live | Agent Ops */}
+          <nav className="header-nav-switcher" aria-label="Navegação Principal">
+            <button
+              type="button"
+              className={`nav-switch-tab ${activeTab === 'factory-live' ? 'active' : ''}`}
+              onClick={() => onSelectTab && onSelectTab('factory-live')}
+            >
+              <span className="tab-icon">🏭</span>
+              <span>Factory Live</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-switch-tab ${activeTab === 'agent-ops' ? 'active' : ''}`}
+              onClick={() => onSelectTab && onSelectTab('agent-ops')}
+            >
+              <span className="tab-icon">🤖</span>
+              <span>Agent Ops</span>
+            </button>
+          </nav>
         </div>
 
         <div className="header-status-group">

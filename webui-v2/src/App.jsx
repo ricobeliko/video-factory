@@ -4,18 +4,28 @@ import ChannelCard from './components/ChannelCard';
 import FlowAccountsSection from './components/FlowAccountsSection';
 import FactoryLiveGraph from './components/FactoryLiveGraph';
 import ExecutionDrawer from './components/ExecutionDrawer';
+import AgentOpsView from './components/AgentOps/AgentOpsView';
 import { getLiveExecutions, getSystemStatus } from './api';
 import './styles.css';
 
 /**
- * App — Factory Live Command Console (R6A.5).
+ * App — Factory Live Command Console & Agent Ops Room (R6A.6 + Agent Ops V1.1).
  * Features:
  * - Single-focus detailed pipeline architecture for extreme scalability.
  * - Automatic deterministic selection of RUNNING channel, with fallback to first channel.
  * - Manual operator focus switching via top channel deck cards.
  * - Decoupled narrative execution drawer.
+ * - Independent Agent Ops control room for real agent observability.
  */
 export default function App() {
+  // Navigation tab state (Factory Live | Agent Ops) with URL hash persistence
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#agent-ops') {
+      return 'agent-ops';
+    }
+    return 'factory-live';
+  });
+
   const [channels, setChannels] = useState([]);
   const [systemStatus, setSystemStatus] = useState(null);
   const [flowPool, setFlowPool] = useState(null);
@@ -101,6 +111,29 @@ export default function App() {
     return channels[0];
   }, [channels, userSelectedChannelId]);
 
+  // Sync activeTab with URL hash changes
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (typeof window !== 'undefined') {
+        const hash = window.location.hash;
+        if (hash === '#agent-ops') {
+          setActiveTab('agent-ops');
+        } else {
+          setActiveTab('factory-live');
+        }
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  const handleSelectTab = (tab) => {
+    setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      window.location.hash = tab === 'agent-ops' ? '#agent-ops' : '#factory-live';
+    }
+  };
+
   const handleSelectFocus = (channel) => {
     const id = channel.channel_id || channel.profile_id;
     setUserSelectedChannelId(id);
@@ -115,33 +148,40 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* 1. Header with System Health & Sync State */}
+      {/* 1. Header with Navigation & System Health */}
       <FactoryHeader
         systemStatus={systemStatus}
         lastUpdated={lastUpdated}
         isApiOnline={isApiOnline}
         onRefresh={pollData}
+        activeTab={activeTab}
+        onSelectTab={handleSelectTab}
       />
 
-      {/* 2. Top Channels Deck — Dynamic Multi-Channel Overview */}
-      <div className="channels-deck-section">
-        <div className="section-title-bar">
-          <div className="deck-title-group">
-            <span className="section-title-icon">📡</span>
-            <span className="section-title">Canais Monitorados</span>
-            <span className="channels-count-pill">
-              {channels.length} {channels.length === 1 ? 'canal' : 'canais'}
-            </span>
-            <span className="section-subtitle">
-              Clique em um canal para alternar o pipeline em tempo real
-            </span>
-          </div>
-          {channels.length > 2 && (
-            <div className="deck-scroll-hint">
-              <span>← Deslize para explorar ({channels.length}) →</span>
+      {/* 2. Main View: Factory Live vs Agent Ops */}
+      {activeTab === 'agent-ops' ? (
+        <AgentOpsView />
+      ) : (
+        <>
+          {/* Top Channels Deck — Dynamic Multi-Channel Overview */}
+          <div className="channels-deck-section">
+            <div className="section-title-bar">
+              <div className="deck-title-group">
+                <span className="section-title-icon">📡</span>
+                <span className="section-title">Canais Monitorados</span>
+                <span className="channels-count-pill">
+                  {channels.length} {channels.length === 1 ? 'canal' : 'canais'}
+                </span>
+                <span className="section-subtitle">
+                  Clique em um canal para alternar o pipeline em tempo real
+                </span>
+              </div>
+              {channels.length > 2 && (
+                <div className="deck-scroll-hint">
+                  <span>← Deslize para explorar ({channels.length}) →</span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
         <div className="channels-deck">
           {channels.length === 0 ? (
@@ -205,6 +245,8 @@ export default function App() {
         taskId={drawerTaskId}
         selectedStage={drawerStage}
       />
+        </>
+      )}
     </div>
   );
 }

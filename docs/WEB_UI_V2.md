@@ -1,7 +1,8 @@
 # Web UI V2 — Especificação Técnica de Migração e Auditoria Streamlit
 
 ## Status
-`DISCOVERY / READ-ONLY AUDIT (Fase R4A)`
+`FASE R4A: DISCOVERY / READ-ONLY AUDIT (COMPLETED)`
+`FASE R5A: THIN READ-ONLY API MVP (COMPLETED)`
 
 ---
 
@@ -350,3 +351,62 @@ Para maximizar a velocidade de entrega sem assumir riscos desnecessários, o esc
    - *Opção 1:* Server-Sent Events (SSE) para stream unidirecional de eventos de log e status.
    - *Opção 2:* Polling curto (intervalo de 2s a 5s) via React Query / SWR.
    - *Recomendação Preliminar:* Polling curto no MVP pela simplicidade e robustez no Windows; SSE na Fase 2 para os logs do stepper.
+
+---
+
+## 15. Phase R5A — Thin Read-Only API MVP (Entregue em 11/10/2026)
+
+### A. Endpoints Implementados (6 GETs)
+Todos os endpoints montados em `app/asgi.py` através do roteador central `app/router.py` sob o prefixo `/api/v2`:
+
+1. `GET /api/v2/system/status`:
+   - Macro status operacional, instância e estado dos workers.
+   - Serviço canônico: `operator_console.get_system_status(profile_id=...)`.
+2. `GET /api/v2/profiles`:
+   - Lista operacional dos perfis e canais com contagens de estoque e agendamentos.
+   - Serviço canônico: `operator_console.get_profile_operations_overview()`.
+3. `GET /api/v2/profiles/{profile_id}/status`:
+   - Snapshot de um perfil agregando identidade, `growth_mode`, status autônomo, estoque pronto canônico e canais.
+   - Retorna HTTP 404 para perfis inexistentes.
+   - Serviços canônicos: `profile_manager.get_profile`, `autonomous_production.get_autonomous_status`, `operator_console.get_canonical_ready_stock`.
+4. `GET /api/v2/scheduler/posts`:
+   - Resumo da fila do scheduler e próximos posts agendados, com parâmetro opcional `profile_id` e `limit` validado (1..100).
+   - Serviço canônico: `operator_console.get_scheduler_queue_summary(limit=...)`.
+5. `GET /api/v2/publications`:
+   - Histórico recente de publicações ordenadas por `id DESC`, com filtro opcional por `profile_id` e `limit` validado (1..100).
+   - Evidencia `status='success'` como sucesso terminal canônico (resolvendo UI-004 na camada de API).
+   - Serviço canônico: `operator_console.get_recent_publications(limit=..., profile_id=...)`.
+6. `GET /api/v2/providers/health`:
+   - Diagnóstico passivo de saúde de provedores (FFmpeg, Gemini, Pexels, etc.).
+   - Serviço canônico: `operator_console.get_provider_health_summary()`.
+   - Zero chamadas externas pagas, zero secrets expostos.
+
+### B. Serviços Canônicos Reutilizados e Novas Funções
+- **Reutilizados:**
+  - `operator_console.get_system_status()`
+  - `operator_console.get_profile_operations_overview()`
+  - `operator_console.get_scheduler_queue_summary()`
+  - `operator_console.get_canonical_ready_stock()`
+  - `operator_console.get_provider_health_summary()`
+  - `profile_manager.get_profile()`
+  - `profile_manager.list_channels()`
+  - `autonomous_production.get_autonomous_status()`
+  - `autonomous_production.resolve_autonomous_youtube_channel()`
+- **Nova função no service layer:**
+  - `operator_console.get_recent_publications(limit=20, profile_id=None, db_path=None)` (função read-only pequena consultando `publication_events`).
+
+### C. Autenticação e Segurança
+- Reutiliza canonicamente `app.controllers.base.verify_token` aplicado no roteador `/api/v2` via `Depends(base.verify_token)`.
+- Compatível com autenticação opcional quando `api_key` é vazia (desenvolvimento local) e proteção estrita via header `x-api-key` quando configurada.
+- Zero secrets ou credenciais retornadas nas respostas.
+
+### D. Limitações Conhecidas
+- **Apenas leitura (Read-Only):** Zero endpoints `POST`/`PUT`/`PATCH`/`DELETE` implementados nesta fase. Operações mutantes (pause, resume, run cycle, alteração de growth mode) permanecem na UI Streamlit até a Fase R6.
+- **Filtragem de Scheduler por Perfil:** A função `operator_console.get_scheduler_queue_summary` retorna métricas agregadas globais; o filtro `profile_id` nesta fase atua sobre a lista de `upcoming_posts` sem alterar as contagens globais para evitar refatoração prematura do service layer.
+- **CFG-004 Preservado:** Perfil default continua operando com `external_account_id=NULL` e fallback estático em `post_for_me.py` sem impacto funcional.
+
+### E. Validação e Impacto em Produção
+- Teste unitário direcionado: `test/services/test_api_v2_readonly.py` (8 testes aprovados, cobrindo rotas, imutabilidade, 404, validação 400, autenticação, sanitização e status terminal).
+- Zero impacto no banco de dados SQLite operacional (schema inalterado).
+- Zero impacto no piloto autônomo em execução no canal *Dose Diária De Internet*.
+

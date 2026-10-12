@@ -3006,3 +3006,39 @@ def get_copyright_provenance_summary_op(
     )
 
 
+# ---------------------------------------------------------------------------
+# 18. Publications Telemetry (Fase R5A)
+# ---------------------------------------------------------------------------
+
+def get_recent_publications(
+    limit: int = 20,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Retorna lista de eventos recentes de publicação ordenados por id DESC.
+
+    Permite filtrar opcionalmente por profile_id e limita a quantidade de registros.
+    Preserva a verdade canônica do status de publicação (ex: status='success').
+    """
+    from app.services import scheduler
+    scheduler.init_db(db_path)
+
+    query = """
+        SELECT id, task_id, platform, published_at, status, external_id,
+               error_code, provider_request_id, profile_id, channel_id,
+               external_url, privacy_status
+        FROM publication_events
+    """
+    params: List[Any] = []
+    if profile_id:
+        query += " WHERE profile_id = ?"
+        params.append(profile_id)
+    query += " ORDER BY id DESC LIMIT ?;"
+    params.append(limit)
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+
+

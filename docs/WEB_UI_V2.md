@@ -5,7 +5,9 @@
 `FASE R5A: THIN READ-ONLY API MVP (COMPLETED)`
 `FASE R5B: LIVE MULTI-CHANNEL EXECUTION CONTRACT / UI-005 (COMPLETED)`
 `FASE R6A: WEB UI V2 / FACTORY LIVE MVP (COMPLETED)`
-`FLOW-UI-001: GOOGLE FLOW TELEMETRY IN FACTORY LIVE = DEV IMPLEMENTED / NOT PRODUCTION DEPLOYED`
+`FASE R6A.3: VISUAL IDENTITY + METRICS + MULTI-CHANNEL LIVE (DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL)`
+`FLOW-UI-001: GOOGLE FLOW TELEMETRY IN FACTORY LIVE = DEV VALIDATED`
+`FLOW-CREDIT-002: REAL BALANCE EXTRACTION VIA VERIFY = DEV VALIDATED`
 
 ---
 
@@ -660,8 +662,29 @@ Após validação visual do operador, o layout linear contínuo de 12 estágios 
 
 5. **Remoção do MiniMap & Altura Dinâmica:**
    - MiniMap removido para eliminar obstrução visual.
-   - Altura do canvas calculada dinamicamente por canal empilhado, com rolagem vertical da página para suportar múltiplos canais sem diminuir o tamanho dos nós.
+ 
+---
 
+### F. R6A.3 — Identidade Visual, Métricas Reais e Live Multicanal (DEV IMPLEMENTED)
 
+1. **Auditoria Multicanal e Dynamic Rendering:**
+   - Auditoria nos perfis de canal:
+     - `Dose Diária De Internet` (`default` / `channel-default-youtube`): ativo e renderizado no endpoint.
+     - `Dose Diária de Histórias e Mistério` (`profile-historias-misterio` / `channel-historias-misterio-youtube`): cadastrado via mecanismo canônico idempotente `ensure_second_channel_profile()` em DEV.
+     - `Dose Diária de GTA VI` (`profile-2095da4fbe23`): legado de produção, ausente de definição canônica em DEV; classificado estritamente como `DEV_DATA_MISSING` (zero dados falsos/segredos criados).
+   - O Channels Deck e o Factory Live Graph renderizam dinamicamente N canais retornados pelo backend (zero hardcode de quantidade ou nomes em JSX).
 
+2. **Identidade Visual e Mapeamento Centralizado:**
+   - Mapeamento centralizado de estágios e cores em `stageVisuals.js`:
+     - Temas semânticos de status: `RUNNING` (azul ativo / borda destacada), `SUCCESS`/`COMPLETE` (verde), `RETRY`/`COOLDOWN` (laranja), `BLOCKED` (âmbar), `FAILED` (vermelho), `IDLE` (cinza azulado).
+     - Categorias com pips discretos e ícones: Topic/Script (texto), Narração (mic), Visuals/Render (filme/render), Safety/Quality/Copyright (escudo/check/copyright), Stock/Scheduler (estoque/relógio), Publisher/YouTube (upload/play).
+     - Remoção de pulsação contínua pesada; microinterações suaves.
 
+3. **Métricas Estritas (Fail-Closed):**
+   - **Ready Stock:** Exibe percentual factual somente quando `target_stock > 0` (`min(100, (ready_stock / target_stock) * 100)`), com mini progress bar discreta e cores semânticas (verde se 100%, azul/âmbar se parcial, cinza/âmbar se 0). Denominador ausente ou <= 0 oculta percentual.
+   - **Pipeline Progress:** Calculado estritamente por estágios em estado terminal positivo real (`SUCCESS` ou `COMPLETE`). Se 0 estágios concluídos, percentual omitido.
+   - **Google Flow:** Saldo absoluto verificado exibido (`164 créditos` / `1.050 créditos`, total `1.214 créditos conhecidos`). Zero inferência de percentual de plano ou denominador falso (sem `credits / 1000`). Barra visual estritamente qualitativa.
+
+4. **Navegação Estável:**
+   - Desativado qualquer auto-zoom, recenter automático, `fitView` ou reposicionamento acionado pelo ciclo de polling (~3s).
+   - Viewport permanece estável durante toda a operação.

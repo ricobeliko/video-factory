@@ -2,8 +2,8 @@ import React from 'react';
 import { Handle, Position } from '@xyflow/react';
 
 /**
- * LaneHeaderNode — Channel Section Header positioned directly above each channel's 2x6 pipeline.
- * Prioritizes profile_name as primary identity, with channel/platform details secondary.
+ * LaneHeaderNode — Channel Section Header positioned directly above each channel's 2x6 pipeline (R6A.3).
+ * Prioritizes channelName as primary identity, with real stock and pipeline metrics.
  */
 export default function LaneHeaderNode({ data }) {
   const {
@@ -13,18 +13,32 @@ export default function LaneHeaderNode({ data }) {
     profileId,
     isAutonomous,
     growthMode,
-    stock,
+    readyStock = 0,
+    targetStock = null,
     status = 'IDLE',
     topic,
+    completedStagesCount = 0,
   } = data;
 
-  // Prioritize channelName as primary identity, profileName as fallback
   const primaryName = channelName || profileName || channelId;
   const platformLabel = data.platform === 'tiktok' ? 'TikTok' : 'YouTube';
   const secondaryDetails = `${platformLabel} • ${channelId || profileId}`;
 
+  // Ready Stock real percentage
+  const stockCount = typeof readyStock === 'number' ? readyStock : 0;
+  const hasTargetStock = typeof targetStock === 'number' && targetStock > 0;
+  const stockPct = hasTargetStock
+    ? Math.min(100, Math.round((stockCount / targetStock) * 100))
+    : null;
+
+  // Pipeline real completed stages (Requirement 4: completed_count > 0 only, fail-closed)
+  const hasPipelineProgress = typeof completedStagesCount === 'number' && completedStagesCount > 0;
+  const pipelinePct = hasPipelineProgress
+    ? Math.min(100, Math.round((completedStagesCount / 12) * 100))
+    : null;
+
   return (
-    <div className="lane-header-card">
+    <div className={`lane-header-card status-lane-${status.toLowerCase()}`}>
       <div className="lane-header-left">
         <div className="lane-channel-avatar">📺</div>
         <div className="lane-channel-info">
@@ -43,16 +57,26 @@ export default function LaneHeaderNode({ data }) {
             <span>Tarefa:</span> {topic}
           </div>
         )}
+
         <div className="lane-badges-row">
           <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
-            {isAutonomous ? '● Autônomo' : '○ Manual'}
+            {isAutonomous ? '● AUTO' : '○ MANUAL'}
           </span>
           <span className="mini-badge growth">
-            {growthMode || 'warmup'}
+            {String(growthMode || 'warmup').toUpperCase()}
           </span>
+
           <span className="mini-badge stock">
-            Estoque: {stock !== undefined && stock !== null ? stock : 0}
+            Estoque: {hasTargetStock ? `${stockCount} / ${targetStock}` : stockCount}
+            {stockPct !== null && ` (${stockPct}%)`}
           </span>
+
+          {hasPipelineProgress && (
+            <span className="mini-badge pipeline-progress">
+              {completedStagesCount} / 12 concluídos ({pipelinePct}%)
+            </span>
+          )}
+
           <span className={`mini-badge status-${status}`}>
             {status}
           </span>

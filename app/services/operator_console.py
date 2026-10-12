@@ -3377,6 +3377,10 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             else:
                 status = "IDLE"
 
+        stock_info = get_canonical_ready_stock(db_path=db_path, profile_id=pid)
+        ready_stock_count = int(stock_info.get("total_ready", 0))
+        target_stock_count = int(stock_info.get("minimum_threshold", 3))
+
         results.append({
             "profile_id": pid,
             "profile_name": pname,
@@ -3386,6 +3390,8 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             "autonomous_enabled": auto_enabled,
             "growth_mode": growth_mode,
             "status": status,
+            "ready_stock": ready_stock_count,
+            "target_stock": target_stock_count,
             "execution": execution,
         })
 

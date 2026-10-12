@@ -20,7 +20,9 @@
 - **ACTIVE_BRANCH** = `feat/web-ui-v2-read-api`
 - **NEXT_GATE** = `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT / RETOMADA DO PILOTO AUTÔNOMO`
 - **FLOW_MA1_STATUS** = `MERGED / READY_FOR_PRODUCTION_DEPLOY`
-- **FLOW_UI_001_STATUS** = `DEV IMPLEMENTED / NOT PRODUCTION DEPLOYED (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)`
+- **FLOW_UI_001_STATUS** = `DEV VALIDATED (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)`
+- **FLOW_CREDIT_002_STATUS** = `DEV VALIDATED (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)`
+- **R6A_3_STATUS** = `DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL (Identidade visual, métricas reais de estoque e pipeline, e renderização dinâmica multicanal no Factory Live)`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
@@ -34,7 +36,9 @@
 ## Status Consolidado por Componente
 
 - **FLOW-MA1 Multi-Account Provider Pool** = MERGED / READY_FOR_PRODUCTION_DEPLOY (Pool de contas com user_data_dir isolado, login humano inicial via Edge nativo, zero senhas persistidas, stickiness da task, failover seguro pré-dispatch, telemetria de créditos FLOW_UI_VERIFIED / LOCAL_ESTIMATE / UNKNOWN, CLI operacional em `flow_account_pool.py`, Flow estritamente single-flight)
-- **FLOW-UI-001 Multi-Account Credit Telemetry in UI** = DEV IMPLEMENTED / NOT PRODUCTION DEPLOYED (Telemetria visual das contas Flow integrada ao Factory Live via snapshot compartilhado de executions/live)
+- **FLOW-UI-001 Multi-Account Credit Telemetry in UI** = DEV VALIDATED (Telemetria visual das contas Flow integrada ao Factory Live via snapshot compartilhado de executions/live)
+- **FLOW-CREDIT-002 Real Credit Balance Extraction** = DEV VALIDATED (Extração factual do saldo real de créditos no verify sem consumir créditos nem gerar vídeos)
+- **R6A.3 Web UI V2 Visual Identity + Metrics + Multi-Channel Live** = DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL (Contrato multicanal dinâmico, percentuais reais de estoque/pipeline, layout visual técnico refinado, zero hardcode)
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
 - **R5A Web UI V2 Thin Read-Only API MVP** = COMPLETE (6 endpoints GET montados em /api/v2 via FastAPI existente, zero regras de negócio duplicadas, zero endpoints WRITE, autenticação verify_token preservada, teste direcionado 8/8 PASS; zero impacto no piloto autônomo em execução)
 - **R5B Live Multi-Channel Execution Contract / UI-005** = DEV COMPLETED (Contrato read-only e causal para tela Factory Live com endpoints /api/v2/executions/live e /executions/{task_id}, grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS; zero impacto no piloto autônomo)

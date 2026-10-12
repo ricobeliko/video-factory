@@ -1,10 +1,11 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
+import { STAGE_BY_CODE, getStatusStyle } from '../utils/stageVisuals';
 
 /**
- * ExecutionNode — Custom node for the 2x6 snake pipeline.
- * Displays step number (#1..#12), stage code, friendly label, and status.
- * Strict Non-Inference: Only displays status and progress when returned by backend.
+ * ExecutionNode — Custom node for the 2x6 snake pipeline (R6A.3).
+ * Displays step number (#1..#12), category icon, stage code, friendly label, and status.
+ * Visuals driven by centralized stageVisuals: status is primary, category is accent.
  */
 export default function ExecutionNode({ data, selected }) {
   const {
@@ -17,10 +18,27 @@ export default function ExecutionNode({ data, selected }) {
     provider = null,
   } = data;
 
-  const statusClass = `node-status-${status}`;
+  const stageDef = STAGE_BY_CODE[stage] || {};
+  const stageIcon = stageDef.icon || '▪️';
+  const categoryLabel = stageDef.categoryLabel || '';
+  const accentColor = stageDef.accentColor || '#38bdf8';
+  const statusTheme = getStatusStyle(status);
 
   return (
-    <div className={`execution-node ${statusClass} ${selected ? 'selected-node' : ''}`}>
+    <div
+      className={`execution-node node-status-${status} ${selected ? 'selected-node' : ''}`}
+      style={{
+        borderColor: statusTheme.borderColor,
+        backgroundColor: statusTheme.bgColor,
+      }}
+    >
+      {/* Category top accent pip */}
+      <div
+        className="node-category-pip"
+        style={{ backgroundColor: accentColor }}
+        title={`Categoria: ${categoryLabel}`}
+      />
+
       {/* Target Handles for Snake routing */}
       <Handle
         type="target"
@@ -44,9 +62,17 @@ export default function ExecutionNode({ data, selected }) {
       <div className="node-header">
         <div className="node-id-group">
           <span className="node-step-badge">#{stepNumber}</span>
+          <span className="node-stage-icon" title={categoryLabel}>{stageIcon}</span>
           <span className="node-stage-code">{stage}</span>
         </div>
-        <span className="node-status-badge">
+        <span
+          className="node-status-badge"
+          style={{
+            color: statusTheme.color,
+            backgroundColor: 'rgba(255, 255, 255, 0.06)',
+            borderColor: statusTheme.borderColor,
+          }}
+        >
           {status === 'RUNNING' && <span className="running-dot" />}
           {status}
         </span>
@@ -66,7 +92,7 @@ export default function ExecutionNode({ data, selected }) {
       )}
 
       {isGap && status === 'RUNNING' && (
-        <div className="node-gap-hint">Sub-etapa ainda não instrumentada</div>
+        <div className="node-gap-hint">Sub-etapa em execução</div>
       )}
 
       {provider && (

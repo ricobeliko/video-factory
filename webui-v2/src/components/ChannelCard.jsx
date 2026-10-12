@@ -1,8 +1,8 @@
 import React from 'react';
 
 /**
- * ChannelCard — Dynamic header card for each profile/channel in the top deck.
- * Prioritizes profile_name as the primary operational identity.
+ * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.3).
+ * Prioritizes channel_name as primary identity, with real mathematical stock percentage.
  */
 export default function ChannelCard({ channel, isSelected, onClick }) {
   const {
@@ -10,20 +10,40 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
     profile_name,
     channel_id,
     channel_name,
+    platform = 'youtube',
     autonomous_enabled,
     growth_mode,
-    stock,
+    ready_stock = 0,
+    target_stock = null,
+    status = 'IDLE',
     execution,
   } = channel;
 
   const isAutonomous = Boolean(autonomous_enabled);
   const isIdle = !execution || execution.status === 'IDLE';
 
-  // Prioritize channel_name as primary identity, profile_name as fallback
+  // Prioritize channel_name as primary identity, fallback to profile_name
   const primaryTitle = channel_name || profile_name || channel_id;
-  const platformLabel = channel.platform === 'tiktok' ? 'TikTok' : 'YouTube';
+  const platformLabel = platform === 'tiktok' ? 'TikTok' : 'YouTube';
   const secondarySubtitle = `${platformLabel} • ${channel_id || profile_id}`;
   const profileMeta = `Perfil: ${profile_id || 'default'}`;
+
+  // Ready Stock real mathematical percentage calculation (Section 3)
+  const stockCount = typeof ready_stock === 'number' ? ready_stock : (channel.stock || 0);
+  const hasTargetStock = typeof target_stock === 'number' && target_stock > 0;
+  const stockPct = hasTargetStock
+    ? Math.min(100, Math.round((stockCount / target_stock) * 100))
+    : null;
+
+  // Mini progress bar color semantics (100% green, >0 blue, 0 gray/neutral)
+  let stockBarColor = '#64748b';
+  if (stockPct !== null) {
+    if (stockPct >= 100) {
+      stockBarColor = '#10b981';
+    } else if (stockPct > 0) {
+      stockBarColor = '#3b82f6';
+    }
+  }
 
   return (
     <div
@@ -31,6 +51,7 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
       onClick={onClick}
       role="button"
       tabIndex={0}
+      aria-label={`Canal ${primaryTitle}`}
     >
       <div className="channel-card-top">
         <div className="channel-identity-group">
@@ -38,30 +59,51 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
             📺 {primaryTitle}
           </div>
           <div className="channel-sub-id" title={`${secondarySubtitle} • ${profileMeta}`}>
-            {secondarySubtitle} • <span style={{ opacity: 0.8 }}>{profileMeta}</span>
+            {secondarySubtitle} • <span className="profile-id-sub">{profileMeta}</span>
           </div>
         </div>
         <div className="channel-badges">
           <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
-            {isAutonomous ? 'Autônomo' : 'Manual'}
+            {isAutonomous ? 'AUTO' : 'MANUAL'}
           </span>
           {growth_mode && (
             <span className="mini-badge growth">
-              {growth_mode}
+              {String(growth_mode).toUpperCase()}
             </span>
           )}
         </div>
       </div>
 
       <div className="channel-card-body">
-        <div className="channel-stock-row">
-          <span>Estoque Pronto:</span>
-          <strong>{stock !== undefined && stock !== null ? stock : 0}</strong>
+        {/* Ready Stock Section with real percentage and mini progress bar */}
+        <div className="channel-stock-block">
+          <div className="channel-stock-header">
+            <span className="stock-title">Estoque Pronto</span>
+            <div className="stock-values">
+              <strong>{hasTargetStock ? `${stockCount} / ${target_stock}` : stockCount}</strong>
+              {stockPct !== null && (
+                <span className="stock-pct-badge" style={{ color: stockBarColor }}>
+                  {stockPct}%
+                </span>
+              )}
+            </div>
+          </div>
+          {hasTargetStock && (
+            <div className="stock-progress-track">
+              <div
+                className="stock-progress-fill"
+                style={{
+                  width: `${stockPct}%`,
+                  backgroundColor: stockBarColor,
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {isIdle ? (
           <div className="task-idle-note">
-            <span>⚪ IDLE</span>
+            <span className="idle-indicator">⚪ {status === 'BLOCKED' ? 'BLOQUEADO' : 'IDLE'}</span>
             <span>• Sem tarefa ativa</span>
           </div>
         ) : (
@@ -69,16 +111,16 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
             <div className="task-topic-preview" title={execution.topic || 'Sem título'}>
               {execution.topic || 'Tarefa em andamento'}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span className={`mini-badge ${execution.status === 'RUNNING' ? 'autonomous' : 'manual'}`}>
+            <div className="task-meta-row">
+              <span className={`mini-badge ${execution.status === 'RUNNING' ? 'running' : 'status-tag'}`}>
                 {execution.status === 'RUNNING' && <span className="running-dot" />}
                 {execution.status}
               </span>
-              <span style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 500 }}>
-                {execution.pipeline_stage_label || execution.stage || 'Processando'}
+              <span className="task-stage-label">
+                {execution.pipeline_stage_label || execution.pipeline_stage || 'Processando'}
               </span>
               {execution.progress !== null && execution.progress !== undefined && (
-                <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: '#fbbf24' }}>
+                <span className="task-progress-pct">
                   {execution.progress}%
                 </span>
               )}

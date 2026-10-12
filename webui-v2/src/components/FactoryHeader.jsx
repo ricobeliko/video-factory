@@ -1,7 +1,12 @@
 import React from 'react';
 
 /**
- * FactoryHeader — Top bar displaying system health, workers and sync state
+ * FactoryHeader — Top bar displaying system health, workers and sync state (R6A.3).
+ * Semantic chip colors:
+ * - ONLINE / ON: green
+ * - OFF intentional: gray
+ * - PARADO unexpected: red
+ * - DRY RUN ON: amber
  */
 export default function FactoryHeader({
   systemStatus,
@@ -26,27 +31,32 @@ export default function FactoryHeader({
         </div>
 
         <div className="header-status-group">
-          <div className="status-pill">
+          {/* 1. Fábrica (Online / Pausada) */}
+          <div className={`status-pill ${isPaused ? 'pill-paused' : 'pill-online'}`}>
             <span className={`indicator-dot ${isPaused ? 'inactive' : 'active'}`} />
             <span>Fábrica: {isPaused ? 'Pausada' : 'Online'}</span>
           </div>
 
-          <div className="status-pill">
+          {/* 2. Worker (Ativo / Parado inesperado) */}
+          <div className={`status-pill ${workerRunning ? 'pill-running' : 'pill-stopped'}`}>
             <span className={`indicator-dot ${workerRunning ? 'active' : 'inactive'}`} />
             <span>Worker: {workerRunning ? 'Ativo' : 'Parado'}</span>
           </div>
 
-          <div className="status-pill">
+          {/* 3. Scheduler (Ativo / Parado inesperado) */}
+          <div className={`status-pill ${schedulerRunning ? 'pill-running' : 'pill-stopped'}`}>
             <span className={`indicator-dot ${schedulerRunning ? 'active' : 'inactive'}`} />
             <span>Scheduler: {schedulerRunning ? 'Ativo' : 'Parado'}</span>
           </div>
 
-          <div className="status-pill">
+          {/* 4. Auto Publish (Ativo / Off intencional) */}
+          <div className={`status-pill ${autoPublish ? 'pill-running' : 'pill-off'}`}>
             <span className={`indicator-dot ${autoPublish ? 'active' : 'neutral'}`} />
             <span>Auto Publish: {autoPublish ? 'Ativo' : 'Off'}</span>
           </div>
 
-          <div className="status-pill">
+          {/* 5. Dry Run (ON âmbar / OFF neutro) */}
+          <div className={`status-pill ${dryRun ? 'pill-warning' : 'pill-off'}`}>
             <span className={`indicator-dot ${dryRun ? 'warning' : 'neutral'}`} />
             <span>Dry Run: {dryRun ? 'ON' : 'OFF'}</span>
           </div>

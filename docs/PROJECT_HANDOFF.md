@@ -53,7 +53,9 @@
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
 - **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL (MERGED)` (Próximo: `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT`)
 - **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
-- **FLOW_UI_001_STATUS:** `DEV IMPLEMENTED / NOT PRODUCTION DEPLOYED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
+- **FLOW_UI_001_STATUS:** `DEV VALIDATED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
+- **FLOW_CREDIT_002_STATUS:** `DEV VALIDATED` (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)
+- **R6A_3_STATUS:** `DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL` (Identidade visual da Web UI V2 / Factory Live, percentuais estritamente reais de estoque e pipeline concluído, e suporte dinâmico a múltiplos canais no Factory Live)
 - **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP`
   - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`) e a infraestrutura FLOW-MA1 foi implementada em DEV.
   - **Hotfix Autonomous Safety Contract:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`

@@ -1,7 +1,7 @@
 import React from 'react';
 
 /**
- * Mapeamento semântico centralizado de status do Google Flow.
+ * Mapeamento semântico centralizado de status do Google Flow (R6A.3).
  * Cores harmonizadas com o design system do Factory Live.
  */
 const STATUS_CONFIG = {
@@ -53,7 +53,6 @@ const STATUS_CONFIG = {
 };
 
 function getStatusDetails(status, creditsSource, creditsRemaining) {
-  // Ajuste sutil para contas disponíveis sem créditos verificados
   if (status === 'AVAILABLE' && (creditsSource === 'UNKNOWN' || creditsRemaining === null)) {
     return STATUS_CONFIG.AVAILABLE_UNKNOWN_CREDITS;
   }
@@ -65,11 +64,11 @@ function getStatusDetails(status, creditsSource, creditsRemaining) {
 }
 
 /**
- * Regra canônica obrigatória de exibição de créditos:
- * - FLOW_UI_VERIFIED & != null -> "900 créditos" [VERIFIED]
+ * Regra canônica obrigatória de exibição de créditos (R6A.3 / FLOW-CREDIT-002):
+ * - FLOW_UI_VERIFIED & != null -> "1.050 créditos" [VERIFIED]
  * - LOCAL_ESTIMATE & != null -> "~805 créditos" [ESTIMATED]
  * - UNKNOWN ou null -> "Saldo indisponível" [UNKNOWN]
- * NUNCA inventar números, nunca assumir plano, nunca exibir '0' se desconhecido.
+ * NUNCA exibir percentual de plano ou denominador inventado (ex: NÃO mostrar 16% ou 100%).
  */
 function formatCredits(remaining, source) {
   if (source === 'FLOW_UI_VERIFIED' && remaining !== null && remaining !== undefined) {
@@ -95,9 +94,6 @@ function formatCredits(remaining, source) {
   };
 }
 
-/**
- * Formata exibição compacta da tarefa corrente.
- */
 function formatCurrentTask(taskId) {
   if (!taskId) {
     return { label: 'Livre', isBusy: false };
@@ -107,11 +103,10 @@ function formatCurrentTask(taskId) {
 }
 
 /**
- * FlowAccountsSection — Seção visual do Google Flow Multi-Account Pool no Factory Live (FLOW-UI-001).
- * Estritamente READ-ONLY, reutiliza o ciclo de polling principal de ~3s.
+ * FlowAccountsSection — Seção visual do Google Flow Multi-Account Pool no Factory Live.
+ * Control room visual, estritamente READ-ONLY, zero percentuais artificiais.
  */
 export default function FlowAccountsSection({ flowPool }) {
-  // 1. Tratamento defensivo de falha / telemetria indisponível
   if (!flowPool || flowPool.error) {
     return (
       <section className="flow-pool-section degraded" aria-label="Google Flow Provider Pool">
@@ -140,13 +135,17 @@ export default function FlowAccountsSection({ flowPool }) {
           <span className="flow-title-icon">🎬</span>
           <span className="flow-title">Google Flow</span>
           <span className="flow-subtitle">Multi-Account Pool</span>
-          <span className="flow-count-badge">{accounts.length} {accounts.length === 1 ? 'conta' : 'contas'}</span>
+          <span className="flow-count-badge">
+            {accounts.length} {accounts.length === 1 ? 'conta' : 'contas'}
+          </span>
         </div>
 
         {total_known_credits !== null && total_known_credits !== undefined && (
           <div className="flow-credits-summary" title="Total somado de saldos conhecidos">
             <span className="summary-label">Créditos conhecidos:</span>
-            <strong className="summary-value">{Number(total_known_credits).toLocaleString('pt-BR')}</strong>
+            <strong className="summary-value">
+              {Number(total_known_credits).toLocaleString('pt-BR')}
+            </strong>
           </div>
         )}
       </div>
@@ -168,6 +167,12 @@ export default function FlowAccountsSection({ flowPool }) {
                 key={acct.account_id}
                 className={`flow-account-card ${isActive ? 'is-active-account' : ''} ${acct.enabled === false ? 'is-disabled' : ''}`}
               >
+                {/* Discrete qualitative status accent line (Requirement 8: NOT a percentage bar) */}
+                <div
+                  className="flow-qualitative-status-bar"
+                  style={{ backgroundColor: statusInfo.dotColor }}
+                />
+
                 {/* Cabeçalho do Card: Display Name + Active Badge + ID secundário */}
                 <div className="flow-card-top">
                   <div className="flow-card-identity">
@@ -181,7 +186,7 @@ export default function FlowAccountsSection({ flowPool }) {
 
                   <div className="flow-card-badges">
                     {isActive && (
-                      <span className="flow-badge-active" title="Conta ativa selecionada para novas gerações">
+                      <span className="flow-badge-active" title="Conta ativa selecionada por maior saldo conhecido">
                         ★ ATIVA
                       </span>
                     )}

@@ -303,29 +303,40 @@ body {
   box-shadow: 0 0 8px rgba(56, 189, 248, 0.4) !important;
 }
 
-.channel-card-top {
+/* Responsive 2-Row Header Layout (R6A.5 Hotfix) */
+.channel-card-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 8px;
-  gap: 8px;
+  width: 100%;
 }
 
-.channel-name-row {
+.channel-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.channel-header-primary {
+  min-height: 20px;
+}
+
+.channel-name-group {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .channel-icon {
   font-size: 14px;
-}
-
-.channel-identity-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-width: 190px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .channel-name {
@@ -335,6 +346,11 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.channel-header-secondary {
+  min-height: 16px;
 }
 
 .channel-sub-id {
@@ -344,12 +360,17 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
-.channel-badges {
+.channel-mode-badges {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .mini-badge {

@@ -65,34 +65,40 @@ export default function ChannelCard({
       aria-label={`Canal ${primaryTitle}`}
       aria-selected={isFocused}
     >
-      {/* Top Banner: Identity, Badges and Focused Indicator */}
-      <div className="channel-card-top">
-        <div className="channel-identity-group">
-          <div className="channel-name-row">
+      {/* Top Banner: 2-Row Responsive Header Layout */}
+      <div className="channel-card-header">
+        {/* Row 1: Primary Identity & Focus Badge */}
+        <div className="channel-header-row channel-header-primary">
+          <div className="channel-name-group">
             <span className="channel-icon">📺</span>
             <span className="channel-name" title={primaryTitle}>
               {primaryTitle}
             </span>
           </div>
-          <div className="channel-sub-id" title={`${secondarySubtitle} • ${profileMeta}`}>
-            {secondarySubtitle} • <span className="profile-id-sub">{profileMeta}</span>
-          </div>
-        </div>
 
-        <div className="channel-badges">
           {isFocused && (
             <span className="mini-badge focused-badge" title="Canal com pipeline em exibição abaixo">
               ● EM FOCO
             </span>
           )}
-          <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
-            {isAutonomous ? 'AUTO' : 'MANUAL'}
-          </span>
-          {growth_mode && (
-            <span className="mini-badge growth">
-              {String(growth_mode).toUpperCase()}
+        </div>
+
+        {/* Row 2: Secondary Metadata & Mode Badges */}
+        <div className="channel-header-row channel-header-secondary">
+          <div className="channel-sub-id" title={`${secondarySubtitle} • ${profileMeta}`}>
+            {secondarySubtitle} • <span className="profile-id-sub">{profileMeta}</span>
+          </div>
+
+          <div className="channel-mode-badges">
+            <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
+              {isAutonomous ? 'AUTO' : 'MANUAL'}
             </span>
-          )}
+            {growth_mode && (
+              <span className="mini-badge growth">
+                {String(growth_mode).toUpperCase()}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

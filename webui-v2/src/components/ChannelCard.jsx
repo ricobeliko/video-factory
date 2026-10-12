@@ -1,7 +1,8 @@
 import React from 'react';
 
 /**
- * ChannelCard — Dynamic header card for each profile/channel
+ * ChannelCard — Dynamic header card for each profile/channel in the top deck.
+ * Prioritizes profile_name as the primary operational identity.
  */
 export default function ChannelCard({ channel, isSelected, onClick }) {
   const {
@@ -18,6 +19,12 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
   const isAutonomous = Boolean(autonomous_enabled);
   const isIdle = !execution || execution.status === 'IDLE';
 
+  // Prioritize profile_name as primary identity per R6A.2 feedback
+  const primaryTitle = profile_name || channel_name || profile_id;
+  const secondarySubtitle = channel_name
+    ? `${channel_name} • ${channel_id || profile_id}`
+    : (channel_id || profile_id);
+
   return (
     <div
       className={`channel-card ${isSelected ? 'active-selected' : ''}`}
@@ -26,8 +33,13 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
       tabIndex={0}
     >
       <div className="channel-card-top">
-        <div className="channel-name" title={channel_name || profile_name}>
-          📺 {channel_name || profile_name}
+        <div className="channel-identity-group">
+          <div className="channel-name" title={primaryTitle}>
+            📺 {primaryTitle}
+          </div>
+          <div className="channel-sub-id" title={secondarySubtitle}>
+            {secondarySubtitle}
+          </div>
         </div>
         <div className="channel-badges">
           <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
@@ -44,7 +56,7 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
       <div className="channel-card-body">
         <div className="channel-stock-row">
           <span>Estoque Pronto:</span>
-          <strong>{stock !== undefined && stock !== null ? stock : '—'}</strong>
+          <strong>{stock !== undefined && stock !== null ? stock : 0}</strong>
         </div>
 
         {isIdle ? (
@@ -59,9 +71,10 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span className={`mini-badge ${execution.status === 'RUNNING' ? 'autonomous' : 'manual'}`}>
+                {execution.status === 'RUNNING' && <span className="running-dot" />}
                 {execution.status}
               </span>
-              <span style={{ fontSize: '10px', color: '#94a3b8' }}>
+              <span style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 500 }}>
                 {execution.pipeline_stage_label || execution.stage || 'Processando'}
               </span>
               {execution.progress !== null && execution.progress !== undefined && (

@@ -3,9 +3,7 @@ import {
   ReactFlow,
   Background,
   Controls,
-  MiniMap,
-  useNodesState,
-  useEdgesState,
+  MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -14,18 +12,18 @@ import LaneHeaderNode from './LaneHeaderNode';
 
 // Canonical 12 stages in strict pipeline sequence
 const CANONICAL_STAGES = [
-  { code: 'TOPIC', label: 'Tema / Pauta' },
-  { code: 'SCRIPT', label: 'Roteiro' },
-  { code: 'NARRATION', label: 'Narração' },
-  { code: 'VISUALS', label: 'Visuais / Clipes' },
-  { code: 'RENDER', label: 'Renderização' },
-  { code: 'SAFETY', label: 'Safety Gate' },
-  { code: 'QUALITY', label: 'Quality Gate' },
-  { code: 'COPYRIGHT', label: 'Copyright Gate' },
-  { code: 'READY_STOCK', label: 'Estoque Pronto' },
-  { code: 'SCHEDULER', label: 'Agendamento' },
-  { code: 'PUBLISHER', label: 'Publicação' },
-  { code: 'YOUTUBE', label: 'YouTube' },
+  { step: 1, code: 'TOPIC', label: 'Tema / Pauta' },
+  { step: 2, code: 'SCRIPT', label: 'Roteiro' },
+  { step: 3, code: 'NARRATION', label: 'Narração' },
+  { step: 4, code: 'VISUALS', label: 'Visuais / Clipes' },
+  { step: 5, code: 'RENDER', label: 'Renderização' },
+  { step: 6, code: 'SAFETY', label: 'Safety Gate' },
+  { step: 7, code: 'QUALITY', label: 'Quality Gate' },
+  { step: 8, code: 'COPYRIGHT', label: 'Copyright Gate' },
+  { step: 9, code: 'READY_STOCK', label: 'Estoque Pronto' },
+  { step: 10, code: 'SCHEDULER', label: 'Agendamento' },
+  { step: 11, code: 'PUBLISHER', label: 'Publicação' },
+  { step: 12, code: 'YOUTUBE', label: 'YouTube' },
 ];
 
 const nodeTypes = {
@@ -34,47 +32,73 @@ const nodeTypes = {
 };
 
 /**
- * FactoryLiveGraph — Single Canvas Multi-Channel Pipeline Graph
- * Strict Non-Inference: Nodes only show status if backed by actual backend telemetry.
+ * FactoryLiveGraph — 2 Rows x 6 Stages Snake Layout per Channel
+ * Row 1 (L->R): 1. TOPIC -> 2. SCRIPT -> 3. NARRATION -> 4. VISUALS -> 5. RENDER -> 6. SAFETY
+ *                                                                                        |
+ * Row 2 (R->L): 12. YOUTUBE <- 11. PUBLISHER <- 10. SCHEDULER <- 9. READY <- 8. CPR <- 7. QUAL
  */
 export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
-  // Build nodes and edges dynamically based on live channels
-  const { initialNodes, initialEdges } = useMemo(() => {
-    const nodes = [];
-    const edges = [];
+  const { nodes, edges, totalHeight } = useMemo(() => {
+    const calculatedNodes = [];
+    const calculatedEdges = [];
 
-    const LANE_HEIGHT = 160;
-    const START_X = 260;
-    const STEP_X = 170;
+    // Layout constants
+    const START_X = 40;
+    const STEP_X = 200; // 180px node + 20px gap
+    const CHANNEL_BLOCK_HEIGHT = 330;
 
     channels.forEach((channel, cIndex) => {
-      const y = cIndex * LANE_HEIGHT + 40;
+      const channelY = cIndex * CHANNEL_BLOCK_HEIGHT + 25;
       const channelId = channel.channel_id || channel.profile_id;
       const execution = channel.execution;
       const activeStage = execution?.pipeline_stage;
       const executionStatus = execution?.status || 'IDLE';
 
-      // 1. Lane Header Node on Left
+      // 1. Channel Section Header Banner (Spanning above the 2x6 grid)
       const headerNodeId = `header-${channelId}`;
-      nodes.push({
+      calculatedNodes.push({
         id: headerNodeId,
         type: 'laneHeader',
-        position: { x: 40, y },
+        position: { x: START_X, y: channelY },
         data: {
-          channelName: channel.channel_name || channel.profile_name,
+          profileName: channel.profile_name,
+          channelName: channel.channel_name,
+          channelId: channel.channel_id,
           profileId: channel.profile_id,
           isAutonomous: channel.autonomous_enabled,
           growthMode: channel.growth_mode,
+          stock: channel.stock,
+          status: executionStatus,
+          topic: execution?.topic,
         },
         selectable: true,
       });
 
-      let prevNodeId = headerNodeId;
+      // 2. 12 Pipeline Stage Nodes in 2x6 Snake Grid
+      const stageNodeIds = {};
+      const row1Y = channelY + 68;
+      const row2Y = channelY + 188;
 
-      // 2. 12 Pipeline Stage Nodes
-      CANONICAL_STAGES.forEach((stageDef, sIndex) => {
+      CANONICAL_STAGES.forEach((stageDef) => {
+        const stepNum = stageDef.step;
         const nodeId = `node-${channelId}-${stageDef.code}`;
-        const x = START_X + sIndex * STEP_X;
+        stageNodeIds[stepNum] = nodeId;
+
+        // Position calculation: 1..6 on Row 1 (col 0..5), 7..12 on Row 2 (col 5..0)
+        let x;
+        let y;
+
+        if (stepNum <= 6) {
+          // Row 1: Left to Right
+          const colIndex = stepNum - 1; // 0..5
+          x = START_X + colIndex * STEP_X;
+          y = row1Y;
+        } else {
+          // Row 2: Right to Left
+          const colIndex = 12 - stepNum; // 5..0
+          x = START_X + colIndex * STEP_X;
+          y = row2Y;
+        }
 
         // Strict Non-Inference status determination
         let stageStatus = 'PENDING';
@@ -85,7 +109,6 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
         if (executionStatus === 'IDLE') {
           stageStatus = 'IDLE';
         } else if (activeStage === stageDef.code) {
-          // Exact stage match from backend
           stageStatus = executionStatus;
           progress = execution?.progress;
           provider = execution?.provider;
@@ -94,7 +117,6 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
           !activeStage &&
           ['SCRIPT', 'NARRATION', 'VISUALS'].includes(stageDef.code)
         ) {
-          // Documented gap in R5B: in-flight processing without sub-stage telemetry
           stageStatus = 'RUNNING';
           isGap = true;
           progress = execution?.progress;
@@ -102,7 +124,6 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
           stageDef.code === 'YOUTUBE' &&
           execution?.publication_state?.status === 'success'
         ) {
-          // Terminal success on YouTube
           stageStatus = 'SUCCESS';
         } else if (
           stageDef.code === 'READY_STOCK' &&
@@ -112,11 +133,12 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
           stageStatus = 'SUCCESS';
         }
 
-        nodes.push({
+        calculatedNodes.push({
           id: nodeId,
           type: 'executionNode',
           position: { x, y },
           data: {
+            stepNumber: stepNum,
             stage: stageDef.code,
             stageLabel: stageDef.label,
             status: stageStatus,
@@ -128,34 +150,78 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
           },
           selectable: true,
         });
+      });
 
-        // Edge from previous node
+      // 3. Edges connecting the Snake sequence (1 -> 2 -> ... -> 12)
+      // Edge from Header down to Stage 1 (TOPIC)
+      calculatedEdges.push({
+        id: `edge-${headerNodeId}-topic`,
+        source: headerNodeId,
+        sourceHandle: 'header-source',
+        target: stageNodeIds[1],
+        targetHandle: 'target-top',
+        type: 'smoothstep',
+        style: { stroke: '#475569', strokeWidth: 1.5, strokeDasharray: '3 3' },
+      });
+
+      // Internal snake edges
+      for (let s = 1; s < 12; s++) {
+        const fromStep = s;
+        const toStep = s + 1;
+        const fromId = stageNodeIds[fromStep];
+        const toId = stageNodeIds[toStep];
+        const fromStageCode = CANONICAL_STAGES[fromStep - 1].code;
+
+        let sourceHandle;
+        let targetHandle;
+
+        if (fromStep < 6) {
+          // Horizontal right: 1->2, 2->3, 3->4, 4->5, 5->6
+          sourceHandle = 'source-right';
+          targetHandle = 'target-left';
+        } else if (fromStep === 6) {
+          // Vertical down: 6 (SAFETY) -> 7 (QUALITY)
+          sourceHandle = 'source-bottom';
+          targetHandle = 'target-top';
+        } else {
+          // Horizontal left: 7->8, 8->9, 9->10, 10->11, 11->12
+          sourceHandle = 'source-left';
+          targetHandle = 'target-right';
+        }
+
         const isEdgeActive =
-          stageStatus === 'RUNNING' ||
-          (activeStage === stageDef.code && executionStatus === 'RUNNING');
+          activeStage === fromStageCode && executionStatus === 'RUNNING';
 
-        edges.push({
-          id: `edge-${prevNodeId}-${nodeId}`,
-          source: prevNodeId,
-          target: nodeId,
+        calculatedEdges.push({
+          id: `edge-${fromId}-${toId}`,
+          source: fromId,
+          sourceHandle,
+          target: toId,
+          targetHandle,
+          type: 'smoothstep',
           className: isEdgeActive ? 'active-edge' : '',
           animated: isEdgeActive,
+          style: {
+            stroke: isEdgeActive ? '#f59e0b' : '#334155',
+            strokeWidth: isEdgeActive ? 2.5 : 2,
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 12,
+            height: 12,
+            color: isEdgeActive ? '#f59e0b' : '#475569',
+          },
         });
-
-        prevNodeId = nodeId;
-      });
+      }
     });
 
-    return { initialNodes: nodes, initialEdges: edges };
+    const computedHeight = Math.max(500, channels.length * CHANNEL_BLOCK_HEIGHT + 80);
+    return {
+      nodes: calculatedNodes,
+      edges: calculatedEdges,
+      totalHeight: computedHeight,
+    };
   }, [channels]);
-
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
-
-  // Sync state when channels change
-  React.useEffect(() => {
-    // When channels update, keep nodes refreshed
-  }, [initialNodes, initialEdges]);
 
   const handleNodeClick = (_, node) => {
     if (node.type === 'laneHeader') {
@@ -167,32 +233,22 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
   };
 
   return (
-    <div className="graph-container">
+    <div className="graph-container" style={{ height: `${totalHeight}px` }}>
       <ReactFlow
-        nodes={initialNodes}
-        edges={initialEdges}
+        nodes={nodes}
+        edges={edges}
         nodeTypes={nodeTypes}
         onNodeClick={handleNodeClick}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={true}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.2}
+        fitViewOptions={{ padding: 0.12 }}
+        minZoom={0.3}
         maxZoom={1.5}
       >
         <Background color="#1e293b" gap={20} size={1} />
         <Controls showInteractive={false} />
-        <MiniMap
-          nodeColor={(n) => {
-            if (n.type === 'laneHeader') return '#3b82f6';
-            if (n.data?.status === 'RUNNING') return '#f59e0b';
-            if (n.data?.status === 'SUCCESS') return '#10b981';
-            if (n.data?.status === 'FAILED') return '#ef4444';
-            return '#334155';
-          }}
-          style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b' }}
-        />
       </ReactFlow>
     </div>
   );

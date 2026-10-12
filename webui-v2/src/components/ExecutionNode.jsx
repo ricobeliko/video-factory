@@ -2,11 +2,13 @@ import React from 'react';
 import { Handle, Position } from '@xyflow/react';
 
 /**
- * ExecutionNode — Custom node for the 12 canonical pipeline stages
+ * ExecutionNode — Custom node for the 2x6 snake pipeline.
+ * Displays step number (#1..#12), stage code, friendly label, and status.
  * Strict Non-Inference: Only displays status and progress when returned by backend.
  */
 export default function ExecutionNode({ data, selected }) {
   const {
+    stepNumber,
     stage,
     stageLabel,
     status = 'PENDING',
@@ -19,14 +21,41 @@ export default function ExecutionNode({ data, selected }) {
 
   return (
     <div className={`execution-node ${statusClass} ${selected ? 'selected-node' : ''}`}>
-      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+      {/* Target Handles for Snake routing */}
+      <Handle
+        type="target"
+        id="target-left"
+        position={Position.Left}
+        className="node-handle handle-left"
+      />
+      <Handle
+        type="target"
+        id="target-top"
+        position={Position.Top}
+        className="node-handle handle-top"
+      />
+      <Handle
+        type="target"
+        id="target-right"
+        position={Position.Right}
+        className="node-handle handle-right"
+      />
+
       <div className="node-header">
-        <span className="node-stage-code">{stage}</span>
-        <span className="node-status-badge">{status}</span>
+        <div className="node-id-group">
+          <span className="node-step-badge">#{stepNumber}</span>
+          <span className="node-stage-code">{stage}</span>
+        </div>
+        <span className="node-status-badge">
+          {status === 'RUNNING' && <span className="running-dot" />}
+          {status}
+        </span>
       </div>
+
       <div className="node-stage-label" title={stageLabel}>
         {stageLabel}
       </div>
+
       {progress !== null && progress !== undefined && status === 'RUNNING' && (
         <div className="node-progress-bar">
           <div
@@ -35,15 +64,36 @@ export default function ExecutionNode({ data, selected }) {
           />
         </div>
       )}
+
       {isGap && status === 'RUNNING' && (
         <div className="node-gap-hint">Sub-etapa ainda não instrumentada</div>
       )}
+
       {provider && (
-        <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+        <div className="node-provider-tag" title={`Provedor: ${provider}`}>
           {provider}
         </div>
       )}
-      <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+
+      {/* Source Handles for Snake routing */}
+      <Handle
+        type="source"
+        id="source-right"
+        position={Position.Right}
+        className="node-handle handle-right"
+      />
+      <Handle
+        type="source"
+        id="source-bottom"
+        position={Position.Bottom}
+        className="node-handle handle-bottom"
+      />
+      <Handle
+        type="source"
+        id="source-left"
+        position={Position.Left}
+        className="node-handle handle-left"
+      />
     </div>
   );
 }

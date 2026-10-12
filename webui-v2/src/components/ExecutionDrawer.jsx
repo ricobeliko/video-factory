@@ -68,10 +68,10 @@ export default function ExecutionDrawer({
         <div className="drawer-header">
           <div>
             <div className="drawer-title">
-              📺 {channelData?.channel_name || channelData?.profile_name || 'Detalhes da Execução'}
+              📺 {channelData?.profile_name || channelData?.channel_name || 'Detalhes da Execução'}
             </div>
-            <div style={{ fontSize: '10px', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
-              Perfil: {channelData?.profile_id}
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
+              {channelData?.channel_name ? `${channelData.channel_name} • ` : ''}Perfil: {channelData?.profile_id}
             </div>
           </div>
           <button className="drawer-close-btn" onClick={onClose} title="Fechar">

@@ -25,11 +25,13 @@ export default function App() {
         getSystemStatus(),
       ]);
 
-      if (liveRes && Array.isArray(liveRes.channels)) {
-        setChannels(liveRes.channels);
+      const channelsList = liveRes?.channels || liveRes?.data?.channels;
+      if (Array.isArray(channelsList)) {
+        setChannels(channelsList);
       }
-      if (statusRes) {
-        setSystemStatus(statusRes);
+      const sysData = statusRes?.data || statusRes;
+      if (sysData) {
+        setSystemStatus(sysData);
       }
 
       setLastUpdated(new Date());

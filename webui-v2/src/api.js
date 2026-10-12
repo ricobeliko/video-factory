@@ -28,7 +28,11 @@ async function fetchJson(endpoint, options = {}) {
     throw err;
   }
 
-  return response.json();
+  const payload = await response.json();
+  if (payload && typeof payload === 'object' && payload.data !== undefined && payload.status === 200) {
+    return payload.data;
+  }
+  return payload;
 }
 
 export async function getLiveExecutions() {

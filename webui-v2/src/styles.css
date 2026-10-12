@@ -66,6 +66,8 @@ body {
   height: 100vh;
   width: 100vw;
   background-color: var(--bg-app);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* ==========================================================================
@@ -81,7 +83,9 @@ body {
   justify-content: space-between;
   padding: 0 20px;
   flex-shrink: 0;
-  z-index: 10;
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
 .header-brand {
@@ -203,19 +207,21 @@ body {
 
 .channels-deck {
   padding: 12px 20px;
-  background-color: rgba(17, 24, 39, 0.7);
+  background-color: rgba(17, 24, 39, 0.9);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   gap: 14px;
   overflow-x: auto;
   flex-shrink: 0;
-  z-index: 5;
+  position: sticky;
+  top: 60px;
+  z-index: 15;
 }
 
 .channel-card {
-  min-width: 270px;
-  max-width: 320px;
+  min-width: 280px;
+  max-width: 330px;
   flex: 1;
   background-color: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -243,21 +249,38 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 8px;
+  gap: 8px;
+}
+
+.channel-identity-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 190px;
 }
 
 .channel-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 170px;
+}
+
+.channel-sub-id {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .channel-badges {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .mini-badge {
@@ -342,7 +365,7 @@ body {
   position: relative;
   background-color: var(--bg-app);
   width: 100%;
-  height: calc(100vh - 190px);
+  min-height: 500px;
 }
 
 /* React Flow customization */
@@ -392,41 +415,63 @@ body {
 }
 
 /* ==========================================================================
-   Execution Nodes (Custom Node)
+   Execution Nodes (Custom Node) — 2x6 Snake Layout
    ========================================================================== */
 
 .execution-node {
-  width: 140px;
+  width: 180px;
+  min-height: 88px;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: 8px;
+  padding: 10px 12px;
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.18s ease;
   position: relative;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .execution-node:hover {
   border-color: var(--border-medium);
   background-color: var(--bg-surface-elevated);
+  transform: translateY(-1px);
 }
 
 .execution-node.selected-node {
   border-color: var(--border-highlight) !important;
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3) !important;
 }
 
 .node-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  gap: 6px;
+}
+
+.node-id-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.node-step-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #94a3b8;
+  background-color: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 .node-stage-code {
-  font-size: 9px;
+  font-size: 10px;
   font-family: var(--font-mono);
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -434,7 +479,7 @@ body {
 }
 
 .node-stage-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
@@ -448,37 +493,77 @@ body {
   align-items: center;
   gap: 4px;
   font-size: 9px;
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 3px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 
+/* Pulsing running dot */
+.running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+  box-shadow: 0 0 6px #f59e0b;
+  display: inline-block;
+  animation: pulseRunningDot 1.4s infinite ease-in-out;
+}
+
+@keyframes pulseRunningDot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.5; }
+}
+
+/* Handles styling */
+.node-handle {
+  width: 6px !important;
+  height: 6px !important;
+  background-color: #475569 !important;
+  border: 1px solid #1e293b !important;
+  border-radius: 50% !important;
+  transition: background-color 0.15s ease;
+}
+
 /* Node Status Variants */
 .node-status-SUCCESS {
-  border-color: rgba(16, 185, 129, 0.4);
-  background-color: rgba(16, 185, 129, 0.04);
+  border-color: rgba(16, 185, 129, 0.5);
+  background-color: rgba(16, 185, 129, 0.06);
 }
 .node-status-SUCCESS .node-status-badge {
   background-color: var(--status-success-bg);
   color: var(--status-success);
 }
 
+/* Enhanced RUNNING status per requirement 8 */
 .node-status-RUNNING {
-  border-color: var(--status-running);
-  background-color: var(--status-running-bg);
-  box-shadow: 0 0 12px rgba(245, 158, 11, 0.25);
-  animation: pulseSubtle 2s infinite ease-in-out;
+  border: 2px solid #f59e0b !important;
+  background-color: rgba(245, 158, 11, 0.18) !important;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.4), inset 0 0 8px rgba(245, 158, 11, 0.08) !important;
+  animation: pulseRunningNode 2s infinite ease-in-out;
 }
 .node-status-RUNNING .node-status-badge {
-  background-color: rgba(245, 158, 11, 0.25);
-  color: #fbbf24;
+  background-color: rgba(245, 158, 11, 0.3);
+  color: #fef3c7;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+}
+
+@keyframes pulseRunningNode {
+  0% {
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(245, 158, 11, 0.55), inset 0 0 10px rgba(245, 158, 11, 0.12);
+  }
+  100% {
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.25);
+  }
 }
 
 .node-status-WAITING {
   border-color: rgba(59, 130, 246, 0.4);
-  background-color: rgba(59, 130, 246, 0.04);
+  background-color: rgba(59, 130, 246, 0.05);
 }
 .node-status-WAITING .node-status-badge {
   background-color: var(--status-waiting-bg);
@@ -487,7 +572,7 @@ body {
 
 .node-status-SCHEDULED {
   border-color: rgba(99, 102, 241, 0.4);
-  background-color: rgba(99, 102, 241, 0.04);
+  background-color: rgba(99, 102, 241, 0.05);
 }
 .node-status-SCHEDULED .node-status-badge {
   background-color: var(--status-scheduled-bg);
@@ -523,7 +608,7 @@ body {
 
 .node-status-PENDING {
   border-color: var(--border-subtle);
-  opacity: 0.75;
+  opacity: 0.8;
 }
 .node-status-PENDING .node-status-badge {
   background-color: var(--status-pending-bg);
@@ -532,31 +617,19 @@ body {
 
 .node-status-IDLE {
   border-color: var(--border-subtle);
-  opacity: 0.55;
+  opacity: 0.6;
 }
 .node-status-IDLE .node-status-badge {
   background-color: var(--status-idle-bg);
   color: var(--text-muted);
 }
 
-@keyframes pulseSubtle {
-  0% {
-    box-shadow: 0 0 4px rgba(245, 158, 11, 0.2);
-  }
-  50% {
-    box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
-  }
-  100% {
-    box-shadow: 0 0 4px rgba(245, 158, 11, 0.2);
-  }
-}
-
 .node-progress-bar {
   width: 100%;
-  height: 3px;
+  height: 4px;
   background-color: var(--border-subtle);
   border-radius: 2px;
-  margin-top: 5px;
+  margin-top: 6px;
   overflow: hidden;
 }
 
@@ -566,39 +639,124 @@ body {
   transition: width 0.3s ease;
 }
 
+.node-provider-tag {
+  font-size: 10px;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+  margin-top: 4px;
+}
+
 .node-gap-hint {
-  font-size: 8px;
+  font-size: 9px;
   color: #eab308;
-  margin-top: 3px;
+  margin-top: 4px;
   line-height: 1.1;
   font-style: italic;
 }
 
-/* Lane Header Node */
-.lane-header-node {
-  min-width: 180px;
-  background-color: var(--bg-surface-elevated);
+/* ==========================================================================
+   Channel Header Banner Node (Above 2x6 Pipeline)
+   ========================================================================== */
+
+.lane-header-card {
+  width: 1180px;
+  height: 50px;
+  background: linear-gradient(90deg, #162032 0%, #111827 100%);
   border: 1px solid var(--border-medium);
   border-left: 4px solid var(--border-highlight);
-  border-radius: 6px;
-  padding: 10px 14px;
+  border-radius: 8px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   user-select: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.lane-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lane-channel-avatar {
+  font-size: 18px;
+}
+
+.lane-channel-info {
+  display: flex;
+  flex-direction: column;
 }
 
 .lane-channel-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.lane-channel-subtitle {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.lane-channel-subtitle code {
+  color: #93c5fd;
+  font-size: 10px;
+}
+
+.lane-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lane-topic-pill {
+  font-size: 11px;
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  padding: 3px 10px;
+  border-radius: 4px;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lane-topic-pill span {
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.lane-badges-row {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.lane-channel-subtitle {
-  font-size: 10px;
-  font-family: var(--font-mono);
+.mini-badge.stock {
+  background-color: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.mini-badge.status-RUNNING {
+  background-color: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.mini-badge.status-IDLE {
+  background-color: var(--status-idle-bg);
   color: var(--text-muted);
-  margin-top: 2px;
+  border: 1px solid var(--border-subtle);
+}
+
+.mini-badge.status-BLOCKED {
+  background-color: var(--status-blocked-bg);
+  color: #fdba74;
+  border: 1px solid rgba(234, 88, 12, 0.4);
 }
 
 /* ==========================================================================

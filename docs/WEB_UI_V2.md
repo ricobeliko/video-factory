@@ -627,5 +627,40 @@ webui-v2/
 - Zero alterações no backend, zero endpoints WRITE criados, zero migrations de SQLite.
 - Streamlit permanece 100% intacto em `webui/Main.py` como fallback operacional.
 
+---
+
+### E. Refinamento de Layout Visual (Fase R6A.2 — Homologação Operacional)
+
+Após validação visual do operador, o layout linear contínuo de 12 estágios foi refatorado para otimizar leitura imediata sem necessidade de pan/zoom contínuo:
+
+1. **Pipeline Layout em 2 Linhas x 6 Estágios (Snake Layout):**
+   - **Row 1 (Esquerda → Direita):**
+     `① TOPIC → ② SCRIPT → ③ NARRATION → ④ VISUALS → ⑤ RENDER → ⑥ SAFETY`
+   - **Conexão Vertical:**
+     `⑥ SAFETY ↓ ⑦ QUALITY`
+   - **Row 2 (Direita → Esquerda):**
+     `⑫ YOUTUBE ← ⑪ PUBLISHER ← ⑩ SCHEDULER ← ⑨ READY_STOCK ← ⑧ COPYRIGHT ← ⑦ QUALITY`
+   - Edges direcionais explícitas com setas pontilhando/indicando inequívoca sequência `1 → 2 → ... → 12`.
+
+2. **Identidade do Canal:**
+   - Prioriza `profile_name` como identidade primária destacada (ex.: *Dose Diária de Internet* / *Video Factory Default*).
+   - Nome do canal e identificador da plataforma aparecem como subtítulo secundário (ex.: *YouTube (Default) • channel-default-youtube*).
+
+3. **Dimensões e Legibilidade dos Nodes:**
+   - Nós redimensionados confortavelmente para 180px × 88px, exibindo:
+     - Badge com número ordinal da etapa (`#1` .. `#12`);
+     - Código canônico do estágio (`NARRATION`);
+     - Label em português (`Narração`);
+     - Status destacado (`RUNNING`, `SUCCESS`, `PENDING`, `IDLE`);
+     - Provedor ativo e barra de progresso quando disponíveis.
+
+4. **Destaque do Status Ativo (`RUNNING`):**
+   - Borda espessa âmbar (2px), glow discreto e ponto pulsante de execução em tempo real.
+
+5. **Remoção do MiniMap & Altura Dinâmica:**
+   - MiniMap removido para eliminar obstrução visual.
+   - Altura do canvas calculada dinamicamente por canal empilhado, com rolagem vertical da página para suportar múltiplos canais sem diminuir o tamanho dos nós.
+
+
 
 

@@ -1009,3 +1009,302 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* ==========================================================================
+   Google Flow Provider Pool Section (FLOW-UI-001)
+   ========================================================================== */
+
+.flow-pool-section {
+  padding: 10px 20px;
+  background-color: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.flow-pool-section.degraded {
+  background-color: rgba(239, 68, 68, 0.05);
+}
+
+.flow-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flow-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.flow-title-icon {
+  font-size: 14px;
+}
+
+.flow-title {
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.flow-subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.flow-count-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  font-weight: 600;
+}
+
+.flow-credits-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-elevated);
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+.flow-credits-summary .summary-value {
+  color: #38bdf8;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.flow-degraded-badge {
+  font-size: 11px;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.flow-cards-deck {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.flow-account-card {
+  min-width: 240px;
+  max-width: 300px;
+  flex: 1;
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.18s ease;
+  position: relative;
+}
+
+.flow-account-card:hover {
+  border-color: var(--border-medium);
+  background-color: var(--bg-surface-hover);
+  transform: translateY(-1px);
+}
+
+.flow-account-card.is-active-account {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4), 0 2px 10px rgba(37, 99, 235, 0.15);
+}
+
+.flow-account-card.is-disabled {
+  opacity: 0.6;
+  filter: grayscale(0.5);
+}
+
+.flow-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.flow-card-identity {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.flow-display-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-account-id {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.flow-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.flow-badge-active {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.4);
+}
+
+.flow-badge-disabled {
+  font-size: 9px;
+  font-weight: 600;
+  background: rgba(100, 116, 139, 0.2);
+  color: #94a3b8;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.flow-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.flow-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.flow-status-text {
+  font-weight: 500;
+}
+
+.flow-status-text.status-available {
+  color: #10b981;
+}
+
+.flow-status-text.status-unknown-credits {
+  color: #a3e635;
+}
+
+.flow-status-text.status-busy {
+  color: #3b82f6;
+}
+
+.flow-status-text.status-low-credits {
+  color: #f59e0b;
+}
+
+.flow-status-text.status-cooldown {
+  color: #f97316;
+}
+
+.flow-status-text.status-exhausted,
+.flow-status-text.status-auth-required,
+.flow-status-text.status-auth-failed {
+  color: #ef4444;
+}
+
+.flow-status-text.status-disabled {
+  color: #64748b;
+}
+
+.flow-credits-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  background: rgba(11, 15, 25, 0.5);
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.flow-credits-value {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.flow-source-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+
+.flow-source-badge.source-verified {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.flow-source-badge.source-estimated {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.flow-source-badge.source-unknown {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.flow-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.flow-task-value.idle {
+  color: var(--text-muted);
+}
+
+.flow-task-value.in-use {
+  color: #60a5fa;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.flow-empty-state {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 12px;
+}
+

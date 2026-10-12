@@ -3387,7 +3387,49 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             "execution": execution,
         })
 
-    return {"channels": results, "total": len(results)}
+    # Flow multi-account pool telemetry (FLOW-UI-001)
+    flow_pool_data = None
+    try:
+        from app.services import flow_account_pool
+        raw_pool = flow_account_pool.get_flow_accounts_status()
+        allowed_fields = {
+            "account_id",
+            "display_name",
+            "enabled",
+            "priority",
+            "status",
+            "credits_remaining",
+            "credits_source",
+            "credits_last_verified_at",
+            "current_task_id",
+            "last_credit_cost",
+            "last_success_at",
+            "last_error",
+        }
+        sanitized_accounts = []
+        for acct in raw_pool.get("accounts", []):
+            sanitized_accounts.append({k: acct[k] for k in allowed_fields if k in acct})
+
+        flow_pool_data = {
+            "accounts": sanitized_accounts,
+            "active_account_id": raw_pool.get("active_account_id"),
+            "total_known_credits": raw_pool.get("total_known_credits"),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to fetch flow accounts status for live overview: {exc}")
+        flow_pool_data = {
+            "accounts": [],
+            "active_account_id": None,
+            "total_known_credits": None,
+            "error": "Telemetria indisponível",
+        }
+
+    return {
+        "channels": results,
+        "total": len(results),
+        "flow_accounts": flow_pool_data,
+        "flow_pool": flow_pool_data,
+    }
 
 
 def get_execution_detail(task_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:

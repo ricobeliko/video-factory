@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import FactoryHeader from './components/FactoryHeader';
 import ChannelCard from './components/ChannelCard';
+import FlowAccountsSection from './components/FlowAccountsSection';
 import FactoryLiveGraph from './components/FactoryLiveGraph';
 import ExecutionDrawer from './components/ExecutionDrawer';
 import { getLiveExecutions, getSystemStatus } from './api';
@@ -9,6 +10,7 @@ import './styles.css';
 export default function App() {
   const [channels, setChannels] = useState([]);
   const [systemStatus, setSystemStatus] = useState(null);
+  const [flowPool, setFlowPool] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isApiOnline, setIsApiOnline] = useState(true);
 
@@ -17,7 +19,7 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  // Polling loop for live execution and system status
+  // Polling loop for live execution and system status (reutilizado para Flow Pool)
   const pollData = useCallback(async () => {
     try {
       const [liveRes, statusRes] = await Promise.all([
@@ -29,6 +31,12 @@ export default function App() {
       if (Array.isArray(channelsList)) {
         setChannels(channelsList);
       }
+
+      const poolData = liveRes?.flow_accounts || liveRes?.data?.flow_accounts || liveRes?.flow_pool || liveRes?.data?.flow_pool;
+      if (poolData) {
+        setFlowPool(poolData);
+      }
+
       const sysData = statusRes?.data || statusRes;
       if (sysData) {
         setSystemStatus(sysData);
@@ -82,6 +90,9 @@ export default function App() {
           ))
         )}
       </div>
+
+      {/* 2.5 Google Flow Multi-Account Pool Deck (FLOW-UI-001) */}
+      <FlowAccountsSection flowPool={flowPool} />
 
       {/* 3. Factory Live Graph (Single Canvas Multi-Lane React Flow) */}
       <FactoryLiveGraph

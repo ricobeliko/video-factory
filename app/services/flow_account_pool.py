@@ -16,6 +16,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import threading
 from typing import Any, Dict, List, Optional, Tuple
@@ -770,6 +772,163 @@ def get_account(account_id: str, config_path: Optional[str] = None) -> Optional[
     return None
 
 
+def find_edge_executable() -> Optional[str]:
+    """Localiza o executável do Microsoft Edge no sistema operacional."""
+    if os.name == "nt":
+        candidates = [
+            shutil.which("msedge"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for c in candidates:
+            if c and os.path.isfile(c):
+                return c
+    else:
+        w_edge = shutil.which("microsoft-edge") or shutil.which("msedge")
+        if w_edge and os.path.isfile(w_edge):
+            return w_edge
+    return None
+
+
+def launch_edge_for_human_login(
+    account_id: str,
+    target_url: str = "https://flow.google.com",
+    config_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Abre o Microsoft Edge nativo com o perfil isolado da conta para login humano inicial no Google Flow.
+
+    NÃO usa Playwright.
+    NÃO manipula credenciais, senhas, 2FA ou cookies.
+    NÃO exige manifest.
+    """
+    valid_id = validate_account_id(account_id)
+    acc = get_account(valid_id, config_path=config_path)
+    user_data_dir = (acc.get("user_data_dir") if acc else None) or resolve_user_data_dir(valid_id)
+    os.makedirs(user_data_dir, exist_ok=True)
+
+    edge_bin = find_edge_executable()
+    if not edge_bin:
+        raise RuntimeError(
+            "Microsoft Edge não encontrado no sistema. Instale o Edge ou adicione msedge ao PATH."
+        )
+
+    cmd = [
+        edge_bin,
+        f"--user-data-dir={os.path.abspath(user_data_dir)}",
+        target_url,
+    ]
+    subprocess.Popen(cmd)
+
+    return {
+        "account_id": valid_id,
+        "profile": os.path.abspath(user_data_dir),
+        "mode": "HUMAN_LOGIN",
+        "edge_launched": True,
+        "edge_bin": edge_bin,
+    }
+
+
+def verify_flow_account_session(
+    account_id: str,
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Verifica se a sessão persistida da conta no Playwright headless está autenticada.
+
+    NÃO exige manifest.
+    NÃO cria projeto.
+    NÃO preenche prompt.
+    NÃO clica Generate.
+    NÃO consome créditos.
+    """
+    valid_id = validate_account_id(account_id)
+    acc = get_account(valid_id, config_path=config_path)
+    user_data_dir = (acc.get("user_data_dir") if acc else None) or resolve_user_data_dir(valid_id)
+    profile_exists = os.path.exists(user_data_dir)
+
+    result = {
+        "account_id": valid_id,
+        "login_status": "UNKNOWN",
+        "profile_exists": profile_exists,
+        "zero_generation": True,
+        "zero_credit_consumption": True,
+        "credits_remaining": None,
+        "credits_source": CREDIT_SOURCE_UNKNOWN,
+        "message": None,
+    }
+
+    try:
+        from playwright.sync_api import sync_playwright
+        from scripts.flow_playwright import launch_flow_context, check_login_state
+    except Exception as imp_err:
+        result["login_status"] = "AUTH_FAILED"
+        result["message"] = f"Dependência ausente: {imp_err}"
+        return result
+
+    try:
+        with sync_playwright() as p:
+            context, err = launch_flow_context(
+                p,
+                user_data_dir=user_data_dir,
+                headless=True,
+            )
+            if err:
+                if "AWAITING_FLOW_EDGE_PROFILE_CLOSE" in err:
+                    result["login_status"] = "AUTH_REQUIRED"
+                    result["message"] = (
+                        "Janela do Edge ainda aberta ou perfil bloqueado. "
+                        "Feche completamente o Microsoft Edge antes de verificar."
+                    )
+                else:
+                    result["login_status"] = "AUTH_REQUIRED"
+                    result["message"] = f"Falha ao iniciar contexto: {err}"
+                update_account_runtime(
+                    valid_id,
+                    {"status": STATUS_AUTH_REQUIRED, "last_error": result["message"]},
+                    runtime_path=runtime_path,
+                )
+                return result
+
+            page = context.pages[0] if context.pages else context.new_page()
+            st = check_login_state(page)
+
+            if st == "AUTHENTICATED":
+                result["login_status"] = "AUTHENTICATED"
+                try:
+                    bal, src = read_flow_credit_balance(page)
+                    if bal is not None:
+                        result["credits_remaining"] = bal
+                        result["credits_source"] = src
+                        record_verified_credit_balance(valid_id, bal, runtime_path=runtime_path)
+                    else:
+                        update_account_runtime(valid_id, {"status": STATUS_AVAILABLE}, runtime_path=runtime_path)
+                except Exception:
+                    update_account_runtime(valid_id, {"status": STATUS_AVAILABLE}, runtime_path=runtime_path)
+            else:
+                result["login_status"] = "AUTH_REQUIRED"
+                result["message"] = f"Sessão não autenticada no Flow: {st}"
+                update_account_runtime(
+                    valid_id,
+                    {"status": STATUS_AUTH_REQUIRED, "last_error": result["message"]},
+                    runtime_path=runtime_path,
+                )
+
+            context.close()
+    except Exception as exc:
+        result["login_status"] = "AUTH_REQUIRED"
+        result["message"] = f"Exceção durante verificação: {exc}"
+        update_account_runtime(
+            valid_id,
+            {"status": STATUS_AUTH_REQUIRED, "last_error": str(exc)},
+            runtime_path=runtime_path,
+        )
+
+    return result
+
+
 def cli_main():
     """Interface de Linha de Comando operacional mínima para o pool de contas."""
     parser = argparse.ArgumentParser(description="Google Flow Account Pool CLI")
@@ -783,6 +942,20 @@ def cli_main():
     add_parser.add_argument("--account-id", required=True, help="Identificador único (ex: flow-b)")
     add_parser.add_argument("--display-name", required=True, help="Nome de exibição (ex: 'Conta B')")
     add_parser.add_argument("--priority", type=int, default=90, help="Prioridade de seleção (default 90)")
+
+    # login (onboarding humano via Edge nativo)
+    login_parser = subparsers.add_parser(
+        "login",
+        help="Abre o Microsoft Edge nativo com o perfil da conta para autenticação humana inicial",
+    )
+    login_parser.add_argument("--account-id", required=True, help="Identificador único da conta (ex: flow-b)")
+
+    # verify (validação de sessão via Playwright headless)
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Verifica se a sessão persistida da conta está autenticada via Playwright headless",
+    )
+    verify_parser.add_argument("--account-id", required=True, help="Identificador único da conta (ex: flow-b)")
 
     # disable
     dis_parser = subparsers.add_parser("disable", help="Desativa uma conta")
@@ -810,7 +983,46 @@ def cli_main():
         acc = add_account(args.account_id, args.display_name, priority=args.priority)
         print(f"Conta '{acc['account_id']}' adicionada com sucesso!")
         print(f"Diretório de perfil: {acc['user_data_dir']}")
-        print("IMPORTANTE: Para login inicial humano, execute: python scripts/flow_playwright.py --account-id " + acc['account_id'] + " --headful --trial-only")
+        print("\nPara login inicial humano, execute:")
+        print(f"  python -m app.services.flow_account_pool login --account-id {acc['account_id']}")
+        print("\nApós concluir o login e fechar o Edge, valide com:")
+        print(f"  python -m app.services.flow_account_pool verify --account-id {acc['account_id']}")
+
+    elif args.command == "login":
+        try:
+            res = launch_edge_for_human_login(args.account_id)
+            print(f"FLOW ACCOUNT = {res['account_id']}")
+            print(f"PROFILE = {res['profile']}")
+            print(f"MODE = {res['mode']}")
+            print(f"EDGE_LAUNCHED = {res['edge_launched']}")
+            print("\nFaça login manualmente no Google Flow.")
+            print("Após concluir, feche completamente esta janela do Edge.")
+            print("Depois execute:\n")
+            print(f"python -m app.services.flow_account_pool verify --account-id {res['account_id']}")
+        except Exception as exc:
+            print(f"ERRO AO ABRIR EDGE: {exc}")
+            sys.exit(1)
+
+    elif args.command == "verify":
+        try:
+            res = verify_flow_account_session(args.account_id)
+            print(f"ACCOUNT_ID = {res['account_id']}")
+            print(f"LOGIN_STATUS = {res['login_status']}")
+            print(f"PROFILE_EXISTS = {res['profile_exists']}")
+            print("ZERO_GENERATION = True")
+            print("ZERO_CREDIT_CONSUMPTION = True")
+            if res.get("credits_remaining") is not None:
+                print(f"CREDITS_REMAINING = {res['credits_remaining']} ({res['credits_source']})")
+            if res.get("message"):
+                print(f"MESSAGE = {res['message']}")
+
+            if res["login_status"] == "AUTHENTICATED":
+                sys.exit(0)
+            else:
+                sys.exit(1)
+        except Exception as exc:
+            print(f"ERRO NA VERIFICAÇÃO: {exc}")
+            sys.exit(1)
 
     elif args.command == "disable":
         ok = disable_account(args.account_id)

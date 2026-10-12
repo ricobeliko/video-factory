@@ -22,7 +22,11 @@ Contrato operacional mandatório validado e endurecido para o PC Forte:
 
 ### Princípios Operacionais Canônicos:
 1. **user_data_dir separado por conta**: Cada conta Flow cadastrada opera com seu próprio diretório persistente do Edge (`storage/flow_browser_profiles/<account_id>/`). A conta primária legada (`flow-primary`) preserva estritamente `storage/flow_browser_profile`.
-2. **Login inicial humano obrigatório**: A autenticação Google de novas contas é realizada exclusivamente por intervenção humana do operador executando o driver em modo visível (`python scripts/flow_playwright.py --account-id <id> --headful --trial-only`). NUNCA automatizar senhas, 2FA, CAPTCHA ou recuperação.
+2. **Onboarding Humano Canônico (FLOW-MA1-HOTFIX)**:
+   - Fluxo obrigatório: `ADD` → `LOGIN VIA EDGE NORMAL` → `FECHAR EDGE` → `VERIFY HEADLESS` → `AUTHENTICATED`
+   - O login inicial Google é realizado exclusivamente de forma humana abrindo o Microsoft Edge NORMAL com o `--user-data-dir` isolado da conta (`python -m app.services.flow_account_pool login --account-id <id>`). NUNCA automatizar senhas, 2FA, CAPTCHA ou recuperação.
+   - **Regra Explícita de Segurança Google**: O Google login NÃO deve ser automatizado pelo Playwright (evita bloqueio do Google por navegador/app potencialmente inseguro).
+   - Após fechar o Edge, a validação da sessão persistida é realizada via Playwright headless (`python -m app.services.flow_account_pool verify --account-id <id>`), com zero manifest, zero geração e zero consumo de créditos.
 3. **Zero senhas e segredos no projeto**: Nenhuma senha, token de autenticação, chave de API ou cookie é persistido no repositório, em arquivos JSON ou no banco de dados. Os cookies e sessões residem exclusivamente dentro dos perfis locais do Microsoft Edge.
 4. **Task stickiness**: Uma tarefa/projeto fica presa à conta Flow associada no `manifest.json` (`flow_account_id`). Após criação do projeto (`flow_project_url`), conclusão de qualquer cena ou confirmação de início de geração/aprovação de créditos, a conta é imutável.
 5. **Failover seguro somente pré-dispatch**: Failover automático para a próxima conta elegível no pool só é permitido antes do consumo ou início de geração (máximo 1 tentativa automática de failover por cena). Se a geração já iniciou na conta original, failover é proibido (segue fluxo de recovery/stock).
@@ -37,10 +41,11 @@ Contrato operacional mandatório validado e endurecido para o PC Forte:
 ### CLI Operacional:
 - **Listar contas**: `python -m app.services.flow_account_pool list`
 - **Adicionar conta**: `python -m app.services.flow_account_pool add --account-id flow-b --display-name "Conta B" --priority 90`
+- **Login humano inicial (Edge normal)**: `python -m app.services.flow_account_pool login --account-id flow-b`
+- **Verificar sessão persistida (Playwright headless)**: `python -m app.services.flow_account_pool verify --account-id flow-b`
 - **Desativar conta**: `python -m app.services.flow_account_pool disable --account-id flow-b`
 - **Reativar conta**: `python -m app.services.flow_account_pool enable --account-id flow-b`
 - **Consultar telemetria consolidada**: `python -m app.services.flow_account_pool status`
-- **Autenticação inicial da nova conta**: `python scripts/flow_playwright.py --account-id flow-b --headful --trial-only`
 
 ### Backlog Futuro:
 - **FLOW-UI-001 = OPEN**: Telemetria visual de múltiplas contas e saldo de créditos no Factory Live da Web UI V2. Web UI V2 permanece temporariamente congelada em R6A.2 na branch `feat/web-ui-v2-read-api`.

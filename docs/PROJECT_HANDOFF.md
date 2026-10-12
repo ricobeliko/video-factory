@@ -92,7 +92,13 @@
 - **Implementação:** `app/services/flow_account_pool.py`, `scripts/flow_playwright.py`, `test/services/test_flow_account_pool.py`.
 - **Princípios Canônicos:**
   - **user_data_dir separado por conta:** Cada conta cadastrada possui seu próprio diretório de perfil persistente (`storage/flow_browser_profiles/<account_id>/`). A conta primária legada (`flow-primary`) preserva estritamente `storage/flow_browser_profile` (sessão atualmente homologada).
-  - **Login inicial humano:** A autenticação Google é realizada manualmente pelo operador abrindo o navegador da conta com `--headful --trial-only` (`python scripts/flow_playwright.py --account-id <id> --headful --trial-only`).
+  - **Onboarding Canônico de Novas Contas (FLOW-MA1-HOTFIX):**
+    - Fluxo obrigatório: `ADD` → `LOGIN VIA EDGE NORMAL` → `FECHAR EDGE` → `VERIFY HEADLESS` → `AUTHENTICATED`
+    - 1. Adicionar: `python -m app.services.flow_account_pool add --account-id <id> --display-name "..."`
+    - 2. Login humano: `python -m app.services.flow_account_pool login --account-id <id>` (abre Microsoft Edge NORMAL com `--user-data-dir` isolado; zero Playwright; login manual pelo operador)
+    - 3. Fechar completamente a janela do Microsoft Edge após o login
+    - 4. Validar: `python -m app.services.flow_account_pool verify --account-id <id>` (valida sessão persistida via Playwright HEADLESS; zero manifest, zero geração, zero consumo de crédito)
+    - **Regra Explícita de Segurança Google:** O login Google inicial NÃO deve ser executado pelo Playwright (evita bloqueio do Google por navegador potencialmente inseguro).
   - **Zero senhas/segredos no projeto:** Nenhuma senha, token, chave de API ou cookie do Google é armazenado no repositório, em arquivos JSON ou no banco de dados. Os cookies e sessões residem exclusivamente dentro do perfil local do Microsoft Edge.
   - **Task stickiness:** Uma tarefa/projeto do Flow fica vinculada estritamente à conta atribuída no `manifest.json` (`flow_account_id`). Após criação do projeto (`flow_project_url`), conclusão de qualquer cena ou confirmação de início de geração/aprovação de créditos, a conta é imutável.
   - **Failover seguro somente pré-dispatch:** Failover automático para a próxima conta elegível no pool só é permitido antes do consumo ou início de geração (máximo 1 tentativa automática de failover por cena).
@@ -103,7 +109,7 @@
     - `UNKNOWN` quando não houver evidência textual inequívoca;
     - **Regra de Ouro:** NUNCA inventar créditos, nunca assumir 1000, nunca tratar UNKNOWN como erro fatal.
   - **Detecção conservadora de esgotamento:** Se houver evidência visível e inequívoca de créditos insuficientes no DOM antes do dispatch, a conta é marcada como `EXHAUSTED` com zero aprovação e zero clique no Generate.
-  - **CLI Operacional Mínimo:** Suporte a `python -m app.services.flow_account_pool` com comandos `list`, `add`, `disable`, `enable`, `status`.
+  - **CLI Operacional Mínimo:** Suporte a `python -m app.services.flow_account_pool` com comandos `list`, `add`, `login`, `verify`, `disable`, `enable`, `status`.
 - **Requisito Futuro Web UI (FLOW-UI-001):**
   - **Status:** `OPEN` (Backlog da Web UI V2).
   - **Objetivo:** Exibir no Factory Live a lista de contas Flow com display name, status operacional (`AVAILABLE`, `EXHAUSTED`, etc.), saldo de créditos (`VERIFIED` vs `ESTIMATED`), data da última verificação e vínculo da tarefa ativa. A Web UI V2 permanece temporariamente congelada em R6A.2 na branch `feat/web-ui-v2-read-api`.

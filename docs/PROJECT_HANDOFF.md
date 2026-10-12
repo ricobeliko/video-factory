@@ -39,8 +39,16 @@
       - Os 3 vídeos foram agendados e publicados com sucesso no YouTube via Post For Me (`publication_events status=success`, `scheduled_posts status=published`).
     - **Growth Mode:**
       - Durante a recuperação, os dois perfis foram temporariamente colocados em `SCALE` para remover limitação de slots e permitir a drenagem do estoque existente.
-      - Após as publicações: *Dose Diária de GTA VI* = `WARMUP`, *Dose Diária de Histórias e Mistério* = `WARMUP`.
-      - Estado operacional final restabelecido: **Growth Mode = WARMUP**.
+      - Após as publicações: *Dose Diária de Histórias e Mistério* retornou para `WARMUP`.
+      - *Dose Diária de GTA VI* permanece temporariamente em `SCALE` aguardando publicação já agendada para 11/10/2026 às 22:11 (ver `TEMPORARY_PRODUCTION_EXCEPTION` abaixo).
+- **TEMPORARY_PRODUCTION_EXCEPTION:**
+  - **Perfil:** `profile-2095da4fbe23` (*Dose Diária de GTA VI*)
+  - **Estado Operacional Vigente:** `growth_mode = SCALE` (TEMPORÁRIO)
+  - **Motivo:** Publicação já agendada para **11/10/2026 às 22:11** horário local (a menção anterior a 12/10 às 10:11 estava incorreta).
+  - **Decisão Operacional Obrigatória:**
+    1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
+    2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
+    3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
 - **CURRENT_GATE:** `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual durante o fluxo: seleção/criação de tema -> criação da task -> roteiro -> narração -> geração visual / Flow -> render final -> Safety Gate -> Quality Gate -> Copyright Provenance Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> `publication_events status=success` -> `scheduled_posts status=published`).
 - **NEXT_EXACT_STEP:** No PC Forte (`C:\Projetos\MoneyPrinterTurbo`), executar a homologação do ciclo autônomo E2E para UMA tarefa real de ponta a ponta sob os seguintes critérios canônicos:
   - Zero duplicação;
@@ -48,15 +56,16 @@
   - Zero override manual de gate;
   - TikTok OFF;
   - Somente uma task para homologação;
-  - Preservar Growth Mode em `WARMUP`;
+  - Preservar Growth Mode em `WARMUP` no canal homologado (usar canal padrão em `WARMUP`, ex: *Dose Diária de Histórias e Mistério*; NÃO usar GTA VI enquanto durar a exceção temporária);
   - Nenhuma intervenção humana entre o início do ciclo e a publicação final.
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
-  - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: A interface possui configuração global/plataforma de Growth Mode e também `growth_mode` por perfil. Isso pode apresentar estados aparentemente divergentes na UI.
-    - **Decisão:** `DEFERRED / NÃO BLOQUEIA ROADMAP ATUAL`. Não implementar correção no momento.
+  - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: Existe seletor global de Growth Mode no Streamlit que pode mudar o estado visual exibido, mas não altera efetivamente o Growth Mode operacional dos perfis. A fonte operacional canônica real é o Growth Mode configurado por perfil/canal (`profile growth_mode`). Exemplo confirmado em produção: *Dose Diária de GTA VI* com perfil em `SCALE` é considerado como `SCALE` pelo Scheduler e Autonomous loop. Portanto: `GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA`.
+    - **Decisão:** `DEFERRED / NÃO BLOQUEIA PRODUÇÃO`. Não corrigir agora, não remover agora, não alterar backend agora. Mapeado no checklist de migração como `UI-001` e `UI-002`.
   - `WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION`: Streamlit atualmente apresenta lentidão operacional perceptível devido ao crescimento da aplicação e reruns amplos da interface.
     - **Diretriz Futura:** Preservar backend Python, Scheduler, SQLite, profiles, gates e publishers. Avaliar substituição progressiva apenas da camada de interface por API leve + frontend separado.
-    - **Decisão:** `DEFERRED / BACKLOG FUTURO`. Não iniciar esta frente antes de concluir `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`.
+    - **Decisão:** `DEFERRED / BACKLOG FUTURO`. Não iniciar esta frente antes de concluir `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`. Mapeado no checklist de migração como `UI-003`.
+- **MIGRATION_CHECKLIST_STATUS:** ATIVO em [docs/ROADMAP.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/ROADMAP.md#web-ui-v2--code-consolidation--migration-checklist) (`WEB UI V2 / CODE CONSOLIDATION — MIGRATION CHECKLIST`). Contém os itens iniciais `UI-001`, `UI-002` e `UI-003`. Toda inconsistência, puxadinho ou duplicação de UI encontrada deve ser registrada lá sem correção prematura. Quando `WEB_UI_V2` iniciar oficialmente, poderá ser criado `docs/WEB_UI_V2.md` para abrigar o checklist detalhado; até lá, permanece centralizado no ROADMAP.
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.

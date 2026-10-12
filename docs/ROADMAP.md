@@ -19,7 +19,9 @@
 - **NEXT_GATE** = `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` (Homologar UM ciclo autônomo REAL completo sem Run Cycle e sem intervenção manual intermediária: seleção/criação de tema -> criação da task -> roteiro -> narração -> geração visual / Flow -> render final -> Safety Gate -> Quality Gate -> Copyright Provenance Gate -> Ready Stock -> Scheduler -> Post For Me -> YouTube -> publication_events status=success -> scheduled_posts status=published, validando zero duplicação, zero regeneração desnecessária, zero override de gate, somente uma task, WARMUP preservado e TikTok OFF)
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
-- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (Divergência aparente entre Growth Mode global e por perfil na UI — adiado, não bloqueia); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Avaliação de substituição progressiva da UI Streamlit por API leve + frontend separado devido a lentidão por reruns amplos, preservando backend/scheduler/gates — backlog futuro, avaliar somente pós-E2E)`
+- **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
+- **DEFERRED_ITEMS** = `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, avaliar pós-E2E, ver UI-003)`
+- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo; 3 itens iniciais: `UI-001`, `UI-002`, `UI-003`)
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -28,7 +30,7 @@
 ## Status Consolidado por Componente
 
 - **Google Flow / External Video Quality Track** = ACTIVE (CURRENT_FOCUS)
-- **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido e Growth Mode retornado a WARMUP)
+- **Recuperação de Estoque Legado Flow** = CONCLUÍDA (3/4 vídeos aprovados e publicados no YouTube via Post For Me nos canais GTA VI e Histórias/Mistério; 1/4 rejeitado pelo Quality Gate 67.8 < 70 sem override manual; Ready Stock consumido; canal Histórias retornado a WARMUP e GTA VI mantido temporariamente em SCALE até confirmação da publicação das 22:11)
 - **V1.1 First Real Video Workflow** = CONCLUÍDA / HOMOLOGADA
 - **V1.2 Manual Flow Optimization** = CONCLUÍDA / HOMOLOGADA (`scripts/flow_workflow.py`)
 - **V1.3 Agent Director Assistance** = CONCLUÍDA / HOMOLOGADA (vídeo `terra_parou_5s_final.mp4` gerado no nicho `curiosidades_ciencia` com 4 clipes Flow + fallback Coverr; novo padrão estabelecido para 6 cenas Flow por Short)
@@ -77,6 +79,105 @@
 - **avatar_mode**: `none`
 - **TikTok**: OFF / NOT HOMOLOGATED
 - **V15-A Production Observability Baseline** = DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
+
+## WEB UI V2 / CODE CONSOLIDATION — MIGRATION CHECKLIST
+
+### Objetivo
+Evitar que, quando a migração `WEB_UI_V2_AND_CODE_CONSOLIDATION` começar oficialmente, seja necessário redescobrir todos os problemas, puxadinhos, duplicações e inconsistências já identificados durante a operação real.
+
+### Regra Permanente do Checklist
+Sempre que durante operação, homologação ou desenvolvimento for encontrado:
+- comportamento duplicado;
+- configuração em múltiplos locais;
+- UI enganosa;
+- workaround;
+- código legado ainda necessário;
+- lógica repetida;
+- fonte de verdade ambígua;
+- componente lento;
+- caminho aparentemente morto;
+- inconsistência entre UI e backend;
+
+**NÃO corrigir automaticamente se não bloquear produção.**
+
+Primeiro registrar no **MIGRATION CHECKLIST**.
+
+Se o problema:
+- não causa perda de dados;
+- não gera publicação incorreta;
+- não causa gasto indevido;
+- não causa duplicação;
+- não quebra autonomia;
+- não enfraquece Safety / Quality / Copyright;
+
+então:
+
+**REGISTRAR + DEFER**.
+
+A correção será avaliada na fase apropriada da migração/limpeza.
+
+### Filosofia da Limpeza Futura
+A existência de um item no checklist **NÃO significa que o código deve ser removido**.
+
+**Fluxo futuro obrigatório:**
+1. `MAPPED`
+2. identificar uso real
+3. identificar fonte canônica
+4. criar caminho único
+5. migrar consumidores
+6. validar
+7. remover legado
+8. marcar `FIXED`
+
+> [!CAUTION]
+> **Nunca:** apagar primeiro e descobrir depois.
+
+### Status Permitidos
+- `OPEN`
+- `MAPPED`
+- `IN_PROGRESS`
+- `FIXED`
+- `DEFERRED`
+- `WONT_FIX`
+
+---
+
+### Itens Iniciais do Checklist
+
+#### UI-001
+- **ID:** `UI-001`
+- **AREA:** `Growth Mode`
+- **PROBLEM:** Existe seletor global de Growth Mode no Streamlit que pode mudar o estado visual exibido, mas não altera efetivamente o Growth Mode operacional dos profiles.
+- **CURRENT_BEHAVIOR:** Profile/channel growth_mode é o estado efetivamente utilizado operacionalmente.
+- **KNOWN_CANONICAL_SOURCE:** Profile growth_mode.
+- **CURRENT_RISK:** `LOW`
+- **PLANNED_ACTION:** Durante Web UI v2 / cleanup, eliminar a ambiguidade e manter apenas um caminho operacional claro para leitura e alteração.
+- **TARGET_PHASE:** `R4 / R8`
+- **STATUS:** `OPEN`
+
+#### UI-002
+- **ID:** `UI-002`
+- **AREA:** `Growth Mode / UI duplication`
+- **PROBLEM:** Growth Mode pode atualmente ser alterado ou exibido em múltiplos pontos da UI.
+- **CURRENT_BEHAVIOR:** Há mais de um caminho visual para um conceito operacional único.
+- **KNOWN_CANONICAL_SOURCE:** Profile growth_mode / channel configuration.
+- **CURRENT_RISK:** `LOW`
+- **PLANNED_ACTION:** Mapear todos os controles existentes. Definir um único serviço backend canônico. Migrar os consumidores. Remover controles duplicados somente depois da validação.
+- **TARGET_PHASE:** `R4 / R7 / R8`
+- **STATUS:** `OPEN`
+
+#### UI-003
+- **ID:** `UI-003`
+- **AREA:** `Streamlit performance`
+- **PROBLEM:** A interface atual apresenta lentidão perceptível e reruns amplos durante uso.
+- **CURRENT_BEHAVIOR:** Backend continua funcional, mas ações simples da interface podem levar tempo excessivo devido ao modelo atual do Streamlit e ao crescimento da aplicação.
+- **KNOWN_CANONICAL_SOURCE:** Arquitetura Streamlit (reruns completos de script) vs Backend assíncrono.
+- **CURRENT_RISK:** `LOW` para backend / `MEDIUM` para operação/usabilidade.
+- **PLANNED_ACTION:** Migrar gradualmente para Web UI v2 com API leve e frontend separado, preservando toda regra de negócio existente.
+- **TARGET_PHASE:** `R4 / R5 / R6 / R7`
+- **STATUS:** `OPEN`
+
+---
 
 ## Produção Atual (Estado Operacional Consolidado)
 

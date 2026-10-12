@@ -555,6 +555,12 @@ def resolve_manifest_account(
 # Leitura de Crédito e Esgotamento na UI do Flow
 # ---------------------------------------------------------------------------
 
+FLOW_CREDIT_SPECIFIC_REGEX = re.compile(
+    r"(?:(\d[\d\s,.]*)\s*(?:cr[eé]ditos?(?:\s+do)?\s*Google\s*Flow|Google\s*Flow\s*credits?|credits?\s+(?:of|for)\s+Google\s+Flow))|"
+    r"(?:(?:cr[eé]ditos?(?:\s+do)?\s*Google\s*Flow|Google\s*Flow\s*credits?|credits?\s+(?:of|for)\s+Google\s+Flow)\s*[:\-]?\s*(\d[\d\s,.]*))",
+    re.IGNORECASE,
+)
+
 CREDIT_REGEX = re.compile(
     r"(?:(\d[\d\s,.]*)\s*(?:cr[eé]ditos?|credits?))|(?:(?:cr[eé]ditos?|credits?)\s*[:\-]?\s*(\d[\d\s,.]*))",
     re.IGNORECASE,
@@ -572,60 +578,149 @@ EXHAUSTION_PATTERNS = [
 
 
 def read_flow_credit_balance(page: Any) -> Tuple[Optional[int], str]:
-    """Lê saldo de créditos restantes do Google Flow na interface (best-effort).
+    """Lê saldo de créditos restantes do Google Flow na interface (fail-closed).
 
-    Se não encontrar leitura confiável, retorna (None, 'UNKNOWN'). NUNCA inventa saldo.
+    1. Inspeciona se há exibição direta de créditos na interface.
+    2. Se não houver, abre o menu da conta/avatar no canto superior direito
+       (flow-header-user-icon / 'Detalhes da conta' / 'Account details').
+    3. Lê o elemento específico de créditos do Google Flow (flow-account-panel, .credits-count).
+    4. Fecha o menu com Escape.
+    5. Se não houver evidência inequívoca de saldo Google Flow, retorna (None, CREDIT_SOURCE_UNKNOWN).
     """
     if not page:
         return None, CREDIT_SOURCE_UNKNOWN
+
+    def _extract_from_text(raw_text: str, is_dedicated_element: bool = False) -> Optional[int]:
+        if not raw_text:
+            return None
+        text = raw_text.strip()
+        m_spec = FLOW_CREDIT_SPECIFIC_REGEX.search(text)
+        if m_spec:
+            num_str = m_spec.group(1) or m_spec.group(2)
+            clean_num = re.sub(r"[^\d]", "", num_str)
+            if clean_num:
+                return int(clean_num)
+
+        if is_dedicated_element:
+            lower = text.lower()
+            if any(
+                term in lower
+                for term in (
+                    "additional",
+                    "adicionais",
+                    "adicional",
+                    "daily",
+                    "diário",
+                    "diários",
+                    "diaria",
+                    "diarias",
+                    "monthly",
+                    "mensal",
+                    "mensais",
+                    "plan",
+                    "plano",
+                )
+            ):
+                return None
+            m_gen = CREDIT_REGEX.search(text)
+            if m_gen:
+                num_str = m_gen.group(1) or m_gen.group(2)
+                clean_num = re.sub(r"[^\d]", "", num_str)
+                if clean_num:
+                    return int(clean_num)
+        return None
+
     try:
-        # 1. Procura elementos de texto com créditos na barra superior ou interface
-        credit_elements = page.locator(
-            "[aria-label*='credit' i], [aria-label*='crédito' i], button:has-text('credit'), button:has-text('crédito')"
+        # Etapa 1: Elementos dedicados de créditos diretamente na barra superior / UI
+        direct_locators = page.locator(
+            ".credits-count, [class*='credits-count'], [aria-label*='Exibição de créditos' i], [aria-label*='Credit display' i], [aria-label*='crédito' i], [aria-label*='credit' i]"
         )
         try:
-            raw_count = credit_elements.count()
-            count = int(raw_count) if isinstance(raw_count, (int, float)) else 0
+            raw_cnt = direct_locators.count()
+            cnt = int(raw_cnt) if isinstance(raw_cnt, (int, float)) else 0
         except Exception:
-            count = 0
-        for idx in range(min(count, 5)):
+            cnt = 0
+
+        for idx in range(min(cnt, 5)):
             try:
-                el = credit_elements.nth(idx)
+                el = direct_locators.nth(idx)
                 txt = (el.inner_text() or el.get_attribute("aria-label") or "").strip()
-                m = CREDIT_REGEX.search(txt)
-                if m:
-                    num_str = m.group(1) or m.group(2)
-                    clean_num = re.sub(r"[^\d]", "", num_str)
-                    if clean_num:
-                        val = int(clean_num)
-                        logger.info(f"[FLOW_CREDIT_READER] Créditos lidos diretamente na UI: {val}")
-                        return val, CREDIT_SOURCE_FLOW_UI_VERIFIED
+                val = _extract_from_text(txt, is_dedicated_element=True)
+                if val is not None:
+                    logger.info(f"[FLOW_CREDIT_READER] Créditos lidos diretamente na UI: {val}")
+                    return val, CREDIT_SOURCE_FLOW_UI_VERIFIED
             except Exception:
                 continue
 
-        # 2. Tenta avatar/menu de conta
-        menu_btn = page.locator("button[aria-label*='Conta' i], button[aria-label*='Account' i], [data-testid='user-avatar']").first
+        # Etapa 2: Localizar e abrir o menu de conta/avatar no canto superior direito
+        account_trigger = page.locator(
+            "flow-header-user-icon [role='button'], flow-header-user-icon, [aria-label*='Detalhes da conta' i], [aria-label*='Account details' i], button[aria-label*='Conta' i], button[aria-label*='Account' i]"
+        ).first
+
         try:
-            raw_menu_count = menu_btn.count()
-            menu_count = int(raw_menu_count) if isinstance(raw_menu_count, (int, float)) else 0
+            raw_trig_cnt = account_trigger.count()
+            trig_cnt = int(raw_trig_cnt) if isinstance(raw_trig_cnt, (int, float)) else 0
         except Exception:
-            menu_count = 0
-        if menu_count == 1 and getattr(menu_btn, "is_visible", lambda: False)() is True:
-            menu_btn.click(timeout=1500)
-            page.wait_for_timeout(300)
-            body_text = page.locator("body").inner_text()
-            m = CREDIT_REGEX.search(body_text)
+            trig_cnt = 0
+
+        if trig_cnt > 0 and getattr(account_trigger, "is_visible", lambda: False)() is True:
+            account_trigger.click(timeout=2500)
+            page.wait_for_timeout(500)
+
+            panel = page.locator(
+                "flow-account-panel, .flow-account-panel-over, [role='dialog'][aria-label*='conta' i], [role='dialog'][aria-label*='account' i], [role='dialog']"
+            ).first
+
+            panel_visible = False
+            try:
+                panel_visible = getattr(panel, "is_visible", lambda: False)() is True
+            except Exception:
+                panel_visible = False
+
+            credit_found: Optional[int] = None
+            if panel_visible:
+                # 2.1 Busca primária nos seletores dedicados do painel
+                panel_credit_locs = panel.locator(
+                    ".credits-count, [class*='credits-count'], .credits-row, [aria-label*='Exibição de créditos' i], [aria-label*='Credit display' i], [aria-label*='crédito' i], [aria-label*='credit' i]"
+                )
+                try:
+                    p_raw_cnt = panel_credit_locs.count()
+                    p_cnt = int(p_raw_cnt) if isinstance(p_raw_cnt, (int, float)) else 0
+                except Exception:
+                    p_cnt = 0
+
+                for idx in range(min(p_cnt, 5)):
+                    try:
+                        p_el = panel_credit_locs.nth(idx)
+                        p_txt = (p_el.inner_text() or p_el.get_attribute("aria-label") or "").strip()
+                        val = _extract_from_text(p_txt, is_dedicated_element=True)
+                        if val is not None:
+                            credit_found = val
+                            break
+                    except Exception:
+                        continue
+
+                # 2.2 Busca de fallback no texto geral do painel com padrão específico inequívoco
+                if credit_found is None:
+                    try:
+                        p_full_text = panel.inner_text()
+                        val = _extract_from_text(p_full_text, is_dedicated_element=False)
+                        if val is not None:
+                            credit_found = val
+                    except Exception:
+                        pass
+
+            # Fecha o painel após leitura
             try:
                 page.keyboard.press("Escape")
+                page.wait_for_timeout(200)
             except Exception:
                 pass
-            if m:
-                num_str = m.group(1) or m.group(2)
-                clean_num = re.sub(r"[^\d]", "", num_str)
-                if clean_num:
-                    val = int(clean_num)
-                    logger.info(f"[FLOW_CREDIT_READER] Créditos lidos no menu de conta: {val}")
-                    return val, CREDIT_SOURCE_FLOW_UI_VERIFIED
+
+            if credit_found is not None:
+                logger.info(f"[FLOW_CREDIT_READER] Créditos lidos no menu de conta: {credit_found}")
+                return credit_found, CREDIT_SOURCE_FLOW_UI_VERIFIED
+
     except Exception as exc:
         logger.debug(f"[FLOW_CREDIT_READER] Leitura de créditos best-effort não concluída: {exc}")
 
@@ -1012,7 +1107,11 @@ def cli_main():
             print("ZERO_GENERATION = True")
             print("ZERO_CREDIT_CONSUMPTION = True")
             if res.get("credits_remaining") is not None:
-                print(f"CREDITS_REMAINING = {res['credits_remaining']} ({res['credits_source']})")
+                print(f"CREDITS_REMAINING = {res['credits_remaining']}")
+                print(f"CREDITS_SOURCE = {res['credits_source']}")
+            else:
+                print("CREDITS_REMAINING = UNKNOWN")
+                print(f"CREDITS_SOURCE = {res.get('credits_source', CREDIT_SOURCE_UNKNOWN)}")
             if res.get("message"):
                 print(f"MESSAGE = {res['message']}")
 

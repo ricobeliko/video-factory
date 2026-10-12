@@ -1,12 +1,14 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
+import AgentAvatar from './AgentAvatar';
 
 /**
- * LaneHeaderNode — Channel Mission Control Banner above the 2x6 pipeline (R6A.5).
+ * LaneHeaderNode — Channel Mission Control & Hero Context Banner (R6A.6).
  * Features:
- * - Channel primary identity with platform badge.
+ * - Channel primary identity with platform & focus badge.
+ * - Active Agent Hero pill (AgentAvatar, persona code, role, progress) when RUNNING.
+ * - Factual Idle/Standby status when not running (no simulated work).
  * - Real Ready Stock and Pipeline progress metrics.
- * - Active topic pill and status chip.
  * - Focus indicator and drawer inspection trigger.
  */
 export default function LaneHeaderNode({ data }) {
@@ -22,6 +24,9 @@ export default function LaneHeaderNode({ data }) {
     status = 'IDLE',
     topic,
     completedStagesCount = 0,
+    activePersona = null,
+    activeStageDef = null,
+    activeProgress = null,
     onOpenDrawer,
   } = data;
 
@@ -36,14 +41,17 @@ export default function LaneHeaderNode({ data }) {
     ? Math.min(100, Math.round((stockCount / targetStock) * 100))
     : null;
 
-  // Pipeline real completed stages (Requirement 4: completed_count > 0 only, fail-closed)
+  // Pipeline real completed stages
   const hasPipelineProgress = typeof completedStagesCount === 'number' && completedStagesCount > 0;
   const pipelinePct = hasPipelineProgress
     ? Math.min(100, Math.round((completedStagesCount / 12) * 100))
     : null;
 
+  const isRunning = status === 'RUNNING';
+
   return (
     <div className={`lane-header-card status-lane-${status.toLowerCase()}`}>
+      {/* 1. Left: Channel Identity */}
       <div className="lane-header-left">
         <div className="lane-channel-avatar">📺</div>
         <div className="lane-channel-info">
@@ -57,13 +65,46 @@ export default function LaneHeaderNode({ data }) {
         </div>
       </div>
 
-      <div className="lane-header-right">
-        {topic && (
-          <div className="lane-topic-pill" title={topic}>
-            <span>Tarefa:</span> {topic}
+      {/* 2. Center: Active Agent Hero / Standby Context */}
+      <div className="lane-header-center">
+        {isRunning && activePersona ? (
+          <div
+            className="lane-active-agent-pill"
+            title={`${activePersona.name} (${activePersona.role}): ${activePersona.bio}`}
+          >
+            <span className="agent-live-tag">⚡ AGENTE ATIVO</span>
+            <AgentAvatar
+              persona={activePersona}
+              accentColor={activeStageDef?.accentColor || '#38bdf8'}
+              isRunning={true}
+              size="xs"
+            />
+            <strong className="agent-pill-code">{activePersona.code}</strong>
+            <span className="agent-pill-role">{activePersona.role}</span>
+            {activeProgress !== null && activeProgress !== undefined && (
+              <span className="agent-pill-progress">[{activeProgress}%]</span>
+            )}
+          </div>
+        ) : (
+          <div className="lane-standby-pill">
+            <span className="standby-dot" />
+            <span className="standby-text">
+              {status === 'BLOCKED'
+                ? 'Canal Bloqueado / Cooldown'
+                : 'Fábrica em Standby • Sem agente ativo'}
+            </span>
           </div>
         )}
 
+        {topic && (
+          <div className="lane-topic-pill" title={topic}>
+            <span>Pauta:</span> {topic}
+          </div>
+        )}
+      </div>
+
+      {/* 3. Right: Metrics & Actions */}
+      <div className="lane-header-right">
         <div className="lane-badges-row">
           <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
             {isAutonomous ? '● AUTO' : '○ MANUAL'}
@@ -72,7 +113,10 @@ export default function LaneHeaderNode({ data }) {
             {String(growthMode || 'warmup').toUpperCase()}
           </span>
 
-          <span className="mini-badge stock">
+          <span
+            className="mini-badge stock"
+            title="Estoque pronto para agendamento/publicação"
+          >
             Estoque: {hasTargetStock ? `${stockCount} / ${targetStock}` : stockCount}
             {stockPct !== null && ` (${stockPct}%)`}
           </span>

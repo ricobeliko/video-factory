@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { getExecutionDetail } from '../api';
 import { STAGE_BY_CODE } from '../utils/stageVisuals';
+import AgentAvatar from './AgentAvatar';
 
 /**
  * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5).
@@ -95,9 +96,12 @@ export default function ExecutionDrawer({
           {/* Active Agent Persona Card */}
           <div className="agent-persona-card" style={{ borderColor: stageDef.accentColor }}>
             <div className="agent-persona-top">
-              <div className="agent-persona-avatar-wrap" style={{ background: stageDef.tonalBg }}>
-                <span className="agent-persona-avatar">{persona.avatar || '🤖'}</span>
-              </div>
+              <AgentAvatar
+                persona={persona}
+                accentColor={stageDef.accentColor}
+                isRunning={execution?.status === 'RUNNING'}
+                size="lg"
+              />
               <div className="agent-persona-meta">
                 <div className="agent-persona-code-row">
                   <span className="agent-code-badge" style={{ backgroundColor: stageDef.accentColor }}>

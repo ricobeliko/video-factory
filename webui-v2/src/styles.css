@@ -233,20 +233,30 @@ body {
    ========================================================================== */
 
 .channels-deck-section {
-  padding: 12px 20px 4px 20px;
+  padding: 12px 20px 8px 20px;
   background-color: var(--bg-app);
   border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
 
 .section-title-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
   margin-bottom: 8px;
+  gap: 12px;
+}
+
+.deck-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .section-title-icon {
   font-size: 14px;
+  line-height: 1;
 }
 
 .section-title {
@@ -257,31 +267,80 @@ body {
   color: var(--text-primary);
 }
 
+.channels-count-pill {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  white-space: nowrap;
+}
+
 .section-subtitle {
   font-size: 11px;
   color: var(--text-muted);
   margin-left: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deck-scroll-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .channels-deck {
   display: flex;
   gap: 14px;
   overflow-x: auto;
-  padding-bottom: 10px;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+  padding-top: 2px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
+}
+
+.channels-deck::-webkit-scrollbar {
+  height: 5px;
+}
+.channels-deck::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 3px;
+}
+.channels-deck::-webkit-scrollbar-thumb {
+  background: var(--border-medium);
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
+.channels-deck::-webkit-scrollbar-thumb:hover {
+  background: var(--border-highlight);
 }
 
 .channel-card {
-  min-width: 290px;
-  max-width: 350px;
-  flex: 1;
+  /* Comfort size 320-430px requirement */
+  flex: 0 0 350px;
+  width: 350px;
+  min-width: 320px;
+  max-width: 420px;
   background-color: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 12px;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
   position: relative;
   user-select: none;
+  scroll-snap-align: start;
 }
 
 .channel-card:hover {
@@ -294,6 +353,10 @@ body {
   border-color: #38bdf8 !important;
   box-shadow: 0 0 0 1.5px #38bdf8, 0 6px 20px rgba(56, 189, 248, 0.22) !important;
   background: linear-gradient(180deg, #16243b 0%, #111a2c 100%) !important;
+}
+
+.channel-card.has-running-task {
+  border-color: rgba(56, 189, 248, 0.45);
 }
 
 .focused-badge {
@@ -398,6 +461,14 @@ body {
   background-color: rgba(99, 102, 241, 0.15);
   color: #a5b4fc;
   border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.mini-badge.agent-tag {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
 .channel-card-body {
@@ -637,18 +708,27 @@ body {
   background-color: var(--bg-app);
 }
 
-/* Edge styling & State semantics (R6A.5 requirement 4) */
+/* Edge styling & State semantics (R6A.6 motion language) */
 .react-flow__edge-path {
   stroke: var(--border-medium);
   stroke-width: 2px;
 }
 
+@keyframes flowAnimation {
+  from {
+    stroke-dashoffset: 20;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 .edge-running .react-flow__edge-path {
   stroke: #38bdf8 !important;
   stroke-width: 2.5px !important;
-  stroke-dasharray: 5;
-  animation: flowAnimation 1s linear infinite;
-  filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.5));
+  stroke-dasharray: 6 4;
+  animation: flowAnimation 1.2s linear infinite;
+  filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.45));
 }
 
 .edge-completed .react-flow__edge-path {
@@ -675,8 +755,12 @@ body {
 .react-flow__edge.active-edge .react-flow__edge-path {
   stroke: #38bdf8;
   stroke-width: 2.5px;
-  stroke-dasharray: 5;
-  animation: flowAnimation 1s linear infinite;
+  stroke-dasharray: 6 4;
+  animation: flowAnimation 1.2s linear infinite;
+}
+
+.edge-energy-packet {
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.65));
 }
 
 .react-flow__controls-button {
@@ -692,7 +776,73 @@ body {
 }
 
 /* ==========================================================================
-   Execution Nodes (Custom Node) — 2x6 Snake Layout (R6A.5)
+   Agent Avatar Cyber-Orb Design System (R6A.6)
+   ========================================================================== */
+
+.agent-avatar-orb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  user-select: none;
+}
+
+.avatar-orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border-style: solid;
+  opacity: 0.85;
+  transition: opacity 0.2s ease, box-shadow 0.2s ease;
+}
+
+.avatar-orb-surface {
+  position: absolute;
+  inset: 1.5px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.15);
+}
+
+.avatar-orb-glyph {
+  line-height: 1;
+  display: inline-block;
+  transform: translateY(-0.5px);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+
+.agent-avatar-orb.is-running .avatar-orb-ring {
+  opacity: 1;
+  box-shadow: 0 0 10px var(--agent-accent);
+}
+
+.avatar-orb-pulse {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--agent-accent);
+  opacity: 0;
+  animation: orbHaloPulse 2.4s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+@keyframes orbHaloPulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* ==========================================================================
+   Execution Nodes (Custom Node) — 2x6 Snake Layout (R6A.6)
    ========================================================================== */
 
 .execution-node {
@@ -702,7 +852,7 @@ body {
   padding: 8px 10px;
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   position: relative;
   user-select: none;
   display: flex;
@@ -710,17 +860,19 @@ body {
   justify-content: space-between;
   border-width: 1.5px;
   border-style: solid;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  /* Layered radial tonal background */
+  background: radial-gradient(130% 90% at 10% 10%, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 3px 10px rgba(0, 0, 0, 0.3);
 }
 
 .execution-node:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 
 .execution-node.selected-node {
   border-color: #38bdf8 !important;
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.45) !important;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
 }
 
 .node-category-pip {
@@ -732,6 +884,7 @@ body {
   border-top-left-radius: 7px;
   border-top-right-radius: 7px;
   opacity: 0.95;
+  transition: box-shadow 0.2s ease;
 }
 
 .node-header {
@@ -753,10 +906,10 @@ body {
   font-family: var(--font-mono);
   font-weight: 700;
   color: #94a3b8;
-  background-color: rgba(15, 23, 42, 0.7);
+  background-color: rgba(15, 23, 42, 0.75);
   padding: 1px 4px;
   border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .node-persona-chip {
@@ -766,15 +919,10 @@ body {
   font-size: 9px;
   font-family: var(--font-mono);
   font-weight: 700;
-  background: rgba(15, 23, 42, 0.65);
+  background: rgba(15, 23, 42, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 1px 5px;
   border-radius: 4px;
-}
-
-.persona-glyph {
-  font-size: 10px;
-  line-height: 1;
 }
 
 .persona-code {
@@ -788,13 +936,7 @@ body {
 .node-stage-icon-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-}
-
-.node-stage-icon {
-  font-size: 16px;
-  line-height: 1;
-  flex-shrink: 0;
+  gap: 8px;
 }
 
 .node-stage-titles {
@@ -845,6 +987,12 @@ body {
   border-radius: 50%;
   background-color: #38bdf8;
   display: inline-block;
+  animation: dotBlink 1.5s ease-in-out infinite;
+}
+
+@keyframes dotBlink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.85); }
 }
 
 /* Handles styling */
@@ -857,21 +1005,22 @@ body {
   transition: background-color 0.15s ease;
 }
 
-/* Node Status Variants */
-.node-status-SUCCESS {
-  border-color: rgba(16, 185, 129, 0.5);
-  background-color: rgba(16, 185, 129, 0.06);
+/* Node Status Variants — Motion Language & Calm Semantics */
+.node-status-SUCCESS,
+.node-status-COMPLETE {
+  background: radial-gradient(130% 90% at 10% 10%, rgba(16, 185, 129, 0.14) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%) !important;
+  border-color: rgba(16, 185, 129, 0.55) !important;
 }
-.node-status-SUCCESS .node-status-badge {
+.node-status-SUCCESS .node-status-badge,
+.node-status-COMPLETE .node-status-badge {
   background-color: var(--status-success-bg);
   color: var(--status-success);
 }
 
-/* Refined RUNNING status — crisp technical control room, zero heavy pulsing */
+/* Organic RUNNING status — gentle breathing aura, zero aggressive flashing */
 .node-status-RUNNING {
-  border: 1.5px solid #0284c7 !important;
-  background-color: rgba(14, 165, 233, 0.16) !important;
-  box-shadow: 0 0 10px rgba(14, 165, 233, 0.25) !important;
+  background: radial-gradient(130% 90% at 10% 10%, rgba(14, 165, 233, 0.2) 0%, rgba(15, 23, 42, 0.9) 65%, rgba(11, 15, 25, 0.98) 100%) !important;
+  animation: nodeRunningBreath 3s ease-in-out infinite;
 }
 .node-status-RUNNING .node-status-badge {
   background-color: rgba(14, 165, 233, 0.25);
@@ -879,9 +1028,20 @@ body {
   border: 1px solid rgba(14, 165, 233, 0.5);
 }
 
+@keyframes nodeRunningBreath {
+  0%, 100% {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 0 12px rgba(56, 189, 248, 0.22);
+    border-color: rgba(56, 189, 248, 0.6);
+  }
+  50% {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 22px rgba(56, 189, 248, 0.42);
+    border-color: rgba(56, 189, 248, 0.95);
+  }
+}
+
 .node-status-WAITING {
-  border-color: rgba(59, 130, 246, 0.4);
-  background-color: rgba(59, 130, 246, 0.05);
+  background: radial-gradient(130% 90% at 10% 10%, rgba(59, 130, 246, 0.12) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%) !important;
+  border-color: rgba(59, 130, 246, 0.4) !important;
 }
 .node-status-WAITING .node-status-badge {
   background-color: var(--status-waiting-bg);
@@ -889,8 +1049,8 @@ body {
 }
 
 .node-status-SCHEDULED {
-  border-color: rgba(99, 102, 241, 0.4);
-  background-color: rgba(99, 102, 241, 0.05);
+  background: radial-gradient(130% 90% at 10% 10%, rgba(99, 102, 241, 0.12) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%) !important;
+  border-color: rgba(99, 102, 241, 0.4) !important;
 }
 .node-status-SCHEDULED .node-status-badge {
   background-color: var(--status-scheduled-bg);
@@ -898,8 +1058,8 @@ body {
 }
 
 .node-status-RETRYING {
+  background: radial-gradient(130% 90% at 10% 10%, rgba(249, 115, 22, 0.12) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%) !important;
   border-color: var(--status-retrying);
-  background-color: var(--status-retrying-bg);
 }
 .node-status-RETRYING .node-status-badge {
   background-color: rgba(249, 115, 22, 0.2);
@@ -907,8 +1067,8 @@ body {
 }
 
 .node-status-BLOCKED {
-  border-color: var(--status-blocked);
-  background-color: var(--status-blocked-bg);
+  background: radial-gradient(130% 90% at 10% 10%, rgba(245, 158, 11, 0.12) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%) !important;
+  border-color: rgba(245, 158, 11, 0.5) !important;
 }
 .node-status-BLOCKED .node-status-badge {
   background-color: rgba(234, 88, 12, 0.25);
@@ -916,8 +1076,8 @@ body {
 }
 
 .node-status-FAILED {
-  border-color: var(--status-failed);
-  background-color: var(--status-failed-bg);
+  background: radial-gradient(130% 90% at 10% 10%, rgba(239, 68, 68, 0.14) 0%, rgba(15, 23, 42, 0.85) 60%, rgba(11, 15, 25, 0.95) 100%) !important;
+  border-color: rgba(239, 68, 68, 0.6) !important;
 }
 .node-status-FAILED .node-status-badge {
   background-color: rgba(239, 68, 68, 0.25);
@@ -926,7 +1086,7 @@ body {
 
 .node-status-PENDING {
   border-color: var(--border-subtle);
-  opacity: 0.8;
+  opacity: 0.82;
 }
 .node-status-PENDING .node-status-badge {
   background-color: var(--status-pending-bg);
@@ -935,7 +1095,7 @@ body {
 
 .node-status-IDLE {
   border-color: var(--border-subtle);
-  opacity: 0.6;
+  opacity: 0.75;
 }
 .node-status-IDLE .node-status-badge {
   background-color: var(--status-idle-bg);
@@ -1035,6 +1195,78 @@ body {
 
 .lane-channel-subtitle code {
   color: #93c5fd;
+  font-size: 10px;
+}
+
+.lane-header-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  max-width: 520px;
+}
+
+.lane-active-agent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(14, 165, 233, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+  white-space: nowrap;
+}
+
+.agent-live-tag {
+  font-size: 8.5px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: #38bdf8;
+  letter-spacing: 0.05em;
+}
+
+.agent-pill-code {
+  color: #f0f9ff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.agent-pill-role {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.agent-pill-progress {
+  color: #38bdf8;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 9.5px;
+}
+
+.lane-standby-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-subtle);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.standby-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+  display: inline-block;
+}
+
+.standby-text {
   font-size: 10px;
 }
 
@@ -1611,8 +1843,9 @@ body {
 }
 
 .flow-account-card.is-active-account {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4), 0 2px 10px rgba(37, 99, 235, 0.15);
+  border-color: #38bdf8 !important;
+  background: radial-gradient(120% 90% at 10% 10%, rgba(30, 58, 102, 0.45) 0%, rgba(15, 23, 42, 0.95) 70%, #0b0f19 100%) !important;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35), 0 4px 18px rgba(37, 99, 235, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
 }
 
 .flow-account-card.is-disabled {
@@ -1849,3 +2082,32 @@ body {
   padding: 8px 12px;
 }
 
+/* ==========================================================================
+   Reduced Motion Accessibility (R6A.6 Requirement 4)
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .edge-energy-packet,
+  .edge-running .react-flow__edge-path {
+    animation: none !important;
+  }
+
+  .edge-energy-packet {
+    display: none !important;
+  }
+
+  .node-status-RUNNING,
+  .agent-avatar-orb.is-running,
+  .avatar-orb-pulse,
+  .running-dot {
+    animation: none !important;
+  }
+}

@@ -68,6 +68,17 @@ export default function App() {
     return () => clearInterval(interval);
   }, [pollData]);
 
+  // Latch initial channel ID once loaded so polling never auto-switches focus behind the operator's back
+  useEffect(() => {
+    if (!userSelectedChannelId && channels.length > 0) {
+      const initialRunning = channels.find(
+        (c) => c.execution?.status === 'RUNNING' || c.status === 'RUNNING'
+      );
+      const initial = initialRunning || channels[0];
+      setUserSelectedChannelId(initial.channel_id || initial.profile_id);
+    }
+  }, [channels, userSelectedChannelId]);
+
   // Deterministic focused channel resolution (Requirement 1)
   const focusedChannel = useMemo(() => {
     if (!channels || channels.length === 0) return null;
@@ -115,11 +126,21 @@ export default function App() {
       {/* 2. Top Channels Deck — Dynamic Multi-Channel Overview */}
       <div className="channels-deck-section">
         <div className="section-title-bar">
-          <span className="section-title-icon">📡</span>
-          <span className="section-title">Canais Monitorados</span>
-          <span className="section-subtitle">
-            Clique em um canal para alternar o pipeline em tempo real
-          </span>
+          <div className="deck-title-group">
+            <span className="section-title-icon">📡</span>
+            <span className="section-title">Canais Monitorados</span>
+            <span className="channels-count-pill">
+              {channels.length} {channels.length === 1 ? 'canal' : 'canais'}
+            </span>
+            <span className="section-subtitle">
+              Clique em um canal para alternar o pipeline em tempo real
+            </span>
+          </div>
+          {channels.length > 2 && (
+            <div className="deck-scroll-hint">
+              <span>← Deslize para explorar ({channels.length}) →</span>
+            </div>
+          )}
         </div>
 
         <div className="channels-deck">

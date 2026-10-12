@@ -7,6 +7,7 @@ import '@xyflow/react/dist/style.css';
 
 import ExecutionNode from './ExecutionNode';
 import LaneHeaderNode from './LaneHeaderNode';
+import FactoryEdge from './FactoryEdge';
 import { STAGE_DEFINITIONS, getEdgeSemantics } from '../utils/stageVisuals';
 
 const nodeTypes = {
@@ -14,12 +15,17 @@ const nodeTypes = {
   laneHeader: LaneHeaderNode,
 };
 
+const edgeTypes = {
+  factoryEdge: FactoryEdge,
+};
+
 /**
- * FactoryLiveGraph — Single-Focus 2x6 Snake Pipeline for the Selected Channel (R6A.5).
- * Renders ONLY the focused channel's detailed 12-stage pipeline for maximum scalability:
- * Row 1 (L->R): 1. TOPIC -> 2. SCRIPT -> 3. NARRATION -> 4. VISUALS -> 5. RENDER -> 6. SAFETY
- *                                                                                        |
- * Row 2 (R->L): 12. YOUTUBE <- 11. PUBLISHER <- 10. SCHEDULER <- 9. READY <- 8. CPR <- 7. QUAL
+ * FactoryLiveGraph — Single-Focus 2x6 Snake Pipeline for the Selected Channel (R6A.6).
+ * Features:
+ * - Single-focus detailed pipeline for the selected channel.
+ * - 2x6 snake routing: Steps 1..6 (left->right) on Row 1, Steps 7..12 (right->left) on Row 2.
+ * - Reactive state-driven FactoryEdge with native SVG energy packets on RUNNING edges.
+ * - Dynamic context passed to LaneHeaderNode (active agent persona, progress, stock).
  */
 export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
   const { nodes, edges } = useMemo(() => {
@@ -90,6 +96,14 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       (e) => e.stageStatus === 'SUCCESS' || e.stageStatus === 'COMPLETE'
     ).length;
 
+    // Detect currently running stage for pipeline hero readout
+    const runningStageEval = stageEvaluations.find(
+      (e) => e.stageStatus === 'RUNNING' || e.stageStatus === 'PROCESSING'
+    );
+    const activePersona = runningStageEval?.stageDef?.persona || null;
+    const activeStageDef = runningStageEval?.stageDef || null;
+    const activeProgress = runningStageEval?.progress || null;
+
     // 2. Channel Section Header Banner
     const headerNodeId = `header-${channelId}`;
     calculatedNodes.push({
@@ -109,6 +123,9 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
         status: executionStatus,
         topic: execution?.topic,
         completedStagesCount: completedCount,
+        activePersona,
+        activeStageDef,
+        activeProgress,
         onOpenDrawer: () => onSelectChannelTask(channel, execution?.task_id),
       },
       selectable: true,
@@ -155,7 +172,7 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       });
     });
 
-    // 4. Edges with state semantics (R6A.5 requirement 4)
+    // 4. Edges with state semantics (R6A.6 motion language)
     // Edge from Header to Stage #1 (TOPIC)
     const topicStatus = stageEvaluations[0]?.stageStatus || 'IDLE';
     const isTopicActive = topicStatus === 'RUNNING' || executionStatus === 'RUNNING';
@@ -165,13 +182,14 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       sourceHandle: 'header-source',
       target: stageNodeIds[1],
       targetHandle: 'target-top',
-      type: 'smoothstep',
+      type: 'factoryEdge',
+      data: { isRunning: isTopicActive },
       className: isTopicActive ? 'active-edge edge-running' : 'edge-dimmed',
       animated: isTopicActive,
       style: {
         stroke: isTopicActive ? '#38bdf8' : '#334155',
         strokeWidth: isTopicActive ? 2 : 1.5,
-        strokeDasharray: isTopicActive ? undefined : '3 3',
+        strokeDasharray: isTopicActive ? '6 4' : '3 3',
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
@@ -206,6 +224,7 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
 
       // Compute edge semantics based on real statuses
       const edgeSemantics = getEdgeSemantics(fromEval.stageStatus, toEval.stageStatus);
+      const isEdgeRunning = edgeSemantics.type === 'running';
 
       calculatedEdges.push({
         id: `edge-${fromId}-${toId}`,
@@ -213,7 +232,8 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
         sourceHandle,
         target: toId,
         targetHandle,
-        type: 'smoothstep',
+        type: 'factoryEdge',
+        data: { isRunning: isEdgeRunning },
         className: edgeSemantics.className,
         animated: edgeSemantics.animated,
         style: {
@@ -261,6 +281,7 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodeClick={handleNodeClick}
         nodesDraggable={false}
         nodesConnectable={false}

@@ -1,11 +1,14 @@
 import React from 'react';
+import { STAGE_BY_CODE } from '../utils/stageVisuals';
 
 /**
- * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.5).
+ * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.6).
  * Features:
  * - Prioritizes channel_name as primary identity.
- * - Strong focus state when selected for detailed pipeline view.
+ * - Distinctive focus state when selected for detailed pipeline view.
  * - Real mathematical stock percentage and mini progress bar.
+ * - Agent persona indicator when task is RUNNING.
+ * - Scalable horizontal rail sizing (320-430px).
  * - Quick action to open causal execution drawer.
  */
 export default function ChannelCard({
@@ -55,6 +58,8 @@ export default function ChannelCard({
   }
 
   const isRunning = execution?.status === 'RUNNING';
+  const runningStage = execution?.pipeline_stage;
+  const runningPersona = runningStage ? STAGE_BY_CODE[runningStage]?.persona : null;
 
   return (
     <div
@@ -145,9 +150,20 @@ export default function ChannelCard({
                 {execution.status === 'RUNNING' && <span className="running-dot" />}
                 {execution.status}
               </span>
+
+              {runningPersona && (
+                <span
+                  className="mini-badge agent-tag"
+                  title={`${runningPersona.name} (${runningPersona.role})`}
+                >
+                  {runningPersona.avatar} {runningPersona.code}
+                </span>
+              )}
+
               <span className="task-stage-label">
                 {execution.pipeline_stage_label || execution.pipeline_stage || 'Processando'}
               </span>
+
               {execution.progress !== null && execution.progress !== undefined && (
                 <span className="task-progress-pct">
                   {execution.progress}%

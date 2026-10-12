@@ -4,6 +4,7 @@
 `FASE R4A: DISCOVERY / READ-ONLY AUDIT (COMPLETED)`
 `FASE R5A: THIN READ-ONLY API MVP (COMPLETED)`
 `FASE R5B: LIVE MULTI-CHANNEL EXECUTION CONTRACT / UI-005 (COMPLETED)`
+`FASE R6A: WEB UI V2 / FACTORY LIVE MVP (COMPLETED)`
 
 ---
 
@@ -554,5 +555,77 @@ Ambos montados em `/api/v2/executions`:
 - **Produção:**
   - Zero impacto no banco de dados SQLite operacional (schema inalterado).
   - Zero alteração no piloto autônomo em execução no PC Forte.
+
+---
+
+## 17. Phase R6A — Web UI V2 / Factory Live MVP (Entregue em 11/10/2026)
+
+### A. Objetivo & Escopo Entregue
+Implementação da primeira interface real desacoplada da Web UI V2, focada exclusivamente na observabilidade visual em tempo real através da tela **FACTORY LIVE**.
+
+- **Princípio:** `BACKEND = SOURCE OF TRUTH / FRONTEND = PRESENTATION ONLY`.
+- **Diretório Frontend Isolado:** `webui-v2/`.
+- **Tecnologias:** React 18, Vite 6, `@xyflow/react` v12, Vanilla CSS.
+- **Zero Dependências Pesadas:** Sem Tailwind, shadcn, Material UI, Bootstrap, Redux, Zustand, React Query, Axios ou bibliotecas externas de ícones/gráficos. Uso exclusivo de `fetch()` nativo do navegador.
+
+### B. Arquitetura do Frontend
+```
+webui-v2/
+  ├── package.json
+  ├── vite.config.js       # Proxy /api -> http://127.0.0.1:8080 (zero CORS no DEV)
+  ├── index.html           # Dark dashboard HTML shell
+  ├── .gitignore           # Exclui node_modules e dist
+  └── src/
+      ├── main.jsx         # React DOM bootstrap
+      ├── App.jsx          # Polling loop (3s), gerenciamento de estado e layout
+      ├── api.js           # Cliente HTTP nativo para endpoints /api/v2/...
+      ├── styles.css       # Design system dark dashboard (tokens de status, grid e drawer)
+      └── components/
+          ├── FactoryHeader.jsx      # Top bar (saúde da fábrica, workers, última sincronização)
+          ├── ChannelCard.jsx        # Deck dinâmico de cards por canal/perfil
+          ├── FactoryLiveGraph.jsx   # Canvas único React Flow com Lanes horizontais por canal
+          ├── ExecutionNode.jsx      # Nós visuais dos 12 estágios do pipeline com não-inferência estrita
+          ├── LaneHeaderNode.jsx     # Âncora lateral esquerda de identificação do canal
+          └── ExecutionDrawer.jsx    # Painel lateral com trace causal ("Quem chamou quem") e timeline
+```
+
+### C. Telas & Componentes Funcionais
+
+1. **Factory Header (`FactoryHeader.jsx`):**
+   - Exibe status da fábrica (Online/Pausada), Worker, Scheduler, Auto Publish e Dry Run.
+   - Timestamp de última atualização em tempo real com botão de refresh manual.
+   - Banner de resiliência: se a API ficar offline, o frontend **não quebra** e mantém o último snapshot válido em memória, exibindo aviso claro de offline.
+
+2. **Deck de Canais (`ChannelCard.jsx`):**
+   - Renderização 100% dinâmica a partir do endpoint `/api/v2/executions/live` (zero canais hardcoded).
+   - Exibe nome do canal, badge autônomo, Growth Mode (`Warmup`/`Scale`), contagem de estoque pronto e resumo da task ativa ou estado `IDLE`.
+   - Interativo: clicar em um canal foca a execução no drawer lateral.
+
+3. **Grafo de Execução Multicanal (`FactoryLiveGraph.jsx`):**
+   - Instanciado em um **único canvas** React Flow (evitando múltiplos canvas concorrentes).
+   - Cada canal é modelado como uma **Lane horizontal independente**, com nó de cabeçalho à esquerda seguido pelos 12 nós do pipeline canônico:
+     `TOPIC → SCRIPT → NARRATION → VISUALS → RENDER → SAFETY → QUALITY → COPYRIGHT → READY_STOCK → SCHEDULER → PUBLISHER → YOUTUBE`.
+   - Grafo configurado estritamente para visualização: `nodesDraggable=false`, `nodesConnectable=false`. Zoom e pan livres.
+
+4. **Regra Estrita de Não-Inferência Mantida no Frontend:**
+   - Nenhum percentual de progresso é mapeado arbitrariamente para estágios do pipeline.
+   - Apenas estágios com telemetria explícita do backend recebem destaque ativo (`RUNNING`, `SUCCESS`, etc.).
+   - Estágios `SCRIPT`, `NARRATION` e `VISUALS` sem callback granular in-flight exibem mensagem explícita: *"Sub-etapa ainda não instrumentada"*.
+   - Se o backend reportar `pipeline_stage=null`, a interface exibe: *"Etapa detalhada não informada pelo backend"*.
+
+5. **Drawer de Execução Causal (`ExecutionDrawer.jsx`):**
+   - Painel lateral deslizante acionado ao clicar em qualquer canal, task ou nó do pipeline.
+   - Exibe snapshot completo: IDs, tema, status, componente, provedor, tempo decorrido, erros e mensagens.
+   - **Trace Causal ("Quem chamou quem"):**
+     `CANAL` ↓ `AUTONOMOUS_PRODUCTION` ↓ `COMPONENTE` ↓ `PROVEDOR` ↓ `RESULTADO` ↓ `PRÓXIMA ETAPA`.
+   - **Prioridade Terminal de Publicação (UI-004):** Se `publication_events.status='success'`, exibe confirmação definitiva de publicação no YouTube com link direto (`video_url`), sem exibir alertas stale de retry.
+   - Linha do tempo cronológica com eventos operacionais obtidos de `GET /api/v2/executions/{task_id}`.
+
+### D. Validação de Build
+- Validação executada: `npm run build` dentro de `webui-v2/`.
+- Resultado: **PASS** (195 módulos compilados em 21.74s, zero erros, bundle otimizado de 112 kB gzip).
+- Zero alterações no backend, zero endpoints WRITE criados, zero migrations de SQLite.
+- Streamlit permanece 100% intacto em `webui/Main.py` como fallback operacional.
+
 
 

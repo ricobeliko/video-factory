@@ -34,7 +34,7 @@
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
 - **R5A Web UI V2 Thin Read-Only API MVP** = COMPLETE (6 endpoints GET montados em /api/v2 via FastAPI existente, zero regras de negócio duplicadas, zero endpoints WRITE, autenticação verify_token preservada, teste direcionado 8/8 PASS; zero impacto no piloto autônomo em execução)
 - **R5B Live Multi-Channel Execution Contract / UI-005** = DEV COMPLETED (Contrato read-only e causal para tela Factory Live com endpoints /api/v2/executions/live e /executions/{task_id}, grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS; zero impacto no piloto autônomo)
-- **R6A Web UI V2 Frontend Scaffold + Factory Live** = PLANNED (Próxima fase de UI: scaffold React/Vite priorizando a tela Factory Live desacoplada do Streamlit)
+- **R6A Web UI V2 Frontend Scaffold + Factory Live** = DEV COMPLETED (Scaffold React 18 + Vite 6 + @xyflow/react isolado em webui-v2, tela Factory Live com cards dinâmicos, lanes horizontais dos 12 estágios, trace causal e drawer de execução, polling 3s, zero inferência, build PASS 112 kB gzip; zero alteração no backend ou Streamlit)
 - **Piloto Autônomo E2E (Dose Diária De Internet)** = ACTIVE (CURRENT_FOCUS)
 
 - **Google Flow / External Video Quality Track** = FROZEN / DEFERRED (Implementação existente preservada intacta; sem trabalho de melhoria neste momento; retomada futura explícita)
@@ -203,8 +203,8 @@ A existência de um item no checklist **NÃO significa que o código deve ser re
 - **CURRENT_BEHAVIOR:** Backend possui dados reais suficientes para compor o estado dos 12 estágios e o traço causal sem inferir etapas intermediárias ausentes.
 - **KNOWN_CANONICAL_SOURCE:** `app.services.operator_console.get_live_execution_overview` e `get_execution_detail`.
 - **CURRENT_RISK:** `LOW` (read-only em DEV).
-- **PLANNED_ACTION:** Contrato backend entregue em R5B. Próximo passo na R6A: construir a tela Factory Live na Web UI V2 (React/Vite).
-- **TARGET_PHASE:** `R5B / R6A`
+- **PLANNED_ACTION:** Contrato backend entregue em R5B. Frontend Factory Live (React/Vite/@xyflow) entregue em R6A. Próximo passo na R6B: controles operacionais de escrita (pause/resume/run cycle).
+- **TARGET_PHASE:** `R5B / R6A / R6B`
 - **STATUS:** `MAPPED / DEV_COMPLETED`
 
 #### CFG-004

@@ -9,7 +9,7 @@ Contrato operacional mandatório validado e endurecido para o PC Forte:
 - **Playwright obrigatório quando Flow ON**: A presença e compatibilidade exata do Playwright com `requirements.txt` (`playwright==1.63.0`) são validadas passivamente pelo Production Readiness sempre que houver perfil ativo com Flow;
 - **Microsoft Edge msedge obrigatório**: Presença do executável `msedge.exe` validada passivamente no Windows pelo readiness;
 - **Flow headless canônico obrigatório em produção**: A automação do Flow utiliza `headless=True` como padrão canônico, permitindo operação estável em background sem display gráfico. O modo `headless=False` permanece disponível exclusivamente para diagnóstico/manual DEV via CLI `--headful` ou `FLOW_HEADLESS=false`;
-- **Perfil Flow persistente**: Perfil do navegador mantido em `storage/flow_browser_profile` preservando cookies e autenticação Google;
+- **Perfil Flow persistente**: Perfil do navegador mantido em `storage/flow_browser_profile` (conta primária legada `flow-primary`) e `storage/flow_browser_profiles/<account_id>/` (contas adicionais do pool FLOW-MA1), preservando cookies e autenticação Google;
 - **Execução Windows e Scheduled Task (`VideoFactory Production`):**
   - **VALIDADO EM PRODUÇÃO:** `User = DESKTOP-21KQ4RJ\bob`, `LogonType = Interactive`, `headless=True`, `Flow AUTHENTICATED` = **PASS** (comprova que o Flow opera headless sob o perfil do bob quando há sessão interativa aberta);
   - **TARGET PENDENTE DE HOMOLOGAÇÃO (Autonomia Pós-Reboot):** `User = DESKTOP-21KQ4RJ\bob`, *Run whether user is logged on or not*, `LogonType = Password` com credencial protegida pelo Windows Task Scheduler, zero senhas em arquivos/scripts/repositório, `Flow headless=True`. **IMPORTANTE:** Este modo non-interactive ainda NÃO foi homologado no PC Forte; não declarar autonomia pós-reboot como homologada;
@@ -17,6 +17,33 @@ Contrato operacional mandatório validado e endurecido para o PC Forte:
   - `auto_publish_enabled` = OFF;
   - `scheduler_enabled` = OFF durante homologação de runtime;
   - `tiktok` = OFF.
+
+## FLOW-MA1 — Multi-Account Provider Pool & Telemetria de Créditos
+
+### Princípios Operacionais Canônicos:
+1. **user_data_dir separado por conta**: Cada conta Flow cadastrada opera com seu próprio diretório persistente do Edge (`storage/flow_browser_profiles/<account_id>/`). A conta primária legada (`flow-primary`) preserva estritamente `storage/flow_browser_profile`.
+2. **Login inicial humano obrigatório**: A autenticação Google de novas contas é realizada exclusivamente por intervenção humana do operador executando o driver em modo visível (`python scripts/flow_playwright.py --account-id <id> --headful --trial-only`). NUNCA automatizar senhas, 2FA, CAPTCHA ou recuperação.
+3. **Zero senhas e segredos no projeto**: Nenhuma senha, token de autenticação, chave de API ou cookie é persistido no repositório, em arquivos JSON ou no banco de dados. Os cookies e sessões residem exclusivamente dentro dos perfis locais do Microsoft Edge.
+4. **Task stickiness**: Uma tarefa/projeto fica presa à conta Flow associada no `manifest.json` (`flow_account_id`). Após criação do projeto (`flow_project_url`), conclusão de qualquer cena ou confirmação de início de geração/aprovação de créditos, a conta é imutável.
+5. **Failover seguro somente pré-dispatch**: Failover automático para a próxima conta elegível no pool só é permitido antes do consumo ou início de geração (máximo 1 tentativa automática de failover por cena). Se a geração já iniciou na conta original, failover é proibido (segue fluxo de recovery/stock).
+6. **Flow permanece single-flight**: Concorrência global mantida em 1 através de `FLOW_CONCURRENCY_LOCK`. Zero paralelismo de navegadores ou consumo simultâneo de GPU/créditos.
+7. **Telemetria de créditos**:
+   - `FLOW_UI_VERIFIED` quando o saldo restante é lido diretamente da interface do Flow (menu da conta / UI);
+   - `LOCAL_ESTIMATE` após consumo confirmado de créditos até a próxima leitura na UI;
+   - `UNKNOWN` quando não houver evidência textual inequívoca;
+   - **Regra de Ouro**: NUNCA inventar créditos, nunca assumir 1000, nunca tratar UNKNOWN como erro fatal.
+8. **Detecção conservadora de esgotamento**: Se houver evidência visível e inequívoca de créditos insuficientes no DOM antes do dispatch, a conta é marcada como `EXHAUSTED` com zero aprovação e zero clique no Generate.
+
+### CLI Operacional:
+- **Listar contas**: `python -m app.services.flow_account_pool list`
+- **Adicionar conta**: `python -m app.services.flow_account_pool add --account-id flow-b --display-name "Conta B" --priority 90`
+- **Desativar conta**: `python -m app.services.flow_account_pool disable --account-id flow-b`
+- **Reativar conta**: `python -m app.services.flow_account_pool enable --account-id flow-b`
+- **Consultar telemetria consolidada**: `python -m app.services.flow_account_pool status`
+- **Autenticação inicial da nova conta**: `python scripts/flow_playwright.py --account-id flow-b --headful --trial-only`
+
+### Backlog Futuro:
+- **FLOW-UI-001 = OPEN**: Telemetria visual de múltiplas contas e saldo de créditos no Factory Live da Web UI V2. Web UI V2 permanece temporariamente congelada em R6A.2 na branch `feat/web-ui-v2-read-api`.
 
 ## V12-E.3 — contrato DEV, sem rollout autorizado
 

@@ -1289,6 +1289,8 @@ def run_playwright_flow_poc(
     download_only: bool = False,
     force_new_project: bool = False,
     headless: Optional[bool] = None,
+    user_data_dir: Optional[str] = None,
+    flow_account_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executa o ciclo completo de validação do Playwright com isolamento de resultado:
@@ -1313,6 +1315,10 @@ def run_playwright_flow_poc(
     """
     report: Dict[str, Any] = {
         "status": "FAILED",
+        "flow_account_id": flow_account_id,
+        "credits_before": None,
+        "credits_after_estimated": None,
+        "credits_source": "UNKNOWN",
         "login_status": "UNKNOWN",
         "project_url_confirmed": False,
         "landing_to_studio": False,
@@ -1437,7 +1443,13 @@ def run_playwright_flow_poc(
 
     with sync_playwright() as p:
         is_headless = resolve_flow_headless(headless)
-        context, err = launch_flow_context(p, headless=is_headless, downloads_path=pw_downloads_dir)
+        resolved_account_dir = user_data_dir or DEFAULT_USER_DATA_DIR
+        context, err = launch_flow_context(
+            p,
+            user_data_dir=resolved_account_dir,
+            headless=is_headless,
+            downloads_path=pw_downloads_dir,
+        )
         if err:
             report["status"] = err
             report["error"] = err
@@ -1523,6 +1535,31 @@ def run_playwright_flow_poc(
                 _stop_tracing("FLOW_VIDEO_MODE_NOT_CONFIRMED")
                 context.close()
                 return report
+
+            # 2c. TELEMETRIA DE CRÉDITOS E DETECÇÃO DE ESGOTAMENTO NA INTERFACE
+            try:
+                from app.services.flow_account_pool import (
+                    check_flow_page_exhausted,
+                    read_flow_credit_balance,
+                    record_verified_credit_balance,
+                    CREDIT_SOURCE_FLOW_UI_VERIFIED,
+                )
+                if check_flow_page_exhausted(page):
+                    logger.warning("[FLOW_EXHAUSTION_GUARD] Evidência visível de esgotamento detectada no Studio. Fail-closed.")
+                    report["status"] = "EXHAUSTED"
+                    report["error"] = "FLOW_ACCOUNT_EXHAUSTED: Visible evidence of insufficient credits on page"
+                    _stop_tracing("EXHAUSTED")
+                    context.close()
+                    return report
+
+                ui_bal, ui_src = read_flow_credit_balance(page)
+                if ui_bal is not None:
+                    report["credits_before"] = ui_bal
+                    report["credits_source"] = ui_src
+                    if flow_account_id and ui_src == CREDIT_SOURCE_FLOW_UI_VERIFIED:
+                        record_verified_credit_balance(flow_account_id, ui_bal)
+            except Exception as cr_err:
+                logger.debug(f"[FLOW_CREDIT_TELEMETRY] Erro não-bloqueante na leitura inicial de créditos: {cr_err}")
 
             # 3. Preenchimento e confirmação do prompt (apenas se editor estiver livre)
             is_pending, p_count, p_cost = check_pending_credit_approval(page)
@@ -1624,6 +1661,18 @@ def run_playwright_flow_poc(
 
             elif is_pending:
                 logger.info(f"ESTADO PRÉ-EXISTENTE DETECTADO: pedido de aprovação pendente encontrado (custo={p_cost}).")
+                try:
+                    from app.services.flow_account_pool import check_flow_page_exhausted
+                    if check_flow_page_exhausted(page):
+                        logger.warning("[FLOW_EXHAUSTION_GUARD] Evidência visível de esgotamento antes da aprovação. ZERO aprovação.")
+                        report["status"] = "EXHAUSTED"
+                        report["error"] = "FLOW_ACCOUNT_EXHAUSTED: Visible evidence of insufficient credits"
+                        _stop_tracing("EXHAUSTED")
+                        context.close()
+                        return report
+                except Exception as exh_err:
+                    logger.debug(f"[FLOW_EXHAUSTION_GUARD] Erro: {exh_err}")
+
                 logger.info("NÃO clicando no botão Generate novamente nesta execução!")
                 report["generate_click_count_this_run"] = 0
                 report["credit_approval_required"] = True
@@ -1643,6 +1692,18 @@ def run_playwright_flow_poc(
                     return report
 
             else:
+                try:
+                    from app.services.flow_account_pool import check_flow_page_exhausted
+                    if check_flow_page_exhausted(page):
+                        logger.warning("[FLOW_EXHAUSTION_GUARD] Evidência visível de esgotamento antes de Generate. ZERO clique.")
+                        report["status"] = "EXHAUSTED"
+                        report["error"] = "FLOW_ACCOUNT_EXHAUSTED: Visible evidence of insufficient credits"
+                        _stop_tracing("EXHAUSTED")
+                        context.close()
+                        return report
+                except Exception as exh_err:
+                    logger.debug(f"[FLOW_EXHAUSTION_GUARD] Erro: {exh_err}")
+
                 # Dispara clique único no Generate
                 logger.info("=== DISPARANDO EXATAMENTE UMA GERAÇÃO REAL AUTORIZADA ===")
                 gen_btn.click()
@@ -1955,7 +2016,51 @@ def generate_flow_scene(
                 details={"reused_existing": True},
             )
 
-    # 2. Executa driver Playwright (single-flight)
+    # 2. Resolução da conta no pool (stickiness, legacy manifest, ou seleção por saldo/prioridade)
+    try:
+        from app.services.flow_account_pool import (
+            resolve_manifest_account,
+            get_account_runtime,
+            record_credit_deduction,
+            record_account_success,
+            record_account_error,
+            failover_flow_account,
+            can_failover_account,
+            resolve_user_data_dir,
+        )
+        account_info = resolve_manifest_account(manifest, manifest_path=manifest_path)
+    except Exception as pool_exc:
+        logger.warning(f"Falha ao consultar pool de contas: {pool_exc}")
+        account_info = {
+            "account_id": "flow-primary",
+            "user_data_dir": DEFAULT_USER_DATA_DIR,
+            "runtime": {},
+        }
+
+    flow_account_id = account_info.get("account_id", "flow-primary")
+    account_user_data_dir = account_info.get("user_data_dir") or DEFAULT_USER_DATA_DIR
+    rt_before = account_info.get("runtime") or {}
+    credits_before = rt_before.get("credits_remaining")
+    initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
+    initial_status = rt_before.get("status", "AVAILABLE")
+
+    # Pre-dispatch failover se conta estiver em status não elegível
+    failover_done = False
+    if can_failover_account(manifest) and initial_status in ("EXHAUSTED", "AUTH_FAILED", "DISABLED", "COOLDOWN"):
+        alt_acc = failover_flow_account(
+            manifest_path,
+            flow_account_id,
+            f"Account in non-eligible status: {initial_status}",
+        )
+        if alt_acc:
+            failover_done = True
+            flow_account_id = alt_acc["account_id"]
+            account_user_data_dir = alt_acc.get("user_data_dir") or resolve_user_data_dir(flow_account_id)
+            rt_before = alt_acc.get("runtime") or get_account_runtime(flow_account_id)
+            credits_before = rt_before.get("credits_remaining")
+            initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
+
+    # 3. Executa driver Playwright (single-flight)
     raw_res = run_playwright_flow_poc(
         manifest_path=manifest_path,
         scene_index=scene_index,
@@ -1964,13 +2069,50 @@ def generate_flow_scene(
         project_url=target_project_url,
         download_only=download_only,
         headless=headless,
+        user_data_dir=account_user_data_dir,
+        flow_account_id=flow_account_id,
     )
 
-    raw_status = raw_res.get("status")
     confirmed_dispatch = bool(
         raw_res.get("generation_start_confirmed")
         or raw_res.get("credit_approval_confirmed")
     )
+
+    # 4. Failover seguro automático pré-dispatch (máximo 1 tentativa por cena)
+    if (
+        not confirmed_dispatch
+        and not failover_done
+        and can_failover_account(manifest)
+        and raw_res.get("status") not in ("SUCCESS", "ALREADY_COMPLETE", "PRE_FLIGHT_TRIAL_PASS")
+    ):
+        failover_reason = raw_res.get("error") or raw_res.get("status") or "Pre-dispatch failure"
+        alt_acc = failover_flow_account(
+            manifest_path,
+            flow_account_id,
+            str(failover_reason),
+        )
+        if alt_acc:
+            failover_done = True
+            flow_account_id = alt_acc["account_id"]
+            account_user_data_dir = alt_acc.get("user_data_dir") or resolve_user_data_dir(flow_account_id)
+            logger.info(f"[FLOW_FAILOVER] Retentando cena {scene_index} com conta alternativa: {flow_account_id}")
+            raw_res = run_playwright_flow_poc(
+                manifest_path=manifest_path,
+                scene_index=scene_index,
+                trial_only=trial_only,
+                timeout_gen_sec=timeout_gen_sec,
+                project_url=target_project_url,
+                download_only=download_only,
+                headless=headless,
+                user_data_dir=account_user_data_dir,
+                flow_account_id=flow_account_id,
+            )
+            confirmed_dispatch = bool(
+                raw_res.get("generation_start_confirmed")
+                or raw_res.get("credit_approval_confirmed")
+            )
+
+    raw_status = raw_res.get("status")
 
     # Cálculo de créditos e status de política
     policy_blocked = bool(raw_res.get("content_policy_blocked") or raw_status == "FLOW_CONTENT_POLICY_BLOCKED")
@@ -1988,6 +2130,44 @@ def generate_flow_scene(
     elif raw_res.get("credit_approval_confirmed") or raw_res.get("generation_start_confirmed"):
         credits_consumed = raw_res.get("credit_cost") or 15
 
+    # Atualiza telemetria de créditos e runtime no pool
+    try:
+        from app.services.flow_account_pool import (
+            record_credit_deduction,
+            record_account_success,
+            record_account_error,
+            get_account_runtime,
+        )
+        if credits_consumed > 0:
+            record_credit_deduction(flow_account_id, credits_consumed)
+
+        task_id = manifest.get("task_id")
+        if raw_status in ("SUCCESS", "ALREADY_COMPLETE", "PRE_FLIGHT_TRIAL_PASS"):
+            record_account_success(flow_account_id, task_id=task_id)
+        else:
+            is_auth = (raw_res.get("login_status") != "AUTHENTICATED" or "auth" in str(raw_res.get("error")).lower())
+            is_exh = (raw_status in ("EXHAUSTED", "FLOW_ACCOUNT_EXHAUSTED") or "exhaust" in str(raw_res.get("error")).lower())
+            record_account_error(
+                flow_account_id,
+                error=raw_res.get("error") or raw_status,
+                is_auth=is_auth,
+                is_exhausted=is_exh,
+            )
+    except Exception as rt_exc:
+        logger.warning(f"Erro ao atualizar runtime da conta Flow {flow_account_id}: {rt_exc}")
+
+    # Obtém estado pós-execução para FlowSceneResult.details
+    try:
+        from app.services.flow_account_pool import get_account_runtime
+        rt_after = get_account_runtime(flow_account_id)
+        final_account_status = rt_after.get("status", "AVAILABLE")
+        credits_after = rt_after.get("credits_remaining")
+        final_credits_source = rt_after.get("credits_source", "UNKNOWN")
+    except Exception:
+        final_account_status = initial_status
+        credits_after = credits_before
+        final_credits_source = initial_credits_source
+
     # Mapeamento canônico de status
     if raw_status in ("SUCCESS", "ALREADY_COMPLETE", "PRE_FLIGHT_TRIAL_PASS"):
         final_status = raw_status
@@ -1995,6 +2175,8 @@ def generate_flow_scene(
         final_status = "FLOW_BROWSER_BUSY"
     elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED":
         final_status = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+    elif raw_status in ("EXHAUSTED", "FLOW_ACCOUNT_EXHAUSTED"):
+        final_status = "FLOW_ACCOUNT_EXHAUSTED"
     elif policy_blocked:
         if refund_confirmed:
             final_status = "FLOW_CONTENT_POLICY_BLOCKED"
@@ -2020,6 +2202,11 @@ def generate_flow_scene(
     details["content_policy_blocked"] = policy_blocked
     details["policy_refund_confirmed"] = refund_confirmed
     details["needs_recovery"] = True if final_status == "FLOW_GENERATION_NEEDS_RECOVERY" else False
+    details["flow_account_id"] = flow_account_id
+    details["flow_account_status"] = final_account_status
+    details["credits_before"] = credits_before
+    details["credits_after_estimated"] = credits_after
+    details["credits_source"] = final_credits_source
 
     return FlowSceneResult(
         status=final_status,
@@ -2044,10 +2231,17 @@ def main():
     parser.add_argument("--download-only", action="store_true", help="Executa apenas isolamento, download e validação do novo tile já gerado")
     parser.add_argument("--new-project", action="store_true", help="Força a criação de um novo projeto limpo no Flow")
     parser.add_argument("--headful", action="store_true", help="Executa o navegador com interface gráfica visível (headless=False) para diagnóstico")
+    parser.add_argument("--account-id", default=None, help="ID da conta Flow no pool (ex: flow-b)")
 
     args = parser.parse_args()
 
     headless_override = False if args.headful else None
+
+    user_data_dir = None
+    if args.account_id:
+        from app.services.flow_account_pool import resolve_user_data_dir, validate_account_id
+        validate_account_id(args.account_id)
+        user_data_dir = resolve_user_data_dir(args.account_id)
 
     res = run_playwright_flow_poc(
         manifest_path=args.manifest,
@@ -2058,6 +2252,8 @@ def main():
         download_only=args.download_only,
         force_new_project=args.new_project,
         headless=headless_override,
+        user_data_dir=user_data_dir,
+        flow_account_id=args.account_id,
     )
 
     print("\n" + "=" * 50)

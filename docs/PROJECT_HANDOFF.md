@@ -51,9 +51,11 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL / SAFE FAILOVER`
-- **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT`
-  - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`), mas o piloto permanece intencionalmente pausado até a implementação de pool multi-contas de provedores de vídeo (Flow / Google AI Pro).
+- **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL FOUNDATION (CONCLUÍDO)` (Próximo: `HOMOLOGAÇÃO / RETOMADA DO PILOTO AUTÔNOMO`)
+- **FLOW_MA1_STATUS:** `IMPLEMENTED / VALIDATED` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
+- **FLOW_UI_001_STATUS:** `OPEN` (Exibição de telemetria de múltiplas contas e saldo de créditos no Factory Live da Web UI V2 — backlog futuro)
+- **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_HOMOLOGATION`
+  - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`) e a infraestrutura FLOW-MA1 foi implementada em DEV.
   - **Hotfix Autonomous Safety Contract:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`
     - Precedência de voz estrita: Profile Settings -> Global UI -> Global App -> Safe Default (com canonicalização mantida);
     - Fail-safe cap no getter: Growth Mode define teto máximo inultrapassável (Warmup: 2 aprovados / 8 tentativas; Scale: 5 aprovados / 15 tentativas; override armazenado só pode reduzir, nunca aumentar).
@@ -63,7 +65,7 @@
       - `cdc09729-22df-466c-b6d2-50f816d20060` (Quality 71.2, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
     - Scheduler, `publication_events`, `scheduled_posts` e histórico de publicações preservados.
     - Autonomous do profile default permanece PAUSADO após o deploy.
-- **CURRENT_PRIORITY:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL / SAFE FAILOVER`
+- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION`
 - **WEB_UI_V2_STATUS:** `FROZEN TEMPORARILY AT R6A.2` (Isolada na branch `feat/web-ui-v2-read-api`; zero alterações na main).
 - **BLOCKERS:** `NONE`
 - **DEFERRED_ITEMS:**
@@ -86,7 +88,25 @@
   - 1 tarefa (`807cd444...`) **REJEITADA PELO QUALITY GATE** (Quality 67.8 < 70) — sem override manual, sem alteração de thresholds e sem recolocação no Scheduler (fail-closed respeitado).
   - Ready Stock das tarefas legadas completamente drenado/publicado.
   - Perfis restaurados para **Growth Mode = WARMUP**.
-- **Novas Gerações:** Já possuem persistência canônica atômica em `flow_bridge.py` (PR #90) com `FLOW_PROVENANCE_PERSIST_FAILED` fail-closed antes do render.
+### FLOW-MA1 — Multi-Account Provider Pool & Telemetria de Créditos (CONCLUÍDO):
+- **Implementação:** `app/services/flow_account_pool.py`, `scripts/flow_playwright.py`, `test/services/test_flow_account_pool.py`.
+- **Princípios Canônicos:**
+  - **user_data_dir separado por conta:** Cada conta cadastrada possui seu próprio diretório de perfil persistente (`storage/flow_browser_profiles/<account_id>/`). A conta primária legada (`flow-primary`) preserva estritamente `storage/flow_browser_profile` (sessão atualmente homologada).
+  - **Login inicial humano:** A autenticação Google é realizada manualmente pelo operador abrindo o navegador da conta com `--headful --trial-only` (`python scripts/flow_playwright.py --account-id <id> --headful --trial-only`).
+  - **Zero senhas/segredos no projeto:** Nenhuma senha, token, chave de API ou cookie do Google é armazenado no repositório, em arquivos JSON ou no banco de dados. Os cookies e sessões residem exclusivamente dentro do perfil local do Microsoft Edge.
+  - **Task stickiness:** Uma tarefa/projeto do Flow fica vinculada estritamente à conta atribuída no `manifest.json` (`flow_account_id`). Após criação do projeto (`flow_project_url`), conclusão de qualquer cena ou confirmação de início de geração/aprovação de créditos, a conta é imutável.
+  - **Failover seguro somente pré-dispatch:** Failover automático para a próxima conta elegível no pool só é permitido antes do consumo ou início de geração (máximo 1 tentativa automática de failover por cena).
+  - **Flow permanece single-flight:** Concorrência global mantida em 1 através de `FLOW_CONCURRENCY_LOCK`. Zero paralelismo de navegadores ou consumo simultâneo.
+  - **Telemetria de créditos confiável:**
+    - `FLOW_UI_VERIFIED` quando o saldo restante é lido diretamente da interface do Flow (menu da conta / UI);
+    - `LOCAL_ESTIMATE` após consumo confirmado de créditos até a próxima leitura na UI;
+    - `UNKNOWN` quando não houver evidência textual inequívoca;
+    - **Regra de Ouro:** NUNCA inventar créditos, nunca assumir 1000, nunca tratar UNKNOWN como erro fatal.
+  - **Detecção conservadora de esgotamento:** Se houver evidência visível e inequívoca de créditos insuficientes no DOM antes do dispatch, a conta é marcada como `EXHAUSTED` com zero aprovação e zero clique no Generate.
+  - **CLI Operacional Mínimo:** Suporte a `python -m app.services.flow_account_pool` com comandos `list`, `add`, `disable`, `enable`, `status`.
+- **Requisito Futuro Web UI (FLOW-UI-001):**
+  - **Status:** `OPEN` (Backlog da Web UI V2).
+  - **Objetivo:** Exibir no Factory Live a lista de contas Flow com display name, status operacional (`AVAILABLE`, `EXHAUSTED`, etc.), saldo de créditos (`VERIFIED` vs `ESTIMATED`), data da última verificação e vínculo da tarefa ativa. A Web UI V2 permanece temporariamente congelada em R6A.2 na branch `feat/web-ui-v2-read-api`.
 
 ### Histórico Recente de Hotfixes e Merges no Main:
 - **PR #96:** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Implementa aprovação manual auditável para artefato final legado vinculada criptograficamente ao SHA-256 de `final-1.mp4`, mantendo validação estrita de Flow premium, BGM segura e zero claims.

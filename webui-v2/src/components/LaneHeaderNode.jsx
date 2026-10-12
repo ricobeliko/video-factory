@@ -18,8 +18,10 @@ export default function LaneHeaderNode({ data }) {
     topic,
   } = data;
 
-  const primaryName = profileName || channelName || profileId;
-  const secondaryDetails = `${channelName ? channelName + ' • ' : ''}${channelId || profileId}`;
+  // Prioritize channelName as primary identity, profileName as fallback
+  const primaryName = channelName || profileName || channelId;
+  const platformLabel = data.platform === 'tiktok' ? 'TikTok' : 'YouTube';
+  const secondaryDetails = `${platformLabel} • ${channelId || profileId}`;
 
   return (
     <div className="lane-header-card">

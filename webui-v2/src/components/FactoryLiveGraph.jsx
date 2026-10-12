@@ -2,7 +2,6 @@ import React, { useMemo } from 'react';
 import {
   ReactFlow,
   Background,
-  Controls,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -65,6 +64,7 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
           channelName: channel.channel_name,
           channelId: channel.channel_id,
           profileId: channel.profile_id,
+          platform: channel.platform,
           isAutonomous: channel.autonomous_enabled,
           growthMode: channel.growth_mode,
           stock: channel.stock,
@@ -242,13 +242,17 @@ export default function FactoryLiveGraph({ channels, onSelectChannelTask }) {
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={true}
-        fitView
-        fitViewOptions={{ padding: 0.12 }}
-        minZoom={0.3}
-        maxZoom={1.5}
+        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+        minZoom={1}
+        maxZoom={1}
+        zoomOnScroll={false}
+        zoomOnPinch={false}
+        panOnScroll={false}
+        zoomOnDoubleClick={false}
+        panOnDrag={false}
+        preventScrolling={false}
       >
         <Background color="#1e293b" gap={20} size={1} />
-        <Controls showInteractive={false} />
       </ReactFlow>
     </div>
   );

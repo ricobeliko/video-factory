@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.config import config
 from app.models import const
+from app.services.post_for_me import CHANNEL_DEFAULT_DISPLAY
 
 DEFAULT_PROFILE_ID = "default"
 DEFAULT_PROFILE_NAME = "Video Factory Default"
@@ -191,6 +192,22 @@ def init_profile_db(db_path: Optional[str] = None) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_task_profiles_pid ON task_profiles(profile_id);")
 
+        # Migração legada idempotente: atualizar 'YouTube (Default)' para o nome canônico
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            UPDATE publishing_channels
+            SET display_name = ?, updated_at = ?
+            WHERE id = ? AND display_name = ?;
+            """,
+            (
+                CHANNEL_DEFAULT_DISPLAY,
+                now_iso,
+                "channel-default-youtube",
+                "YouTube (Default)",
+            ),
+        )
+
 
 def _validate_growth_mode(mode: str) -> str:
     clean = str(mode or "").strip().lower()
@@ -305,11 +322,26 @@ def ensure_default_profile(db_path: Optional[str] = None) -> Dict[str, Any]:
                     "channel-default-youtube",
                     DEFAULT_PROFILE_ID,
                     "youtube",
-                    "YouTube (Default)",
+                    CHANNEL_DEFAULT_DISPLAY,
                     upload_post_username,
                     1,
                     now_iso,
                     now_iso,
+                ),
+            )
+        else:
+            # Migração legada idempotente: atualizar 'YouTube (Default)' para o nome canônico
+            conn.execute(
+                """
+                UPDATE publishing_channels
+                SET display_name = ?, updated_at = ?
+                WHERE id = ? AND display_name = ?;
+                """,
+                (
+                    CHANNEL_DEFAULT_DISPLAY,
+                    now_iso,
+                    "channel-default-youtube",
+                    "YouTube (Default)",
                 ),
             )
 

@@ -3138,6 +3138,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
         primary_ch = chans[0] if chans else None
         cid = primary_ch.get("id") if primary_ch else None
         cname = primary_ch.get("channel_name") if primary_ch else None
+        platform = primary_ch.get("platform") if primary_ch else None
 
         auto_status = autonomous_production.get_autonomous_status(profile_id=pid, db_path=db_path)
         auto_enabled = auto_status.get("enabled", False)
@@ -3381,6 +3382,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             "profile_name": pname,
             "channel_id": cid,
             "channel_name": cname,
+            "platform": platform,
             "autonomous_enabled": auto_enabled,
             "growth_mode": growth_mode,
             "status": status,

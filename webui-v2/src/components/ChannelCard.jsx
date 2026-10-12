@@ -19,11 +19,11 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
   const isAutonomous = Boolean(autonomous_enabled);
   const isIdle = !execution || execution.status === 'IDLE';
 
-  // Prioritize profile_name as primary identity per R6A.2 feedback
-  const primaryTitle = profile_name || channel_name || profile_id;
-  const secondarySubtitle = channel_name
-    ? `${channel_name} • ${channel_id || profile_id}`
-    : (channel_id || profile_id);
+  // Prioritize channel_name as primary identity, profile_name as fallback
+  const primaryTitle = channel_name || profile_name || channel_id;
+  const platformLabel = channel.platform === 'tiktok' ? 'TikTok' : 'YouTube';
+  const secondarySubtitle = `${platformLabel} • ${channel_id || profile_id}`;
+  const profileMeta = `Perfil: ${profile_id || 'default'}`;
 
   return (
     <div
@@ -37,8 +37,8 @@ export default function ChannelCard({ channel, isSelected, onClick }) {
           <div className="channel-name" title={primaryTitle}>
             📺 {primaryTitle}
           </div>
-          <div className="channel-sub-id" title={secondarySubtitle}>
-            {secondarySubtitle}
+          <div className="channel-sub-id" title={`${secondarySubtitle} • ${profileMeta}`}>
+            {secondarySubtitle} • <span style={{ opacity: 0.8 }}>{profileMeta}</span>
           </div>
         </div>
         <div className="channel-badges">

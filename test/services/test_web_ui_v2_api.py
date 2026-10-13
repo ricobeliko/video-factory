@@ -163,3 +163,84 @@ class TestWebUiV2Api(unittest.TestCase):
 
             resp_ok = self.client.get("/api/v2/channels", headers={"x-api-key": "test-secret-key-channels-v2"})
             self.assertEqual(resp_ok.status_code, 200)
+
+    def test_factory_endpoints_exist_in_openapi_and_app(self):
+        """7. Rotas POST /api/v2/factory/pause e /api/v2/factory/resume existem no OpenAPI."""
+        openapi_schema = asgi.app.openapi()
+        paths = openapi_schema.get("paths", {})
+
+        self.assertIn("/api/v2/factory/pause", paths)
+        self.assertIn("post", paths["/api/v2/factory/pause"])
+
+        self.assertIn("/api/v2/factory/resume", paths)
+        self.assertIn("post", paths["/api/v2/factory/resume"])
+
+    def test_factory_pause_and_resume_auth_enforced(self):
+        """8. Requisições sem autenticação ou com chave inválida são rejeitadas (401)."""
+        config.app["api_key"] = "test-secret-key-factory"
+
+        # Pause sem token / token inválido
+        r_pause_miss = self.client.post("/api/v2/factory/pause")
+        self.assertEqual(r_pause_miss.status_code, 401)
+        r_pause_wrong = self.client.post("/api/v2/factory/pause", headers={"x-api-key": "wrong"})
+        self.assertEqual(r_pause_wrong.status_code, 401)
+
+        # Resume sem token / token inválido
+        r_resume_miss = self.client.post("/api/v2/factory/resume")
+        self.assertEqual(r_resume_miss.status_code, 401)
+        r_resume_wrong = self.client.post("/api/v2/factory/resume", headers={"x-api-key": "wrong"})
+        self.assertEqual(r_resume_wrong.status_code, 401)
+
+    def test_factory_pause_calls_operation_once(self):
+        """9. Pause chama operator_console.pause_factory exatamente uma vez."""
+        with patch("app.services.operator_console.pause_factory") as mock_pause, \
+             patch("app.services.operator_console.get_factory_state", return_value="PAUSED"), \
+             patch("app.services.operator_console.is_factory_paused", return_value=True):
+
+            resp = self.client.post("/api/v2/factory/pause")
+            self.assertEqual(resp.status_code, 200)
+            mock_pause.assert_called_once_with()
+
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("factory_state"), "PAUSED")
+            self.assertEqual(data.get("is_paused"), True)
+
+    def test_factory_resume_calls_operation_once(self):
+        """10. Resume chama operator_console.resume_factory exatamente uma vez."""
+        with patch("app.services.operator_console.resume_factory") as mock_resume, \
+             patch("app.services.operator_console.get_factory_state", return_value="RUNNING"), \
+             patch("app.services.operator_console.is_factory_paused", return_value=False):
+
+            resp = self.client.post("/api/v2/factory/resume")
+            self.assertEqual(resp.status_code, 200)
+            mock_resume.assert_called_once_with()
+
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("factory_state"), "RUNNING")
+            self.assertEqual(data.get("is_paused"), False)
+
+    def test_factory_pause_and_resume_operational_failure_returns_controlled_error(self):
+        """11. Falha operacional interna retorna erro controlado (500) sem vazar detalhes sensíveis."""
+        with patch("app.services.operator_console.pause_factory", side_effect=RuntimeError("internal sqlite lock failure")):
+            resp_pause = self.client.post("/api/v2/factory/pause")
+            self.assertEqual(resp_pause.status_code, 500)
+            self.assertNotIn("internal sqlite lock failure", resp_pause.text)
+            self.assertNotIn("Traceback", resp_pause.text)
+
+        with patch("app.services.operator_console.resume_factory", side_effect=RuntimeError("internal sqlite lock failure")):
+            resp_resume = self.client.post("/api/v2/factory/resume")
+            self.assertEqual(resp_resume.status_code, 500)
+            self.assertNotIn("internal sqlite lock failure", resp_resume.text)
+            self.assertNotIn("Traceback", resp_resume.text)
+
+    def test_factory_pause_and_resume_blocked_on_unauthorized_environment(self):
+        """12. Ambiente não autorizado (VIEW ONLY / SECONDARY) é bloqueado com 403."""
+        with patch("app.services.operator_console.pause_factory", side_effect=PermissionError("Operação bloqueada: VIEW ONLY")):
+            resp_pause = self.client.post("/api/v2/factory/pause")
+            self.assertEqual(resp_pause.status_code, 403)
+            self.assertIn("only primary instance", resp_pause.json().get("message", "").lower())
+
+        with patch("app.services.operator_console.resume_factory", side_effect=PermissionError("Operação bloqueada: VIEW ONLY")):
+            resp_resume = self.client.post("/api/v2/factory/resume")
+            self.assertEqual(resp_resume.status_code, 403)
+            self.assertIn("only primary instance", resp_resume.json().get("message", "").lower())

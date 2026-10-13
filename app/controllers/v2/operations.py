@@ -27,6 +27,70 @@ def get_system_status(
     return utils.get_response(200, status)
 
 
+@router.post(
+    "/factory/pause",
+    summary="Pause factory operations non-destructively",
+)
+def pause_factory(request: Request):
+    request_id = base.get_task_id(request)
+    try:
+        operator_console.pause_factory()
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can change factory operational state",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Internal error pausing factory",
+        )
+
+    state = operator_console.get_factory_state()
+    return utils.get_response(
+        200,
+        {
+            "factory_state": state,
+            "is_paused": operator_console.is_factory_paused(),
+        },
+        message="Factory paused successfully",
+    )
+
+
+@router.post(
+    "/factory/resume",
+    summary="Resume factory operations",
+)
+def resume_factory(request: Request):
+    request_id = base.get_task_id(request)
+    try:
+        operator_console.resume_factory()
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can change factory operational state",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Internal error resuming factory",
+        )
+
+    state = operator_console.get_factory_state()
+    return utils.get_response(
+        200,
+        {
+            "factory_state": state,
+            "is_paused": operator_console.is_factory_paused(),
+        },
+        message="Factory resumed successfully",
+    )
+
+
 @router.get(
     "/profiles",
     summary="List operational profiles overview",

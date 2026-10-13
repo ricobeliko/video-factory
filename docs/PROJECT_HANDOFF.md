@@ -14,7 +14,7 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `11/10/2026`
+- **LAST_UPDATED:** `13/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop)
 - **CURRENT_FOCUS:** `HOMOLOGAÇÃO_E2E_PILOTO_AUTONOMO_INTERNET`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
@@ -22,8 +22,9 @@
 - **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
-- **CURRENT_MAIN_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: aprovação manual auditável vinculada ao SHA-256 de final-1.mp4 para tasks legadas híbridas)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: deployado e validado no PC Forte em 11/10/2026)
+- **CURRENT_MAIN_SHA:** `3f8b09644e6399af8829bb9a196e3c4195de4723` (commit merged no branch `main`: *docs: record flow-ma1 merged and autonomous pilot paused pending production setup*)
+- **DEV_BRANCH_HEAD_SHA:** `b20878cc1297822378f4be48db5483ece9d7d9ff` (HEAD da branch ativa `feat/web-ui-v2-read-api`: *fix(webui): improve agent ops telemetry projection*)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: deployado e validado no PC Forte em 11/10/2026; produção ainda NÃO recebeu deploy de `3f8b096`)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -51,12 +52,15 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL (MERGED)` (Próximo: `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT`)
+- **CURRENT_GATE:** `R6B — WEB UI V2 OPERATIONAL CONTROLS MVP (DEV)` / `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
 - **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
 - **FLOW_UI_001_STATUS:** `DEV VALIDATED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
 - **FLOW_CREDIT_002_STATUS:** `DEV VALIDATED` (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)
 - **R6A_5_STATUS:** `COMPLETED / HUMAN APPROVED` (Checkpoint `14387b021943d1c14b6a8972839a4be31556de8b` aprovado pelo humano; Visual Identity System, single-focus detailed pipeline para escalabilidade, 12 personas, preenchimento tonal, AI Compute Vault do Flow)
-- **R6A_6_STATUS:** `DEV IMPLEMENTED` (Organic Factory Live / Motion Language + 10+ Channel Scalability; rail horizontal responsiva com cards confortáveis 320-430px e scroll-snap, latching de foco imune a polling, componente tech-factory AgentAvatar para as 12 personas consistente entre node e drawer, nodes orgânicos com profundidade tonal e auras localizadas, motion language orientada a estado com FactoryEdge e packets de energia SVG <animateMotion>, hero do pipeline contextualizado com agente ativo factual, superfície elevada do Google Flow e prefers-reduced-motion)
+- **R6A_6_STATUS:** `COMPLETED / DEV IMPLEMENTED` (Organic Factory Live / Motion Language + 10+ Channel Scalability; rail horizontal responsiva com cards confortáveis 320-430px e scroll-snap, latching de foco imune a polling, componente tech-factory AgentAvatar para as 12 personas consistente entre node e drawer, nodes orgânicos com profundidade tonal e auras localizadas, motion language orientada a estado com FactoryEdge e packets de energia SVG <animateMotion>, hero do pipeline contextualizado com agente ativo factual, superfície elevada do Google Flow e prefers-reduced-motion)
+- **AGENT_OPS_V1_1_STATUS:** `COMPLETED / DEV VALIDATED` (Aba independente Agent Ops no Web UI V2 desacoplada do Factory Live. Navegação no header `Factory Live` | `Agent Ops` com URL hash sync, central de operações com 4 papéis visuais, Current Mission Card com elapsed e metadados factuais, feed cronológico sanitizado sem segredos ou prompts, endpoint read-only `GET /api/v2/agent-ops` resolvendo `AGENT_BRIDGE_ROOT`, polling 2s restrito à aba ativa, 13 testes direcionados PASS em `test/services/test_agent_ops.py`)
+- **AGENT_OPS_HOTFIX_STATUS:** `COMPLETED (commit b20878c)` — Hotfix de projeção de telemetria refinando unwrapping de `step_update`, eliminação de ruídos, mapeamento de ferramentas do AGY para EXECUTOR, resolução de branch e cálculo factual de `elapsed`.
+- **AGENT_BRIDGE_INTEGRATION_STATUS:** `VERIFIED / MVP A10 FROZEN (3586364)` — Primeira missão real delegada com sucesso à fábrica (`doc-sync-handoff-agent-ops`).
 - **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP`
   - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`) e a infraestrutura FLOW-MA1 foi implementada em DEV.
   - **Hotfix Autonomous Safety Contract:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`
@@ -68,9 +72,9 @@
       - `cdc09729-22df-466c-b6d2-50f816d20060` (Quality 71.2, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
     - Scheduler, `publication_events`, `scheduled_posts` e histórico de publicações preservados.
     - Autonomous do profile default permanece PAUSADO após o deploy.
-- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION`
-- **WEB_UI_V2_STATUS:** `FROZEN TEMPORARILY AT R6A.2` (Isolada na branch `feat/web-ui-v2-read-api`; zero alterações na main).
-- **BLOCKERS:** `NONE`
+- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R6B OPERATIONAL CONTROLS MVP (DEV)`
+- **WEB_UI_V2_STATUS:** `ACTIVE DEV (R6B IN PROGRESS na branch feat/web-ui-v2-read-api; zero alterações no main)`
+- **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
 - **DEFERRED_ITEMS:**
   - `CFG-005 — YouTube-only destination using cross_platform preset`:
     - **Descrição:** O destino operacional atual é YouTube-only, porém o preset `cross_platform` mantém restrições de TikTok Rewards e pode causar rejeições desnecessárias (ex.: task de 58s rejeitada pelo Safety Gate porque Cross Platform exige >= 60s).
@@ -84,7 +88,7 @@
 - **R4A_WEB_UI_V2_DISCOVERY_STATUS:** Concluído documentalmente em paralelo ([docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md)), mapeando o monólito Streamlit (14.315 linhas, 34 funções operacionais e proposta de API fina FastAPI preservando backend), com ZERO alteração funcional, ZERO impacto no banco operacional e ZERO interferência no piloto autônomo em andamento.
 - **R5B_LIVE_EXECUTION_CONTRACT_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), contrato read-only e causal para tela Factory Live (UI-005) com 2 novos endpoints GET (`/api/v2/executions/live` e `/api/v2/executions/{task_id}`), grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS.
 - **R6A_WEB_UI_V2_FACTORY_LIVE_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), primeira interface desacoplada Web UI V2 em `webui-v2/` (React 18, Vite 6, `@xyflow/react` v12, Vanilla CSS) com tela Factory Live (cards de canal dinâmicos, grafo em lanes horizontais dos 12 estágios, trace causal e drawer de execução com terminal YouTube state, polling 3s, build PASS 112 kB gzip; zero alteração no backend ou Streamlit). NEXT_GATE de produção permanece estritamente `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` no PC Forte.
-- **AGENT_OPS_V1_1_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), nova tela independente Agent Ops no Web UI V2 desacoplada do Factory Live. Navegação no header (`Factory Live` | `Agent Ops` com URL hash sync), central de operações com 4 papéis visuais (Architect OFFLINE com aviso V2 pendente, Executor Antigravity, Validator Bridge, Human em standby/alert), Current Mission Card com elapsed e metadados factuais, feed cronológico sanitizado (sem prompts, segredos ou caminhos absolutos), endpoint read-only `GET /api/v2/agent-ops` resolvendo `AGENT_BRIDGE_ROOT` com fail-safe desconectado/conectado, polling 2s restrito à aba ativa, testes direcionados em `test/services/test_agent_ops.py`.
+- **R6B_OPERATIONAL_CONTROLS_STATUS:** `IN_PROGRESS (DEV)` — Transição para endpoints de controle e comando da Web UI V2 (Missão 2: `GET /api/v2/channels`; Missão 3: `POST /api/v2/factory/pause` e `/resume`).
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.
@@ -115,18 +119,26 @@
     - **Regra de Ouro:** NUNCA inventar créditos, nunca assumir 1000, nunca tratar UNKNOWN como erro fatal.
   - **Detecção conservadora de esgotamento:** Se houver evidência visível e inequívoca de créditos insuficientes no DOM antes do dispatch, a conta é marcada como `EXHAUSTED` com zero aprovação e zero clique no Generate.
   - **CLI Operacional Mínimo:** Suporte a `python -m app.services.flow_account_pool` com comandos `list`, `add`, `login`, `verify`, `disable`, `enable`, `status`.
-- **Requisito Futuro Web UI (FLOW-UI-001):**
-  - **Status:** `OPEN` (Backlog da Web UI V2).
-  - **Objetivo:** Exibir no Factory Live a lista de contas Flow com display name, status operacional (`AVAILABLE`, `EXHAUSTED`, etc.), saldo de créditos (`VERIFIED` vs `ESTIMATED`), data da última verificação e vínculo da tarefa ativa. A Web UI V2 permanece temporariamente congelada em R6A.2 na branch `feat/web-ui-v2-read-api`.
+- **FLOW-UI-001 (CONCLUÍDO EM DEV):**
+  - **Status:** `DEV VALIDATED` (Commit `8bc7b3d`).
+  - **Entrega:** Telemetria de contas Google Flow integrada ao Factory Live via snapshot compartilhado de `executions/live` (display name, status operacional, créditos verified/estimated, última verificação).
+- **FLOW-CREDIT-002 (CONCLUÍDO EM DEV):**
+  - **Status:** `DEV VALIDATED` (Commit `7687f1f`).
+  - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
-### Histórico Recente de Hotfixes e Merges no Main:
-- **PR #96:** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Implementa aprovação manual auditável para artefato final legado vinculada criptograficamente ao SHA-256 de `final-1.mp4`, mantendo validação estrita de Flow premium, BGM segura e zero claims.
-- **PR #95 (`5ef87e2`):** `fix(flow-provenance): fallback backward-compatible para Flow legado via manifest` — Reconstrói `material_sources` e `visual_clips` estritamente a partir do `flow/manifest.json` e `flow/clips/` quando ausentes no `script.json`, eliminando falso negativo em tarefas legadas completas sem relaxar fail-closed.
-- **PR #94 (`b1031c7`):** `fix(autonomous): prevent premature gate evaluation during ongoing video generation` — Exige evidência positiva (vídeo existe, > 0 bytes e não está PENDING/PROCESSING) antes de chamar `evaluate_completed_task_gates`; mantém `current_task_id` durante a geração.
-- **PR #93 (`4b19d5b`):** `fix(audio): disable amix input normalization and add peak limiter in _mix_audio_ffmpeg` — Desativa normalização indesejada do FFmpeg amix (`normalize=0`) e insere limiter de pico (`alimiter=limit=0.95`).
-- **PR #92 (`cc20f93`):** `fix(webui): support manual YouTube publish via Post For Me without legacy Upload-Post dependency` — Remove exigência espúria de credenciais legadas do Upload-Post no modal de publicação quando provider é `post_for_me`.
-- **PR #91 (`6dafd77`):** `fix(flow-provenance): fail-closed follow-up to PR #90 review` — Fail-closed em exceções de validação de clips e matching estrito de `expected_clip`.
-- **PR #90 (`5a1900b`):** `fix(flow-provenance): persist scene materials and enforce strict flow provenance validation` — Persiste materiais das cenas e valida proveniência de clipes Flow no Copyright Gate.
+### Histórico Recente de Merges no Main:
+- **`3f8b096`:** `docs: record flow-ma1 merged and autonomous pilot paused pending production setup`
+- **`b8c0904`:** `fix: use native edge for flow account onboarding` — Login humano inicial Google via Edge nativo, sem automação Playwright.
+- **`3426271`:** `feat: add flow multi-account provider pool` — Pool multi-contas do Google Flow (`app/services/flow_account_pool.py`).
+- **`b75f488`:** `fix: enforce autonomous profile safety contract` — Fail-safe cap no getter e precedência de voz estrita.
+- **PR #96 (`1702e8b`):** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Deployado e homologado no PC Forte em 11/10/2026.
+
+### Histórico Recente de Entregas em DEV (`feat/web-ui-v2-read-api`):
+- **`b20878c`:** `fix(webui): improve agent ops telemetry projection` — Hotfix na projeção read-only da telemetria Agent Ops: unwrapping do stream-json (`step_update`), mapeamento de ferramentas para EXECUTOR, eliminação de ruídos (collapse ACTIVE/DONE), derivação factual de elapsed (zero 00:00 falso), resolução de branch por payload e 13 testes unitários PASS em `test/services/test_agent_ops.py`.
+- **`4fbbd2f`:** `feat(webui): add agent ops live telemetry view` — Tela desacoplada Agent Ops com feed em tempo real, 4 agentes operacionais e endpoint `GET /api/v2/agent-ops`.
+- **`40ed659`:** `feat(webui): evolve factory live motion and channel scalability` (R6A.6) — Motion language orgânica com SVG `<animateMotion>`, rail horizontal responsiva e cards 320-430px.
+- **`aed67c9`:** `feat(webui): R6A.5 visual identity system, personas, and single-focus pipeline` — Single-focus pipeline, 12 personas tech-factory e AI Compute Vault.
+- **`2caa0c2`:** `feat(webui): R6A.3 visual identity, real metrics, and multi-channel live rendering` — Layout dinâmico multicanal e métricas factuais sem denomidador falso.
 
 ### PC Forte Production Runtime Contract:
 - **Python via .venv**: Operação e pacotes restritos ao ambiente virtual do projeto;

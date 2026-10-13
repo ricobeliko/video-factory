@@ -10,20 +10,26 @@
 
 ---
 
-# Estado Atual Canônico — 12/10/2026
+# Estado Atual Canônico — 13/10/2026
 
-- **CURRENT_FOCUS** = `FLOW-MA1 — MULTI-ACCOUNT PROVIDER POOL FOUNDATION (CONCLUÍDO)`
+- **CURRENT_FOCUS** = `R6B — WEB UI V2 OPERATIONAL CONTROLS MVP (DEV)` / `FLOW-MA1 PRODUCTION SETUP & PILOT RESUMPTION (PROD)`
 - **CURRENT_PHASE** = `V1.5E`
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
-- **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas e failover seguro implementados em DEV)`
-- **PROJECT_STATUS** = `ACTIVE_DEV / FLOW-MA1_IMPLEMENTED`
+- **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
+- **PROJECT_STATUS** = `ACTIVE_DEV / FLOW-MA1_MERGED`
+- **CURRENT_MAIN_SHA** = `3f8b09644e6399af8829bb9a196e3c4195de4723` (main branch)
+- **DEV_BRANCH_HEAD_SHA** = `b20878cc1297822378f4be48db5483ece9d7d9ff` (feat/web-ui-v2-read-api)
+- **LAST_PRODUCTION_DEPLOY_SHA** = `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96 deployado e homologado no PC Forte)
 - **ACTIVE_BRANCH** = `feat/web-ui-v2-read-api`
-- **NEXT_GATE** = `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT / RETOMADA DO PILOTO AUTÔNOMO`
+- **NEXT_GATE** = `R6B — OPERATIONAL CONTROLS MVP (DEV: api-v2-channels-overview) / PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
 - **FLOW_MA1_STATUS** = `MERGED / READY_FOR_PRODUCTION_DEPLOY`
 - **FLOW_UI_001_STATUS** = `DEV VALIDATED (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)`
 - **FLOW_CREDIT_002_STATUS** = `DEV VALIDATED (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)`
 - **R6A_3_STATUS** = `COMPLETED (Identidade visual, métricas reais de estoque e pipeline, e renderização dinâmica multicanal no Factory Live)`
-- **R6A_5_STATUS** = `DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL (Visual identity system, single-focus detailed pipeline, 12 personas operacionais, edges com semântica de estado e AI Compute Vault)`
+- **R6A_5_STATUS** = `COMPLETED / HUMAN APPROVED (Visual identity system, single-focus detailed pipeline, 12 personas operacionais, edges com semântica de estado e AI Compute Vault)`
+- **R6A_6_STATUS** = `COMPLETED / DEV IMPLEMENTED (Organic Factory Live / Motion Language + 10+ Channel Scalability; rail horizontal responsiva, cards 320-430px, packets de energia SVG <animateMotion>)`
+- **AGENT_OPS_V1_1_STATUS** = `COMPLETED / DEV VALIDATED (Aba independente Agent Ops no Web UI V2 com telemetria real do AgentBridge MVP A10, 4 papéis visuais, feed cronológico sanitizado e 13 testes unitários PASS)`
+- **AGENT_OPS_HOTFIX_STATUS** = `COMPLETED (commit b20878c: unwrapping de step_update, eliminação de ruído e cálculo factual de elapsed)`
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
@@ -40,7 +46,8 @@
 - **FLOW-UI-001 Multi-Account Credit Telemetry in UI** = DEV VALIDATED (Telemetria visual das contas Flow integrada ao Factory Live via snapshot compartilhado de executions/live)
 - **FLOW-CREDIT-002 Real Credit Balance Extraction** = DEV VALIDATED (Extração factual do saldo real de créditos no verify sem consumir créditos nem gerar vídeos)
 - **R6A.3 Web UI V2 Visual Identity + Metrics + Multi-Channel Live** = COMPLETED (Contrato multicanal dinâmico, percentuais reais de estoque/pipeline, layout visual técnico refinado, zero hardcode)
-- **R6A.5 Web UI V2 Visual Identity System + Single-Focus Pipeline** = DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL (Single-focus pipeline escalável, 12 personas/agentes operacionais, preenchimento tonal, edges dinâmicas por estado e AI compute vault)
+- **R6A.5 Web UI V2 Visual Identity System + Single-Focus Pipeline** = COMPLETED / HUMAN APPROVED (Single-focus pipeline escalável, 12 personas/agentes operacionais, preenchimento tonal, edges dinâmicas por estado e AI compute vault)
+- **R6A.6 Web UI V2 Organic Motion Language + Scalability** = COMPLETED / DEV IMPLEMENTED (Motion language orgânica orientada a estado, FactoryEdge com packets de energia SVG e rail horizontal responsiva)
 - **R4A Web UI V2 Discovery** = COMPLETED (Auditoria Streamlit completa, inventário de 14.315 linhas, 34 funções mapeadas, proposta de API fina com FastAPI existente sem regras duplicadas e especificação em `docs/WEB_UI_V2.md`; zero código alterado, zero impacto no piloto autônomo)
 - **R5A Web UI V2 Thin Read-Only API MVP** = COMPLETE (6 endpoints GET montados em /api/v2 via FastAPI existente, zero regras de negócio duplicadas, zero endpoints WRITE, autenticação verify_token preservada, teste direcionado 8/8 PASS; zero impacto no piloto autônomo em execução)
 - **R5B Live Multi-Channel Execution Contract / UI-005** = DEV COMPLETED (Contrato read-only e causal para tela Factory Live com endpoints /api/v2/executions/live e /executions/{task_id}, grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS; zero impacto no piloto autônomo)
@@ -95,8 +102,8 @@
 - **Presenter autonomous**: OFF
 - **avatar_mode**: `none`
 - **TikTok**: OFF / NOT HOMOLOGATED
-- **V15-A Production Observability Baseline** = DEV IMPLEMENTED / NOT PRODUCTION OBSERVED YET
-- **Agent Ops V1.1 — Live Agent Observability** = DEV IMPLEMENTED (Aba independente no Web UI V2 com telemetria real do AgentBridge, feed sanitizado de atividades, 4 papéis de agentes e endpoint read-only)
+- **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
+- **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 
 ## WEB UI V2 / CODE CONSOLIDATION — MIGRATION CHECKLIST
 

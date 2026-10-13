@@ -5,9 +5,15 @@
  */
 
 async function fetchJson(endpoint, options = {}) {
+  const apiKey = typeof window !== 'undefined'
+    ? (window.__API_KEY__ || localStorage.getItem('api_key') || sessionStorage.getItem('api_key') || '')
+    : '';
+  const authHeaders = apiKey ? { 'x-api-key': apiKey } : {};
+
   const response = await fetch(endpoint, {
     headers: {
       'Accept': 'application/json',
+      ...authHeaders,
       ...options.headers,
     },
     ...options,
@@ -75,4 +81,16 @@ export async function getProviderHealth() {
 
 export async function getAgentOps() {
   return fetchJson('/api/v2/agent-ops');
+}
+
+export async function pauseFactory() {
+  return fetchJson('/api/v2/factory/pause', {
+    method: 'POST',
+  });
+}
+
+export async function resumeFactory() {
+  return fetchJson('/api/v2/factory/resume', {
+    method: 'POST',
+  });
 }

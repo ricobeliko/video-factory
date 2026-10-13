@@ -37,6 +37,48 @@ def list_profiles(request: Request):
 
 
 @router.get(
+    "/channels",
+    summary="Get channels overview for Web UI V2",
+)
+def get_channels_overview(request: Request):
+    profile_overviews = operator_console.get_profile_operations_overview()
+    channels_data = []
+    for p in profile_overviews:
+        pid = p.get("profile_id", "")
+        settings = profile_manager.get_profile_settings(pid)
+        channels = profile_manager.list_channels(profile_id=pid)
+        yt_channel = next((c for c in channels if c.get("platform") == "youtube"), None)
+        is_auto = autonomous_production.is_profile_autonomous_mode_enabled(pid)
+        target_stock = autonomous_production.get_target_ready_stock(pid)
+
+        channels_data.append({
+            "channel_id": pid,
+            "profile_id": pid,
+            "name": p.get("name"),
+            "slug": p.get("slug"),
+            "niche": p.get("niche") or "—",
+            "language": p.get("language") or "pt-BR",
+            "region": p.get("region") or "BR",
+            "growth_mode": p.get("growth_mode") or "WARMUP",
+            "is_active": p.get("is_active", True),
+            "is_active_profile": p.get("is_active_profile", False),
+            "autonomous_enabled": is_auto,
+            "target_stock": target_stock,
+            "ready_stock": p.get("ready_stock", 0),
+            "pending_processing": p.get("pending_processing", 0),
+            "scheduled": p.get("scheduled", 0),
+            "failed": p.get("failed", 0),
+            "channels_count": p.get("channels_count", len(channels)),
+            "channels_enabled": p.get("channels_enabled", 0),
+            "channels": channels,
+            "youtube_channel": yt_channel,
+            "settings": settings.model_dump(),
+        })
+
+    return utils.get_response(200, {"channels": channels_data, "total": len(channels_data)})
+
+
+@router.get(
     "/profiles/{profile_id}/status",
     summary="Get status snapshot for a single profile",
 )

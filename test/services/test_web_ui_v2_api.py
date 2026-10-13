@@ -244,3 +244,110 @@ class TestWebUiV2Api(unittest.TestCase):
             resp_resume = self.client.post("/api/v2/factory/resume")
             self.assertEqual(resp_resume.status_code, 403)
             self.assertIn("only primary instance", resp_resume.json().get("message", "").lower())
+
+    def test_factory_run_cycle_exists_in_openapi_and_app(self):
+        """13. Rota POST /api/v2/factory/run-cycle existe no OpenAPI e suporta POST."""
+        openapi_schema = asgi.app.openapi()
+        paths = openapi_schema.get("paths", {})
+
+        self.assertIn("/api/v2/factory/run-cycle", paths)
+        self.assertIn("post", paths["/api/v2/factory/run-cycle"])
+
+    def test_factory_run_cycle_auth_enforced(self):
+        """14. Requisições a run-cycle sem autenticação ou com chave inválida são rejeitadas (401)."""
+        config.app["api_key"] = "test-secret-key-cycle"
+
+        # Sem token -> 401
+        r_miss = self.client.post("/api/v2/factory/run-cycle")
+        self.assertEqual(r_miss.status_code, 401)
+
+        # Token inválido -> 401
+        r_wrong = self.client.post("/api/v2/factory/run-cycle", headers={"x-api-key": "invalid-token"})
+        self.assertEqual(r_wrong.status_code, 401)
+
+        # Token correto -> passa
+        with patch("app.services.operator_console.run_autonomous_cycle_op", return_value={"status": "idle"}):
+            r_ok = self.client.post(
+                "/api/v2/factory/run-cycle",
+                headers={"x-api-key": "test-secret-key-cycle"},
+            )
+            self.assertEqual(r_ok.status_code, 200)
+
+    def test_factory_run_cycle_delegates_to_canonical_operation(self):
+        """15. run-cycle delega a operator_console.run_autonomous_cycle_op com parâmetros corretos."""
+        with patch("app.services.operator_console.run_autonomous_cycle_op") as mock_op:
+            mock_op.return_value = {
+                "status": "idle",
+                "message": "Ciclo supervisionado executado",
+                "profile_id": "test-prof-1",
+            }
+
+            # Chamada sem corpo (defaults: force=True, one_shot=True, profile_id=None, channel_id=None)
+            resp = self.client.post("/api/v2/factory/run-cycle")
+            self.assertEqual(resp.status_code, 200)
+            mock_op.assert_called_once_with(
+                force=True,
+                one_shot=True,
+                profile_id=None,
+                channel_id=None,
+            )
+            mock_op.reset_mock()
+
+            # Chamada com corpo JSON explícito
+            resp_body = self.client.post(
+                "/api/v2/factory/run-cycle",
+                json={
+                    "profile_id": "custom-prof",
+                    "channel_id": "custom-chan",
+                    "force": False,
+                    "one_shot": True,
+                },
+            )
+            self.assertEqual(resp_body.status_code, 200)
+            mock_op.assert_called_once_with(
+                force=False,
+                one_shot=True,
+                profile_id="custom-prof",
+                channel_id="custom-chan",
+            )
+
+    def test_factory_run_cycle_blocked_on_unauthorized_environment(self):
+        """16. Instância secundária (VIEW ONLY) é bloqueada com status 403."""
+        with patch(
+            "app.services.operator_console.run_autonomous_cycle_op",
+            side_effect=PermissionError("Operação bloqueada: Esta instância está operando em modo VIEW ONLY."),
+        ):
+            resp = self.client.post("/api/v2/factory/run-cycle")
+            self.assertEqual(resp.status_code, 403)
+            self.assertIn("only primary instance", resp.json().get("message", "").lower())
+
+    def test_factory_run_cycle_concurrency_guard_returns_409(self):
+        """17. Ciclo concorrente em andamento é bloqueado com 409 Conflict."""
+        with patch(
+            "app.services.operator_console.run_autonomous_cycle_op",
+            return_value={"status": "busy", "reason": "cycle_in_progress"},
+        ):
+            resp = self.client.post("/api/v2/factory/run-cycle")
+            self.assertEqual(resp.status_code, 409)
+            self.assertIn("already in progress", resp.json().get("message", "").lower())
+
+    def test_factory_run_cycle_paused_guard_returns_409(self):
+        """18. Fábrica pausada bloqueia disparo de ciclo com 409 Conflict."""
+        with patch(
+            "app.services.operator_console.run_autonomous_cycle_op",
+            return_value={"status": "blocked", "reason": "factory_paused", "message": "Fábrica pausada"},
+        ):
+            resp = self.client.post("/api/v2/factory/run-cycle")
+            self.assertEqual(resp.status_code, 409)
+            self.assertIn("factory is paused", resp.json().get("message", "").lower())
+
+    def test_factory_run_cycle_operational_failure_returns_controlled_error(self):
+        """19. Erro operacional interno retorna 500 sem vazar dados sensíveis ou stack trace."""
+        with patch(
+            "app.services.operator_console.run_autonomous_cycle_op",
+            side_effect=RuntimeError("internal sqlite lock failure with sensitive table path"),
+        ):
+            resp = self.client.post("/api/v2/factory/run-cycle")
+            self.assertEqual(resp.status_code, 500)
+            self.assertNotIn("internal sqlite lock failure", resp.text)
+            self.assertNotIn("Traceback", resp.text)

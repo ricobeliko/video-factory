@@ -3,6 +3,7 @@
 from typing import Optional
 
 from fastapi import Depends, Query, Request
+from pydantic import BaseModel
 
 from app.controllers import base
 from app.controllers.v2.base import new_router
@@ -88,6 +89,84 @@ def resume_factory(request: Request):
             "is_paused": operator_console.is_factory_paused(),
         },
         message="Factory resumed successfully",
+    )
+
+
+class RunCycleRequest(BaseModel):
+    profile_id: Optional[str] = None
+    channel_id: Optional[str] = None
+    force: bool = True
+    one_shot: bool = True
+
+
+@router.post(
+    "/factory/run-cycle",
+    summary="Trigger a supervised factory autonomous run cycle",
+)
+def run_factory_cycle(
+    request: Request,
+    body: Optional[RunCycleRequest] = None,
+    profile_id: Optional[str] = Query(
+        default=None, description="Optional profile ID filter"
+    ),
+):
+    request_id = base.get_task_id(request)
+    target_profile_id = (body.profile_id if body and body.profile_id else None) or profile_id
+    target_channel_id = body.channel_id if body and body.channel_id else None
+    force = body.force if body is not None else True
+    one_shot = body.one_shot if body is not None else True
+
+    try:
+        result = operator_console.run_autonomous_cycle_op(
+            force=force,
+            one_shot=one_shot,
+            profile_id=target_profile_id,
+            channel_id=target_channel_id,
+        )
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can trigger a factory run cycle",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Internal error running factory cycle",
+        )
+
+    if not isinstance(result, dict):
+        result = {"status": "completed", "result": result}
+
+    if result.get("status") == "busy" or result.get("reason") == "cycle_in_progress":
+        raise HttpException(
+            task_id=request_id,
+            status_code=409,
+            message="Operation blocked: a production cycle is already in progress",
+            data=result,
+        )
+
+    if result.get("reason") == "factory_paused":
+        raise HttpException(
+            task_id=request_id,
+            status_code=409,
+            message="Operation blocked: factory is paused",
+            data=result,
+        )
+
+    if result.get("reason") == "secondary_view_only":
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can trigger a factory run cycle",
+            data=result,
+        )
+
+    return utils.get_response(
+        200,
+        result,
+        message="Autonomous production cycle executed successfully",
     )
 
 

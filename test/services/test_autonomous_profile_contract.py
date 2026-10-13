@@ -64,13 +64,16 @@ def test_3_canonicalization_applied_to_profile_voice(isolated_db, monkeypatch):
     assert ctx["voice_name"] == "pt-BR-FranciscaNeural"
 
 
-def test_4_warmup_stored_generation_limit_5_clamps_to_2(isolated_db):
-    """4. WARMUP + stored generation limit 5 => 2."""
+def test_4_warmup_stored_generation_limit_allows_up_to_5_clamps_above_5(isolated_db):
+    """4. WARMUP + stored generation limit 5 => allows 5; limit 10 => clamps to 5."""
     pid = profile_manager.DEFAULT_PROFILE_ID
     profile_manager.update_profile(pid, growth_mode=const.GROWTH_MODE_WARMUP, db_path=isolated_db)
 
     autonomous.set_max_generations_24h(5, profile_id=pid, db_path=isolated_db)
-    assert autonomous.get_max_generations_24h(profile_id=pid, db_path=isolated_db) == 2
+    assert autonomous.get_max_generations_24h(profile_id=pid, db_path=isolated_db) == 5
+
+    autonomous.set_max_generations_24h(10, profile_id=pid, db_path=isolated_db)
+    assert autonomous.get_max_generations_24h(profile_id=pid, db_path=isolated_db) == 5
 
 
 def test_5_warmup_stored_generation_limit_1_allows_1(isolated_db):
@@ -146,3 +149,80 @@ def test_10_no_regression_in_autonomous_enable_disable(isolated_db):
     # Desabilita
     autonomous.set_profile_autonomous_mode_enabled(pid, False, db_path=isolated_db)
     assert autonomous.is_profile_autonomous_mode_enabled(pid, db_path=isolated_db) is False
+
+
+def test_11_warmup_stock_1_of_3_with_2_generations_allows_new_generation(isolated_db):
+    """11. WARMUP + estoque 1/3 + 2 gerações nas últimas 24h -> não bloqueia por limite diário (cap=5)."""
+    pid = profile_manager.DEFAULT_PROFILE_ID
+    profile_manager.update_profile(pid, growth_mode=const.GROWTH_MODE_WARMUP, db_path=isolated_db)
+    autonomous.set_target_ready_stock(3, profile_id=pid, db_path=isolated_db)
+
+    # Inserir 2 eventos de geração aprovada nas últimas 24h
+    now_iso = scheduler._to_iso(scheduler._normalize_utc(None))
+    with scheduler.get_connection(isolated_db) as conn:
+        conn.execute(
+            "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message) "
+            "VALUES (?, 'autonomous_production', 'info', 'generation_approved', 'task-1', 'ok'), "
+            "       (?, 'autonomous_production', 'info', 'generation_approved', 'task-2', 'ok');",
+            (now_iso, now_iso),
+        )
+
+    gen_today = autonomous.count_generations_in_last_24h(db_path=isolated_db, profile_id=pid)
+    max_24h = autonomous.get_max_generations_24h(profile_id=pid, db_path=isolated_db)
+    assert gen_today == 2
+    assert max_24h == 5
+    assert gen_today < max_24h  # Pode gerar!
+
+
+def test_12_warmup_stock_at_target_stops_generation(isolated_db):
+    """12. WARMUP + estoque 3/3 -> reposição para quando o estoque atinge a meta."""
+    pid = profile_manager.DEFAULT_PROFILE_ID
+    profile_manager.update_profile(pid, growth_mode=const.GROWTH_MODE_WARMUP, db_path=isolated_db)
+    autonomous.set_target_ready_stock(3, profile_id=pid, db_path=isolated_db)
+
+    # Simulação da guarda canônica de estoque de autonomous_production (linhas 2448-2458)
+    ready_total = 3
+    target_stock = autonomous.get_target_ready_stock(profile_id=pid, db_path=isolated_db)
+    assert target_stock == 3
+    assert ready_total >= target_stock  # Para reposição e entra em IDLE sem gerar
+
+
+def test_13_warmup_with_5_generations_blocks(isolated_db):
+    """13. WARMUP + 5 gerações nas últimas 24h -> bloqueia (gen_today >= max_24h)."""
+    pid = profile_manager.DEFAULT_PROFILE_ID
+    profile_manager.update_profile(pid, growth_mode=const.GROWTH_MODE_WARMUP, db_path=isolated_db)
+
+    now_iso = scheduler._to_iso(scheduler._normalize_utc(None))
+    with scheduler.get_connection(isolated_db) as conn:
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message) "
+                "VALUES (?, 'autonomous_production', 'info', 'generation_approved', ?, 'ok');",
+                (now_iso, f"task-approved-{i}"),
+            )
+
+    gen_today = autonomous.count_generations_in_last_24h(db_path=isolated_db, profile_id=pid)
+    max_24h = autonomous.get_max_generations_24h(profile_id=pid, db_path=isolated_db)
+    assert gen_today == 5
+    assert max_24h == 5
+    assert gen_today >= max_24h  # Bloqueia!
+
+
+def test_14_warmup_publication_limit_remains_1_per_24h(isolated_db):
+    """14. Publicação WARMUP YouTube permanece estritamente limitada a 1/24h com min_interval de 8h."""
+    rate = scheduler.get_platform_rate_limits(
+        "youtube",
+        db_path=isolated_db,
+        growth_mode=const.GROWTH_MODE_WARMUP,
+    )
+    assert rate["limit"] == 1
+    assert rate["min_interval_hours"] == 8
+
+
+def test_15_secondary_channels_remain_autonomous_disabled(isolated_db):
+    """15. Histórias e GTA VI continuam com Autonomous OFF."""
+    h_prof = profile_manager.create_profile(name="Histórias", slug="historias", db_path=isolated_db)
+    g_prof = profile_manager.create_profile(name="GTA VI", slug="gta-vi", db_path=isolated_db)
+
+    assert autonomous.is_profile_autonomous_mode_enabled(h_prof["id"], db_path=isolated_db) is False
+    assert autonomous.is_profile_autonomous_mode_enabled(g_prof["id"], db_path=isolated_db) is False

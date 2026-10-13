@@ -345,7 +345,7 @@ def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[
 
     gm = get_profile_growth_mode(clean_p, db_path=db_path)
     if gm == const.GROWTH_MODE_WARMUP:
-        mode_cap = 2
+        mode_cap = 5
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
         mode_cap = 5
@@ -353,7 +353,7 @@ def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[
 
     if parsed_stored is not None:
         return parsed_stored
-    return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H if is_default else 2
+    return DEFAULT_AUTONOMOUS_MAX_GENERATIONS_24H if is_default else 5
 
 
 def set_max_generations_24h(

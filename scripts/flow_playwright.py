@@ -48,6 +48,75 @@ DEFAULT_TIMEOUT_GEN_SEC = 600
 DEFAULT_TIMEOUT_DOWNLOAD_MS = 30000
 MIN_TILE_EVIDENCE_CHARS = 24
 DEFAULT_VIEWPORT: Dict[str, int] = {"width": 1920, "height": 1080}
+# Margens para dimensionamento dinâmico de janela e viewport em modo headful no Windows
+WINDOWS_WINDOW_BORDER_X: int = 16   # bordas laterais da moldura da janela
+WINDOWS_WINDOW_BORDER_Y: int = 16   # bordas verticais da moldura da janela
+EDGE_CHROME_HEADER_HEIGHT: int = 80 # altura do cabeçalho do Edge (abas, barra de navegação/endereços)
+MIN_HEADFUL_WIDTH: int = 1024
+MIN_HEADFUL_HEIGHT: int = 600
+
+
+def get_windows_workarea() -> Optional[Tuple[int, int]]:
+    """
+    Obtém as dimensões da área de trabalho útil do Windows via SystemParametersInfoW(SPI_GETWORKAREA),
+    já descontando a barra de tarefas do sistema operacional.
+    Retorna (largura, altura) em pixels ou None em caso de falha/plataforma não-Windows.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        SPI_GETWORKAREA = 0x0030
+        rect = wintypes.RECT()
+        success = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_GETWORKAREA, 0, ctypes.byref(rect), 0
+        )
+        if success:
+            w = int(rect.right - rect.left)
+            h = int(rect.bottom - rect.top)
+            if w > 0 and h > 0:
+                return (w, h)
+    except Exception as exc:
+        logger.debug(f"Falha ao consultar SPI_GETWORKAREA: {exc}")
+    return None
+
+
+def resolve_flow_window_and_viewport(
+    headless: bool = True,
+    custom_viewport: Optional[Dict[str, int]] = None,
+) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """
+    Calcula dimensões coerentes de janela (--window-size) e viewport:
+    - Se custom_viewport for explicitamente informado, usa-o para ambos.
+    - Se headless=True ou em plataformas não-Windows (ou falha na API), preserva DEFAULT_VIEWPORT (1920x1080).
+    - Se headful no Windows:
+      1. Obtém a área útil via SPI_GETWORKAREA (descontando a barra de tarefas).
+      2. Desconta as bordas da janela para a janela externa (--window-size).
+      3. Ajusta o viewport para caber dentro da janela, descontando o cabeçalho/chrome do Edge.
+    Retorna (window_size_dict, viewport_dict).
+    """
+    if custom_viewport is not None:
+        return dict(custom_viewport), dict(custom_viewport)
+
+    if headless:
+        return dict(DEFAULT_VIEWPORT), dict(DEFAULT_VIEWPORT)
+
+    workarea = get_windows_workarea()
+    if not workarea:
+        return dict(DEFAULT_VIEWPORT), dict(DEFAULT_VIEWPORT)
+
+    work_w, work_h = workarea
+    # Janela externa: desconta bordas da janela a partir da área útil do monitor
+    win_w = max(MIN_HEADFUL_WIDTH, min(DEFAULT_VIEWPORT["width"], work_w - WINDOWS_WINDOW_BORDER_X))
+    win_h = max(MIN_HEADFUL_HEIGHT, min(DEFAULT_VIEWPORT["height"], work_h - WINDOWS_WINDOW_BORDER_Y))
+
+    # Viewport interno: ajusta para caber perfeitamente dentro da janela, descontando o chrome do navegador
+    vp_w = max(MIN_HEADFUL_WIDTH - WINDOWS_WINDOW_BORDER_X, win_w - WINDOWS_WINDOW_BORDER_X)
+    vp_h = max(MIN_HEADFUL_HEIGHT - EDGE_CHROME_HEADER_HEIGHT, win_h - EDGE_CHROME_HEADER_HEIGHT)
+
+    return {"width": win_w, "height": win_h}, {"width": vp_w, "height": vp_h}
 
 
 def normalize_tile_label(label: str) -> str:
@@ -223,7 +292,7 @@ def launch_flow_context(
             return None, "INVALID_PLAYWRIGHT_DOWNLOADS_PATH"
         os.makedirs(downloads_path, exist_ok=True)
     try:
-        vp = viewport if viewport is not None else DEFAULT_VIEWPORT
+        win_size, vp = resolve_flow_window_and_viewport(headless=headless, custom_viewport=viewport)
         launch_kwargs: Dict[str, Any] = {
             "user_data_dir": user_data_dir,
             "channel": "msedge",
@@ -233,7 +302,7 @@ def launch_flow_context(
             "args": [
                 "--no-first-run",
                 "--no-default-browser-check",
-                f"--window-size={vp['width']},{vp['height']}",
+                f"--window-size={win_size['width']},{win_size['height']}",
             ],
             "accept_downloads": True,
         }
@@ -1872,7 +1941,11 @@ def run_playwright_flow_poc(
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_UI_MS)
         try:
-            page.set_viewport_size(DEFAULT_VIEWPORT)
+            if is_headless:
+                page.set_viewport_size(DEFAULT_VIEWPORT)
+            elif page.viewport_size is None:
+                _, vp = resolve_flow_window_and_viewport(headless=False)
+                page.set_viewport_size(vp)
         except Exception as vp_exc:
             logger.debug(f"Ajuste explícito de viewport na página inicial: {vp_exc}")
 

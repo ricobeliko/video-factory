@@ -1741,3 +1741,29 @@ Entregas V16.4.1A:
 - **Validação Local:**
   - 88/88 testes PASS em 3.45s (`test/services/test_flow_playwright.py`).
 - **Próximo Gate:** Aprovação do Architect para merge em main.
+
+
+### V16.16 — Google Flow Dynamic Headful Window & Viewport Sizing (DEV)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (14/10/2026)
+- **Branch:** `fix/flow-window-size`
+- **Contexto & Causa Raiz:**
+  - No PC Forte, o dimensionamento forçado estático em 1920x1080 deixava parte do compositor do Google Flow fora da área visível (especialmente o campo de prompt e controles inferiores) devido à resolução útil da tela (escala DPI e barra de tarefas do Windows).
+  - Validado em teste real no PC Forte com a conta `flow-b` que o dimensionamento dinâmico via `SystemParametersInfoW(SPI_GETWORKAREA)` posiciona os controles de geração e o compositor 100% acessíveis e visíveis.
+- **Componentes e Arquitetura:**
+  - `scripts/flow_playwright.py`:
+    - `get_windows_workarea`: obtém via `SystemParametersInfoW(SPI_GETWORKAREA)` a área útil real do monitor no Windows, já descontando a barra de tarefas do sistema. Fallback seguro para `None` em caso de erro ou em plataformas não-Windows.
+    - `resolve_flow_window_and_viewport`: calcula dimensões coerentes entre janela externa (`--window-size`) e viewport do Playwright:
+      1. Modo headful no Windows: desconta margens de bordas (`WINDOWS_WINDOW_BORDER_X=16`, `WINDOWS_WINDOW_BORDER_Y=16`) para a janela externa caber perfeitamente no monitor; ajusta o viewport interno para caber dentro da janela, descontando o cabeçalho/chrome do Edge (`EDGE_CHROME_HEADER_HEIGHT=80`).
+      2. Modo headless e plataformas não suportadas: preserva integralmente o padrão `DEFAULT_VIEWPORT` (1920x1080).
+      3. Viewport customizado: respeitado quando explicitamente fornecido.
+    - `launch_flow_context`: utiliza `resolve_flow_window_and_viewport` para definir `--window-size` e `viewport`, mantendo `chromium_sandbox=True` e perfis persistentes.
+    - `run_playwright_flow_poc`: respeita o viewport dinâmico em modo headful, aplicando `DEFAULT_VIEWPORT` estático exclusivamente em modo headless.
+  - `test/services/test_flow_playwright.py`:
+    - `test_get_windows_workarea_valid`: valida cálculo de largura e altura úteis a partir da estrutura RECT.
+    - `test_resolve_flow_window_and_viewport_fallback_on_api_failure`: valida fallback robusto para `DEFAULT_VIEWPORT` (1920x1080) quando a API falha ou fora do Windows.
+    - `test_resolve_flow_window_and_viewport_coherent_dimensions`: valida coerência geométrica (`vp_w <= win_w` e `vp_h < win_h`) simulando resolução do PC Forte (1536x816).
+    - `test_resolve_flow_window_and_viewport_preserves_headless`: valida que o modo headless preserva estritamente 1920x1080.
+    - `test_launch_flow_context_headful_windows_workarea`: valida integração completa no `launch_persistent_context` com viewport e `--window-size` dinâmicos.
+- **Validação Local:**
+  - 93/93 testes PASS em 2.58s (`test/services/test_flow_playwright.py`).
+- **Próximo Gate:** Aprovação do Architect para merge e release em main.

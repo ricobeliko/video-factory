@@ -13,6 +13,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.flow_playwright import (
+    DEFAULT_VIEWPORT,
+    get_windows_workarea,
+    resolve_flow_window_and_viewport,
     GENERATION_COMPLETE_JS,
     check_generate_actionable,
     check_login_state,
@@ -108,6 +111,79 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertEqual(kwargs.get("viewport"), custom_vp)
         args = kwargs.get("args", [])
         self.assertIn("--window-size=2560,1440", args)
+
+    def test_get_windows_workarea_valid(self):
+        """Valida que get_windows_workarea calcula largura e altura positivas a partir de RECT."""
+        with patch("sys.platform", "win32"), \
+             patch("ctypes.windll.user32.SystemParametersInfoW") as mock_spi:
+            def side_effect(action, param, ref, winini):
+                ref._obj.left = 0
+                ref._obj.top = 0
+                ref._obj.right = 1536
+                ref._obj.bottom = 816
+                return 1
+            mock_spi.side_effect = side_effect
+            res = get_windows_workarea()
+            self.assertEqual(res, (1536, 816))
+
+    def test_resolve_flow_window_and_viewport_fallback_on_api_failure(self):
+        """Valida fallback seguro para DEFAULT_VIEWPORT quando a API do Windows falha ou em plataforma não-Windows."""
+        # Caso 1: API retorna 0 ou falha
+        with patch("scripts.flow_playwright.get_windows_workarea", return_value=None):
+            win_size, vp = resolve_flow_window_and_viewport(headless=False)
+            self.assertEqual(win_size, DEFAULT_VIEWPORT)
+            self.assertEqual(vp, DEFAULT_VIEWPORT)
+
+        # Caso 2: sys.platform != win32
+        with patch("sys.platform", "linux"):
+            res = get_windows_workarea()
+            self.assertIsNone(res)
+            win_size, vp = resolve_flow_window_and_viewport(headless=False)
+            self.assertEqual(win_size, DEFAULT_VIEWPORT)
+            self.assertEqual(vp, DEFAULT_VIEWPORT)
+
+    def test_resolve_flow_window_and_viewport_coherent_dimensions(self):
+        """Valida dimensões coerentes entre janela externa e viewport interno em modo headful."""
+        with patch("scripts.flow_playwright.get_windows_workarea", return_value=(1536, 816)):
+            win_size, vp = resolve_flow_window_and_viewport(headless=False)
+            # Janela externa deve caber na área útil descontando bordas
+            self.assertLessEqual(win_size["width"], 1536)
+            self.assertLessEqual(win_size["height"], 816)
+            self.assertEqual(win_size["width"], 1520)
+            self.assertEqual(win_size["height"], 800)
+
+            # Viewport interno deve caber perfeitamente dentro da janela
+            self.assertLessEqual(vp["width"], win_size["width"])
+            self.assertLess(vp["height"], win_size["height"])
+            self.assertEqual(vp["width"], 1504)
+            self.assertEqual(vp["height"], 720)
+
+    def test_resolve_flow_window_and_viewport_preserves_headless(self):
+        """Valida que o comportamento headless preserva rigorosamente DEFAULT_VIEWPORT (1920x1080)."""
+        with patch("scripts.flow_playwright.get_windows_workarea", return_value=(1366, 768)):
+            win_size, vp = resolve_flow_window_and_viewport(headless=True)
+            self.assertEqual(win_size, DEFAULT_VIEWPORT)
+            self.assertEqual(vp, DEFAULT_VIEWPORT)
+
+    def test_launch_flow_context_headful_windows_workarea(self):
+        """launch_flow_context em headful no Windows aplica janela e viewport dimensionados pela área útil."""
+        mock_playwright = MagicMock()
+        mock_ctx = MagicMock()
+        mock_playwright.chromium.launch_persistent_context.return_value = mock_ctx
+
+        with patch("scripts.flow_playwright.get_windows_workarea", return_value=(1536, 816)):
+            ctx, err = launch_flow_context(
+                mock_playwright,
+                user_data_dir="storage/test_profile",
+                headless=False,
+            )
+            self.assertIsNone(err)
+            _, kwargs = mock_playwright.chromium.launch_persistent_context.call_args
+            self.assertEqual(kwargs.get("viewport"), {"width": 1504, "height": 720})
+            self.assertEqual(kwargs.get("headless"), False)
+            self.assertTrue(kwargs.get("chromium_sandbox"))
+            args = kwargs.get("args", [])
+            self.assertIn("--window-size=1520,800", args)
 
     def test_check_login_state_public_about_landing(self):
         """1. Landing pública (/about) retorna AWAITING_INITIAL_HUMAN_LOGIN (fail-closed)."""

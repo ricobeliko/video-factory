@@ -1156,14 +1156,20 @@ def get_generation_profile_context(
     fallback_preset = const.DEFAULT_MONETIZATION_PRESET
     fallback_growth = const.DEFAULT_GROWTH_MODE
 
-    # 1. Voice - Precedência: Profile Settings -> Global UI -> Global App -> Safe Default
+    # 1. Voice - Precedência: Global UI (Voz Global da Fábrica) -> Profile Settings -> Global App -> Safe Default
+    # O controle 'Voz Global da Fábrica' na Channel Factory define a voz TTS única utilizada por todos os canais.
+    global_voice = (
+        str(config.ui.get("voice_name")).strip()
+        if (config.ui.get("voice_name") and str(config.ui.get("voice_name")).strip())
+        else None
+    )
     profile_voice = (
         str(settings.voice.voice_name).strip()
         if (settings and settings.voice and settings.voice.voice_name and str(settings.voice.voice_name).strip())
         else None
     )
-    global_voice = config.ui.get("voice_name") or config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
-    raw_voice = profile_voice or global_voice
+    fallback_voice = config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
+    raw_voice = global_voice or profile_voice or fallback_voice
     from app.services import voice
     voice_name = voice.canonicalize_voice_name(raw_voice) or "en-US-BrianMultilingualNeural"
 

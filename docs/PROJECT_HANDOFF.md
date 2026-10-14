@@ -62,8 +62,8 @@
 - **AGENT_BRIDGE_INTEGRATION_STATUS:** `VERIFIED / MVP A10 FROZEN (3586364)` — Primeira missão real delegada com sucesso à fábrica (`doc-sync-handoff-agent-ops`).
 - **AUTONOMOUS_PILOT_STATUS:** `PAUSED_PENDING_FLOW_MULTI_ACCOUNT_PRODUCTION_SETUP`
   - **Motivo da Pausa:** Piloto autônomo do canal *Dose Diária de Internet* pausado pelo operador em produção. O hotfix de contrato e fail-safe foi concluído (`READY_FOR_PRODUCTION_DEPLOY`) e a infraestrutura FLOW-MA1 foi implementada em DEV.
-  - **Hotfix Autonomous Safety Contract:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`
-    - Precedência de voz estrita: Profile Settings -> Global UI -> Global App -> Safe Default (com canonicalização mantida);
+  - **Hotfix Autonomous Safety Contract & Precedência de Voz:** `MERGED / READY_FOR_PRODUCTION_DEPLOY`
+    - Precedência de voz canônica alinhada à Channel Factory: Global UI (Voz Global da Fábrica salva pelo operador) -> Profile Settings -> Global App -> Safe Default (com canonicalização mantida);
     - Fail-safe cap no getter: Growth Mode define teto máximo inultrapassável (Warmup: 2 aprovados / 8 tentativas; Scale: 5 aprovados / 15 tentativas; override armazenado só pode reduzir, nunca aumentar).
   - **Preservações Obrigatórias em Produção (Zero Manipulação / Zero Reset):**
     - Vídeos aprovados existentes em produção permanecem 100% intactos:
@@ -79,6 +79,10 @@
       - `edge-tts 7.2.7`: Falha imediata reportando HTTP 403 Forbidden em 3 tentativas sem travamento de 90s (comprovando o fim do deadlock de streaming).
       - `edge-tts 7.3.1`: **SUCESSO CONFIRMADO na 1ª tentativa** (tempo: 2,16 segundos, arquivo MP3 gerado com 30.096 bytes).
       - Conclusão: a síntese de voz está plenamente operacional em produção com `edge-tts==7.3.1` aliado ao streaming assíncrono nativo (`c5841b4`).
+  - **Hotfix de Precedência da Voz Global da Fábrica (14/10/2026):**
+    - **Sintoma:** Geração completa do canal *Dose Diária de GTA VI* funcionou e foi aprovada, mas a voz utilizada no vídeo não correspondeu à voz selecionada e salva pelo operador no painel Channel Factory.
+    - **Causa Raiz:** A Channel Factory expõe "Voz Global da Fábrica" com a garantia de ser a voz TTS única para todos os canais da fábrica (`config.ui["voice_name"]`). Porém, o onboarding gravava uma cópia da voz no `settings_json` do perfil e `get_generation_profile_context()` avaliava `profile_voice or global_voice`, fazendo com que a voz congelada na criação do canal sobrescrevesse a Voz Global selecionada e salva pelo operador.
+    - **Correção:** Em `profile_manager.get_generation_profile_context()`, a precedência foi corrigida para `global_voice or profile_voice or fallback_voice`, garantindo que a Voz Global selecionada e salva em `config.ui['voice_name']` seja soberana para todas as próximas gerações da fábrica, com fallback gracioso para o perfil apenas quando a global estiver vazia. Teste direcionado com duas vozes diferentes confirmou a alternância imediata. Tarefas e vídeos já gerados preservados intactos.
 - **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R6B OPERATIONAL CONTROLS MVP (DEV)`
 - **WEB_UI_V2_STATUS:** `ACTIVE DEV (R6B IN PROGRESS na branch feat/web-ui-v2-read-api; zero alterações no main)`
 - **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
@@ -134,7 +138,8 @@
   - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
 ### Histórico Recente de Merges no Main:
-- **`fix(deps): update edge-tts to 7.3.1`**: Fix definitivo da dependência alinhando pyproject.toml, requirements.txt e uv.lock com a versão 7.3.1 confirmada funcional em produção (2,16s / 30.096 bytes).
+- **`fix(voice): enforce global ui voice precedence over stored profile settings`**: Hotfix alinhando a precedência em `get_generation_profile_context` para que a Voz Global da Fábrica selecionada e salva pelo operador em `config.ui['voice_name']` prevaleça sobre a voz legada/congelada do perfil (ex: GTA VI).
+- **`5bdb1ec` (`fix(deps): update edge-tts to 7.3.1`)**: Fix definitivo da dependência alinhando pyproject.toml, requirements.txt e uv.lock com a versão 7.3.1 confirmada funcional em produção (2,16s / 30.096 bytes).
 - **`c8b1444`:** `docs: record edge-tts streaming hotfix in PROJECT_HANDOFF`
 - **`c5841b4`:** `fix(voice): consume native edge-tts async stream to prevent sync deadlock and propagate errors` — Elimina deadlock upstream de `edge_tts.Communicate.stream_sync()` ao consumir nativamente `communicate.stream()` assíncrono em loop dedicado com timeout, propagação imediata de erros de rede/handshake (<0.05s) e cleanup de áudio vazio.
 - **`050ba86`:** `fix(voice): expose sanitized tts failure diagnostics and persist in task state` — Sanitização de URLs/tokens no diagnóstico TTS e persistência no estado da tarefa (deployado no PC Forte em 14/10/2026).

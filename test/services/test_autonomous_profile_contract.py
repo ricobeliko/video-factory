@@ -25,40 +25,48 @@ def isolated_db(tmp_path):
     return db
 
 
-def test_1_profile_voice_wins_over_global_voice(isolated_db, monkeypatch):
-    """1. Profile voice definida vence voz global."""
+def test_1_global_ui_voice_wins_over_stored_profile_voice_with_two_voices(isolated_db, monkeypatch):
+    """1. Voz Global da Fábrica (config.ui['voice_name']) prevalece sobre voz legada persistida no perfil.
+    Valida alternância entre duas vozes diferentes (requisito 7 da missão)."""
     pid = profile_manager.DEFAULT_PROFILE_ID
-    monkeypatch.setitem(config.ui, "voice_name", "en-US-BrianMultilingualNeural")
 
+    # Simula exatamente o perfil GTA VI com voz legada salva no SQLite
     settings = profile_manager.get_profile_settings(pid, db_path=isolated_db)
-    settings.voice.voice_name = "pt-BR-FranciscaNeural"
+    settings.voice.voice_name = "en-US-BrianMultilingualNeural"
     profile_manager.update_profile_settings(pid, settings, db_path=isolated_db)
 
-    ctx = profile_manager.get_generation_profile_context(pid, db_path=isolated_db)
-    assert ctx["voice_name"] == "pt-BR-FranciscaNeural"
+    # 1ª Voz selecionada e salva pelo operador no painel: Francisca
+    monkeypatch.setitem(config.ui, "voice_name", "pt-BR-FranciscaNeural")
+    ctx1 = profile_manager.get_generation_profile_context(pid, db_path=isolated_db)
+    assert ctx1["voice_name"] == "pt-BR-FranciscaNeural"
+    params1 = autonomous.build_autonomous_video_params("Tema GTA VI 1", profile_id=pid, db_path=isolated_db)
+    assert params1.voice_name == "pt-BR-FranciscaNeural"
 
-
-def test_2_profile_without_voice_uses_global_fallback(isolated_db, monkeypatch):
-    """2. Profile sem voice usa fallback global."""
-    pid = profile_manager.DEFAULT_PROFILE_ID
+    # 2ª Voz selecionada e salva pelo operador no painel: Antonio
     monkeypatch.setitem(config.ui, "voice_name", "pt-BR-AntonioNeural")
+    ctx2 = profile_manager.get_generation_profile_context(pid, db_path=isolated_db)
+    assert ctx2["voice_name"] == "pt-BR-AntonioNeural"
+    params2 = autonomous.build_autonomous_video_params("Tema GTA VI 2", profile_id=pid, db_path=isolated_db)
+    assert params2.voice_name == "pt-BR-AntonioNeural"
+
+
+def test_2_profile_fallback_when_global_ui_voice_empty(isolated_db, monkeypatch):
+    """2. Quando a Voz Global da UI não estiver configurada, recorre à voz do perfil."""
+    pid = profile_manager.DEFAULT_PROFILE_ID
+    monkeypatch.setitem(config.ui, "voice_name", "")
 
     settings = profile_manager.get_profile_settings(pid, db_path=isolated_db)
-    settings.voice.voice_name = None
+    settings.voice.voice_name = "pt-BR-AntonioNeural"
     profile_manager.update_profile_settings(pid, settings, db_path=isolated_db)
 
     ctx = profile_manager.get_generation_profile_context(pid, db_path=isolated_db)
     assert ctx["voice_name"] == "pt-BR-AntonioNeural"
 
 
-def test_3_canonicalization_applied_to_profile_voice(isolated_db, monkeypatch):
-    """3. Canonicalização existente continua aplicada à voz do perfil (remove sufixo de catálogo)."""
+def test_3_canonicalization_applied_to_global_voice(isolated_db, monkeypatch):
+    """3. Canonicalização é aplicada à voz global (remove sufixo de catálogo como -Female)."""
     pid = profile_manager.DEFAULT_PROFILE_ID
-    monkeypatch.setitem(config.ui, "voice_name", "en-US-BrianMultilingualNeural")
-
-    settings = profile_manager.get_profile_settings(pid, db_path=isolated_db)
-    settings.voice.voice_name = "pt-BR-FranciscaNeural-Female"
-    profile_manager.update_profile_settings(pid, settings, db_path=isolated_db)
+    monkeypatch.setitem(config.ui, "voice_name", "pt-BR-FranciscaNeural-Female")
 
     ctx = profile_manager.get_generation_profile_context(pid, db_path=isolated_db)
     assert ctx["voice_name"] == "pt-BR-FranciscaNeural"

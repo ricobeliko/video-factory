@@ -777,6 +777,48 @@ def ensure_video_generation_mode(
             if _safe_locator_count(candidate) > 0:
                 trigger_btn = candidate
 
+        EXCLUDED_TRIGGER_TERMS = re.compile(
+            r"\b(grade|grid|blocos|tiles|projeto|project|conta|account|perfil|profile|"
+            r"ajuda|help|filtra|sort|ordena|adicionar arquivo|upload|menu para adicionar|"
+            r"reutilizar comando|fechar|close|minimizar|expandir|notifica|pesquisar|search)\b",
+            re.I
+        )
+
+        def _is_excluded_trigger(b: Any) -> bool:
+            try:
+                lbl = (b.get_attribute("aria-label") if hasattr(b, "get_attribute") else "") or ""
+                txt = (b.inner_text() if hasattr(b, "inner_text") and isinstance(b.inner_text(), str) else "") or ""
+                if EXCLUDED_TRIGGER_TERMS.search(f"{lbl} {txt}"):
+                    return True
+                if hasattr(b, "bounding_box"):
+                    box = b.bounding_box()
+                    if box and box.get("y", 0) < 120:
+                        return True
+            except Exception:
+                pass
+            return False
+
+        def _score_trigger(b: Any) -> int:
+            s = 0
+            try:
+                lbl = (b.get_attribute("aria-label") if hasattr(b, "get_attribute") else "") or ""
+                txt = (b.inner_text() if hasattr(b, "inner_text") and isinstance(b.inner_text(), str) else "") or ""
+                if hasattr(b, "get_attribute") and b.get_attribute("cdkoverlayorigin") is not None:
+                    s += 5
+                if re.search(r"gatilho de configura..es|settings trigger|configura..es de gera..o|generation settings|seletor de modelo|model selector", lbl, re.I):
+                    s += 6
+                elif re.search(r"\b(configura|settings|modelo|model|modo|mode)\b", lbl, re.I):
+                    s += 2
+                if re.search(r"\b(v[íi]deo|video|veo)\b", txt, re.I):
+                    s += 5
+                elif re.search(r"\b(imagem|image|banana|nano|imagen)\b", txt, re.I):
+                    s += 3
+                if re.search(r"\b(720p|1080p|8s|4s|5s|9:16|16:9|1:1|x1)\b", txt, re.I):
+                    s += 2
+            except Exception:
+                pass
+            return s
+
         count = _safe_locator_count(trigger_btn) if trigger_btn else 0
 
         if count > 1:
@@ -784,10 +826,28 @@ def ensure_video_generation_mode(
                 visible_btns = [b for b in trigger_btn.all() if b.is_visible()]
             except Exception:
                 visible_btns = []
-            if len(visible_btns) == 1:
-                target_btn = visible_btns[0]
+
+            # Desambiguação contextual: filtra controles de grade, projeto, conta e header (y < 120)
+            filtered_btns = [b for b in visible_btns if not _is_excluded_trigger(b)]
+
+            if len(filtered_btns) == 1:
+                target_btn = filtered_btns[0]
+            elif len(filtered_btns) > 1:
+                # Pontuação funcional objetiva
+                scored = [(_score_trigger(b), b) for b in filtered_btns]
+                scored.sort(key=lambda x: x[0], reverse=True)
+                if scored[0][0] > scored[1][0]:
+                    target_btn = scored[0][1]
+                else:
+                    # Empate funcional: verifica se apenas um contém 'vídeo'/'veo'
+                    video_matches = [b for b in filtered_btns if re.search(r"\b(v[íi]deo|video|veo)\b", b.inner_text() if hasattr(b, "inner_text") and isinstance(b.inner_text(), str) else "", re.I)]
+                    if len(video_matches) == 1:
+                        target_btn = video_matches[0]
+                    else:
+                        logger.warning(f"AMBIGUOUS_GENERATION_TYPE_TRIGGER: count={count}, visible={len(visible_btns)}, filtered={len(filtered_btns)}")
             elif len(visible_btns) > 1:
-                video_matches = [b for b in visible_btns if re.search(r"\b(v[íi]deo|video|veo)\b", b.inner_text() if isinstance(b.inner_text(), str) else "", re.I)]
+                # Se todos foram filtrados por exclusão, tenta vídeo inequívoco entre os visíveis como fallback
+                video_matches = [b for b in visible_btns if re.search(r"\b(v[íi]deo|video|veo)\b", b.inner_text() if hasattr(b, "inner_text") and isinstance(b.inner_text(), str) else "", re.I)]
                 if len(video_matches) == 1:
                     target_btn = video_matches[0]
                 else:
@@ -831,14 +891,14 @@ def ensure_video_generation_mode(
             )
             overlay.first.wait_for(state="visible", timeout=timeout_ms)
 
-            video_radio = overlay.first.get_by_role("radio", name=re.compile(r"^(videocam\s+)?v[íi]deo$|^video$", re.I))
+            video_radio = overlay.first.get_by_role("radio", name=re.compile(r"^(videocam\s+)?v[íi]deo$|^video$|^veo$", re.I))
             if _safe_locator_count(video_radio) == 0:
                 video_radio = overlay.first.get_by_role("radio").filter(
-                    has_text=re.compile(r"^\s*(videocam\s+)?v[íi]deo\s*$", re.I)
+                    has_text=re.compile(r"^\s*(videocam\s+)?(v[íi]deo|veo)\s*$", re.I)
                 )
             if _safe_locator_count(video_radio) == 0:
-                video_radio = overlay.first.locator("[role='radio'], [role='menuitemradio']").filter(
-                    has_text=re.compile(r"^\s*(videocam\s+)?v[íi]deo\s*$|^video$", re.I)
+                video_radio = overlay.first.locator("[role='radio'], [role='menuitemradio'], [role='tab'], button").filter(
+                    has_text=re.compile(r"^\s*(videocam\s+)?(v[íi]deo|veo)\s*$|^video$|^veo$", re.I)
                 )
 
             v_count = _safe_locator_count(video_radio)

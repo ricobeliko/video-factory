@@ -292,6 +292,212 @@ class TestFlowPlaywright(unittest.TestCase):
             mock_page.wait_for_url.assert_called_once()
             mock_expect.assert_called()
 
+    def test_ensure_video_generation_mode_disambiguates_grid_settings_already_video(self):
+        """Valida desambiguação contextual quando existem múltiplos botões (ex: grade vs compositor) e o modo já é Video."""
+        mock_page = MagicMock()
+
+        # Botão 1: Configurações da grade de blocos (header, y=18, termo excluído 'grade')
+        btn_grid = MagicMock()
+        btn_grid.is_visible.return_value = True
+        btn_grid.get_attribute.side_effect = lambda attr: "Configurações da grade de blocos" if attr == "aria-label" else None
+        btn_grid.inner_text.return_value = ""
+        btn_grid.bounding_box.return_value = {"x": 1044, "y": 18, "width": 40, "height": 40}
+
+        # Botão 2: Gatilho de configurações do compositor (y=647, modo Video já ativo)
+        btn_trigger = MagicMock()
+        btn_trigger.is_visible.return_value = True
+        btn_trigger.get_attribute.side_effect = lambda attr: "Gatilho de configurações" if attr == "aria-label" else ("" if attr == "cdkoverlayorigin" else None)
+        btn_trigger.inner_text.return_value = "Vídeo · 720p · 8s crop_9_16 x1"
+        btn_trigger.bounding_box.return_value = {"x": 737, "y": 647, "width": 150, "height": 32}
+
+        # Botão 3: Invisível
+        btn_hidden = MagicMock()
+        btn_hidden.is_visible.return_value = False
+
+        mock_trigger_locator = MagicMock()
+        mock_trigger_locator.count.return_value = 3
+        mock_trigger_locator.all.return_value = [btn_grid, btn_trigger, btn_hidden]
+        mock_trigger_locator.first = btn_grid
+
+        # get_by_role retorna 0 para forçar busca por atributos (Estratégia B)
+        mock_page.get_by_role.return_value.count.return_value = 0
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "mat-progress-bar" in selector or "mat-spinner" in selector or "progressbar" in selector or "flow-loading" in selector:
+                loc.count.return_value = 0
+                return loc
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+                return loc
+            if "cdk-overlay-pane" in selector:
+                loc.filter.return_value = mock_overlay
+                return loc
+            return mock_trigger_locator
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertTrue(res["confirmed"])
+        self.assertFalse(res["changed"])
+        self.assertEqual(res["generation_type"], "VIDEO")
+        self.assertEqual(res["aspect_ratio"], "9:16")
+        self.assertEqual(res["output_count"], 1)
+        btn_trigger.click.assert_not_called()
+        btn_grid.click.assert_not_called()
+
+    def test_ensure_video_generation_mode_disambiguates_grid_settings_image_to_video(self):
+        """Valida desambiguação contextual quando em modo Image: seleciona o gatilho correto e altera para Video."""
+        mock_page = MagicMock()
+
+        # Botão 1: Configurações da grade de blocos (header, y=18)
+        btn_grid = MagicMock()
+        btn_grid.is_visible.return_value = True
+        btn_grid.get_attribute.side_effect = lambda attr: "Configurações da grade de blocos" if attr == "aria-label" else None
+        btn_grid.inner_text.return_value = ""
+        btn_grid.bounding_box.return_value = {"x": 1044, "y": 18, "width": 40, "height": 40}
+
+        # Botão 2: Gatilho de configurações do compositor (y=647, modo Imagem ativo inicialmente)
+        btn_trigger = MagicMock()
+        btn_trigger.is_visible.return_value = True
+        btn_trigger.get_attribute.side_effect = lambda attr: "Gatilho de configurações" if attr == "aria-label" else ("" if attr == "cdkoverlayorigin" else None)
+        mode_switched = [False]
+        def _trigger_text():
+            return "Vídeo · 720p · 8s crop_9_16 x1" if mode_switched[0] else "Imagem · 1:1 · x1"
+        btn_trigger.inner_text.side_effect = _trigger_text
+        btn_trigger.bounding_box.return_value = {"x": 737, "y": 647, "width": 150, "height": 32}
+
+        # Botão 3: Invisível
+        btn_hidden = MagicMock()
+        btn_hidden.is_visible.return_value = False
+
+        mock_trigger_locator = MagicMock()
+        mock_trigger_locator.count.return_value = 3
+        mock_trigger_locator.all.return_value = [btn_grid, btn_trigger, btn_hidden]
+        mock_trigger_locator.first = btn_grid
+
+        mock_overlay = MagicMock()
+        mock_overlay.first = mock_overlay
+
+        mock_video_radio = MagicMock()
+        mock_video_radio.count.return_value = 1
+        mock_video_radio.first = mock_video_radio
+        def _video_click(*args, **kwargs):
+            mode_switched[0] = True
+        mock_video_radio.click.side_effect = _video_click
+
+        mock_ar_radio = MagicMock()
+        mock_ar_radio.count.return_value = 1
+        mock_ar_radio.first = mock_ar_radio
+        mock_ar_radio.first.get_attribute.return_value = "false"
+
+        mock_x1_radio = MagicMock()
+        mock_x1_radio.count.return_value = 1
+        mock_x1_radio.first = mock_x1_radio
+        mock_x1_radio.first.get_attribute.return_value = "false"
+
+        def _get_by_role_overlay(role, name=None):
+            if role == "radio":
+                p = getattr(name, "pattern", "") if name else ""
+                if "v" in p or "video" in p or "veo" in p:
+                    return mock_video_radio
+                elif "9:16" in p:
+                    return mock_ar_radio
+                elif "x1" in p:
+                    return mock_x1_radio
+            return MagicMock(count=lambda: 0)
+
+        mock_overlay.get_by_role.side_effect = _get_by_role_overlay
+
+        # get_by_role retorna 0 na página principal
+        mock_page.get_by_role.return_value.count.return_value = 0
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "mat-progress-bar" in selector or "mat-spinner" in selector or "progressbar" in selector or "flow-loading" in selector:
+                loc.count.return_value = 0
+                return loc
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+                return loc
+            if "cdk-overlay-pane" in selector:
+                loc.filter.return_value = mock_overlay
+                return loc
+            if "button[" in selector or "button," in selector:
+                return mock_trigger_locator
+            # Demais seletores retornam 0 para isolamento estrito
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            res = ensure_video_generation_mode(mock_page)
+            self.assertTrue(res["confirmed"])
+            self.assertTrue(res["changed"])
+            self.assertEqual(res["generation_type"], "VIDEO")
+            btn_trigger.click.assert_called_once()
+            btn_grid.click.assert_not_called()
+            mock_video_radio.click.assert_called_once()
+
+    def test_ensure_video_generation_mode_truly_ambiguous_buttons_fail_closed(self):
+        """Valida que quando há múltiplos botões no compositor com pontuação idêntica e sem sinal inequívoco, falha fechado."""
+        mock_page = MagicMock()
+
+        btn_a = MagicMock()
+        btn_a.is_visible.return_value = True
+        btn_a.get_attribute.side_effect = lambda attr: "Gatilho de opções" if attr == "aria-label" else None
+        btn_a.inner_text.return_value = "Opções A"
+        btn_a.bounding_box.return_value = {"x": 500, "y": 647, "width": 100, "height": 32}
+
+        btn_b = MagicMock()
+        btn_b.is_visible.return_value = True
+        btn_b.get_attribute.side_effect = lambda attr: "Gatilho de opções" if attr == "aria-label" else None
+        btn_b.inner_text.return_value = "Opções B"
+        btn_b.bounding_box.return_value = {"x": 700, "y": 647, "width": 100, "height": 32}
+
+        mock_trigger_locator = MagicMock()
+        mock_trigger_locator.count.return_value = 2
+        mock_trigger_locator.all.return_value = [btn_a, btn_b]
+        mock_trigger_locator.first = btn_a
+
+        mock_page.get_by_role.return_value.count.return_value = 0
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "mat-progress-bar" in selector or "mat-spinner" in selector or "progressbar" in selector or "flow-loading" in selector:
+                loc.count.return_value = 0
+                return loc
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+                return loc
+            if "button[" in selector or "button," in selector:
+                return mock_trigger_locator
+            # Demais seletores (badges, hotbar, chips) retornam 0 para garantir que o fallback não encontre sinais falsos
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+        btn_a.click.assert_not_called()
+        btn_b.click.assert_not_called()
+
     def test_fill_prompt_prosemirror(self):
         """Preenche prompt no ProseMirror via editor.fill() nativo."""
         mock_page = MagicMock()

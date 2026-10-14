@@ -1767,3 +1767,26 @@ Entregas V16.4.1A:
 - **Validação Local:**
   - 93/93 testes PASS em 2.58s (`test/services/test_flow_playwright.py`).
 - **Próximo Gate:** Aprovação do Architect para merge e release em main.
+
+
+### V16.17 — Google Flow Video Mode UI Trigger Contextual Disambiguation (DEV)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (14/10/2026)
+- **Branch:** `fix/flow-video-mode-ui`
+- **Contexto & Causa Raiz:**
+  - No PC Forte com a conta `flow-b`, ao criar um novo projeto (`--new-project`), o Playwright abriu o compositor mas retornou `FLOW_VIDEO_MODE_NOT_CONFIRMED` com o log `AMBIGUOUS_GENERATION_TYPE_TRIGGER: count=3, visible=2`.
+  - Causa raiz identificada: a busca genérica por atributos `aria-label*='configura'` capturou simultaneamente o botão de cabeçalho `Configurações da grade de blocos` (header, y=18) e o gatilho de configurações do compositor (y=647).
+  - Como o projeto novo iniciava em modo Imagem (ou texto do gatilho sem o termo explícito 'vídeo'), a checagem ingênua de `video_matches` encontrou 0 elementos, declarando falso conflito de ambiguidade e descartando o gatilho, impedindo o clique para abrir o seletor e comutar para Vídeo.
+- **Componentes e Arquitetura:**
+  - `scripts/flow_playwright.py`:
+    - `ensure_video_generation_mode`:
+      1. Adicionado filtro de exclusão funcional `_is_excluded_trigger`: descarta automaticamente botões de grade/grid (`Configurações da grade de blocos`), projeto, conta, ajuda, busca e controles localizados na barra de navegação/header (bounding box `y < 120`).
+      2. Adicionada pontuação funcional objetiva `_score_trigger`: pontua e prioriza botões do compositor por atributos característicos (`cdkoverlayorigin`, `aria-label` semântico de geração, modelos e parâmetros de renderização), selecionando o gatilho correto de forma determinística por contexto, visibilidade e função.
+      3. Atualizada seleção da opção Vídeo no popup overlay para suportar `(v[íi]deo|veo)` em elementos `radio`, `menuitemradio`, `tab` ou `button`.
+      4. Preservado fail-closed rigoroso: em caso de empate funcional não resolvível, não clica em Generate e aborta com segurança.
+  - `test/services/test_flow_playwright.py`:
+    - `test_ensure_video_generation_mode_disambiguates_grid_settings_already_video`: valida desambiguação contextual entre grade (header) e compositor quando o modo já é Vídeo (zero cliques no seletor).
+    - `test_ensure_video_generation_mode_disambiguates_grid_settings_image_to_video`: valida desambiguação contextual em projeto recém-criado em modo Imagem, abrindo o gatilho correto e comutando para Vídeo.
+    - `test_ensure_video_generation_mode_truly_ambiguous_buttons_fail_closed`: valida fail-closed quando múltiplos botões idênticos sem indicação de vídeo coexistem no compositor.
+- **Validação Local:**
+  - 96/96 testes PASS em 3.16s (`test/services/test_flow_playwright.py`).
+- **Próximo Gate:** Aprovação do Architect para homologação controlada.

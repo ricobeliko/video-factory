@@ -710,10 +710,25 @@ def read_flow_credit_balance(page: Any) -> Tuple[Optional[int], str]:
                     except Exception:
                         pass
 
-            # Fecha o painel após leitura
+            # Fecha o painel após leitura garantindo que backdrops do CDK sejam dispensados
             try:
-                page.keyboard.press("Escape")
+                backdrop = page.locator(".cdk-overlay-backdrop")
+                if getattr(backdrop, "count", lambda: 0)() > 0 and getattr(backdrop.first, "is_visible", lambda: False)() is True:
+                    backdrop.first.click(force=True, timeout=1000)
+                else:
+                    page.keyboard.press("Escape")
+            except Exception:
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+
+            try:
                 page.wait_for_timeout(200)
+                backdrop = page.locator(".cdk-overlay-backdrop")
+                if getattr(backdrop, "count", lambda: 0)() > 0 and getattr(backdrop.first, "is_visible", lambda: False)() is True:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(200)
             except Exception:
                 pass
 

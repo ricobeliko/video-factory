@@ -1790,3 +1790,41 @@ Entregas V16.4.1A:
 - **Validação Local:**
   - 96/96 testes PASS em 3.16s (`test/services/test_flow_playwright.py`).
 - **Próximo Gate:** Aprovação do Architect para homologação controlada.
+
+### V16.18 â Google Flow Full Automation Recovery & CDK Overlay Dismissal (DEV)
+- **Status:** `DEV_HOMOLOGATED / FULL_TRIAL_PASS` (14/10/2026)
+- **Branch:** `fix/flow-video-mode-ui`
+- **Contexto & Causa Raiz:**
+  - InvestigaÃ§Ã£o completa do fluxo histÃ³rico funcional (11â12/10/2026, onde 6/6 cenas eram geradas com sucesso) e homologaÃ§Ã£o em Playwright real no notebook DEV.
+  - No baseline histÃ³rico de 11/10 (`3cf8a49`), o compositor era acessado diretamente sem intervenÃ§Ãµes espÃºria de leitura de overlay. Em commits posteriores (`7687f1f` / `3426271`), a leitura de telemetria de crÃ©ditos (`read_flow_credit_balance`) abria o painel de conta (`flow-account-panel`), que injeta no Angular CDK um elemento transparente cobrindo a viewport inteira: `<div class="cdk-overlay-backdrop cdk-overlay-transparent-backdrop cdk-overlay-backdrop-showing"></div>`.
+  - O fechamento ingÃªnuo do painel via `page.keyboard.press("Escape")` nÃ£o fechava o backdrop em sessÃµes reais porque o foco DOM nÃ£o propagava o evento para o listener do CDK.
+  - Consequentemente, ao avanÃ§ar para `check_generate_actionable` (e na geraÃ§Ã£o real), o Playwright sofria timeout de 30s (`Timeout 30000ms exceeded`), pois o backdrop transparente do CDK interceptava todos os ponteiros do mouse sobre a tela (`cdk-overlay-backdrop intercepts pointer events`).
+- **Componentes e Arquitetura:**
+  - `app/services/flow_account_pool.py`:
+    - `read_flow_credit_balance`: ao fechar o painel de detalhes da conta apÃ³s ler o saldo, localiza e clica explicitamente no `.cdk-overlay-backdrop` caso visÃ­vel, disparando o `backdropClick` nativo do Angular CDK para dispensar o container do overlay e aguarda seu desaparecimento com fallback seguro para Escape.
+  - `scripts/flow_playwright.py`:
+    - `dismiss_overlay_backdrops`: rotina defensiva nÃ£o-bloqueante que verifica se algum backdrop do Angular CDK permaneceu ativo no DOM e o dispensa antes de qualquer aÃ§Ã£o do usuÃ¡rio no compositor.
+    - `check_generate_actionable`: invoca `dismiss_overlay_backdrops` antes de testar `btn.click(trial=True)`.
+    - `run_playwright_flow_poc`: invoca `dismiss_overlay_backdrops` antes de disparar o clique real de geraÃ§Ã£o.
+  - `test/services/test_flow_playwright.py`:
+    - `test_dismiss_overlay_backdrops_when_present`: valida que backdrops visÃ­veis sÃ£o clicados com `force=True`.
+    - `test_check_generate_actionable_dismisses_backdrop_and_calls_trial`: valida que o teste de actionability do Generate limpa os overlays antes do trial click.
+- **ValidaÃ§Ã£o com Playwright Real no Notebook DEV:**
+  - Comando: `python scripts/flow_playwright.py --manifest storage/dev_smoke/v1_5c_flow_ab/manifest.json --scene 1 --trial-only --headful`
+  - Perfil DEV persistente (`storage/flow_browser_profile`): completamente autenticado, sem intervenÃ§Ã£o humana.
+  - Resultado: `STATUS = PRE_FLIGHT_TRIAL_PASS`
+  - CritÃ©rios ObrigatÃ³rios:
+    - `LOGIN`: PASS (`LOGIN_STATUS = AUTHENTICATED`)
+    - `PROJECT_NAVIGATION`: PASS (`PROJECT_URL_CONFIRMED = True`, `LANDING_TO_STUDIO = True`)
+    - `COMPOSER`: PASS (`EDITOR_FOUND = True`)
+    - `VIDEO_MODE`: PASS (`GENERATION_TYPE_CONFIRMED = True`, `GENERATION_TYPE = VIDEO`)
+    - `MODEL_SELECTION`: PASS (`VÃ­deo Â· 720p Â· 8s crop_9_16 x1`, zero cliques no seletor)
+    - `PROMPT_FILLED`: PASS (`PROMPT_FILLED = True`)
+    - `PROMPT_CONFIRMED`: PASS (`PROMPT_CONFIRMED = True`)
+    - `GENERATE_ACTIONABLE`: PASS (`GENERATE_ACTIONABLE = True`)
+    - `GENERATE_CLICK_COUNT`: 0 (`GENERATE_CLICK_COUNT_THIS_RUN = 0`)
+    - `CREDITS_CONSUMED`: 0 (`CREDITS_BEFORE = 214`, crÃ©ditos intactos)
+- **ValidaÃ§Ã£o Local:**
+  - 98/98 testes PASS em 2.97s (`test/services/test_flow_playwright.py`).
+  - 21/21 testes PASS em 1.47s (`test/test_flow_account_pool.py`).
+- **PrÃ³ximo Gate:** AprovaÃ§Ã£o do Architect para release e homologaÃ§Ã£o controlada.

@@ -2503,6 +2503,34 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertFalse(res["confirmed"])
         self.assertEqual(res["error"], "STUDIO_SURFACE_TIMELINE_NO_COMPOSER")
 
+    def test_dismiss_overlay_backdrops_when_present(self):
+        """dismiss_overlay_backdrops clica no backdrop se visível."""
+        from scripts.flow_playwright import dismiss_overlay_backdrops
+        mock_page = MagicMock()
+        mock_backdrop = MagicMock()
+        mock_backdrop.count.return_value = 1
+        mock_backdrop.first.is_visible.return_value = True
+        mock_page.locator.return_value = mock_backdrop
+
+        dismiss_overlay_backdrops(mock_page)
+        mock_backdrop.first.click.assert_called_once_with(force=True, timeout=1000)
+
+    def test_check_generate_actionable_dismisses_backdrop_and_calls_trial(self):
+        """check_generate_actionable garante dispensa de backdrops antes do trial click."""
+        from scripts.flow_playwright import check_generate_actionable
+        mock_btn = MagicMock()
+        mock_page = MagicMock()
+        mock_backdrop = MagicMock()
+        mock_backdrop.count.return_value = 1
+        mock_backdrop.first.is_visible.return_value = True
+        mock_page.locator.return_value = mock_backdrop
+        mock_btn.page = mock_page
+
+        result = check_generate_actionable(mock_btn, timeout_ms=5000)
+        self.assertTrue(result)
+        mock_backdrop.first.click.assert_called_once_with(force=True, timeout=1000)
+        mock_btn.click.assert_called_once_with(trial=True, timeout=5000)
+
 if __name__ == "__main__":
     unittest.main()
 

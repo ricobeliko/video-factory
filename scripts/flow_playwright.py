@@ -1148,12 +1148,43 @@ def get_generate_button(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> 
     return btn
 
 
+def dismiss_overlay_backdrops(page: Any) -> None:
+    """Garante que nenhum backdrop do Angular CDK permaneça interceptando cliques."""
+    if not page:
+        return
+    try:
+        locator_fn = getattr(page, "locator", None)
+        if not locator_fn:
+            return
+        backdrop = locator_fn(".cdk-overlay-backdrop")
+        count_fn = getattr(backdrop, "count", None)
+        raw_cnt = count_fn() if count_fn else 0
+        cnt = int(raw_cnt) if isinstance(raw_cnt, (int, float)) else 0
+        if cnt > 0 and getattr(backdrop.first, "is_visible", lambda: False)() is True:
+            logger.info("cdk-overlay-backdrop ativo detectado; dispensando antes da ação...")
+            try:
+                backdrop.first.click(force=True, timeout=1000)
+            except Exception:
+                kb = getattr(page, "keyboard", None)
+                if kb:
+                    kb.press("Escape")
+            try:
+                wait_fn = getattr(backdrop.first, "wait_for", None)
+                if wait_fn:
+                    wait_fn(state="hidden", timeout=1500)
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.debug(f"Aviso não-bloqueante ao dispensar backdrop: {exc}")
+
+
 def check_generate_actionable(btn: Locator, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> bool:
     """
     Verifica a actionability completa do botão Generate via Playwright
     usando click(trial=True) sem executar o clique real.
     """
     logger.info("Testando actionability do botão Generate com trial=True...")
+    dismiss_overlay_backdrops(getattr(btn, "page", None))
     btn.click(trial=True, timeout=timeout_ms)
     logger.info("Actionability do botão Generate confirmada (attached, visible, stable, enabled).")
     return True
@@ -2233,6 +2264,7 @@ def run_playwright_flow_poc(
 
                 # Dispara clique único no Generate
                 logger.info("=== DISPARANDO EXATAMENTE UMA GERAÇÃO REAL AUTORIZADA ===")
+                dismiss_overlay_backdrops(page)
                 gen_btn.click()
                 report["generate_click_count_this_run"] = 1
 

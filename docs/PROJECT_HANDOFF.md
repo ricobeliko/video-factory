@@ -14,7 +14,7 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `13/10/2026`
+- **LAST_UPDATED:** `14/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop)
 - **CURRENT_FOCUS:** `HOMOLOGAÇÃO_E2E_PILOTO_AUTONOMO_INTERNET`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
@@ -22,9 +22,9 @@
 - **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
-- **CURRENT_MAIN_SHA:** `3f8b09644e6399af8829bb9a196e3c4195de4723` (commit merged no branch `main`: *docs: record flow-ma1 merged and autonomous pilot paused pending production setup*)
-- **DEV_BRANCH_HEAD_SHA:** `b20878cc1297822378f4be48db5483ece9d7d9ff` (HEAD da branch ativa `feat/web-ui-v2-read-api`: *fix(webui): improve agent ops telemetry projection*)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96: deployado e validado no PC Forte em 11/10/2026; produção ainda NÃO recebeu deploy de `3f8b096`)
+- **CURRENT_MAIN_SHA:** `c5841b4` (fix(voice): consume native edge-tts async stream to prevent sync deadlock and propagate errors)
+- **DEV_BRANCH_HEAD_SHA:** `c5841b4` (branch `main` em DEV adiantada em relação a origin/main)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `050ba86bdc09b75ae26312ce5b7ada2b9ec2cd68` (deployado no PC Forte em 14/10/2026 com diagnóstico TTS sanitizado)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -72,6 +72,10 @@
       - `cdc09729-22df-466c-b6d2-50f816d20060` (Quality 71.2, Safety PASS, Copyright PASS, `final-1.mp4` íntegro);
     - Scheduler, `publication_events`, `scheduled_posts` e histórico de publicações preservados.
     - Autonomous do profile default permanece PAUSADO após o deploy.
+  - **Diagnóstico TTS e Correção de Streaming Edge TTS (14/10/2026):**
+    - **Sintoma:** 5 falhas consecutivas de síntese no canal *Dose Diária de Internet* (`0c8bd081...`, `efa0d660...`, `b6581830...`, `38a61195...`, `d80578f7...`) com erro mascarado em ~2 minutos por tarefa.
+    - **Causa Raiz Comprovada:** `edge_tts.Communicate.stream_sync()` na versão 7.2.7 sofre deadlock permanente quando o stream assíncrono lança exceção (ex.: handshake WebSocket HTTP 403 da Microsoft). O wrapper de 30s do MPT convertia qualquer erro real em `TimeoutError`, acumulando 90,05s em 3 tentativas e ocultando a resposta real do provedor.
+    - **Correção Implementada (`c5841b4`):** Consumo nativo da API assíncrona `communicate.stream()` em `app/services/voice.py` com loop isolado e timeout determinístico. Falhas de handshake/conexão agora propagam instantaneamente (< 0.05s) com sanitização de tokens e limpeza de arquivos vazios.
 - **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R6B OPERATIONAL CONTROLS MVP (DEV)`
 - **WEB_UI_V2_STATUS:** `ACTIVE DEV (R6B IN PROGRESS na branch feat/web-ui-v2-read-api; zero alterações no main)`
 - **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
@@ -127,6 +131,10 @@
   - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
 ### Histórico Recente de Merges no Main:
+- **`c5841b4`:** `fix(voice): consume native edge-tts async stream to prevent sync deadlock and propagate errors` — Elimina deadlock upstream de `edge_tts.Communicate.stream_sync()` ao consumir nativamente `communicate.stream()` assíncrono em loop dedicado com timeout, propagação imediata de erros de rede/handshake (<0.05s) e cleanup de áudio vazio.
+- **`050ba86`:** `fix(voice): expose sanitized tts failure diagnostics and persist in task state` — Sanitização de URLs/tokens no diagnóstico TTS e persistência no estado da tarefa (deployado no PC Forte em 14/10/2026).
+- **`a44f2d3`:** `fix(autonomous): allow up to 5 approved generations in 24h for warmup replenishment` — Permite até 5 gerações aprovadas em 24h para reposição no warmup (deployado no PC Forte).
+- **`c07ab33` / `aa8ae8c` / `663bb1f`:** Web UI V2 endpoints de controle da fábrica (pause, resume, run-cycle) integrados na main.
 - **`3f8b096`:** `docs: record flow-ma1 merged and autonomous pilot paused pending production setup`
 - **`b8c0904`:** `fix: use native edge for flow account onboarding` — Login humano inicial Google via Edge nativo, sem automação Playwright.
 - **`3426271`:** `feat: add flow multi-account provider pool` — Pool multi-contas do Google Flow (`app/services/flow_account_pool.py`).

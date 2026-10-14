@@ -372,6 +372,112 @@ class TestVoiceService(unittest.TestCase):
         self.assertEqual(diag["last_error_type"], "TimeoutError")
         self.assertIn("timed out", diag["last_error_message"])
 
+    def test_azure_tts_v1_propagates_handshake_error_immediately(self):
+        """
+        Valida que falhas de handshake/conexao no stream assincrono sao propagadas
+        imediatamente sem travar em deadlock nem aguardar desnecessariamente o timeout.
+        """
+        class _HandshakeErrorCommunicate:
+            def __init__(self, text, voice, rate="+0%", boundary=None):
+                self.text = text
+                self.voice = voice
+                self.rate = rate
+                self.boundary = boundary
+
+            async def stream(self):
+                raise RuntimeError(
+                    "403, message='Invalid response status', url=URL("
+                    "'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?"
+                    "TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=abc')"
+                )
+                yield {"type": "audio", "data": b""}
+
+        class _FakeSubMaker:
+            def feed(self, chunk):
+                return None
+            def get_srt(self):
+                return ""
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            vs.edge_tts, "Communicate", _HandshakeErrorCommunicate
+        ), patch.object(vs.edge_tts, "SubMaker", _FakeSubMaker), patch.object(
+            vs.config,
+            "app",
+            dict(vs.config.app, edge_tts_timeout=5.0),
+        ):
+            voice_file = Path(tmp_dir) / "handshake-fail.mp3"
+            started_at = time.monotonic()
+            sub_maker = vs.azure_tts_v1(
+                text="texto de teste",
+                voice_name="pt-BR-AntonioNeural-Male",
+                voice_file=str(voice_file),
+                voice_rate=1.0,
+            )
+            elapsed = time.monotonic() - started_at
+            self.assertFalse(voice_file.exists())
+
+        self.assertIsNone(sub_maker)
+        # 3 tentativas devem falhar imediatamente (< 2s) sem aguardar os 5s de timeout por tentativa
+        self.assertLess(elapsed, 2.0)
+        diag = vs.get_last_tts_diagnostic()
+        self.assertIsNotNone(diag)
+        self.assertEqual(diag["provider"], "azure-tts-v1")
+        self.assertEqual(diag["voice_name"], "pt-BR-AntonioNeural")
+        self.assertEqual(diag["attempts"], 3)
+        self.assertEqual(diag["last_error_type"], "RuntimeError")
+        self.assertIn("403", diag["last_error_message"])
+        self.assertIn("<REDACTED_QUERY>", diag["last_error_message"])
+        self.assertNotIn("6A5AA1D4EAFF4E9FB37E23D68491D6F4", diag["last_error_message"])
+
+    def test_azure_tts_v1_times_out_hanging_async_stream(self):
+        """
+        Valida que o stream assincrono do edge_tts obedece o timeout configurado quando trava.
+        """
+        class _HangingAsyncCommunicate:
+            def __init__(self, text, voice, rate="+0%", boundary=None):
+                self.text = text
+                self.voice = voice
+                self.rate = rate
+                self.boundary = boundary
+
+            async def stream(self):
+                await asyncio.sleep(10)
+                yield {"type": "audio", "data": b"unreachable"}
+
+        class _FakeSubMaker:
+            def feed(self, chunk):
+                return None
+            def get_srt(self):
+                return ""
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            vs.edge_tts, "Communicate", _HangingAsyncCommunicate
+        ), patch.object(vs.edge_tts, "SubMaker", _FakeSubMaker), patch.object(
+            vs.config,
+            "app",
+            dict(vs.config.app, edge_tts_timeout=0.05),
+        ):
+            voice_file = Path(tmp_dir) / "hanging-async-edge-tts.mp3"
+            started_at = time.monotonic()
+            sub_maker = vs.azure_tts_v1(
+                text="texto de teste timeout async",
+                voice_name="pt-BR-FranciscaNeural-Female",
+                voice_file=str(voice_file),
+                voice_rate=1.0,
+            )
+            elapsed = time.monotonic() - started_at
+            self.assertFalse(voice_file.exists())
+
+        self.assertIsNone(sub_maker)
+        self.assertLess(elapsed, 2)
+        diag = vs.get_last_tts_diagnostic()
+        self.assertIsNotNone(diag)
+        self.assertEqual(diag["provider"], "azure-tts-v1")
+        self.assertEqual(diag["voice_name"], "pt-BR-FranciscaNeural")
+        self.assertEqual(diag["attempts"], 3)
+        self.assertEqual(diag["last_error_type"], "TimeoutError")
+        self.assertIn("timed out", diag["last_error_message"])
+
     def test_sanitize_error_message_redacts_tokens_and_urls(self):
         """Valida que mensagens de erro de TTS não expõem tokens, chaves ou query strings de URL."""
         raw_msg = (

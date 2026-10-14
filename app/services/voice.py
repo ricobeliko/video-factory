@@ -1281,17 +1281,55 @@ def stream_edge_tts_chunks(
     communicate, on_chunk, timeout_seconds: Union[float, None] = None
 ) -> None:
     """
-    统一消费 edge_tts 的同步流和旧版异步流。
-
-    edge_tts 7.x 提供 `stream_sync()`，可以在同步函数里直接迭代；
-    更早的版本通常只有异步 `stream()`。为了让 `azure_tts_v1()` 在
-    旧依赖残留场景下仍能继续工作，这里统一做一层流式兼容。
+    Consome o stream de áudio do edge_tts preferindo a API assíncrona oficial (stream),
+    evitando o deadlock upstream de stream_sync() em caso de exceções no handshake/conexão.
+    Mantém fallback compatível para implementações ou mocks legados que exponham apenas stream_sync.
 
     Args:
         communicate: edge_tts.Communicate 实例
         on_chunk: 每拿到一个事件块时执行的回调
         timeout_seconds: 单次流式请求总超时；为 None 时不启用超时。
     """
+    if hasattr(communicate, "stream"):
+        async def _consume_async_stream():
+            async for chunk in communicate.stream():
+                on_chunk(chunk)
+
+        def _run_with_new_loop():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                if timeout_seconds:
+                    loop.run_until_complete(
+                        asyncio.wait_for(_consume_async_stream(), timeout=timeout_seconds)
+                    )
+                else:
+                    loop.run_until_complete(_consume_async_stream())
+            finally:
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+                finally:
+                    loop.close()
+
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is not None:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(_run_with_new_loop).result()
+        else:
+            _run_with_new_loop()
+        return
+
     if hasattr(communicate, "stream_sync"):
         if timeout_seconds:
             _stream_edge_tts_sync_with_timeout(
@@ -1303,25 +1341,7 @@ def stream_edge_tts_chunks(
             on_chunk(chunk)
         return
 
-    if not hasattr(communicate, "stream"):
-        raise AttributeError("edge_tts communicate object has no stream method")
-
-    async def _consume_async_stream():
-        async for chunk in communicate.stream():
-            on_chunk(chunk)
-
-    # 这里显式创建独立事件循环，而不是复用外部上下文，目的是避免
-    # 在同步调用栈里遇到“当前线程没有事件循环”或跨线程复用循环的问题。
-    loop = asyncio.new_event_loop()
-    try:
-        if timeout_seconds:
-            loop.run_until_complete(
-                asyncio.wait_for(_consume_async_stream(), timeout=timeout_seconds)
-            )
-        else:
-            loop.run_until_complete(_consume_async_stream())
-    finally:
-        loop.close()
+    raise AttributeError("edge_tts communicate object has no stream or stream_sync method")
 
 
 _tts_diagnostic_state = threading.local()
@@ -1412,7 +1432,10 @@ def azure_tts_v1(
         except Exception as e:
             elapsed = round(time.monotonic() - attempt_start, 2)
             error_type = type(e).__name__
-            error_msg = _sanitize_error_message(str(e))
+            raw_msg = str(e)
+            if isinstance(e, TimeoutError) and not raw_msg and timeout_seconds:
+                raw_msg = f"edge_tts stream timed out after {timeout_seconds:g}s"
+            error_msg = _sanitize_error_message(raw_msg)
             logger.error(f"failed, error: {error_msg}")
             attempts_history.append({
                 "attempt": i + 1,

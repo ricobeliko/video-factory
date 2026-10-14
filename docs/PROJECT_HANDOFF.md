@@ -1715,3 +1715,29 @@ Entregas V16.4.1A:
 - **Validação Local:**
   - 82/82 testes PASS em 2.17s (`test/services/test_flow_playwright.py`).
 - **Próximo Gate:** Deploy controlado de produção no PC Forte.
+
+
+### V16.15 — Google Flow Browser Readiness & Native Sandbox Hardening (DEV)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (14/10/2026)
+- **Branch:** `fix/flow-browser-readiness`
+- **Componentes e Arquitetura:**
+  - `scripts/flow_playwright.py`:
+    - `launch_flow_context`: adicionado `chromium_sandbox=True` no `launch_persistent_context`. Elimina a injeção automática de `--no-sandbox` pelo Playwright, removendo o aviso de segurança no topo do Edge e restaurando o isolamento nativo de processos no Windows. Preservados `--enable-automation`, `navigator.webdriver` e o viewport 1920x1080.
+    - `check_studio_surface_readiness`: implementada função dedicada com espera condicional (`wait_for` de seletores, sem sleeps fixos) distinguindo explicitamente entre:
+      1. `COMPOSER_AVAILABLE`: compositor de prompt e/ou controles de geração presentes e visíveis.
+      2. `MEDIA_LIBRARY_ACTIVE`: biblioteca de mídias/assets aberta/visível, com compositor ausente.
+      3. `TIMELINE_EDITOR_ACTIVE`: superfície de edição de timeline/cenas ativa, sem compositor de prompt.
+      4. `LOADING_IN_PROGRESS`: indicadores de progresso/carregamento ainda ativos após o timeout.
+      5. `COMPOSER_NOT_FOUND`: nenhum compositor nem superfície conhecida identificada.
+    - `ensure_video_generation_mode`: integração obrigatória de prontidão de superfície, falhando fail-closed imediatamente com diagnósticos ricos se a interface estiver incompleta, ocupada em loading ou na superfície errada (`STUDIO_SURFACE_MEDIA_LIBRARY_NO_COMPOSER`, `STUDIO_SURFACE_TIMELINE_NO_COMPOSER`, `STUDIO_SURFACE_LOADING_TIMEOUT`), impedindo declaração prematura de modo de vídeo durante a hidratação e mantendo zero cliques em Generate.
+  - `test/services/test_flow_playwright.py`:
+    - `test_launch_flow_context_default_desktop_viewport`: valida `chromium_sandbox=True`.
+    - `test_check_studio_surface_readiness_composer_available`: valida detecção de compositor disponível.
+    - `test_check_studio_surface_readiness_media_library_active`: valida detecção de biblioteca de mídia ativa.
+    - `test_check_studio_surface_readiness_timeline_active`: valida detecção de timeline ativa.
+    - `test_check_studio_surface_readiness_loading_in_progress`: valida detecção de loaders em progresso.
+    - `test_ensure_video_generation_mode_fails_closed_on_media_library`: valida fail-closed na biblioteca de mídia.
+    - `test_ensure_video_generation_mode_fails_closed_on_timeline`: valida fail-closed na timeline.
+- **Validação Local:**
+  - 88/88 testes PASS em 3.45s (`test/services/test_flow_playwright.py`).
+- **Próximo Gate:** Aprovação do Architect para merge em main.

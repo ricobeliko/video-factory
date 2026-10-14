@@ -229,6 +229,7 @@ def launch_flow_context(
             "channel": "msedge",
             "headless": headless,
             "viewport": vp,
+            "chromium_sandbox": True,
             "args": [
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -452,6 +453,144 @@ def _safe_locator_count(loc) -> int:
         return 0
 
 
+def check_studio_surface_readiness(
+    page: Page,
+    timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
+) -> Dict[str, Any]:
+    """
+    Avalia a prontidão real da superfície do Studio com espera condicional (sem sleeps fixos),
+    distinguindo explicitamente entre:
+    1. 'COMPOSER_AVAILABLE': compositor de prompt e/ou controles de geração presentes e visíveis.
+    2. 'MEDIA_LIBRARY_ACTIVE': biblioteca de mídias/assets aberta/visível, com compositor ausente.
+    3. 'TIMELINE_EDITOR_ACTIVE': superfície de edição de timeline/cenas ativa, sem compositor de prompt.
+    4. 'LOADING_IN_PROGRESS': indicadores de progresso/carregamento ainda ativos após o timeout.
+    5. 'COMPOSER_NOT_FOUND': nenhum compositor nem superfície conhecida identificada.
+    """
+    readiness: Dict[str, Any] = {
+        "surface_state": "COMPOSER_NOT_FOUND",
+        "is_ready": False,
+        "composer_visible": False,
+        "loading_active": False,
+        "details": [],
+    }
+
+    wait_window_ms = min(5000, timeout_ms) if timeout_ms > 0 else 5000
+
+    # 1. Espera condicional pelo término de carregamento (spinners / progressbars)
+    loaders = page.locator("mat-progress-bar, mat-spinner, .loading-spinner, [role='progressbar'], .cdk-loading")
+    try:
+        if _safe_locator_count(loaders) > 0 and hasattr(loaders.first, "wait_for"):
+            loaders.first.wait_for(state="hidden", timeout=wait_window_ms)
+    except Exception:
+        pass
+
+    # Verifica se ainda há loader ativo e visível após a espera
+    if _safe_locator_count(loaders) > 0:
+        try:
+            if hasattr(loaders.first, "is_visible") and loaders.first.is_visible():
+                readiness["surface_state"] = "LOADING_IN_PROGRESS"
+                readiness["loading_active"] = True
+                readiness["details"].append("loading_indicators_active")
+                return readiness
+        except Exception:
+            pass
+
+    # 2. Biblioteca de mídias carregada, mas compositor ausente
+    media_lib_loc = page.locator(
+        "flow-media-library, [data-testid*='media-library'], mat-tab-body:has-text('Mídias'), "
+        "[aria-label*='Biblioteca de mídia' i], [aria-label*='Media library' i], .media-library-panel"
+    )
+    is_media_lib_vis = False
+    if _safe_locator_count(media_lib_loc) > 0:
+        try:
+            if hasattr(media_lib_loc.first, "is_visible") and media_lib_loc.first.is_visible():
+                is_media_lib_vis = True
+        except Exception:
+            pass
+
+    # 3. Superfície de edição de cena/timeline
+    timeline_loc = page.locator(
+        "flow-timeline, .timeline-container, [data-testid*='timeline'], .track-container, [aria-label*='Timeline' i]"
+    )
+    is_timeline_vis = False
+    if _safe_locator_count(timeline_loc) > 0:
+        try:
+            if hasattr(timeline_loc.first, "is_visible") and timeline_loc.first.is_visible():
+                is_timeline_vis = True
+        except Exception:
+            pass
+
+    # 4. Espera condicional pela prontidão do compositor de prompt ou controles de geração
+    editor_loc = page.locator("div.ProseMirror[contenteditable='true']")
+    gen_controls_loc = page.locator(
+        "button:has-text('Generate'), button:has-text('Iniciar'), "
+        "button[aria-label*='generate' i], [role='button'][aria-label*='gerar' i], "
+        ".model-badge, mat-chip, .veo-chip, flow-video-hotbar, "
+        "button[aria-label*='modelo' i], button[aria-label*='model' i], button[aria-label*='settings' i]"
+    )
+
+    try:
+        if hasattr(editor_loc.first, "wait_for"):
+            editor_loc.first.wait_for(state="visible", timeout=wait_window_ms)
+    except Exception:
+        pass
+
+    try:
+        if hasattr(gen_controls_loc.first, "wait_for"):
+            gen_controls_loc.first.wait_for(state="visible", timeout=wait_window_ms)
+    except Exception:
+        pass
+
+    # Avaliação da disponibilidade do compositor
+    is_editor_vis = False
+    try:
+        if _safe_locator_count(editor_loc) > 0 and hasattr(editor_loc.first, "is_visible"):
+            is_editor_vis = bool(editor_loc.first.is_visible())
+    except Exception:
+        pass
+
+    is_controls_vis = False
+    try:
+        if _safe_locator_count(gen_controls_loc) > 0 and hasattr(gen_controls_loc.first, "is_visible"):
+            is_controls_vis = bool(gen_controls_loc.first.is_visible())
+    except Exception:
+        pass
+
+    # Se o editor de prompt ou os controles de geração estiverem visíveis:
+    if is_editor_vis or is_controls_vis:
+        readiness["surface_state"] = "COMPOSER_AVAILABLE"
+        readiness["is_ready"] = True
+        readiness["composer_visible"] = is_editor_vis
+        readiness["details"].append(f"composer_editor={is_editor_vis}")
+        readiness["details"].append(f"gen_controls={is_controls_vis}")
+        return readiness
+
+    # Se o compositor não está visível, mas a biblioteca de mídia ou timeline está:
+    if is_media_lib_vis:
+        readiness["surface_state"] = "MEDIA_LIBRARY_ACTIVE"
+        readiness["details"].append("media_library_panel_detected_no_composer")
+        return readiness
+
+    if is_timeline_vis:
+        readiness["surface_state"] = "TIMELINE_EDITOR_ACTIVE"
+        readiness["details"].append("timeline_container_detected_no_composer")
+        return readiness
+
+    # Fallback seguro: verifica se ao menos algum gatilho de modo ou chip está presente
+    candidate_triggers = page.locator("button, [role='button'], mat-chip, span.badge").filter(
+        has_text=re.compile(r"\b(veo|v[íi]deo|video|banana|nano|imagem|image)\b", re.I)
+    )
+    if _safe_locator_count(candidate_triggers) > 0:
+        readiness["surface_state"] = "COMPOSER_AVAILABLE"
+        readiness["is_ready"] = True
+        readiness["details"].append("triggers_detected_on_surface")
+        return readiness
+
+    readiness["surface_state"] = "COMPOSER_NOT_FOUND"
+    readiness["details"].append("composer_and_controls_absent")
+    return readiness
+
+
 def ensure_video_generation_mode(
     page: Page,
     timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
@@ -470,6 +609,7 @@ def ensure_video_generation_mode(
       (zero cliques em Generate, zero créditos consumidos).
     """
     diagnostics: Dict[str, Any] = {
+        "surface_readiness": None,
         "tried_triggers": [],
         "positive_video_signals": [],
         "conflicting_image_signals": [],
@@ -488,6 +628,25 @@ def ensure_video_generation_mode(
     }
 
     try:
+        # 0. Avaliação e espera condicional da prontidão da superfície Studio
+        readiness = check_studio_surface_readiness(page, timeout_ms=timeout_ms)
+        diagnostics["surface_readiness"] = readiness
+
+        if not readiness["is_ready"]:
+            st = readiness["surface_state"]
+            if st == "LOADING_IN_PROGRESS":
+                logger.error("FAIL CLOSED: Carregamento do Studio ainda em andamento após timeout.")
+                res["error"] = "STUDIO_SURFACE_LOADING_TIMEOUT"
+                return res
+            elif st == "MEDIA_LIBRARY_ACTIVE":
+                logger.error("FAIL CLOSED: Biblioteca de mídias aberta na interface, compositor de geração ausente.")
+                res["error"] = "STUDIO_SURFACE_MEDIA_LIBRARY_NO_COMPOSER"
+                return res
+            elif st == "TIMELINE_EDITOR_ACTIVE":
+                logger.error("FAIL CLOSED: Superfície de timeline/cenas ativa, compositor de geração ausente.")
+                res["error"] = "STUDIO_SURFACE_TIMELINE_NO_COMPOSER"
+                return res
+
         # Se houver painel lateral de chat aberto cobrindo a interface principal, fecha-o
         close_btn = page.locator(
             "flow-chat button[aria-label*='Fechar' i], flow-chat button[aria-label*='Close' i], "

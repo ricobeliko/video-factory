@@ -17,6 +17,7 @@ from scripts.flow_playwright import (
     check_generate_actionable,
     check_login_state,
     check_pending_credit_approval,
+    check_studio_surface_readiness,
     _persist_download,
     download_generated_clip,
     normalize_tile_label,
@@ -89,6 +90,7 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_playwright.chromium.launch_persistent_context.assert_called_once()
         _, kwargs = mock_playwright.chromium.launch_persistent_context.call_args
         self.assertEqual(kwargs.get("viewport"), {"width": 1920, "height": 1080})
+        self.assertTrue(kwargs.get("chromium_sandbox"))
         args = kwargs.get("args", [])
         self.assertIn("--window-size=1920,1080", args)
 
@@ -2086,6 +2088,138 @@ class TestFlowPlaywright(unittest.TestCase):
             self.assertIn("credits_before", res.details)
             self.assertIn("credits_after_estimated", res.details)
 
+
+    def test_check_studio_surface_readiness_composer_available(self):
+        """Readiness: detecta COMPOSER_AVAILABLE quando editor ProseMirror está visível."""
+        mock_page = MagicMock()
+        mock_editor = MagicMock()
+        mock_editor.count.return_value = 1
+        mock_editor.first.is_visible.return_value = True
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "ProseMirror" in selector:
+                loc.count.return_value = 1
+                loc.first = mock_editor
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        res = check_studio_surface_readiness(mock_page, timeout_ms=1000)
+        self.assertEqual(res["surface_state"], "COMPOSER_AVAILABLE")
+        self.assertTrue(res["is_ready"])
+
+    def test_check_studio_surface_readiness_media_library_active(self):
+        """Readiness: detecta MEDIA_LIBRARY_ACTIVE quando painel de mídias aberto sem compositor."""
+        mock_page = MagicMock()
+        mock_media = MagicMock()
+        mock_media.count.return_value = 1
+        mock_media.first.is_visible.return_value = True
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if any(k in selector for k in ["media-library", "Mídias"]):
+                loc.count.return_value = 1
+                loc.first = mock_media
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        res = check_studio_surface_readiness(mock_page, timeout_ms=1000)
+        self.assertEqual(res["surface_state"], "MEDIA_LIBRARY_ACTIVE")
+        self.assertFalse(res["is_ready"])
+
+    def test_check_studio_surface_readiness_timeline_active(self):
+        """Readiness: detecta TIMELINE_EDITOR_ACTIVE quando timeline ativa sem compositor."""
+        mock_page = MagicMock()
+        mock_timeline = MagicMock()
+        mock_timeline.count.return_value = 1
+        mock_timeline.first.is_visible.return_value = True
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if any(k in selector for k in ["timeline", "track-container"]):
+                loc.count.return_value = 1
+                loc.first = mock_timeline
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        res = check_studio_surface_readiness(mock_page, timeout_ms=1000)
+        self.assertEqual(res["surface_state"], "TIMELINE_EDITOR_ACTIVE")
+        self.assertFalse(res["is_ready"])
+
+    def test_check_studio_surface_readiness_loading_in_progress(self):
+        """Readiness: detecta LOADING_IN_PROGRESS quando spinners/progressbars persistem."""
+        mock_page = MagicMock()
+        mock_spinner = MagicMock()
+        mock_spinner.count.return_value = 1
+        mock_spinner.first.is_visible.return_value = True
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if any(k in selector for k in ["progress-bar", "spinner", "progressbar"]):
+                loc.count.return_value = 1
+                loc.first = mock_spinner
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        res = check_studio_surface_readiness(mock_page, timeout_ms=1000)
+        self.assertEqual(res["surface_state"], "LOADING_IN_PROGRESS")
+        self.assertFalse(res["is_ready"])
+
+    def test_ensure_video_generation_mode_fails_closed_on_media_library(self):
+        """ensure_video_generation_mode falha fail-closed imediato quando na biblioteca de mídias."""
+        mock_page = MagicMock()
+        mock_media = MagicMock()
+        mock_media.count.return_value = 1
+        mock_media.first.is_visible.return_value = True
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if any(k in selector for k in ["media-library", "Mídias"]):
+                loc.count.return_value = 1
+                loc.first = mock_media
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "STUDIO_SURFACE_MEDIA_LIBRARY_NO_COMPOSER")
+
+    def test_ensure_video_generation_mode_fails_closed_on_timeline(self):
+        """ensure_video_generation_mode falha fail-closed imediato quando na timeline."""
+        mock_page = MagicMock()
+        mock_timeline = MagicMock()
+        mock_timeline.count.return_value = 1
+        mock_timeline.first.is_visible.return_value = True
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if any(k in selector for k in ["timeline", "track-container"]):
+                loc.count.return_value = 1
+                loc.first = mock_timeline
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "STUDIO_SURFACE_TIMELINE_NO_COMPOSER")
 
 if __name__ == "__main__":
     unittest.main()

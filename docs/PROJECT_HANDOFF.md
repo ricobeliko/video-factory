@@ -21,10 +21,9 @@
 - **FLOW_TRACK:** `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro).
 - **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **PRODUCTION_PATH:** `C:\Projetos\MoneyPrinterTurbo` (PC Forte de produção — onde o app roda; deploy realizado estritamente via PowerShell com `scripts/update_production.ps1`)
-- **CURRENT_MAIN_SHA:** `c5841b4` (fix(voice): consume native edge-tts async stream to prevent sync deadlock and propagate errors)
-- **DEV_BRANCH_HEAD_SHA:** `c5841b4` (branch `main` em DEV adiantada em relação a origin/main)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `050ba86bdc09b75ae26312ce5b7ada2b9ec2cd68` (deployado no PC Forte em 14/10/2026 com diagnóstico TTS sanitizado)
+- **CURRENT_MAIN_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (docs: record edge-tts streaming hotfix in PROJECT_HANDOFF)
+- **DEV_BRANCH_HEAD_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (branch `main` em DEV)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -76,6 +75,10 @@
     - **Sintoma:** 5 falhas consecutivas de síntese no canal *Dose Diária de Internet* (`0c8bd081...`, `efa0d660...`, `b6581830...`, `38a61195...`, `d80578f7...`) com erro mascarado em ~2 minutos por tarefa.
     - **Causa Raiz Comprovada:** `edge_tts.Communicate.stream_sync()` na versão 7.2.7 sofre deadlock permanente quando o stream assíncrono lança exceção (ex.: handshake WebSocket HTTP 403 da Microsoft). O wrapper de 30s do MPT convertia qualquer erro real em `TimeoutError`, acumulando 90,05s em 3 tentativas e ocultando a resposta real do provedor.
     - **Correção Implementada (`c5841b4`):** Consumo nativo da API assíncrona `communicate.stream()` em `app/services/voice.py` com loop isolado e timeout determinístico. Falhas de handshake/conexão agora propagam instantaneamente (< 0.05s) com sanitização de tokens e limpeza de arquivos vazios.
+    - **Validação Factual em Produção (HEAD `c8b1444`):**
+      - `edge-tts 7.2.7`: Falha imediata reportando HTTP 403 Forbidden em 3 tentativas sem travamento de 90s (comprovando o fim do deadlock de streaming).
+      - `edge-tts 7.3.1`: **SUCESSO CONFIRMADO na 1ª tentativa** (tempo: 2,16 segundos, arquivo MP3 gerado com 30.096 bytes).
+      - Conclusão: a síntese de voz está plenamente operacional em produção com `edge-tts==7.3.1` aliado ao streaming assíncrono nativo (`c5841b4`).
 - **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R6B OPERATIONAL CONTROLS MVP (DEV)`
 - **WEB_UI_V2_STATUS:** `ACTIVE DEV (R6B IN PROGRESS na branch feat/web-ui-v2-read-api; zero alterações no main)`
 - **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
@@ -131,6 +134,8 @@
   - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
 ### Histórico Recente de Merges no Main:
+- **`fix(deps): update edge-tts to 7.3.1`**: Fix definitivo da dependência alinhando pyproject.toml, requirements.txt e uv.lock com a versão 7.3.1 confirmada funcional em produção (2,16s / 30.096 bytes).
+- **`c8b1444`:** `docs: record edge-tts streaming hotfix in PROJECT_HANDOFF`
 - **`c5841b4`:** `fix(voice): consume native edge-tts async stream to prevent sync deadlock and propagate errors` — Elimina deadlock upstream de `edge_tts.Communicate.stream_sync()` ao consumir nativamente `communicate.stream()` assíncrono em loop dedicado com timeout, propagação imediata de erros de rede/handshake (<0.05s) e cleanup de áudio vazio.
 - **`050ba86`:** `fix(voice): expose sanitized tts failure diagnostics and persist in task state` — Sanitização de URLs/tokens no diagnóstico TTS e persistência no estado da tarefa (deployado no PC Forte em 14/10/2026).
 - **`a44f2d3`:** `fix(autonomous): allow up to 5 approved generations in 24h for warmup replenishment` — Permite até 5 gerações aprovadas em 24h para reposição no warmup (deployado no PC Forte).

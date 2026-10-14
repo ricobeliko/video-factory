@@ -843,6 +843,195 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertFalse(res["confirmed"])
         self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
 
+    def test_ensure_video_generation_mode_surface_positive_signals(self):
+        """D2. surface_positive_signals: quando gatilho ausente, confirma Video via chips Veo e parâmetros."""
+        mock_page = MagicMock()
+
+        # Gatilho de modo ausente
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 0
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_veo_chip = MagicMock()
+        mock_veo_chip.is_visible.return_value = True
+        mock_veo_chip.inner_text.return_value = "Veo 2 · Fast"
+
+        mock_ar_chip = MagicMock()
+        mock_ar_chip.is_visible.return_value = True
+        mock_ar_chip.inner_text.return_value = "9:16"
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif any(kw in selector for kw in ["button", "role=", "combobox", "toolbar", "ProseMirror", "data-testid"]):
+                loc.count.return_value = 0
+                loc.all.return_value = []
+                loc.filter.return_value = loc
+            else:
+                def _filter(has_text=None, has=None):
+                    f = MagicMock()
+                    pat = getattr(has_text, "pattern", "") if has_text else ""
+                    if "veo" in pat:
+                        f.count.return_value = 1
+                        f.all.return_value = [mock_veo_chip]
+                    elif "9:16" in pat:
+                        f.count.return_value = 1
+                        f.first = mock_ar_chip
+                        f.all.return_value = [mock_ar_chip]
+                    else:
+                        f.count.return_value = 0
+                        f.all.return_value = []
+                    return f
+                loc.filter.side_effect = _filter
+                loc.count.return_value = 0
+                loc.all.return_value = []
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertTrue(res["confirmed"])
+        self.assertFalse(res["changed"])
+        self.assertEqual(res["generation_type"], "VIDEO")
+        self.assertEqual(res["aspect_ratio"], "9:16")
+        self.assertIn("diagnostics", res)
+        self.assertTrue(len(res["diagnostics"]["positive_video_signals"]) > 0)
+
+    def test_ensure_video_generation_mode_surface_conflicting_image_signals(self):
+        """D3. surface_conflicting_image_signals: fail-closed se detectar chip de imagem na superfície."""
+        mock_page = MagicMock()
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 0
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_image_chip = MagicMock()
+        mock_image_chip.is_visible.return_value = True
+        mock_image_chip.inner_text.return_value = "Nano Banana 2.1"
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif any(kw in selector for kw in ["button", "role=", "combobox", "toolbar", "ProseMirror", "data-testid"]):
+                loc.count.return_value = 0
+                loc.all.return_value = []
+                loc.filter.return_value = loc
+            else:
+                def _filter(has_text=None, has=None):
+                    f = MagicMock()
+                    pat = getattr(has_text, "pattern", "") if has_text else ""
+                    if "banana" in pat or "imagen" in pat:
+                        f.count.return_value = 1
+                        f.all.return_value = [mock_image_chip]
+                    else:
+                        f.count.return_value = 0
+                        f.all.return_value = []
+                    return f
+                loc.filter.side_effect = _filter
+                loc.count.return_value = 0
+                loc.all.return_value = []
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+        self.assertIn("diagnostics", res)
+        self.assertTrue(len(res["diagnostics"]["conflicting_image_signals"]) > 0)
+
+    def test_ensure_video_generation_mode_diagnostics(self):
+        """D4. diagnostics_logged: registra tried_triggers ao falhar de modo estéril."""
+        mock_page = MagicMock()
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 0
+        mock_page.get_by_role.return_value = mock_trigger
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+        self.assertIn("diagnostics", res)
+        self.assertTrue(len(res["diagnostics"]["tried_triggers"]) >= 3)
+
+    def test_ensure_video_generation_mode_generic_indicators_only_fail_closed(self):
+        """D5. generic_indicators_only: 9:16, x1, 720p/1080p isoladamente NÃO confirmam VIDEO (fail-closed estrito)."""
+        mock_page = MagicMock()
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 0
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_res_chip = MagicMock()
+        mock_res_chip.is_visible.return_value = True
+        mock_res_chip.inner_text.return_value = "1080p"
+
+        mock_ar_chip = MagicMock()
+        mock_ar_chip.is_visible.return_value = True
+        mock_ar_chip.inner_text.return_value = "9:16"
+
+        mock_x1_chip = MagicMock()
+        mock_x1_chip.is_visible.return_value = True
+        mock_x1_chip.inner_text.return_value = "x1"
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif any(kw in selector for kw in ["button", "role=", "combobox", "toolbar", "ProseMirror", "data-testid"]):
+                loc.count.return_value = 0
+                loc.all.return_value = []
+                loc.filter.return_value = loc
+            else:
+                def _filter(has_text=None, has=None):
+                    f = MagicMock()
+                    pat = getattr(has_text, "pattern", "") if has_text else ""
+                    # Apenas indicadores genéricos/secundários (sem Veo, sem videocam, sem 4s/5s/8s/24fps)
+                    if "1080p" in pat:
+                        f.count.return_value = 1
+                        f.all.return_value = [mock_res_chip]
+                    elif "9:16" in pat:
+                        f.count.return_value = 1
+                        f.first = mock_ar_chip
+                        f.all.return_value = [mock_ar_chip]
+                    elif "x1" in pat:
+                        f.count.return_value = 1
+                        f.first = mock_x1_chip
+                        f.all.return_value = [mock_x1_chip]
+                    else:
+                        f.count.return_value = 0
+                        f.all.return_value = []
+                    return f
+                loc.filter.side_effect = _filter
+                loc.count.return_value = 0
+                loc.all.return_value = []
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertFalse(res["confirmed"])
+        self.assertEqual(res["error"], "FLOW_VIDEO_MODE_NOT_CONFIRMED")
+        self.assertEqual(len(res["diagnostics"]["positive_video_signals"]), 0)
+        self.assertTrue(len(res["diagnostics"]["secondary_signals"]) >= 2)
+
     def test_trial_only_confirms_video_zero_generate(self):
         """E. trial_only confirma Video e garante Generate real = 0 e crédito = 0."""
         with patch("scripts.flow_playwright.sync_playwright"), \

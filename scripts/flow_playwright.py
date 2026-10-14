@@ -433,6 +433,17 @@ def ensure_studio_surface(
     return navigate_landing_to_studio(page, timeout_ms=timeout_ms)
 
 
+def _safe_locator_count(loc) -> int:
+    """Retorna a contagem inteira do locator, compatível com Playwright nativo e mocks."""
+    try:
+        val = loc.count() if callable(loc.count) else loc.count
+        if type(val) is int:
+            return val
+        return 0
+    except Exception:
+        return 0
+
+
 def ensure_video_generation_mode(
     page: Page,
     timeout_ms: int = DEFAULT_TIMEOUT_UI_MS,
@@ -440,13 +451,24 @@ def ensure_video_generation_mode(
     """
     Garante operacionalmente que o modo de geração ativo é VIDEO antes de qualquer ação.
     Contrato Fail-Closed:
-    - Se já estiver em VIDEO: não clica no seletor desnecessariamente, retorna confirmed=True, changed=False.
-    - Se estiver em IMAGEM (ou modelo Nano Banana): abre o seletor, localiza exatamente 1
+    - Se o modo VIDEO for confirmado via gatilho/seletor ou por sinais positivos inequívocos
+      da superfície do Studio (badges Veo, duração/fps, ícones de vídeo, placeholder de vídeo):
+      retorna confirmed=True, changed=False, generation_type="VIDEO" (zero cliques desnecessários).
+    - Se estiver em IMAGEM (ou modelo Nano Banana/Imagen): abre o seletor, localiza exatamente 1
       opção de Vídeo, clica UMA vez, ajusta 9:16 e x1 se disponíveis, fecha seletor e
       confirma via asserção de UI que o modo ativo agora é VIDEO. Retorna confirmed=True, changed=True.
-    - Se o controle de modo estiver ausente, ambíguo, ou a opção de Vídeo for ambígua/não confirmada:
-      FAIL CLOSED -> retorna confirmed=False com FLOW_VIDEO_MODE_NOT_CONFIRMED (zero cliques em Generate, zero créditos).
+    - Se houver ausência de gatilho e de sinais positivos, ou sinais conflitantes/ambíguos:
+      FAIL CLOSED -> retorna confirmed=False com FLOW_VIDEO_MODE_NOT_CONFIRMED e diagnósticos ricos
+      (zero cliques em Generate, zero créditos consumidos).
     """
+    diagnostics: Dict[str, Any] = {
+        "tried_triggers": [],
+        "positive_video_signals": [],
+        "conflicting_image_signals": [],
+        "trigger_found": False,
+        "trigger_text": None,
+    }
+
     res: Dict[str, Any] = {
         "confirmed": False,
         "changed": False,
@@ -454,6 +476,7 @@ def ensure_video_generation_mode(
         "aspect_ratio": None,
         "output_count": None,
         "error": None,
+        "diagnostics": diagnostics,
     }
 
     try:
@@ -462,124 +485,324 @@ def ensure_video_generation_mode(
             "flow-chat button[aria-label*='Fechar' i], flow-chat button[aria-label*='Close' i], "
             "button[aria-label='Fechar'], button[aria-label='Close']"
         ).filter(has_text=re.compile(r"close", re.I))
-        if close_btn.count() > 0 and close_btn.first.is_visible():
+        if _safe_locator_count(close_btn) > 0 and close_btn.first.is_visible():
             logger.info("Fechando painel de chat para expor controles principais do Studio...")
             try:
                 close_btn.first.click()
             except Exception as close_exc:
                 logger.debug(f"Não foi necessário fechar chat: {close_exc}")
 
-        # Localiza o botão gatilho de configurações/modelo
-        trigger_btn = page.get_by_role("button", name=re.compile(r"gatilho de configura..es|settings trigger", re.I))
-        if trigger_btn.count() == 0:
-            # Fallback para botão contendo palavras-chave de modelos/modos
-            trigger_btn = page.locator("button").filter(
-                has_text=re.compile(r"\b(v[íi]deo|video|veo|omni|banana|nano|imagem|image)\b", re.I)
-            )
+        # 1. Busca abrangente por botão / controle de seleção de modo / modelo
+        trigger_btn = None
+        target_btn = None
 
-        count = trigger_btn.count()
-        if count == 0:
-            logger.error("MISSING_GENERATION_TYPE_TRIGGER: nenhum botão de seleção de modo encontrado.")
+        # Estratégia A: Role button com nome semântico (compatível com UI atual e legada)
+        diag_a = "role=button[name='gatilho de configurações'|'settings trigger'|'model'|'mode'|'veo']"
+        diagnostics["tried_triggers"].append(diag_a)
+        candidate = page.get_by_role(
+            "button",
+            name=re.compile(r"gatilho de configura..es|settings trigger|seletor de modelo|model selector|tipo de gera..o|generation mode", re.I)
+        )
+        if _safe_locator_count(candidate) > 0:
+            trigger_btn = candidate
+
+        # Estratégia B: Atributos aria-label ou data-testid indicando modelo/modo/configurações
+        if not trigger_btn or _safe_locator_count(trigger_btn) == 0:
+            diag_b = "button[aria-label*='configura'|'settings'|'modelo'|'model'|'modo'|'mode'|'veo']"
+            diagnostics["tried_triggers"].append(diag_b)
+            candidate = page.locator(
+                "button[aria-label*='configura' i], button[aria-label*='settings' i], "
+                "button[aria-label*='modelo' i], button[aria-label*='model' i], "
+                "button[aria-label*='modo' i], button[aria-label*='mode' i], "
+                "button[aria-label*='veo' i], button[data-testid*='model' i], button[data-testid*='mode' i]"
+            )
+            if _safe_locator_count(candidate) > 0:
+                trigger_btn = candidate
+
+        # Estratégia C: Botão ou elemento clicável contendo palavras-chave de modelos/modos
+        if not trigger_btn or _safe_locator_count(trigger_btn) == 0:
+            diag_c = "button/[role=button]/[role=combobox] filter(has_text=video|veo|omni|banana|nano|imagem)"
+            diagnostics["tried_triggers"].append(diag_c)
+            candidate = page.locator("button, [role='button'], [role='combobox']").filter(
+                has_text=re.compile(r"\b(v[íi]deo|video|veo|veo\s*2|omni|banana|nano|imagem|image)\b", re.I)
+            )
+            if _safe_locator_count(candidate) > 0:
+                trigger_btn = candidate
+
+        # Estratégia D: Botões na barra de prompt / barra de ferramentas do editor
+        if not trigger_btn or _safe_locator_count(trigger_btn) == 0:
+            diag_d = "toolbar/prompt-bar container buttons"
+            diagnostics["tried_triggers"].append(diag_d)
+            candidate = page.locator(
+                "div.ProseMirror ~ *, flow-prompt-bar, .editor-footer, .editor-toolbar, flow-editor-action-bar, mat-toolbar"
+            ).locator("button, [role='button']").filter(
+                has_text=re.compile(r"\b(v[íi]deo|video|veo|banana|nano|imagem|image)\b", re.I)
+            )
+            if _safe_locator_count(candidate) > 0:
+                trigger_btn = candidate
+
+        count = _safe_locator_count(trigger_btn) if trigger_btn else 0
+
+        if count > 1:
+            try:
+                visible_btns = [b for b in trigger_btn.all() if b.is_visible()]
+            except Exception:
+                visible_btns = []
+            if len(visible_btns) == 1:
+                target_btn = visible_btns[0]
+            elif len(visible_btns) > 1:
+                video_matches = [b for b in visible_btns if re.search(r"\b(v[íi]deo|video|veo)\b", b.inner_text() if isinstance(b.inner_text(), str) else "", re.I)]
+                if len(video_matches) == 1:
+                    target_btn = video_matches[0]
+                else:
+                    logger.warning(f"AMBIGUOUS_GENERATION_TYPE_TRIGGER: count={count}, visible={len(visible_btns)}")
+        elif count == 1:
+            target_btn = trigger_btn.first
+
+        # SE O GATILHO FOI LOCALIZADO:
+        if target_btn:
+            diagnostics["trigger_found"] = True
+            try:
+                target_btn.wait_for(state="visible", timeout=min(timeout_ms, 5000))
+            except Exception:
+                pass
+
+            raw_text = target_btn.inner_text()
+            initial_text = raw_text.strip() if isinstance(raw_text, str) else ""
+            diagnostics["trigger_text"] = initial_text
+            logger.info(f"Texto atual do seletor de modo/modelo: '{initial_text}'")
+
+            is_video = bool(re.search(r"\b(v[íi]deo|video|veo|omni)\b", initial_text, re.I))
+            is_image = bool(re.search(r"\b(imagem|image|banana|nano)\b", initial_text, re.I))
+
+            if is_video and not is_image:
+                logger.info("Modo de geração já está comprovado como VIDEO via seletor. Zero cliques no seletor.")
+                res["confirmed"] = True
+                res["changed"] = False
+                res["generation_type"] = "VIDEO"
+                if "9:16" in initial_text or "9_16" in initial_text:
+                    res["aspect_ratio"] = "9:16"
+                if "x1" in initial_text:
+                    res["output_count"] = 1
+                return res
+
+            # Se está em IMAGEM ou texto não comprova vídeo diretamente -> Tentar alteração controlada
+            logger.info("Gatilho presente mas modo não está configurado como VIDEO. Abrindo seletor para alteração controlada...")
+            target_btn.click(timeout=timeout_ms)
+
+            overlay = page.locator(".cdk-overlay-pane, [role='dialog'], [role='menu'], mat-menu-panel, flow-menu").filter(
+                has=page.locator("[role='radio'], [role='menuitemradio'], button")
+            )
+            overlay.first.wait_for(state="visible", timeout=timeout_ms)
+
+            video_radio = overlay.first.get_by_role("radio", name=re.compile(r"^(videocam\s+)?v[íi]deo$|^video$", re.I))
+            if _safe_locator_count(video_radio) == 0:
+                video_radio = overlay.first.get_by_role("radio").filter(
+                    has_text=re.compile(r"^\s*(videocam\s+)?v[íi]deo\s*$", re.I)
+                )
+            if _safe_locator_count(video_radio) == 0:
+                video_radio = overlay.first.locator("[role='radio'], [role='menuitemradio']").filter(
+                    has_text=re.compile(r"^\s*(videocam\s+)?v[íi]deo\s*$|^video$", re.I)
+                )
+
+            v_count = _safe_locator_count(video_radio)
+            if v_count != 1:
+                logger.error(f"Opção 'Vídeo' ambígua ou ausente no seletor: count={v_count}. Abortando fail-closed.")
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                return res
+
+            logger.info("Selecionando opção 'Vídeo' no overlay...")
+            video_radio.first.click(timeout=timeout_ms)
+            try:
+                expect(video_radio.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
+            except Exception:
+                pass
+
+            # Ajusta aspect ratio 9:16 se disponível
+            ar_9_16 = overlay.first.get_by_role("radio", name=re.compile(r"9:16", re.I))
+            if _safe_locator_count(ar_9_16) == 0:
+                ar_9_16 = overlay.first.locator("[role='radio'], [role='menuitemradio']").filter(
+                    has_text=re.compile(r"9:16", re.I)
+                )
+            if _safe_locator_count(ar_9_16) == 1:
+                if ar_9_16.first.get_attribute("aria-checked") != "true":
+                    logger.info("Configurando aspect ratio para 9:16...")
+                    ar_9_16.first.click(timeout=timeout_ms)
+                    try:
+                        expect(ar_9_16.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
+                    except Exception:
+                        pass
+                res["aspect_ratio"] = "9:16"
+
+            # Ajusta contagem x1 se disponível
+            x1_opt = overlay.first.get_by_role("radio", name=re.compile(r"^x1$", re.I))
+            if _safe_locator_count(x1_opt) == 0:
+                x1_opt = overlay.first.locator("[role='radio'], [role='menuitemradio']").filter(
+                    has_text=re.compile(r"^x1$", re.I)
+                )
+            if _safe_locator_count(x1_opt) == 1:
+                if x1_opt.first.get_attribute("aria-checked") != "true":
+                    logger.info("Configurando contagem de saída para x1...")
+                    x1_opt.first.click(timeout=timeout_ms)
+                    try:
+                        expect(x1_opt.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
+                    except Exception:
+                        pass
+                res["output_count"] = 1
+
+            page.keyboard.press("Escape")
+            try:
+                overlay.first.wait_for(state="hidden", timeout=5000)
+            except Exception:
+                pass
+
+            expect(target_btn).to_contain_text(re.compile(r"v[íi]deo|video", re.I), timeout=timeout_ms)
+            expect(target_btn).not_to_contain_text(re.compile(r"banana|nano|imagem|image", re.I), timeout=timeout_ms)
+
+            final_raw = target_btn.inner_text()
+            final_text = final_raw.strip() if isinstance(final_raw, str) else ""
+            logger.info(f"Modo VIDEO confirmado na UI com sucesso! Seletor: '{final_text}'")
+
+            res["confirmed"] = True
+            res["changed"] = True
+            res["generation_type"] = "VIDEO"
+            return res
+
+        # 2. FALLBACK: SINAIS POSITIVOS DA PRÓPRIA SUPERFÍCIE (quando gatilho ausente ou interface fixa em vídeo)
+        logger.info("Gatilho de modo ausente. Avaliando sinais positivos e contraditórios da superfície do Studio...")
+
+        # A. Sinais conflitantes de IMAGEM (fail-closed imediato se houver evidência de imagem ativa)
+        image_signals = page.locator(
+            ".model-badge, mat-chip, .mode-chip, .banana-chip, span.badge, [data-badge*='model' i]"
+        ).filter(
+            has_text=re.compile(r"\b(nano banana|banana|imagen|imagen\s*3|texto para imagem|text to image)\b", re.I)
+        )
+        if _safe_locator_count(image_signals) > 0:
+            try:
+                for el in image_signals.all()[:3]:
+                    if el.is_visible():
+                        raw = el.inner_text()
+                        txt = raw.strip() if isinstance(raw, str) else ""
+                        if txt:
+                            diagnostics["conflicting_image_signals"].append(txt[:50])
+            except Exception:
+                pass
+
+        if len(diagnostics["conflicting_image_signals"]) > 0:
+            logger.error(
+                f"FAIL CLOSED: Sinais de modo IMAGEM detectados na superfície: "
+                f"{diagnostics['conflicting_image_signals']}. Abortando sem cliques em Generate."
+            )
             res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
             return res
 
-        if count > 1:
-            visible_btns = [b for b in trigger_btn.all() if b.is_visible()]
-            if len(visible_btns) == 1:
-                target_btn = visible_btns[0]
-            else:
-                logger.error(f"AMBIGUOUS_GENERATION_TYPE_TRIGGER: count={count}, visible={len(visible_btns)}")
-                res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
-                return res
-        else:
-            target_btn = trigger_btn.first
+        # B. Sinais de Superfície
+        # 1. Menção explícita e inequívoca a Veo ou Vídeo em chips/badges
+        veo_badges = page.locator(
+            ".model-badge, mat-chip, .mode-chip, .veo-chip, span.badge, [data-badge*='model' i]"
+        ).filter(
+            has_text=re.compile(r"\b(veo|veo\s*2|veo2|texto para v[íi]deo|text to video)\b", re.I)
+        )
+        if _safe_locator_count(veo_badges) > 0:
+            try:
+                for el in veo_badges.all()[:3]:
+                    if el.is_visible():
+                        raw = el.inner_text()
+                        txt = raw.strip() if isinstance(raw, str) else ""
+                        if txt:
+                            diagnostics["positive_video_signals"].append(f"badge:{txt[:50]}")
+            except Exception:
+                pass
 
-        target_btn.wait_for(state="visible", timeout=timeout_ms)
-        initial_text = target_btn.inner_text().strip()
-        logger.info(f"Texto atual do seletor de modo/modelo: '{initial_text}'")
+        # 2. Componentes ou ícones específicos de vídeo no Studio (flow-video-hotbar, videocam)
+        video_components = page.locator("flow-video-hotbar, mat-icon:has-text('videocam'), [aria-label*='videocam' i]")
+        if _safe_locator_count(video_components) > 0:
+            try:
+                for el in video_components.all()[:2]:
+                    if el.is_visible():
+                        tag = el.evaluate("el => el.tagName") if hasattr(el, "evaluate") else "element"
+                        diagnostics["positive_video_signals"].append(f"component:{tag}")
+            except Exception:
+                pass
 
-        # 1. ESTADO JÁ VIDEO
-        is_video = bool(re.search(r"\b(v[íi]deo|video|veo|omni)\b", initial_text, re.I))
-        is_image = bool(re.search(r"\b(imagem|image|banana|nano)\b", initial_text, re.I))
+        # 3. Parâmetros temporais exclusivos de vídeo (ex: 4s, 5s, 8s, 24fps, 30fps)
+        temporal_params = page.locator("mat-chip, span, div, .param-chip").filter(
+            has_text=re.compile(r"\b(4s|5s|8s|24fps|30fps)\b", re.I)
+        )
+        if _safe_locator_count(temporal_params) > 0:
+            try:
+                for el in temporal_params.all()[:3]:
+                    if el.is_visible():
+                        raw = el.inner_text()
+                        txt = raw.strip() if isinstance(raw, str) else ""
+                        if txt:
+                            diagnostics["positive_video_signals"].append(f"temporal_param:{txt[:30]}")
+            except Exception:
+                pass
 
-        if is_video and not is_image:
-            logger.info("Modo de geração já está comprovado como VIDEO. Zero cliques no seletor.")
+        # 4. Indicadores genéricos/secundários (720p, 1080p, 9:16, x1)
+        # NOTA: Registrados em secondary_signals; isoladamente NÃO confirmam VIDEO
+        secondary_signals = []
+        resolution_params = page.locator("mat-chip, span, div, .param-chip").filter(
+            has_text=re.compile(r"\b(720p|1080p)\b", re.I)
+        )
+        if _safe_locator_count(resolution_params) > 0:
+            try:
+                for el in resolution_params.all()[:2]:
+                    if el.is_visible():
+                        raw = el.inner_text()
+                        txt = raw.strip() if isinstance(raw, str) else ""
+                        if txt:
+                            secondary_signals.append(f"resolution:{txt[:30]}")
+            except Exception:
+                pass
+
+        ar_loc = page.locator("mat-chip, span, div, [class*='aspect' i]").filter(has_text=re.compile(r"\b(9:16|crop_9_16)\b", re.I))
+        if _safe_locator_count(ar_loc) > 0:
+            try:
+                if ar_loc.first.is_visible():
+                    res["aspect_ratio"] = "9:16"
+                    secondary_signals.append("aspect_ratio:9:16")
+            except Exception:
+                pass
+
+        x1_loc = page.locator("mat-chip, span, div, [class*='count' i]").filter(has_text=re.compile(r"^x1$", re.I))
+        if _safe_locator_count(x1_loc) > 0:
+            try:
+                if x1_loc.first.is_visible():
+                    res["output_count"] = 1
+                    secondary_signals.append("output_count:x1")
+            except Exception:
+                pass
+
+        diagnostics["secondary_signals"] = secondary_signals
+
+        # C. Avaliação dos sinais da superfície:
+        # CONDIÇÃO ESTRITA (Architect Gate): Exige pelo menos 1 sinal específico e inequívoco de vídeo.
+        # Indicadores genéricos (9:16, x1, 720p, 1080p) isoladamente NÃO confirmam VIDEO.
+        if len(diagnostics["positive_video_signals"]) > 0:
+            logger.info(
+                f"Modo de geração VIDEO confirmado com sucesso via sinais inequívocos da superfície Studio! "
+                f"Sinais inequívocos: {diagnostics['positive_video_signals']}. Secundários: {secondary_signals}"
+            )
             res["confirmed"] = True
             res["changed"] = False
             res["generation_type"] = "VIDEO"
-            if "9:16" in initial_text or "9_16" in initial_text:
-                res["aspect_ratio"] = "9:16"
-            if "x1" in initial_text:
-                res["output_count"] = 1
             return res
 
-        # 2. ESTADO IMAGE / NÃO CONFIRMADO -> MUDANÇA CONTROLADA
-        logger.info("Modo não está configurado como VIDEO. Abrindo seletor para alteração controlada...")
-        target_btn.click(timeout=timeout_ms)
-
-        # Localiza o overlay
-        overlay = page.locator(".cdk-overlay-pane, [role='dialog'], [role='menu']").filter(
-            has=page.get_by_role("radio")
+        # 3. FAIL CLOSED: Se nenhum gatilho nem sinal positivo foi comprovado
+        logger.error(
+            f"MISSING_GENERATION_TYPE_TRIGGER / INCONCLUSIVE_SURFACE_SIGNALS: "
+            f"Nenhum gatilho de modo nem sinal positivo de vídeo confirmado. "
+            f"Seletores tentados: {diagnostics['tried_triggers']}. "
+            f"Sinais positivos: {diagnostics['positive_video_signals']}. "
+            f"Conflitos: {diagnostics['conflicting_image_signals']}."
         )
-        overlay.first.wait_for(state="visible", timeout=timeout_ms)
-
-        # Localiza a opção de Vídeo
-        video_radio = overlay.first.get_by_role("radio", name=re.compile(r"^(videocam\s+)?v[íi]deo$|^video$", re.I))
-        if video_radio.count() == 0:
-            video_radio = overlay.first.get_by_role("radio").filter(
-                has_text=re.compile(r"^\s*(videocam\s+)?v[íi]deo\s*$", re.I)
-            )
-
-        v_count = video_radio.count()
-        if v_count != 1:
-            logger.error(f"Opção 'Vídeo' ambígua ou ausente no seletor: count={v_count}. Abortando fail-closed.")
-            try:
-                page.keyboard.press("Escape")
-            except Exception:
-                pass
-            res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
-            return res
-
-        # Clica na opção Vídeo exatamente UMA vez
-        logger.info("Selecionando opção 'Vídeo' no overlay...")
-        video_radio.first.click(timeout=timeout_ms)
-        expect(video_radio.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
-
-        # Ajusta aspect ratio 9:16 se disponível
-        ar_9_16 = overlay.first.get_by_role("radio", name=re.compile(r"9:16", re.I))
-        if ar_9_16.count() == 1:
-            if ar_9_16.first.get_attribute("aria-checked") != "true":
-                logger.info("Configurando aspect ratio para 9:16...")
-                ar_9_16.first.click(timeout=timeout_ms)
-                expect(ar_9_16.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
-            res["aspect_ratio"] = "9:16"
-
-        # Ajusta contagem x1 se disponível
-        x1_opt = overlay.first.get_by_role("radio", name=re.compile(r"^x1$", re.I))
-        if x1_opt.count() == 1:
-            if x1_opt.first.get_attribute("aria-checked") != "true":
-                logger.info("Configurando contagem de saída para x1...")
-                x1_opt.first.click(timeout=timeout_ms)
-                expect(x1_opt.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
-            res["output_count"] = 1
-
-        # Fecha o overlay
-        page.keyboard.press("Escape")
-        try:
-            overlay.first.wait_for(state="hidden", timeout=5000)
-        except Exception:
-            pass
-
-        # Confirma na própria UI que o tipo ativo agora é Video
-        expect(target_btn).to_contain_text(re.compile(r"v[íi]deo|video", re.I), timeout=timeout_ms)
-        expect(target_btn).not_to_contain_text(re.compile(r"banana|nano|imagem|image", re.I), timeout=timeout_ms)
-
-        final_text = target_btn.inner_text().strip()
-        logger.info(f"Modo VIDEO confirmado na UI com sucesso! Seletor: '{final_text}'")
-
-        res["confirmed"] = True
-        res["changed"] = True
-        res["generation_type"] = "VIDEO"
+        res["error"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
         return res
 
     except Exception as exc:

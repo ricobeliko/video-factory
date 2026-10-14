@@ -1678,3 +1678,23 @@ Entregas V16.4.1A:
 
 
 
+
+### V16.13 — Google Flow Video Mode Detection Resiliency (Homologada em DEV)
+- **Status:** DEV_HOMOLOGATED / PENDING_ARCHITECT_APPROVAL (14/10/2026)
+- **Branch:** ix/flow-video-mode-detection
+- **Componentes e Arquitetura:**
+  - scripts/flow_playwright.py (ensure_video_generation_mode):
+    - Ampliação dos seletores de busca por gatilho de modo/configurações (suporte a eo, modelo, modo, configurações, settings, ria-label).
+    - Fallback de superfície por sinais positivos de vídeo quando o gatilho antigo não estiver presente (badges Veo/Veo 2, chips de parâmetros de vídeo 720p, 1080p, 4s, 5s, 8s, 24fps, 30fps, componentes low-video-hotbar, ícones ideocam).
+    - Detecção fail-closed estrita para sinais conflitantes de imagem (Nano Banana, Imagen 3, 	ext to image), abortando antes de qualquer clique em Generate.
+    - Telemetria de diagnóstico estruturada (diagnostics com 	ried_triggers, positive_video_signals, conflicting_image_signals).
+    - Helper _safe_locator_count(loc) para compatibilidade total entre Playwright nativo e mocks de teste MagicMock.
+  - 	est/services/test_flow_playwright.py:
+    - Adicionados 3 novos testes direcionados:
+      - 	est_ensure_video_generation_mode_surface_positive_signals
+      - 	est_ensure_video_generation_mode_surface_conflicting_image_signals
+      - 	est_ensure_video_generation_mode_diagnostics
+- **Validação Local:**
+  - 79 testes unitários PASS em 2.19s (	est/services/test_flow_playwright.py).
+  - Zero cliques em Generate quando modo de vídeo não confirmado (fail-closed garantido).
+- **Próximo Gate:** Aprovação do Architect para commit local em DEV.

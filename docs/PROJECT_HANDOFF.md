@@ -1698,3 +1698,20 @@ Entregas V16.4.1A:
   - 79 testes unitários PASS em 2.19s (	est/services/test_flow_playwright.py).
   - Zero cliques em Generate quando modo de vídeo não confirmado (fail-closed garantido).
 - **Próximo Gate:** Aprovação do Architect para commit local em DEV.
+
+
+### V16.14 — Google Flow Desktop Viewport & Window Size Hardening (DEV)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (14/10/2026)
+- **Branch:** `fix/flow-viewport-desktop`
+- **Componentes e Arquitetura:**
+  - `scripts/flow_playwright.py`:
+    - Definido `DEFAULT_VIEWPORT = {"width": 1920, "height": 1080}`.
+    - `launch_flow_context`: adicionado parâmetro `viewport` opcional, configurando explicitamente `launch_kwargs["viewport"] = vp` e adicionando `--window-size=1920,1080` nos `args` do Chromium/Edge. Garante que tanto em modo headful quanto headless a janela física e o viewport do layout abram em formato desktop completo (1920x1080), impedindo que o layout responsivo do Google Flow esconda o botão/seletor de modo vídeo.
+    - `run_playwright_flow_poc`: aplicação explícita de `page.set_viewport_size(DEFAULT_VIEWPORT)` na página ativa para resiliência contra pré-configurações de abas abertas.
+    - Preservados integralmente os perfis de navegação, sessões, seletores, fail-closed e proteção de créditos.
+  - `test/services/test_flow_playwright.py`:
+    - `test_launch_flow_context_default_desktop_viewport`: valida configuração padrão de viewport 1920x1080 e `--window-size=1920,1080`.
+    - `test_launch_flow_context_custom_viewport`: valida suporte a viewports customizados.
+- **Validação Local:**
+  - 82/82 testes PASS em 2.17s (`test/services/test_flow_playwright.py`).
+- **Próximo Gate:** Deploy controlado de produção no PC Forte.

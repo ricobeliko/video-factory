@@ -76,6 +76,37 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertIsNone(ctx)
         self.assertEqual(err, "AWAITING_FLOW_EDGE_PROFILE_CLOSE")
 
+    def test_launch_flow_context_default_desktop_viewport(self):
+        """launch_flow_context configura viewport 1920x1080 e --window-size=1920,1080 por padrão."""
+        mock_playwright = MagicMock()
+        mock_ctx = MagicMock()
+        mock_playwright.chromium.launch_persistent_context.return_value = mock_ctx
+
+        ctx, err = launch_flow_context(mock_playwright, user_data_dir="storage/test_profile")
+        self.assertIsNone(err)
+        self.assertEqual(ctx, mock_ctx)
+
+        mock_playwright.chromium.launch_persistent_context.assert_called_once()
+        _, kwargs = mock_playwright.chromium.launch_persistent_context.call_args
+        self.assertEqual(kwargs.get("viewport"), {"width": 1920, "height": 1080})
+        args = kwargs.get("args", [])
+        self.assertIn("--window-size=1920,1080", args)
+
+    def test_launch_flow_context_custom_viewport(self):
+        """launch_flow_context respeita viewport customizado se especificado."""
+        mock_playwright = MagicMock()
+        mock_ctx = MagicMock()
+        mock_playwright.chromium.launch_persistent_context.return_value = mock_ctx
+
+        custom_vp = {"width": 2560, "height": 1440}
+        ctx, err = launch_flow_context(mock_playwright, user_data_dir="storage/test_profile", viewport=custom_vp)
+        self.assertIsNone(err)
+
+        _, kwargs = mock_playwright.chromium.launch_persistent_context.call_args
+        self.assertEqual(kwargs.get("viewport"), custom_vp)
+        args = kwargs.get("args", [])
+        self.assertIn("--window-size=2560,1440", args)
+
     def test_check_login_state_public_about_landing(self):
         """1. Landing pública (/about) retorna AWAITING_INITIAL_HUMAN_LOGIN (fail-closed)."""
         mock_page = MagicMock()

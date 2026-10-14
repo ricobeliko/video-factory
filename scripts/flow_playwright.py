@@ -47,6 +47,7 @@ DEFAULT_TIMEOUT_UI_MS = 30000
 DEFAULT_TIMEOUT_GEN_SEC = 600
 DEFAULT_TIMEOUT_DOWNLOAD_MS = 30000
 MIN_TILE_EVIDENCE_CHARS = 24
+DEFAULT_VIEWPORT: Dict[str, int] = {"width": 1920, "height": 1080}
 
 
 def normalize_tile_label(label: str) -> str:
@@ -208,6 +209,7 @@ def launch_flow_context(
     user_data_dir: str = DEFAULT_USER_DATA_DIR,
     headless: bool = True,
     downloads_path: Optional[str] = None,
+    viewport: Optional[Dict[str, int]] = None,
 ) -> Tuple[Optional[BrowserContext], Optional[str]]:
     """
     Abre o contexto persistente do Playwright usando o Microsoft Edge instalado (channel='msedge').
@@ -221,11 +223,17 @@ def launch_flow_context(
             return None, "INVALID_PLAYWRIGHT_DOWNLOADS_PATH"
         os.makedirs(downloads_path, exist_ok=True)
     try:
+        vp = viewport if viewport is not None else DEFAULT_VIEWPORT
         launch_kwargs: Dict[str, Any] = {
             "user_data_dir": user_data_dir,
             "channel": "msedge",
             "headless": headless,
-            "args": ["--no-first-run", "--no-default-browser-check"],
+            "viewport": vp,
+            "args": [
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"--window-size={vp['width']},{vp['height']}",
+            ],
             "accept_downloads": True,
         }
         if downloads_path:
@@ -1704,6 +1712,10 @@ def run_playwright_flow_poc(
 
         page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_UI_MS)
+        try:
+            page.set_viewport_size(DEFAULT_VIEWPORT)
+        except Exception as vp_exc:
+            logger.debug(f"Ajuste explícito de viewport na página inicial: {vp_exc}")
 
         # Configura download behavior via CDP exclusivamente para native_staging_dir (durável)
         try:

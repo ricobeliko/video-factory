@@ -364,6 +364,32 @@ class TestVoiceService(unittest.TestCase):
 
         self.assertIsNone(sub_maker)
         self.assertLess(elapsed, 2)
+        diag = vs.get_last_tts_diagnostic()
+        self.assertIsNotNone(diag)
+        self.assertEqual(diag["provider"], "azure-tts-v1")
+        self.assertEqual(diag["voice_name"], "en-AU-NatashaNeural")
+        self.assertEqual(diag["attempts"], 3)
+        self.assertEqual(diag["last_error_type"], "TimeoutError")
+        self.assertIn("timed out", diag["last_error_message"])
+
+    def test_sanitize_error_message_redacts_tokens_and_urls(self):
+        """Valida que mensagens de erro de TTS não expõem tokens, chaves ou query strings de URL."""
+        raw_msg = (
+            "403, message='Invalid response status', url=URL("
+            "'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?"
+            "TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=abc&Sec-MS-GEC=xyz')"
+        )
+        sanitized = vs._sanitize_error_message(raw_msg)
+        self.assertNotIn("6A5AA1D4EAFF4E9FB37E23D68491D6F4", sanitized)
+        self.assertNotIn("Sec-MS-GEC=xyz", sanitized)
+        self.assertIn("<REDACTED_QUERY>", sanitized)
+        self.assertIn("403", sanitized)
+
+        # Teste com API key e passwords
+        cred_msg = "failed with api_key=secret_12345 and password=super_secret!"
+        sanitized_cred = vs._sanitize_error_message(cred_msg)
+        self.assertNotIn("secret_12345", sanitized_cred)
+        self.assertNotIn("super_secret", sanitized_cred)
 
     @unittest.skipUnless(
         RUN_INTEGRATION_TESTS,

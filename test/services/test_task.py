@@ -974,6 +974,83 @@ class TestTaskService(unittest.TestCase):
             task_id, "audio", "generated audio duration is zero"
         )
 
+    def test_generate_audio_records_tts_diagnostic_on_failure(self):
+        """Valida que quando TTS falha com diagnóstico estruturado, o erro detalhado é registrado e script.json atualizado."""
+        task_id = "test-tts-diagnostic-propagation"
+        task_dir = utils.task_dir(task_id)
+        params = VideoParams(
+            video_subject="tts diagnostic",
+            video_script="",
+            voice_name="en-US-BrianMultilingualNeural",
+        )
+        fake_diag = {
+            "provider": "azure-tts-v1",
+            "voice_name": "en-US-BrianMultilingualNeural",
+            "attempts": 3,
+            "total_duration_seconds": 90.15,
+            "last_error_type": "TimeoutError",
+            "last_error_message": "edge_tts stream timed out after 30s",
+        }
+
+        try:
+            with (
+                patch.object(tm.voice, "tts", return_value=None),
+                patch.object(tm.voice, "get_last_tts_diagnostic", return_value=fake_diag),
+                patch.object(tm.task_artifacts, "patch_script_data") as patch_script,
+                patch.object(tm, "_mark_task_failed") as mark_task_failed,
+            ):
+                audio_file, audio_duration, result_sub_maker = tm.generate_audio(
+                    task_id, params, "script"
+                )
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+        self.assertIsNone(audio_file)
+        self.assertIsNone(audio_duration)
+        self.assertIsNone(result_sub_maker)
+
+        patch_script.assert_called_once_with(task_id, tts_diagnostic=fake_diag)
+        mark_task_failed.assert_called_once()
+        call_args = mark_task_failed.call_args
+        self.assertEqual(call_args.args[0], task_id)
+        self.assertEqual(call_args.args[1], "audio")
+        self.assertIn("provider=azure-tts-v1", call_args.args[2])
+        self.assertIn("attempts=3", call_args.args[2])
+        self.assertIn("[TimeoutError] edge_tts stream timed out after 30s", call_args.args[2])
+        self.assertEqual(call_args.kwargs.get("details"), {"tts_diagnostic": fake_diag})
+
+    def test_generate_audio_uses_fallback_error_without_diagnostic(self):
+        """Valida que quando TTS falha sem diagnóstico, a mensagem canônica legada é preservada."""
+        task_id = "test-tts-fallback-propagation"
+        task_dir = utils.task_dir(task_id)
+        params = VideoParams(
+            video_subject="tts fallback",
+            video_script="",
+            voice_name="test-voice",
+        )
+
+        try:
+            with (
+                patch.object(tm.voice, "tts", return_value=None),
+                patch.object(tm.voice, "get_last_tts_diagnostic", return_value=None),
+                patch.object(tm, "_mark_task_failed") as mark_task_failed,
+            ):
+                audio_file, audio_duration, result_sub_maker = tm.generate_audio(
+                    task_id, params, "script"
+                )
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+        self.assertIsNone(audio_file)
+        self.assertIsNone(audio_duration)
+        self.assertIsNone(result_sub_maker)
+        mark_task_failed.assert_called_once_with(
+            task_id,
+            "audio",
+            "failed to synthesize audio; verify the selected voice and TTS connectivity",
+            details=None,
+        )
+
     def test_generate_subtitle_uses_whisper_for_custom_audio_without_sub_maker(self):
         """
         自定义音频不会经过 TTS，所以没有 sub_maker。

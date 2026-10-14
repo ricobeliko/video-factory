@@ -566,10 +566,29 @@ def generate_audio(
             voice_file=audio_file,
         )
         if sub_maker is None:
+            tts_diag = voice.get_last_tts_diagnostic()
+            if tts_diag:
+                error_msg = (
+                    f"failed to synthesize audio (provider={tts_diag.get('provider')}, "
+                    f"voice={tts_diag.get('voice_name')}, "
+                    f"attempts={tts_diag.get('attempts')}, "
+                    f"duration={tts_diag.get('total_duration_seconds')}s): "
+                    f"[{tts_diag.get('last_error_type')}] {tts_diag.get('last_error_message')}"
+                )
+                details = {"tts_diagnostic": tts_diag}
+                try:
+                    task_artifacts.patch_script_data(task_id, tts_diagnostic=tts_diag)
+                except Exception as patch_exc:
+                    logger.debug(f"could not patch tts_diagnostic in script.json: {patch_exc}")
+            else:
+                error_msg = "failed to synthesize audio; verify the selected voice and TTS connectivity"
+                details = None
+
             _mark_task_failed(
                 task_id,
                 "audio",
-                "failed to synthesize audio; verify the selected voice and TTS connectivity",
+                error_msg,
+                details=details,
             )
             return None, None, None
         # Measure the real written audio_file, not sub_maker.cues[-1].end:

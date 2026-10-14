@@ -1014,6 +1014,7 @@ def tts(
     voice_file: str,
     voice_volume: float = 1.0,
 ) -> Union[SubMaker, None]:
+    _set_last_tts_diagnostic(None)
     # 无停顿标签时，原样直通原始文本，避免无意义的正则处理或空白截断
     if not utils.has_pause_tags(text):
         return _single_tts(
@@ -1323,13 +1324,51 @@ def stream_edge_tts_chunks(
         loop.close()
 
 
+_tts_diagnostic_state = threading.local()
+
+
+def _sanitize_error_message(msg: str | None) -> str:
+    """Sanitiza mensagens de erro de TTS para observabilidade sem vazar dados sensíveis."""
+    if not msg:
+        return "unknown error"
+    clean = str(msg).strip()
+    # Oculta tokens, chaves e credenciais em query strings ou cabeçalhos
+    clean = re.sub(
+        r"((?:\b|[?&])(?:TrustedClientToken|Sec-MS-GEC|token|key|api_key|secret|password)=)[^& \'\")\\]+",
+        r"\1<REDACTED>",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    # Reduz URLs completas com query params
+    clean = re.sub(r"(\bhttps?://[^\s?#]+)\?[^\s'\")]+", r"\1?<REDACTED_QUERY>", clean)
+    clean = re.sub(r"(\bwss?://[^\s?#]+)\?[^\s'\")]+", r"\1?<REDACTED_QUERY>", clean)
+    clean = " ".join(clean.split())
+    if len(clean) > 200:
+        clean = clean[:197] + "..."
+    return clean
+
+
+def get_last_tts_diagnostic() -> dict | None:
+    """Retorna detalhes diagnósticos sanitizados da última falha de TTS na thread atual."""
+    return getattr(_tts_diagnostic_state, "last_diagnostic", None)
+
+
+def _set_last_tts_diagnostic(diag: dict | None) -> None:
+    """Registra detalhes diagnósticos da última falha de TTS na thread atual."""
+    _tts_diagnostic_state.last_diagnostic = diag
+
+
 def azure_tts_v1(
     text: str, voice_name: str, voice_rate: float, voice_file: str
 ) -> Union[SubMaker, None]:
     voice_name = parse_voice_name(voice_name)
     text = text.strip()
     rate_str = convert_rate_to_percent(voice_rate)
+    attempts_history = []
+    total_start = time.monotonic()
+
     for i in range(3):
+        attempt_start = time.monotonic()
         try:
             logger.info(f"start, voice name: {voice_name}, try: {i + 1}")
 
@@ -1357,13 +1396,30 @@ def azure_tts_v1(
                 )
 
             if not sub_maker.get_srt():
+                elapsed = round(time.monotonic() - attempt_start, 2)
                 logger.warning("failed, sub_maker.get_srt() is empty")
+                attempts_history.append({
+                    "attempt": i + 1,
+                    "duration_seconds": elapsed,
+                    "error_type": "EmptySubtitleError",
+                    "error_message": "sub_maker.get_srt() is empty",
+                })
                 continue
 
             logger.info(f"completed, output file: {voice_file}")
+            _set_last_tts_diagnostic(None)
             return sub_maker
         except Exception as e:
-            logger.error(f"failed, error: {str(e)}")
+            elapsed = round(time.monotonic() - attempt_start, 2)
+            error_type = type(e).__name__
+            error_msg = _sanitize_error_message(str(e))
+            logger.error(f"failed, error: {error_msg}")
+            attempts_history.append({
+                "attempt": i + 1,
+                "duration_seconds": elapsed,
+                "error_type": error_type,
+                "error_message": error_msg,
+            })
             # TTS 流式写入如果在首包前超时或网络异常，会留下 0 字节音频文件。
             # 这种文件既不可播放，也可能误导后续排查，因此失败后只清理空文件；
             # 如果已经写入了部分数据，则保留现场文件，便于分析服务端返回内容。
@@ -1375,6 +1431,18 @@ def azure_tts_v1(
                         "failed to remove empty tts file: "
                         f"{voice_file}, error: {str(remove_error)}"
                     )
+
+    total_duration = round(time.monotonic() - total_start, 2)
+    last_err = attempts_history[-1] if attempts_history else {}
+    _set_last_tts_diagnostic({
+        "provider": "azure-tts-v1",
+        "voice_name": voice_name,
+        "attempts": len(attempts_history),
+        "total_duration_seconds": total_duration,
+        "last_error_type": last_err.get("error_type", "UnknownError"),
+        "last_error_message": last_err.get("error_message", "all attempts failed"),
+        "attempts_history": attempts_history,
+    })
     return None
 
 

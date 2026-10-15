@@ -1851,3 +1851,35 @@ Entregas V16.4.1A:
   - 99/99 testes PASS em 2.95s (`test/services/test_flow_playwright.py`).
   - Validação Playwright headful real no notebook DEV: `STATUS = PRE_FLIGHT_TRIAL_PASS`, `CREDITS_CONSUMED = 0`.
 - **Próximo Gate:** Aprovação do Architect para release e homologação controlada.
+
+### V16.20 — Auditoria Completa Google Flow e Homologação de Geração Real DEV
+- **Status:** `DEV_AUDITED_AND_REAL_GENERATION_HOMOLOGATED` (14/10/2026)
+- **Base:** `dc783176dfc9a759ceb27d5ccbb66078f3d88993` (origin/main)
+- **Auditoria do Notebook DEV (Headful Edge):**
+  - **Conta e Perfil:** `flow-primary` (`storage/flow_browser_profile`), sessão persistente `AUTHENTICATED`.
+  - **Saldo:** 130 créditos verificados diretamente na UI (`FLOW_UI_VERIFIED`).
+  - **Navegação & Projeto:** Transição para Studio limpa e confirmada (`https://flow.google.com/project/5cbaac29-c5d9-4150-a86f-d16e545a5099`).
+  - **Modo & Modelo:** Modo VIDEO comprovado (`Vídeo · 720p · 8s crop_9_16 x1`), zero cliques de seletor necessários.
+  - **Prompt:** ProseMirror preenchido e confirmado via expect.
+  - **Actionability do Generate:** `is_disabled=False`, `click(trial=True)` 100% PASS.
+  - **Baseline:** 0 tiles pré-existentes identificados no projeto limpo.
+- **Geração Real Única Autorizada (Limite Estrito = 1):**
+  - **Prompt:** `"A majestic snow-capped mountain reflecting in a perfectly calm alpine lake at dawn, crystal clear, 9:16 vertical composition, cinematic photorealism, slow camera drift, no text, no watermark."`
+  - **Disparo:** Clique único no Generate (`generate_click_count_this_run = 1`, zero loops).
+  - **Início:** `GENERATION_STARTED` confirmado diretamente na interface.
+  - **Conclusão:** `wait_for_generation_complete` confirmou conclusão em ~46s.
+  - **Isolamento do Resultado:** Tile isolado identificado com sucesso (`label:Mountain reflecting in alpine lake`).
+  - **Download Escopado:** Hover no tile -> `Mais opções` -> `Fazer o download` -> `720p Tamanho original`.
+  - **Resiliência do Download:** O fallback de staging nativo recuperou o arquivo com integridade perfeita após salvamento inicial assíncrono.
+  - **Validação do MP4:**
+    - Arquivo: `storage/dev_smoke/real_generation_dev/clips/flow_scene_01.mp4`
+    - Duração: `8.042667s`
+    - Tamanho: `3.285.584 bytes` (~3.28 MB)
+    - SHA-256: `b000f138f0cf62f1479ff89f146e87df3676711f0bd9895105751681dfe5734f`
+    - Validação de mídia (`validate_clip_file`): `{'valid': True, 'duration': 8.042667, 'size': 3285584}`.
+- **Diagnóstico Comparativo DEV vs PROD (Causa da Falha de Detecção em PROD):**
+  - **Em DEV:** Projeto limpo (baseline de 0 tiles). O novo tile é único e passa com `new_tile_count = 1`.
+  - **Em PROD:** Projeto antigo/reutilizado (`0ec5ffbb-c75a-49b3-a2c1-be693547a72b`) contendo tiles anteriores.
+  - **Causa Raiz Identificada:** Quando o novo tile conclui mas a thumbnail ainda não carregou o token `/asb/`, o detector usa o fallback `ident = f"label:{aria_label}"`. Se um tile anterior no projeto reutilizado tiver o mesmo label/prompt, o novo tile colide com o `baseline_set`, sendo ignorado (`new_tiles = 0`). Subsequentemente, `new_ids = after_ids - baseline_ids` resulta em conjunto vazio, disparando `GENERATION_RESULT_NOT_FOUND` falso, mesmo com o vídeo gerado e visível na tela.
+  - **Recomendação:** Priorizar sempre projetos limpos (`--new-project`) para execuções de produção, ou aguardar o token único `/asb/` da thumbnail para desambiguação perfeita.
+- **Créditos Consumidos:** Exatamente 15 créditos na única geração real autorizada (130 -> 115).

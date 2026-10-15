@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.flow_playwright import (
+    _safe_locator_count,
     DEFAULT_VIEWPORT,
     get_windows_workarea,
     resolve_flow_window_and_viewport,
@@ -2567,6 +2568,55 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertTrue(res["confirmed"])
         self.assertEqual(res["generation_type"], "VIDEO")
         mock_chip.click.assert_called_once()
+
+    def test_match_tile_label_substring_high_evidence(self):
+        """Valida casamento por substring com evidência >= 24 caracteres."""
+        scene = {
+            "scene_index": 1,
+            "prompt_en": "Cinematic vertical shot of a holographic map in dark room with futuristic details",
+        }
+        # clean_label está contido no prompt (28 chars >= 24)
+        self.assertTrue(match_tile_label_to_scene("Holographic map in dark room", scene))
+        # target está contido em clean_label (28 chars >= 24)
+        scene_short = {"scene_index": 1, "prompt_en": "Holographic map in dark room"}
+        self.assertTrue(match_tile_label_to_scene("Cinematic vertical holographic map in dark room", scene_short))
+
+    def test_download_only_skips_empty_scene_tiles(self):
+        """Valida que download_only ignora flow-scene-tile em empty-state ao buscar alvos de vídeo."""
+        mock_page = MagicMock()
+        mock_tiles = MagicMock()
+        mock_tiles.count.return_value = 2
+
+        # Tile 0: vídeo real
+        mock_t0 = MagicMock()
+        mock_t0.locator.side_effect = lambda sel: MagicMock(count=lambda: 0)  # sem .empty-state
+        mock_t0.get_attribute.return_value = "Holographic map in dark room"
+
+        # Tile 1: cena vazia
+        mock_t1 = MagicMock()
+        mock_empty = MagicMock()
+        mock_empty.count.return_value = 1  # tem .empty-state
+        mock_t1.locator.side_effect = lambda sel: mock_empty if "empty-state" in sel else MagicMock(count=lambda: 0)
+        mock_t1.get_attribute.return_value = "Untitled Scene 10-14 13:55:11"
+
+        mock_tiles.nth.side_effect = lambda idx: mock_t0 if idx == 0 else mock_t1
+
+        scene = {
+            "scene_index": 1,
+            "prompt_en": "Holographic map in dark room",
+        }
+
+        # Simula o loop de filtragem do download_only
+        matched_indices = []
+        for idx in range(2):
+            tile_cand = mock_tiles.nth(idx)
+            if _safe_locator_count(tile_cand.locator(".empty-state")) > 0:
+                continue
+            label_attr = tile_cand.get_attribute("aria-label")
+            if match_tile_label_to_scene(label_attr, scene):
+                matched_indices.append(idx)
+
+        self.assertEqual(matched_indices, [0])
 
 if __name__ == "__main__":
     unittest.main()

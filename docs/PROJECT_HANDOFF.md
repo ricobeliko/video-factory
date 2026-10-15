@@ -1883,3 +1883,30 @@ Entregas V16.4.1A:
   - **Causa Raiz Identificada:** Quando o novo tile conclui mas a thumbnail ainda não carregou o token `/asb/`, o detector usa o fallback `ident = f"label:{aria_label}"`. Se um tile anterior no projeto reutilizado tiver o mesmo label/prompt, o novo tile colide com o `baseline_set`, sendo ignorado (`new_tiles = 0`). Subsequentemente, `new_ids = after_ids - baseline_ids` resulta em conjunto vazio, disparando `GENERATION_RESULT_NOT_FOUND` falso, mesmo com o vídeo gerado e visível na tela.
   - **Recomendação:** Priorizar sempre projetos limpos (`--new-project`) para execuções de produção, ou aguardar o token único `/asb/` da thumbnail para desambiguação perfeita.
 - **Créditos Consumidos:** Exatamente 15 créditos na única geração real autorizada (130 -> 115).
+
+### V16.21 — Recuperação do Vídeo Existente da Conta flow-b e Resolução de Baseline com Placeholders
+- **Status:** `VIDEO_RECOVERED_AND_HOMOLOGATED` (14/10/2026)
+- **Branch/Base:** `main` (commit `891a602ba08831f5e5edb86859dc7f65655d679e`)
+- **Projeto Alvo:** `https://flow.google.com/project/0ec5ffbb-c75a-49b3-a2c1-be693547a72b` (Conta: `flow-b`).
+- **Diagnóstico da Falha em Produção (Causa do Timeout de 900s):**
+  - O projeto em questão continha 2 elementos:
+    - `Tile 0`: Vídeo gerado com sucesso pelo Veo (`Holographic map in dark room`, `flow-video-tile`).
+    - `Tile 1`: Placeholder de cena vazia pré-existente (`Untitled Scene 10-14 13:55:11`, `flow-scene-tile.empty-state`).
+  - No ciclo de geração em PROD, `capture_tile_baseline` contou o placeholder no baseline (`baseCount = 1`).
+  - Durante a geração, `GENERATION_COMPLETE_JS` avaliava `readyCount > baseCount`. Como o placeholder de cena não é um vídeo, `readyCount` subiu apenas de 0 para 1.
+  - A condição `1 > 1` permaneceu estritamente falsa, mantendo a espera até o timeout de 900s com `GENERATION_RESULT_NOT_FOUND`, embora o vídeo estivesse completamente pronto e visível na tela.
+- **Recuperação Real Executada em DEV (Zero Cliques Generate, Zero Créditos Consumidos):**
+  - Acesso direto ao projeto via perfil `flow-b` em DEV.
+  - O seletor escopado localizou deterministicamente o `Tile 0` (`Holographic map in dark room`).
+  - Executado download escopado nativo para `storage/recovered_videos/recovered_scene_holographic_map.mp4`.
+  - **Validação de Mídia:**
+    - Arquivo: `storage/recovered_videos/recovered_scene_holographic_map.mp4`
+    - Tamanho: `5.526.272 bytes` (~5,52 MB).
+    - Duração: `8.0 segundos`.
+    - Integridade: `valid = True`, `error = None` (FFprobe confirmado).
+- **Implementação e Proteção contra Regressões:**
+  - `match_tile_label_to_scene`: adicionado suporte a relação de substring de alta entropia ($\ge 24$ caracteres) para acomodar resumos e títulos gerados pela IA do Flow.
+  - `capture_tile_baseline`, `wait_for_generation_complete` e `--download-only`: ignoram explicitamente elementos `.empty-state` (`flow-scene-tile`), impedindo que placeholders de cena vazia corrompam contagens de baseline ou sejam confundidos com alvos de vídeo.
+- **Validação Local:**
+  - 101/101 testes unitários PASS em 3.16s (`test/services/test_flow_playwright.py`).
+  - Recuperação real em DEV concluída com sucesso.

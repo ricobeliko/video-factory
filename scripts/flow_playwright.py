@@ -185,6 +185,13 @@ def match_tile_label_to_scene(
         if len(target) >= min_evidence_chars and clean_label.startswith(target):
             return True
 
+        # 3. Relação de substring (com evidência mínima de 24 caracteres úteis)
+        if len(clean_label) >= min_evidence_chars and clean_label in target:
+            return True
+
+        if len(target) >= min_evidence_chars and target in clean_label:
+            return True
+
     return False
 
 
@@ -1397,6 +1404,8 @@ def capture_tile_baseline(page: Page) -> Set[str]:
     baseline_ids: Set[str] = set()
     for i in range(count):
         t = tiles.nth(i)
+        if _safe_locator_count(t.locator(".empty-state")) > 0:
+            continue
         img = t.locator("img.thumbnail")
         ident = None
         if img.count() > 0:
@@ -1524,6 +1533,8 @@ def wait_for_generation_complete(
 
         for i in range(count):
             t = all_grid_tiles.nth(i)
+            if _safe_locator_count(t.locator(".empty-state")) > 0:
+                continue
             img = t.locator("img.thumbnail")
             ident = None
             if img.count() > 0:
@@ -2195,6 +2206,8 @@ def run_playwright_flow_poc(
                     matched_indices = []
                     for idx in range(t_count):
                         tile_cand = all_tiles.nth(idx)
+                        if _safe_locator_count(tile_cand.locator(".empty-state")) > 0:
+                            continue
                         label_attr = tile_cand.get_attribute("aria-label")
                         if match_tile_label_to_scene(label_attr, target_scene):
                             matched_indices.append(idx)

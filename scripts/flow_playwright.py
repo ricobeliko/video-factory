@@ -716,17 +716,38 @@ def ensure_video_generation_mode(
                 res["error"] = "STUDIO_SURFACE_TIMELINE_NO_COMPOSER"
                 return res
 
-        # Se houver painel lateral de chat aberto cobrindo a interface principal, fecha-o
+        # Se houver painel lateral de chat ou de configurações do agente aberto, fecha-o
         close_btn = page.locator(
             "flow-chat button[aria-label*='Fechar' i], flow-chat button[aria-label*='Close' i], "
-            "button[aria-label='Fechar'], button[aria-label='Close']"
-        ).filter(has_text=re.compile(r"close", re.I))
+            "button[aria-label='Fechar'], button[aria-label='Close'], "
+            "flow-agent-panel button[aria-label*='Voltar' i], flow-agent-panel button[aria-label*='Fechar' i]"
+        )
         if _safe_locator_count(close_btn) > 0 and close_btn.first.is_visible():
-            logger.info("Fechando painel de chat para expor controles principais do Studio...")
+            logger.info("Fechando painel lateral para expor controles principais do Studio...")
             try:
                 close_btn.first.click()
             except Exception as close_exc:
-                logger.debug(f"Não foi necessário fechar chat: {close_exc}")
+                logger.debug(f"Não foi necessário fechar painel lateral: {close_exc}")
+
+        # 0. Garante que o modo 'Agente' não esteja ativo (o modo Agente oculta o gatilho de vídeo direto)
+        agent_chip = page.locator(
+            "button.agent-mode-chip, [role='button'].agent-mode-chip, button:has(span.agent-mode-chip-label), button:has-text('Agente')"
+        ).first
+        try:
+            if _safe_locator_count(agent_chip) > 0 and agent_chip.is_visible():
+                is_pressed = (
+                    agent_chip.get_attribute("aria-pressed") == "true"
+                    or "checked" in (agent_chip.get_attribute("class") or "")
+                )
+                if is_pressed:
+                    logger.info("Modo 'Agente' ativo detectado no compositor. Desativando modo Agente para expor o seletor direto de vídeo...")
+                    agent_chip.click()
+                    try:
+                        page.wait_for_timeout(300)
+                    except Exception:
+                        pass
+        except Exception as ag_exc:
+            logger.debug(f"Aviso não-bloqueante ao verificar chip Agente: {ag_exc}")
 
         # 1. Busca abrangente por botão / controle de seleção de modo / modelo
         trigger_btn = None
@@ -780,7 +801,8 @@ def ensure_video_generation_mode(
         EXCLUDED_TRIGGER_TERMS = re.compile(
             r"\b(grade|grid|blocos|tiles|projeto|project|conta|account|perfil|profile|"
             r"ajuda|help|filtra|sort|ordena|adicionar arquivo|upload|menu para adicionar|"
-            r"reutilizar comando|fechar|close|minimizar|expandir|notifica|pesquisar|search)\b",
+            r"reutilizar comando|fechar|close|minimizar|expandir|notifica|pesquisar|search|"
+            r"instru..es|instrucoes|agente|voltar)\b",
             re.I
         )
 

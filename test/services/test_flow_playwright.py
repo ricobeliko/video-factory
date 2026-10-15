@@ -2531,6 +2531,43 @@ class TestFlowPlaywright(unittest.TestCase):
         mock_backdrop.first.click.assert_called_once_with(force=True, timeout=1000)
         mock_btn.click.assert_called_once_with(trial=True, timeout=5000)
 
+    def test_ensure_video_generation_mode_deactivates_agent_mode(self):
+        """Valida que ensure_video_generation_mode desativa o modo Agente se ativo antes de selecionar Vídeo."""
+        mock_page = MagicMock()
+
+        # Mock chip do agente
+        mock_chip = MagicMock()
+        mock_chip.count.return_value = 1
+        mock_chip.is_visible.return_value = True
+        mock_chip.get_attribute.side_effect = lambda a: "true" if a == "aria-pressed" else "agent-mode-chip agent-mode-chip-checked"
+        mock_chip.first = mock_chip
+
+        # Mock trigger de vídeo (inicialmente oculto, depois visível)
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.is_visible.return_value = True
+        mock_trigger.inner_text.return_value = "Vídeo · 720p · 8s crop_9_16 x1"
+        mock_trigger.first = mock_trigger
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "agent-mode-chip" in selector or "Agente" in selector:
+                return mock_chip
+            if "timeline" in selector or "track-container" in selector:
+                loc.count.return_value = 0
+                return loc
+            loc.count.return_value = 0
+            loc.filter.return_value = loc
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+        mock_page.get_by_role.return_value = mock_trigger
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertTrue(res["confirmed"])
+        self.assertEqual(res["generation_type"], "VIDEO")
+        mock_chip.click.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -1828,3 +1828,26 @@ Entregas V16.4.1A:
   - 98/98 testes PASS em 2.97s (`test/services/test_flow_playwright.py`).
   - 21/21 testes PASS em 1.47s (`test/test_flow_account_pool.py`).
 - **PrÃ³ximo Gate:** AprovaÃ§Ã£o do Architect para release e homologaÃ§Ã£o controlada.
+
+### V16.19 — Resolução de Conflito de Modo Agente vs Compositor Direto no Flow (DEV)
+- **Status:** `DEV_HOMOLOGATED / REPRODUCED_AND_FIXED` (14/10/2026)
+- **Branch:** `fix/flow-agent-mode-deactivation`
+- **Contexto & Diagnóstico com Trace Real do PC Forte (FLOW_DIAGNOSTICO.zip):**
+  - O trace real da falha em PROD (`20261014_211303_FLOW_VIDEO_MODE_NOT_CONFIRMED.zip`) revelou que o projeto no PC Forte estava com o chip de modo `Agente` ativado (`agent-mode-chip-checked`, `aria-pressed="true"`).
+  - No Google Flow, quando o modo `Agente` está ativo, o botão padrão `Gatilho de configurações` é automaticamente ocultado na UI (`hidden=""`). Em seu lugar, a UI exibe controles do agente, incluindo um botão `Configurações` (ícone `tune`, x=1159, y=871).
+  - O seletor de fallback de configurações clicou nesse botão `Configurações` do agente, o que abriu o painel lateral `<flow-agent-panel>` (`Configurações do agente`), e não o popup padrão de seleção de modo (`.cdk-overlay-pane`).
+  - Como `<flow-agent-panel>` é uma gaveta lateral interna e não um `.cdk-overlay-pane`, a espera pelo overlay sofreu timeout de 30 segundos (`FLOW_VIDEO_MODE_NOT_CONFIRMED`).
+- **Comprovação e Reprodução Empírica:**
+  - Em DEV, reproduzimos o estado exato ativando o chip `Agente` (`aria-pressed="true"`), confirmando que `Gatilho de configurações` fica imediatamente invisível (`visible: False`) e o botão `Configurações` do agente passa a ser exibido.
+  - Ao clicar no chip `Agente` para desativá-lo (`aria-pressed="false"`), o modo Agente é desligado e o `Gatilho de configurações` volta a ficar 100% visível no compositor com o texto de vídeo ativo (`Vídeo · 720p · 8s crop_9_16 x1`).
+  - Também foi validada em teste headful a comutação controlada de `🍌 Nano Banana 2.1` (Imagem) de volta para `Vídeo` abrindo o popup do seletor, com seleção de 9:16 e x1.
+- **Implementação:**
+  - `scripts/flow_playwright.py`:
+    - `ensure_video_generation_mode`: fecha painéis laterais residuais (`flow-agent-panel button[aria-label*='Voltar']`) e verifica se o chip `button.agent-mode-chip` está com `aria-pressed="true"` ou classe `checked`. Se ativo, clica no chip para desativar o modo Agente, restaurando a interface direta do compositor.
+    - `EXCLUDED_TRIGGER_TERMS`: expandido para ignorar termos de agente (`instruções`, `agente`, `voltar`).
+  - `test/services/test_flow_playwright.py`:
+    - Adicionado `test_ensure_video_generation_mode_deactivates_agent_mode`: valida a desativação do chip Agente e a confirmação do modo Vídeo subsequente.
+- **Validação Local:**
+  - 99/99 testes PASS em 2.95s (`test/services/test_flow_playwright.py`).
+  - Validação Playwright headful real no notebook DEV: `STATUS = PRE_FLIGHT_TRIAL_PASS`, `CREDITS_CONSUMED = 0`.
+- **Próximo Gate:** Aprovação do Architect para release e homologação controlada.

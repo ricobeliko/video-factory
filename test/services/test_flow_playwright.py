@@ -2618,6 +2618,30 @@ class TestFlowPlaywright(unittest.TestCase):
 
         self.assertEqual(matched_indices, [0])
 
+    def test_match_tile_label_ai_summary_tokens(self):
+        """Valida que títulos resumidos gerados pela IA do Flow casam deterministicamente com o prompt longo."""
+        real_holographic_scene = {
+            "scene_index": 1,
+            "prompt_en": (
+                "A glowing holographic outline of an open-world map suspended in a dark room. "
+                "The holographic lines slowly pulse and expand, symbolizing imagination and grand scale. "
+                "A dimly lit futuristic studio space with dark concrete walls."
+            ),
+        }
+        # Título gerado pela IA do Flow
+        self.assertTrue(
+            match_tile_label_to_scene("Holographic map in dark room", real_holographic_scene)
+        )
+
+        # Prompt de tema completamente diferente (futebol / espaço) deve ser REJEITADO (fail-closed)
+        unrelated_scene = {
+            "scene_index": 1,
+            "prompt_en": "Um astronauta caminha lentamente sobre a superfície da Lua enquanto a Terra azul aparece ao fundo.",
+        }
+        self.assertFalse(
+            match_tile_label_to_scene("Holographic map in dark room", unrelated_scene)
+        )
+
 if __name__ == "__main__":
     unittest.main()
 

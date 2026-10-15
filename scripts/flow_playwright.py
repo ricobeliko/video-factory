@@ -192,6 +192,18 @@ def match_tile_label_to_scene(
         if len(target) >= min_evidence_chars and target in clean_label:
             return True
 
+        # 4. Relação de palavras-chave da IA do Flow (resumo do prompt):
+        # O Google Flow sintetiza títulos curtos a partir do prompt (ex: 'Holographic map in dark room').
+        # Exige pelo menos 3 palavras significativas (>= 3 chars) e >= 80% de correspondência no prompt alvo.
+        label_words = [
+            w for w in re.findall(r"[a-zA-Z0-9_À-ÿ]+", clean_label)
+            if len(w) >= 3 and w not in ("the", "and", "for", "with", "uma", "com", "que", "dos", "das", "seu", "sua")
+        ]
+        if len(label_words) >= 3 and len(clean_label) >= 15:
+            matched_words = [w for w in label_words if w in target]
+            if len(matched_words) >= 3 and (len(matched_words) / len(label_words)) >= 0.8:
+                return True
+
     return False
 
 
@@ -2217,9 +2229,19 @@ def run_playwright_flow_poc(
                         logger.info(
                             f"Tile determinístico encontrado para cena {scene_index} no índice {matched_indices[0]}."
                         )
+                    elif len(matched_indices) == 0:
+                        logger.error(
+                            f"Multi-tile download-only: nenhum tile do projeto correspondeu deterministicamente à cena {scene_index} "
+                            f"(matches=0, total_tiles={t_count}). Fail-closed."
+                        )
+                        report["status"] = f"AMBIGUOUS_TILE_TARGET_FOR_SCENE_{scene_index}"
+                        report["error"] = f"AMBIGUOUS_TILE_TARGET_FOR_SCENE_{scene_index}"
+                        _stop_tracing(report["status"])
+                        context.close()
+                        return report
                     else:
                         logger.error(
-                            f"Multi-tile download-only: impossível determinar inequivocamente tile da cena {scene_index} "
+                            f"Multi-tile download-only: múltiplos tiles corresponderam ambiguamente à cena {scene_index} "
                             f"(matches={len(matched_indices)}, total_tiles={t_count}). Fail-closed."
                         )
                         report["status"] = f"AMBIGUOUS_TILE_TARGET_FOR_SCENE_{scene_index}"

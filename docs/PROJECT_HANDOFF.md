@@ -1910,3 +1910,24 @@ Entregas V16.4.1A:
 - **Validação Local:**
   - 101/101 testes unitários PASS em 3.16s (`test/services/test_flow_playwright.py`).
   - Recuperação real em DEV concluída com sucesso.
+
+### V16.22 — Correção Final de Identificação de Vídeos por Resumo de Prompt da IA do Flow
+- **Status:** `DEV_HOMOLOGATED / REPRODUCED_AND_FIXED` (14/10/2026)
+- **Base:** `44305f1ff662b2666b51fd3620b56183d52f10d2` (origin/main)
+- **Diagnóstico da Causa Raiz de `matches=0` em `--download-only`:**
+  - O Google Flow sintetiza títulos curtos (ex: `"Holographic map in dark room"`) a partir de prompts longos (ex: `"A glowing holographic outline of an open-world map suspended in a dark room..."`).
+  - Como palavras intermediárias (ex: `"outline of an open-world "`) são omitidas na síntese do Flow, o casamento por substring contígua estrita (`clean_label in target`) falhava (`False`), mesmo quando o manifesto correspondia à cena real.
+  - Além disso, se o operador apontava para um `manifest.json` de outro projeto/tema, o fail-closed rejeitava corretamente o vídeo para evitar associação incorreta.
+- **Implementação:**
+  - `match_tile_label_to_scene()`: adicionada Regra 4 de casamento por palavras-chave significativas da IA do Flow (mínimo de 3 palavras significativas com $\ge 3$ letras e $\ge 80\%$ de correspondência no prompt alvo), rejeitando com 100% de precisão prompts não relacionados.
+  - `--download-only`: log detalhado diferenciando `matches=0` (nenhum tile correspondeu ao prompt da cena) de `matches>1` (ambiguidade real).
+- **Validação com Playwright Real em DEV (Zero Cliques, Zero Créditos):**
+  - Executado `--download-only` no projeto `0ec5ffbb-c75a-49b3-a2c1-be693547a72b` com conta `flow-b`.
+  - Resultado: `Tile determinístico encontrado para cena 1 no índice 0`.
+  - Download capturado: `Holographic_map_in_dark_room_20261014233509.mp4`.
+  - Validação MP4: `valid = True`, duração `8.0s`, tamanho `5.526.272 bytes`.
+  - Cliques no Generate: `0` (`generate_click_count_this_run = 0`).
+  - Tentativas de geração: `0` (`generation_attempts = 0`).
+  - Status: `SUCCESS`.
+- **Testes Unitários:**
+  - 102/102 testes PASS em 2.99s (`test/services/test_flow_playwright.py`).

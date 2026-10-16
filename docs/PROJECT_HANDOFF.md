@@ -16,20 +16,20 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `HOTFIX QG-V2.1 — CORREÇÃO DE NameError max_sim EM calculate_originality()`
+- **CURRENT_FOCUS:** `QG-V2.2 — RECUPERAÇÃO SEGURA DE VÍDEOS JÁ GERADOS (RETIDOS POR QUALITY GATE)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / HOTFIX_QG_V2_1_READY`
+- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_DEV_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed` (base de produção; hotfix QG-V2.1 aplicado localmente)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos)
-- **CURRENT_GATE:** `HOTFIX QG-V2.1 TESTING & DEPLOYMENT GATE`
+- **CURRENT_MAIN_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (base de produção; QG-V2.2 implementado localmente em DEV)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
+- **CURRENT_GATE:** `QG-V2.2 LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `PRODUCTION_DEPLOYED (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip instalado no PC Forte, Task Scheduler porta 8080 ativa, Streamlit 8501 preservado)`
-- **QG_V2_STATUS:** `HOTFIX QG-V2.1 DEV VALIDATED (Correção de NameError max_sim em calculate_originality quando recent_topics não está vazio; 14 testes direcionados PASS)`
+- **QG_V2_STATUS:** `QG-V2.2 DEV VALIDATED (Recuperação Segura de Vídeos Retidos por Quality Gate: CLI scripts/recover_held_quality_videos.py com modo dry-run padrão, promoção segura para Ready Stock via app/services/quality_recovery.py, fail-closed, preservação de histórico, zero regeneração/custos, 10 testes direcionados PASS)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2252,6 +2252,40 @@ Entregas V16.4.1A:
     - `test_calculate_originality_scenarios` (PASS - histórico vazio, temas distintos, temas similares e duplicatas).
     - `test_inspect_held_quality_videos_with_populated_history` (PASS - execução da auditoria com histórico populado em SQLite sem qualquer exceção).
     - 12 testes anteriores de integração e regressão de QG-V2 mantidos 100% aprovados.
+
+### V16.31 — QG-V2.2: Recuperação Segura de Vídeos Retidos por Quality Gate (DEV)
+- **Status:** `DEV_VALIDATED / LOCAL_COMMIT_READY` (16/10/2026)
+- **Base:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0`
+- **Contexto e Motivação:**
+  - A auditoria read-only em produção confirmou 35 tarefas inspecionadas, com 11 candidatas retidas exclusivamente pelo Quality Gate antigo e agora elegíveis à aprovação pelo QG-V2, com arquivos MP4 íntegros e Safety/Copyright PASS (ex.: GTA 5 vs GTA 6 recalibrado de 63.3 REVIEW para 77.2 GOOD; Elevador despencando recalibrado de 69.2 REVIEW para 87.7 STRONG).
+- **Mecanismo Seguro de Recuperação Criado:**
+  1. *Serviço de Recuperação (`app/services/quality_recovery.py`):*
+     - Funções `inspect_single_held_task`, `inspect_all_held_tasks` e `recover_held_quality_task`.
+     - Classificação determinística em 6 estados mutuamente exclusivos: `ELIGIBLE`, `BLOCKED`, `ALREADY_STOCKED`, `ALREADY_SCHEDULED`, `ALREADY_PUBLISHED` e `NEEDS_REVIEW`.
+     - Preservação estrita de histórico append-only em `content_quality_scores` (o score anterior e a decisão anterior NUNCA são sobrescritos ou apagados; novo registro é inserido e resolvido como o mais recente via `ORDER BY created_at DESC, id DESC LIMIT 1`).
+     - Registro auditável formal em `operational_events` com tipo `held_task_quality_recovered` e metadados completos em JSON.
+     - Garantia de idempotência: invocações repetidas detectam `ALREADY_STOCKED` e encerram com status `already_recovered` sem duplicações.
+  2. *CLI Operacional (`scripts/recover_held_quality_videos.py`):*
+     - Modo padrão seguro: `--dry-run` (somente leitura; zero mutação de banco ou disco).
+     - Aplicação futura estritamente controlada: exige `--apply --task-id <ID> --confirm RECOVER_HELD_VIDEOS`.
+     - Fail-closed total: proíbe `--apply` em lote ou sem ID específico.
+  3. *Isolamento e Proteção de Estoque:*
+     - A recuperação apenas eleva a avaliação para que `get_autonomous_ready_stock` reconheça a tarefa como estoque pronto para YouTube.
+     - NENHUMA linha é inserida em `scheduled_posts`.
+     - NENHUM agendamento ou disparo é ativado no Scheduler.
+     - NENHUM render, NENHUMA geração de cena, NENHUM consumo de créditos Google Flow ou TTS.
+- **Validação Local Dirigida:**
+  - 10/10 testes unitários e de integração direcionados PASS em `test/services/test_quality_recovery_v2_2.py`:
+    - `test_1_gta_candidate_recoverable` (PASS - candidato GTA recuperado com sucesso para Ready Stock).
+    - `test_2_elevator_candidate_recoverable` (PASS - candidato Elevador recalculado >= 85.0 STRONG e recuperado).
+    - `test_3_quality_below_70_remains_blocked` (PASS - fail-closed para score < 70.0).
+    - `test_4_safety_rejected_blocks_recovery` (PASS - Safety Gate rejeitado bloqueia recuperação).
+    - `test_5_copyright_rejected_blocks_recovery` (PASS - Copyright Gate rejeitado bloqueia recuperação).
+    - `test_6_mp4_missing_or_empty_blocks_recovery` (PASS - MP4 ausente ou vazio bloqueia recuperação).
+    - `test_7_video_already_published_cannot_be_recovered` (PASS - previne republicação).
+    - `test_8_video_already_scheduled_cannot_be_recovered` (PASS - previne agendamento duplicado).
+    - `test_9_repeated_application_idempotent_no_duplication` (PASS - idempotência perfeita).
+    - `test_10_preserves_history_and_no_automatic_publication` (PASS - histórico preservado, evento de auditoria gerado, ZERO agendamento ou publicação automática).
 
 
 

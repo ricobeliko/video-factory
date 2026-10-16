@@ -18,7 +18,8 @@
 param(
     [string]$HostAddress = "0.0.0.0",
     [int]$Port = 8080,
-    [switch]$BuildIfMissing
+    [switch]$BuildIfMissing,
+    [switch]$KillExisting
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,7 +113,60 @@ Write-WebUiLog "URL Local             : http://localhost:$Port"
 Write-WebUiLog "URL Remota na Rede    : http://<IP_DO_HOST>:$Port"
 Write-WebUiLog "Streamlit Fallback    : http://<IP_DO_HOST>:8501 (preservado ativo)"
 
+# 5.1 Verificação de Porta e Proteção Contra Processos Duplicados
+$PortInUse = $false
+try {
+    $TcpClient = New-Object System.Net.Sockets.TcpClient
+    $ConnectTask = $TcpClient.ConnectAsync("127.0.0.1", $Port)
+    if ($ConnectTask.Wait(800) -and $TcpClient.Connected) {
+        $PortInUse = $true
+        $TcpClient.Close()
+    }
+} catch {}
+
+if ($PortInUse) {
+    if ($KillExisting) {
+        Write-WebUiLog "Porta $Port ocupada. Encerrando processo anterior (-KillExisting)..." -Level "WARN"
+        try {
+            $ExistingConns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+            if ($ExistingConns) {
+                foreach ($Conn in $ExistingConns) {
+                    if ($Conn.OwningProcess -and $Conn.OwningProcess -ne $PID) {
+                        Stop-Process -Id $Conn.OwningProcess -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                Start-Sleep -Seconds 1
+            }
+        } catch {
+            Write-WebUiLog "Aviso ao tentar encerrar processo na porta ${Port}: $_" -Level "WARN"
+        }
+    } else {
+        # Avalia se a instância na porta já é o Web UI V2 respondendo
+        $IsHealthy = $false
+        try {
+            $HealthResp = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 3 -ErrorAction SilentlyContinue
+            if ($HealthResp.status -eq "healthy") {
+                $IsHealthy = $true
+            }
+        } catch {}
+
+        if ($IsHealthy) {
+            Write-WebUiLog "Instância ativa da Web UI V2 já em execução e saudável na porta $Port. Encerrando launcher sem duplicar processo." -Level "SUCCESS"
+            exit 0
+        } else {
+            $ErrMsg = "CONFLITO: A porta $Port já está em uso por outro processo. Encerre o processo conflitante ou utilize -KillExisting."
+            Write-WebUiLog $ErrMsg -Level "ERROR" -IsError
+            exit 1
+        }
+    }
+}
+
 # 6. Inicialização do Servidor Uvicorn
+$PidFile = Join-Path $LogDir "webui_v2.pid"
+try {
+    Set-Content -Path $PidFile -Value $PID -Encoding ASCII -Force
+} catch {}
+
 Write-WebUiLog "Iniciando servidor FastAPI / Uvicorn..."
 $UvicornArgs = @(
     "-m", "uvicorn",
@@ -122,8 +176,16 @@ $UvicornArgs = @(
     "--log-level", "warning"
 )
 
-& $VenvPython $UvicornArgs
-$ExitCode = $LASTEXITCODE
+try {
+    & $VenvPython $UvicornArgs
+    $ExitCode = $LASTEXITCODE
+} finally {
+    try {
+        if (Test-Path $PidFile) {
+            Remove-Item -Path $PidFile -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
 
 Write-WebUiLog "Servidor Web UI V2 finalizado com código $ExitCode."
 exit $ExitCode

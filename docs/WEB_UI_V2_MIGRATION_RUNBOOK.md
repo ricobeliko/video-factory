@@ -69,23 +69,40 @@ Test-Path "$WebUiDist\assets"
 
 ## 4. Procedimento de Inicialização
 
-### Opção A — Execução via Script Operacional Canônico (Recomendada):
+### Opção A — Execução Automática e Persistente via Scheduled Task (Recomendada para Produção):
+
+Para que a Web UI V2 inicie automaticamente no boot do Windows, sem depender de janelas abertas do PowerShell e sem exigir login do operador:
+
+Abra o PowerShell como Administrador no PC Forte (`C:\Projetos\MoneyPrinterTurbo`):
+
+```powershell
+.\scripts\register_webui_v2_task.ps1
+```
+
+O script automatiza todo o ciclo com garantias de segurança:
+1. **Verificação de Pré-condições:** Valida o `.venv` e a presença do build compilado em `webui-v2\dist\index.html`.
+2. **Preservação Estrita da Produção:** Detecta e mantém 100% intacta a tarefa `VideoFactory Production` (Streamlit na 8501).
+3. **Tratamento de Instância Manual Preexistente:** Se uma janela PowerShell ou processo manual já estiver ocupando a porta 8080, o script encerra o processo anterior de forma limpa antes de acionar a Scheduled Task.
+4. **Registro Idempotente:** Registra a tarefa `VideoFactory WebUI V2` com:
+   - **Gatilho:** No boot do Windows (`AtStartup`), sem exigir login.
+   - **Execução:** Invisível / sem janela (`-WindowStyle Hidden`).
+   - **Prevenção de Duplicatas:** `MultipleInstances = IgnoreNew` (impede processos concorrentes).
+   - **Recuperação Automática:** `RestartCount = 3`, `RestartInterval = 1 minuto`.
+   - **Tempo Limite:** `ExecutionTimeLimit = 0` (execução contínua).
+5. **Inicialização e Validação:** Inicia a tarefa e confirma via polling:
+   - HTTP 200 em `http://127.0.0.1:8080/health`.
+   - HTTP 200 em `http://127.0.0.1:8080/api/v2/health` confirmando `role = SECONDARY_VIEW_ONLY`.
+   - Exibe o status consolidado de ambas as tarefas no encerramento.
+
+### Opção B — Execução Manual para Testes Rápidos:
+
+Caso prefira rodar temporariamente em uma janela visível:
 
 ```powershell
 .\scripts\start_webui_v2.ps1 -HostAddress "0.0.0.0" -Port 8080
 ```
 
-O script:
-1. Valida o runtime Python `.venv`.
-2. Verifica a existência de `webui-v2\dist\index.html` (e compila se ausente).
-3. Registra logs operacionais em `storage\logs\webui_v2\webui_v2_startup.log`.
-4. Inicia o Uvicorn servindo a Web UI V2 e a API V2 no endereço e porta especificados.
-
-### Opção B — Execução Direta:
-
-```powershell
-& .venv\Scripts\python.exe -m uvicorn app.asgi:app --host 0.0.0.0 --port 8080 --log-level info
-```
+O launcher detecta se outra instância já estiver ouvindo na porta 8080 e encerra com sucesso sem duplicar processos.
 
 ---
 
@@ -168,8 +185,15 @@ Se o operador acessar a interface de outro computador na rede local ou via VPN:
 
 Caso seja necessário desativar ou reverter a Web UI V2:
 
-1. **Desativação Imediata (Sem impacto em Git ou dados):**
-   - Encerre o processo do Uvicorn na porta 8080 (CTRL+C ou encerre o PID registrado em `storage\logs\webui_v2\webui_v2_startup.log`).
+1. **Desativação Imediata da Scheduled Task / Processo:**
+   - Para desativar e remover a tarefa agendada sem afetar outros serviços:
+     ```powershell
+     .\scripts\register_webui_v2_task.ps1 -Unregister
+     ```
+   - Ou simplesmente interrompa a tarefa via PowerShell:
+     ```powershell
+     Stop-ScheduledTask -TaskName "VideoFactory WebUI V2"
+     ```
    - A Web UI V2 fica imediatamente inativa.
    - O Streamlit na porta 8501 continua operando normalmente como autoridade primária ou interface ativa.
 

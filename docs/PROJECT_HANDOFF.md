@@ -163,19 +163,21 @@ Remove-Item -Path ".\webui-v2\temp_extract" -Recurse -Force
 Test-Path "$WebUiDist\index.html"
 Test-Path "$WebUiDist\assets"
 
-# 5. Iniciar a Web UI V2 na porta 8080 (em nova janela do PowerShell)
-.\scripts\start_webui_v2.ps1
+# 5. Registrar e iniciar a Scheduled Task persistente (inicia no boot, sem janela interativa):
+.\scripts\register_webui_v2_task.ps1
 
-# 6. Validar os endpoints de saúde
+# 6. Validar os endpoints de saúde e conformidade SECONDARY_VIEW_ONLY
 Invoke-RestMethod -Uri "http://127.0.0.1:8080/health"
 Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/v2/health"
 ```
 
 #### Procedimento de Rollback no PC Forte:
-Caso seja necessário desativar a Web UI V2:
+Caso seja necessário desativar e desregistrar a Web UI V2:
 ```powershell
-# Encerre o processo do Uvicorn na porta 8080 (CTRL+C ou encerre o PID registrado em storage\logs\webui_v2\webui_v2_startup.log)
-# O Streamlit na 8501 permanece intacto e 100% operacional.
+# Desregistra a Scheduled Task e encerra processos na porta 8080 de forma limpa:
+.\scripts\register_webui_v2_task.ps1 -Unregister
+
+# O serviço principal VideoFactory Production (Streamlit na porta 8501) permanece 100% intacto e operacional.
 # NUNCA execute git switch --detach ou git checkout no PC Forte.
 ```
 

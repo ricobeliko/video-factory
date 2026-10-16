@@ -16,15 +16,15 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `HOTFIX PLAYER WEB UI V2 — ESTABILIZAÇÃO DO CICLO DE VIDA E CANCELAMENTO DE STREAMING`
+- **CURRENT_FOCUS:** `HOTFIX PLAYER FASTSTART & REMUX GOVERNANCE (NEW MP4 FASTSTART + WEB UI V2 SINGLE LOAD)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / WEB_UI_V2_PLAYER_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / PLAYER_FASTSTART_HOTFIX_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `1684da7b6422c298551952668c449cf9fe2cf7ae` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `1684da7b6422c298551952668c449cf9fe2cf7ae` (origin/main)
+- **CURRENT_MAIN_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `WEB_UI_V2 PLAYER HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `PLAYER FASTSTART HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
@@ -226,7 +226,14 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
 ### Histórico Recente de Merges no Main:
-- **`HOTFIX PLAYER WEB UI V2` (`fix(webui-v2): stabilize review player lifecycle and cancel pending media streams on task change`)**:
+- **`HOTFIX PLAYER FASTSTART` (`fix(video): enforce -movflags +faststart on final renders and eliminate double load in review player`)**:
+  - **Causa Raiz Comprovada:** O pipeline de renderização FFmpeg (`app/services/video.py`) não incluía `-movflags +faststart`, gerando MP4s com o átomo `moov` posicionado após o bloco de dados `mdat` (no fim do arquivo). No Chromium (Brave / Edge), o player abortava a requisição inicial `Range: bytes=0-` (`net::ERR_ABORTED`), gerando erro de desconexão `[WinError 10054]` no Windows/Uvicorn e abrindo 3–4 conexões simultâneas por vídeo para buscar os metadados no fim do arquivo. Isso esgotava o pool de 6 sockets HTTP/1.1 do Chromium, travando a troca de vídeos por 30–60s.
+  - **Correções Aplicadas:**
+    1. Em `app/services/video.py`: Inclusão de `["-movflags", "+faststart"]` em `_render_final_ffmpeg_ass` e `_render_final_stream_copy` para saídas MP4, garantindo que o átomo `moov` seja posicionado no início do arquivo (offset 32), permitindo leitura imediata em um único chunk de 64KB (tempo de inicialização reduzido para 0.23s com uma única conexão).
+    2. Em `webui-v2/src/components/VideoReview/VideoReviewView.jsx`: Eliminação da dupla chamada síncrona de `video.load()`. Na troca de tarefa, o player executa `video.pause()` para cessar a reprodução anterior, atribui `video.src = url` e executa um único `video.load()` determinístico. O cleanup com `video.removeAttribute('src')` e `video.load()` foi movido exclusivamente para o unmount do componente.
+    3. Em `scripts/remux_faststart.py`: Utilitário seguro para remux de vídeos existentes com dry-run obrigatório por padrão, seleção explícita por `--task-id`, validação de integridade/duração, backup `.bak` e bloqueio estrito (fail-closed) de vídeos publicados, agendados ou com aprovação manual de Copyright vinculada criptograficamente ao SHA-256 de `final-1.mp4`.
+  - **Validação:** 3/3 testes direcionados PASS em `test/services/test_faststart_contract.py` e build Vite 6 concluído com sucesso em 5.98s.
+- **`HOTFIX PLAYER WEB UI V2` (`041200d` / `fix(webui-v2): stabilize review player lifecycle and cancel pending media streams on task change`)**:
   - **Causa Raiz Comprovada:** O componente `<video>` da Central de Revisão utilizava `key={selectedTask.task_id}`, forçando o React a desmontar e recriar o elemento DOM a cada seleção de tarefa. No Chromium (Brave / Edge), o descarte do nó sem cancelamento explícito deixava requisições e sockets HTTP/1.1 de streaming de mídia abertos em background aguardando fechamento do servidor ou timeout de socket keep-alive, esgotando o limite de conexões simultâneas por host e mantendo novas requisições `/video` presas em `(pending)` por 30 a 60 segundos.
   - **Correções Aplicadas:**
     1. Instância do player estável no DOM via `ref={videoRef}`, eliminando recriações por `key` e atribuição direta de `src` no JSX.
@@ -2379,6 +2386,45 @@ Entregas V16.4.1A:
 - **Validação de Testes:**
   - Build de produção do frontend (`npm run build` em `webui-v2/`) executado com sucesso em 8.38s sem avisos ou erros.
   - Nenhuma dependência adicionada, nenhuma alteração em backend, SQLite, streaming HTTP Range ou gates.
+
+---
+
+## V16.35 — Hotfix Player Faststart & Governança de Remux
+
+- **Data:** `16/10/2026`
+- **Status:** `DEV_VALIDATED (3/3 testes direcionados PASS | Vite build 5.98s PASS)`
+- **Objetivo:**
+  Corrigir definitivamente a causa raiz da lentidão na troca de vídeos na Central de Revisão da Web UI V2, garantindo que vídeos novos iniciem imediatamente sem cancelamento de conexões, estabilizando o player no frontend e estabelecendo governança estrita para remux de arquivos históricos.
+- **Diagnóstico Aprofundado & Causa Raiz Comprovada:**
+  - O pipeline de renderização FFmpeg (`app/services/video.py`) não incluía `-movflags +faststart`.
+  - Consequentemente, o átomo `moov` (metadados essenciais de duração, dimensões e codecs) era gravado após o bloco de dados brutos `mdat`, no final do arquivo MP4.
+  - No Chromium (Brave / Edge), ao receber `Range: bytes=0-` em um arquivo sem `faststart`, o navegador detecta `mdat` no início, aborta a requisição com `net::ERR_ABORTED` (gerando `ConnectionResetError: [WinError 10054]` no Windows/Uvicorn) e abre 3 a 4 conexões HTTP simultâneas para buscar o `moov` no final do arquivo.
+  - Como o Chromium limita a 6 as conexões HTTP/1.1 por host, a soma das requisições abortadas com o polling background da Web UI V2 a cada 3s esgotava o pool de sockets, mantendo novas requisições `/video` na fila (`pending/stalled`) por 30 a 60 segundos.
+  - Experimento com Edge (Chromium) comprovou:
+    - **Sem faststart:** 3 a 4 requisições Range por vídeo, `net::ERR_ABORTED`, alta latência.
+    - **Com faststart:** **1 única requisição HTTP Range**, `moov` lido no 1º chunk de 64KB, `loadedmetadata` e `canplay` em **0.23 segundos** sem aborts.
+- **Implementações Técnicas:**
+  1. *Pipeline de Renderização de Novos MP4s (`app/services/video.py`):*
+     - Inclusão determinística de `["-movflags", "+faststart"]` em `_render_final_stream_copy` e `_render_final_ffmpeg_ass` para saídas com extensão `.mp4`.
+     - Zero alteração em qualidade, codecs, bitrate, filtros ASS ou duração.
+  2. *Player Web UI V2 (`webui-v2/src/components/VideoReview/VideoReviewView.jsx`):*
+     - Eliminação da dupla chamada síncrona de `video.load()`.
+     - Ao trocar de tarefa, executa `video.pause()` para interromper imediatamente o som/reprodução anterior, atribui `video.src = url` e invoca `video.load()` uma única vez.
+     - Limpeza explícita com `video.removeAttribute('src')` e `video.load()` mantida exclusivamente no unmount do componente.
+     - Preservada instância DOM estável do elemento `<video>` via `ref={videoRef}` sem `key` dinâmico.
+  3. *Governança de Vídeos Históricos (`scripts/remux_faststart.py`):*
+     - Utilitário seguro com dry-run obrigatório por padrão e seleção explícita por `--task-id`.
+     - Validação de segurança prévia (fail-closed):
+       - Bloqueia tarefas com `TASK_COPYRIGHT_MANUAL_APPROVAL` em `operational_events`: a aprovação manual de copyright é criptograficamente vinculada ao SHA-256 exato de `final-1.mp4`. Mover o átomo `moov` altera o hash e invalidaria o Copyright Gate (`current_sha256 != approved_sha256 -> BLOCK`).
+       - Bloqueia tarefas já publicadas (`publication_events`) ou agendadas (`scheduled_posts`).
+       - Aplicação real exige `--apply`, gera backup `.bak` e substitui atomicamente apenas após validação de integridade e duração via ffprobe. Nenhuma execução real em lote foi autorizada.
+- **Validação de Testes:**
+  - 3/3 testes direcionados PASS em `test/services/test_faststart_contract.py`:
+    - `test_ffmpeg_commands_include_faststart_for_mp4` (PASS)
+    - `test_moov_position_in_rendered_mp4` (PASS - átomo `moov` no início comprovado)
+    - `test_remux_blocks_manual_approval_with_sha256` (PASS - bloqueio fail-closed de hash comprovado)
+  - Build Vite 6 (`npm run build` em `webui-v2/`) concluído com sucesso em 5.98s (0 erros).
+
 
 
 

@@ -1936,8 +1936,10 @@ def _render_final_stream_copy(
         "-c:a", "copy",
         "-threads", str(threads),
         "-shortest",
-        os.path.abspath(staged_output),
     ]
+    if output_file.lower().endswith(".mp4"):
+        cmd.extend(["-movflags", "+faststart"])
+    cmd.append(os.path.abspath(staged_output))
     try:
         res = _run_concat_with_heartbeat(cmd, staged_output)
         if res.returncode != 0:
@@ -1997,8 +1999,10 @@ def _render_final_ffmpeg_ass(
         "-c:a", "copy",
         "-threads", str(threads),
         "-shortest",
-        os.path.abspath(staged_output),
     ]
+    if output_file.lower().endswith(".mp4"):
+        cmd.extend(["-movflags", "+faststart"])
+    cmd.append(os.path.abspath(staged_output))
     try:
         res = _run_concat_with_heartbeat(cmd, staged_output)
         if res.returncode != 0:

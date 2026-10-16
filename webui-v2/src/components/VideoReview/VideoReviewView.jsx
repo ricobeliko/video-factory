@@ -66,33 +66,39 @@ function VideoReviewView() {
     return tasks.find((t) => t.task_id === selectedTaskId) || tasks[0];
   }, [tasks, selectedTaskId]);
 
-  // Ciclo de vida explícito da mídia: cancela requisições pendentes da tarefa anterior
-  // evitando bloqueio do pool de sockets de streaming no Chromium (Brave / Edge)
+  // Ciclo de vida estável do player: vincula a nova URL diretamente sem dupla chamada de load()
+  // e pausa a reprodução imediatamente ao trocar de tarefa.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // 1. Pausa e aborta qualquer streaming de rede em andamento
-    try {
-      video.pause();
-      video.removeAttribute('src');
-      video.load(); // Cancela imediatamente sockets HTTP pendentes no Chromium
-    } catch {
-      // Ignora erro de cancelamento
-    }
-
-    // 2. Conecta a nova mídia e carrega os metadados do vídeo selecionado
     if (selectedTask?.task_id) {
       const url = getReviewTaskVideoUrl(selectedTask.task_id);
+      try {
+        video.pause();
+      } catch {
+        // Ignora erro ao pausar
+      }
       video.src = url;
       try {
-        video.load();
+        video.load(); // Chamada única determinística
       } catch {
         // Ignora erro de carregamento
       }
+    } else {
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      } catch {
+        // Ignora erro de limpeza
+      }
     }
+  }, [selectedTask?.task_id]);
 
-    // 3. Cleanup rigoroso no unmount ou antes da próxima seleção
+  // Cleanup de mídia exclusivamente no desmonte da Central de Revisão
+  useEffect(() => {
+    const video = videoRef.current;
     return () => {
       if (video) {
         try {
@@ -100,11 +106,11 @@ function VideoReviewView() {
           video.removeAttribute('src');
           video.load();
         } catch {
-          // Ignora erro de cleanup
+          // Ignora erro no desmonte
         }
       }
     };
-  }, [selectedTask?.task_id]);
+  }, []);
 
   // Manipulador de Aprovação
   const handleApprove = async () => {

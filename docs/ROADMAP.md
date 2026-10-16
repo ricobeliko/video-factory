@@ -12,21 +12,21 @@
 
 # Estado Atual Canônico — 16/10/2026
 
-- **CURRENT_FOCUS** = `R10 — RELEASE CONSOLIDADA WEB UI V2 (R9.1 + R9.2 + R9.3) PRONTA PARA DEPLOY CONTROLADO NO PC FORTE`
+- **CURRENT_FOCUS** = `R10 + QG-V2 — RELEASE CONSOLIDADA WEB UI V2 E PROTEÇÃO DE CRÉDITOS HOMOLOGADA PARA DEPLOY CONTROLADO NO PC FORTE`
 - **CURRENT_PHASE** = `V1.5E`
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
 - **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS** = `ACTIVE_DEV / R10_RELEASE_CANDIDATE_READY`
+- **PROJECT_STATUS** = `ACTIVE_DEV / R10_QG_V2_INTEGRATED_RELEASE_CANDIDATE_READY`
 - **CURRENT_MAIN_SHA** = `3040278b00c3087ebb9556d25c7cd8b3e2898156` (origin/main)
-- **DEV_BRANCH_HEAD_SHA** = `96b9c112bcd912c95ac0ca05de19a6e057059585` (HEAD local em DEV com R9.1 + R9.2 + R9.3 + R10)
+- **DEV_BRANCH_HEAD_SHA** = `832c0bf5c6d018c3b564f973b880f278665c9711` (HEAD local em DEV com R9.1 + R9.2 + R9.3 + R10 + QG-V2)
 - **LAST_PRODUCTION_DEPLOY_SHA** = `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte)
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `R10 CONTROLLED PRODUCTION ROLLOUT PACKAGE (PROD)`
+- **NEXT_GATE** = `R10 + QG-V2 CONTROLLED PRODUCTION ROLLOUT PACKAGE (PROD)`
 - **R9_1_STATUS** = `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão de etapas no Live Graph desacoplada da verificação real dos 3 Gates [Safety, Quality, Copyright], estado IDLE com 0% falso)`
 - **R9_2_STATUS** = `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle de rastreamento dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS** = `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS** = `READY_FOR_CONTROLLED_PRODUCTION_DEPLOY (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip gerado e verificado, runbook atualizado docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, zero migrações de banco, autostart via Task Scheduler porta 8080, Streamlit 8501 preservado)`
-- **QG_V2_STATUS** = `DEV VALIDATED (Hotfix QG-V2: Qualidade Inteligente, Duração por Plataforma e Proteção de Créditos; portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical/visual sem redução do threshold 70.0, scripts/inspect_held_quality_videos.py, 9 testes direcionados PASS)`
+- **QG_V2_STATUS** = `DEV VALIDATED (Hotfix QG-V2 + Gate Final R10: portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical/visual sem redução do threshold 70.0, scripts/inspect_held_quality_videos.py, compatibilidade Web UI V2 comprovada, 12 testes direcionados PASS)`
 - **R8_STATUS** = `COMPLETED / DEV VALIDATED (Web UI V2 Production Consolidation: Same-Origin FastAPI serving webui-v2/dist via SPAStaticFiles on port 8080, health endpoints /health and /api/v2/health, production launcher scripts/start_webui_v2.ps1, migration runbook docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, Streamlit fallback preserved on 8501, 42/42 targeted tests PASS)`
 - **R7_STATUS** = `COMPLETED / DEV VALIDATED (Per-Profile Settings, Growth Mode, Autonomous Mode, Quotas and Publishing Windows, 36/36 unit tests PASS)`
 - **R6B_STATUS** = `COMPLETED / DEV VALIDATED (Operational Controls & Dispatch: GET /api/v2/channels, POST /api/v2/factory/pause, POST /api/v2/factory/resume, POST /api/v2/factory/run-cycle, integração frontend Web UI V2 com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso, 19/19 testes unitários PASS)`
@@ -1483,8 +1483,18 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
   - **Desacoplamento de Duração por Plataforma:** YouTube Shorts aceita vertical de 15s a 180s com faixa ideal 45-90s; regras de TikTok Creator Rewards (>60s) isoladas exclusivamente para TikTok (que permanece OFF). Resolução definitiva de `CFG-005`.
   - **Calibração de Vocabulário e Originalidade:** 40+ substantivos e entidades físicas reais adicionadas ao vocabulário concreto; atenuação de falso risco de repetição por palavras-chave canônicas de nicho; limiar 70.0 rigidamente mantido (`REVIEW` < 70 nunca auto-aprovado).
   - **Inspeção e Recuperação de Estoque Sem Regeneração:** Script CLI read-only `scripts/inspect_held_quality_videos.py` identificando tarefas retidas com MP4 íntegro para aprovação auditável sem custo de computação.
-- **Validação:** 9/9 testes unitários e de integração direcionados PASS em `test/services/test_quality_gate_v2.py`.
+- **Validação:** 12/12 testes unitários e de integração direcionados PASS em `test/services/test_quality_gate_v2.py`.
 - **Status:** ✅ DEV VALIDATED
+
+### V16.29 — GATE FINAL R10 + QG-V2: Homologação Integrada e Congelamento da Release Única
+- **Objetivo:** Validação integrada de ponta a ponta entre a Web UI V2 (R9/R10) e o Quality Gate V2, garantindo proteção contra desperdício de créditos e ausência de bloqueios espúrios na esteira autônoma.
+- **Entregáveis e Validações:**
+  - **Fluxo Completo de Gates:** Roteiro legítimo avança normalmente até READY_STOCK; roteiro com preâmbulo genérico/inválido falha antes do Flow (`can_proceed_to_visuals == False`), protegendo 100% dos créditos.
+  - **Duração por Plataforma (CFG-005):** YouTube Shorts aceita faixas 45–59s, 60–90s e até 180s com nota informativa e pontuação adequada; restrições do TikTok Creator Rewards mantidas isoladas.
+  - **Compatibilidade Web UI V2:** Falha pré-Flow reflete factual em `VISUALS`/`MATERIALS` no Live Graph e Drawer sem inferência de `SUCCESS` indevido; tarefas e canais permanecem isolados.
+  - **Pacote Consolidado:** Pacote `releases/webui-v2-dist-96b9c11.zip` verificado e pronto para implantação sem Node.js no PC Forte.
+- **Validação:** 12/12 testes direcionados PASS em `test/services/test_quality_gate_v2.py`.
+- **Status:** ✅ DEV HOMOLOGATED / CANDIDATE FROZEN
 
 ---
 

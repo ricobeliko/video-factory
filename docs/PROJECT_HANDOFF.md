@@ -19,17 +19,17 @@
 - **CURRENT_FOCUS:** `R10 RELEASE CONSOLIDADA WEB UI V2 — PACOTE DE DEPLOY CONTROLADO PRONTO`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / R10_RELEASE_CANDIDATE_READY`
+- **PROJECT_STATUS:** `ACTIVE_DEV / R10_QG_V2_INTEGRATED_RELEASE_CANDIDATE_READY`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `96b9c112bcd912c95ac0ca05de19a6e057059585` (HEAD local em DEV com R9.1 + R9.2 + R9.3 + R10)
+- **DEV_BRANCH_HEAD_SHA:** `832c0bf5c6d018c3b564f973b880f278665c9711` (HEAD local em DEV com R9.1 + R9.2 + R9.3 + R10 + QG-V2)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
-- **CURRENT_GATE:** `R10 CONTROLLED PRODUCTION ROLLOUT PACKAGE (PROD)`
+- **CURRENT_GATE:** `R10 + QG-V2 INTEGRATED RELEASE READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `READY_FOR_CONTROLLED_PRODUCTION_DEPLOY (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip gerado e verificado, runbook atualizado docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, zero migrações de banco, autostart via Task Scheduler porta 8080, Streamlit 8501 preservado)`
-- **QG_V2_STATUS:** `DEV VALIDATED (Hotfix QG-V2: Qualidade Inteligente, Duração por Plataforma e Proteção de Créditos; portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical/visual sem redução do threshold 70.0 [REVIEW nunca auto-aprovado], tool read-only scripts/inspect_held_quality_videos.py, 9 testes direcionados PASS)`
+- **QG_V2_STATUS:** `DEV VALIDATED (Hotfix QG-V2 + Gate Final R10: portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical sem redução de 70.0, scripts/inspect_held_quality_videos.py, compatibilidade Web UI V2 comprovada, 12 testes direcionados PASS)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2212,6 +2212,24 @@ Entregas V16.4.1A:
     - `test_flow_idempotency_preserves_valid_scenes` (PASS - reuso sem regeneração)
     - `test_ready_stock_receives_only_eligible_content` (PASS)
     - `test_calibrated_audit_cases` (PASS - 4 casos reais da auditoria avaliados com sucesso)
+    - `test_youtube_shorts_duration_ranges_45_to_180s` (PASS - 45-59s, 60-90s, até 180s)
+    - `test_pre_generation_editorial_gate_allows_legitimate_scripts` (PASS - roteiros legítimos nunca bloqueados)
+    - `test_webui_v2_reflects_factual_gate_rejections_and_stages` (PASS - telemetria factual e isolamento)
+
+### V16.29 — GATE FINAL R10 + QG-V2: Homologação Integrada e Congelamento da Release Única (DEV)
+- **Status:** `DEV_HOMOLOGATED / CANDIDATE_FROZEN` (16/10/2026)
+- **Base:** `832c0bf5c6d018c3b564f973b880f278665c9711`
+- **Objetivo Concluído:**
+  - Validação factual e integrada entre a Web UI V2 consolidada (R9.1 + R9.2 + R9.3 + R10) e o Quality Gate V2, assegurando proteção contra desperdício de créditos e ausência de bloqueios indevidos na esteira autônoma.
+- **Garantias e Evidências Consolidadas:**
+  1. *Filtro Pré-Flow com Zero Impacto na Geração Legítima:* Roteiros legítimos (ex.: casos auditados de Games, Curiosidades e Ciência) fluem normalmente para as etapas de síntese e materiais com `can_proceed_to_visuals == True`. Roteiros com preâmbulos banais, clichês ou duração impraticável (< 15s) são barrados de imediato com `state=TASK_STATE_FAILED`, economizando 100% dos créditos Google Flow.
+  2. *Desacoplamento de Duração por Plataforma (CFG-005 Resolvido):* Faixas de 45–59s, 60–90s e até 180s aprovadas no Safety Gate com `PASS` e no Quality Score para YouTube Shorts; TikTok Creator Rewards (>60s) preservado de forma estritamente isolada e inativo (`tiktok = OFF`).
+  3. *Telemetria Factual da Web UI V2:* Tarefas que falham pré-Flow reportam estágio `VISUALS`/`MATERIALS` com status `FAILED` e detalhe explicativo (`operator_console.get_execution_detail`), sem que o grafo do Live Graph mostre progresso indevido ou `SUCCESS` falso. Tarefas retidas em `REVIEW` jamais entram em `READY_STOCK` ou no Scheduler.
+  4. *Fail-Closed Inalterado:* Quality Score mínimo de 70.0 mantido sem atenuação; Safety e Copyright permanecem bloqueantes; nenhuma liberação automática de `REVIEW`.
+  5. *Pacote Frontend Autônomo Consolidado:* O pacote `releases/webui-v2-dist-96b9c11.zip` (SHA-256: `3bebaf3b5307cf1becd07e4b97a61c42b38a924d2bf242b75fd54e5ff9213b4e`) contém o build estático 100% atualizado e compatível com as rotas FastAPI.
+- **Validação Local:**
+  - 12/12 testes unitários e de integração direcionados PASS em `test/services/test_quality_gate_v2.py`.
+
 
 
 

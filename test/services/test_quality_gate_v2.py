@@ -29,6 +29,7 @@ from app.models import const
 from app.services import (
     autonomous_production,
     copyright_gate,
+    operator_console,
     profile_manager,
     quality_score,
     safety_gate,
@@ -516,3 +517,145 @@ def test_calibrated_audit_cases(audit_cases):
     )
     assert q_gta["quality_score"] >= 70.0
     assert q_gta["quality_label"] in ("GOOD", "STRONG")
+
+
+# ===========================================================================
+# 9. Duração e Plataformas: 45-59s, 60-90s e até 180s para YouTube Shorts
+# ===========================================================================
+
+def test_youtube_shorts_duration_ranges_45_to_180s(temp_db):
+    """Valida duração por plataforma: 45-59s, 60-90s e até 180s em YouTube Shorts."""
+    durations = [48.0, 58.0, 75.0, 120.0, 180.0]
+    for dur in durations:
+        # Safety Gate
+        s_res = safety_gate.evaluate_duration_safety(
+            task_id=f"task-dur-{int(dur)}",
+            actual_duration=dur,
+            preset="cross_platform",
+            platform="youtube",
+            db_path=temp_db,
+        )
+        assert s_res["safety_status"] == const.SAFETY_STATUS_PASS, f"Falhou com {dur}s no Safety"
+        if dur < 60.0:
+            assert any("YouTube Shorts" in r for r in s_res["safety_reasons"])
+
+        # Quality Score duration fit
+        q_score, q_reasons = quality_score.calculate_duration_fit(
+            actual_duration=dur,
+            preset="cross_platform",
+            platform="youtube",
+        )
+        # Faixa 45-90s recebe 100.0; até 180s recebe >= 70.0
+        if dur <= 90.0:
+            assert q_score == 100.0, f"Faixa ideal {dur}s deveria pontuar 100"
+        else:
+            assert q_score >= 70.0, f"Faixa estendida {dur}s deveria pontuar >= 70"
+        assert any("YouTube Shorts" in r for r in q_reasons)
+
+
+# ===========================================================================
+# 10. Roteiros legítimos não são rejeitados pelo filtro pré-Flow
+# ===========================================================================
+
+def test_pre_generation_editorial_gate_allows_legitimate_scripts(temp_db):
+    """Garante que roteiros legítimos e bem estruturados passam sem impedimento pré-Flow."""
+    legit_scripts = {
+        "gta": {
+            "topic": "GTA 5 vs GTA 6: o que muda na física dos carros",
+            "niche": "Games",
+            "script": "Você sabia que a física de colisão mudou completamente entre GTA 5 e GTA 6? Enquanto no jogo anterior os veículos pareciam blocos rígidos, agora a Rockstar refez todo o motor de deformação. O peso da suspensão, a inércia em alta velocidade e o impacto realista dos pneus trazem uma sensação impressionante a cada curva.",
+        },
+        "abelhas": {
+            "topic": "Mel das abelhas: como é produzido na colmeia",
+            "niche": "Curiosidades",
+            "script": "O mistério de como as abelhas produzem o mel revela uma engenharia natural fascinante dentro da colmeia. Milhares de operárias coletam néctar das flores e realizam um processo enzimático complexo, desidratando o líquido com o bater sincronizado de suas asas até chegar à consistência perfeita.",
+        },
+        "elevador": {
+            "topic": "Elevador despencando: o que fazer para sobreviver",
+            "niche": "Curiosidades",
+            "script": "O que fazer se um elevador estiver despencando em queda livre? Ao contrário do mito popular, pular no último segundo não vai salvar você. Especialistas em segurança física comprovam que a melhor estratégia é deitar no chão do elevador para distribuir a força do impacto por todo o corpo.",
+        },
+        "luz": {
+            "topic": "Reflexo na velocidade da luz e os mistérios da física",
+            "niche": "Ciência",
+            "script": "O que acontece com o seu reflexo se você se mover na velocidade da luz? A resposta desafia a física quântica e o próprio tempo. Como a luz precisa de uma velocidade constante no vácuo para atingir o espelho, as equações de relatividade mostram que o espaço ao redor se contrai de maneira extrema.",
+        },
+    }
+
+    for case_key, data in legit_scripts.items():
+        eval_res = quality_score.evaluate_pre_generation_editorial_quality(
+            task_id=f"task-legit-{case_key}",
+            topic=data["topic"],
+            script=data["script"],
+            niche=data["niche"],
+            platform="youtube",
+            db_path=temp_db,
+        )
+        assert eval_res["can_proceed_to_visuals"] is True, f"Roteiro legítimo '{case_key}' foi rejeitado indevidamente"
+        assert eval_res["quality_score"] >= 55.0
+
+
+# ===========================================================================
+# 11. Compatibilidade Web UI V2: Telemetria factual e isolamento de falhas
+# ===========================================================================
+
+def test_webui_v2_reflects_factual_gate_rejections_and_stages(temp_db, monkeypatch):
+    """Verifica compatibilidade com a Web UI V2:
+    - Rejeição pré-Flow aparece como FAILED na etapa VISUALS/MATERIALS.
+    - Gates pós-render reportam resultados factuais sem inferir SUCCESS indevido.
+    - Tarefas e canais permanecem isolados sem vazamento de estado.
+    """
+    operator_console.init_operator_db(temp_db)
+    profile_manager.init_profile_db(temp_db)
+    profile_manager.ensure_default_profile(temp_db)
+
+    # 1. Simula tarefa com rejeição editorial pré-Flow
+    tid_failed = "task-preflow-rejected-ui"
+    sm.state.update_task(
+        tid_failed,
+        state=const.TASK_STATE_FAILED,
+        stage="materials",
+        failed_stage="materials",
+        progress=40,
+        video_subject="Coisa qualquer e sem contexto",
+        error="Quality Gate editorial pré-geração reprovou roteiro (42.0 < 55.0): clichê de introdução",
+        profile_id="default",
+    )
+
+    monkeypatch.setattr(
+        "app.services.autonomous_production.get_autonomous_status",
+        lambda profile_id=None, db_path=None: {
+            "status": "failed",
+            "current_task_id": tid_failed,
+            "message": "Falha na geração",
+        }
+    )
+
+    overview = operator_console.get_live_execution_overview(db_path=temp_db)
+    assert overview["total"] >= 1
+    ch_exec = None
+    for ch in overview["channels"]:
+        if ch.get("execution") and ch["execution"].get("task_id") == tid_failed:
+            ch_exec = ch["execution"]
+            break
+
+    assert ch_exec is not None, "Tarefa com falha pré-Flow deve aparecer na telemetria live do canal"
+    assert ch_exec["status"] == "FAILED"
+    assert ch_exec["pipeline_stage"] in ("VISUALS", "MATERIALS")
+    assert "reprovou roteiro" in ch_exec["error"]
+    # Telemetria factual de gates
+    gates = ch_exec.get("gates") or {}
+    assert gates.get("gate_status") == "rejected"
+    assert "clichê" in str(gates.get("gate_reason", ""))
+
+    # Detalhe individual da execução
+    detail = operator_console.get_execution_detail(tid_failed, db_path=temp_db)
+    assert detail is not None
+    assert detail["task_snapshot"]["state"] == const.TASK_STATE_FAILED
+    assert detail["task_snapshot"]["failed_stage"] == "materials"
+    assert "reprovou roteiro" in detail["task_snapshot"]["error"]
+
+    # 2. Confirma que tarefa com falha pré-Flow NÃO aparece em READY_STOCK
+    stock = autonomous_production.get_autonomous_ready_stock(db_path=temp_db)
+    assert not any(t.get("task_id") == tid_failed for t in stock.get("all_ready", []))
+

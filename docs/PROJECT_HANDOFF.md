@@ -16,20 +16,20 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `R10 RELEASE CONSOLIDADA WEB UI V2 — PACOTE DE DEPLOY CONTROLADO PRONTO`
+- **CURRENT_FOCUS:** `HOTFIX QG-V2.1 — CORREÇÃO DE NameError max_sim EM calculate_originality()`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / R10_QG_V2_INTEGRATED_RELEASE_CANDIDATE_READY`
+- **PROJECT_STATUS:** `ACTIVE_DEV / HOTFIX_QG_V2_1_READY`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `832c0bf5c6d018c3b564f973b880f278665c9711` (HEAD local em DEV com R9.1 + R9.2 + R9.3 + R10 + QG-V2)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
-- **CURRENT_GATE:** `R10 + QG-V2 INTEGRATED RELEASE READY FOR CONTROLLED PRODUCTION DEPLOY`
+- **CURRENT_MAIN_SHA:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed` (base de produção; hotfix QG-V2.1 aplicado localmente)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos)
+- **CURRENT_GATE:** `HOTFIX QG-V2.1 TESTING & DEPLOYMENT GATE`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
-- **R10_STATUS:** `READY_FOR_CONTROLLED_PRODUCTION_DEPLOY (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip gerado e verificado, runbook atualizado docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, zero migrações de banco, autostart via Task Scheduler porta 8080, Streamlit 8501 preservado)`
-- **QG_V2_STATUS:** `DEV VALIDATED (Hotfix QG-V2 + Gate Final R10: portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical sem redução de 70.0, scripts/inspect_held_quality_videos.py, compatibilidade Web UI V2 comprovada, 12 testes direcionados PASS)`
+- **R10_STATUS:** `PRODUCTION_DEPLOYED (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip instalado no PC Forte, Task Scheduler porta 8080 ativa, Streamlit 8501 preservado)`
+- **QG_V2_STATUS:** `HOTFIX QG-V2.1 DEV VALIDATED (Correção de NameError max_sim em calculate_originality quando recent_topics não está vazio; 14 testes direcionados PASS)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2229,6 +2229,30 @@ Entregas V16.4.1A:
   5. *Pacote Frontend Autônomo Consolidado:* O pacote `releases/webui-v2-dist-96b9c11.zip` (SHA-256: `3bebaf3b5307cf1becd07e4b97a61c42b38a924d2bf242b75fd54e5ff9213b4e`) contém o build estático 100% atualizado e compatível com as rotas FastAPI.
 - **Validação Local:**
   - 12/12 testes unitários e de integração direcionados PASS em `test/services/test_quality_gate_v2.py`.
+
+### V16.30 — HOTFIX QG-V2.1: Correção de NameError max_sim em calculate_originality (DEV)
+- **Status:** `DEV_VALIDATED / READY_FOR_HOTFIX_DEPLOY` (16/10/2026)
+- **Base Instalada em Produção:** `8f36848a03ff8d924353904aafa3c25a6b8bb8ed`
+- **Incidente Operacional em Produção:**
+  - Após o deploy da release consolidada R10 + QG-V2 no PC Forte, a execução de `python scripts/inspect_held_quality_videos.py` falhou ao recalcular o Quality Score de tarefas retidas:
+    ```text
+    scripts/inspect_held_quality_videos.py -> quality_score.evaluate_quality() -> calculate_originality()
+    NameError: name 'max_sim' is not defined
+    ```
+- **Causa Raiz Comprovada:**
+  - Em `app/services/quality_score.py:calculate_originality()`, ao aplicar a nova calibração QG-V2, o loop de cálculo de similaridade máxima (`max_sim`) sobre `recent_topics` foi acidentalmente omitido.
+  - Em ambientes DEV sem histórico prévio persistido no banco, `not recent_topics` retornava prematuramente `95.0`, mascarando o erro.
+  - Em produção (ou quando o banco SQLite contém histórico recente de tópicos), o fluxo avançava para a linha `if max_sim <= 0.25:`, onde `max_sim` não estava definido.
+- **Correção Implementada:**
+  - Em `app/services/quality_score.py:calculate_originality()`, restaurada e inicializada a variável `max_sim = 0.0` com a varredura completa por `SequenceMatcher` sobre cada tópico de `recent_topics`.
+  - Preservada integralmente a semântica da calibração QG-V2 (sim <= 0.25 -> 95.0; 0.25 < sim <= 0.60 -> interpolação 95..70; sim > 0.60 -> penalidade progressiva até 0).
+  - Preservado o limiar de aprovação estrito de 70.0 e fail-closed em Safety e Copyright.
+- **Validação Local:**
+  - 14/14 testes direcionados PASS em `test/services/test_quality_gate_v2.py`:
+    - `test_calculate_originality_scenarios` (PASS - histórico vazio, temas distintos, temas similares e duplicatas).
+    - `test_inspect_held_quality_videos_with_populated_history` (PASS - execução da auditoria com histórico populado em SQLite sem qualquer exceção).
+    - 12 testes anteriores de integração e regressão de QG-V2 mantidos 100% aprovados.
+
 
 
 

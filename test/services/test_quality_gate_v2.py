@@ -659,3 +659,90 @@ def test_webui_v2_reflects_factual_gate_rejections_and_stages(temp_db, monkeypat
     stock = autonomous_production.get_autonomous_ready_stock(db_path=temp_db)
     assert not any(t.get("task_id") == tid_failed for t in stock.get("all_ready", []))
 
+
+# ===========================================================================
+# 12. Hotfix QG-V2.1: calculate_originality com histórico e sem NameError
+# ===========================================================================
+
+def test_calculate_originality_scenarios():
+    """Valida calculate_originality em todos os ramos: vazio, distinto, similar e duplicata."""
+    # 1. Histórico vazio
+    s_empty, r_empty = quality_score.calculate_originality("Tema Inovador", [])
+    assert s_empty == 95.0
+    assert any("sem repetições" in r for r in r_empty)
+
+    s_none, _ = quality_score.calculate_originality("Tema Inovador", None)
+    assert s_none == 95.0
+
+    # 2. Histórico com tópicos lexicalmente distintos (sim <= 0.25)
+    s_dist, r_dist = quality_score.calculate_originality(
+        "Física dos Carros em Alta Velocidade",
+        ["Receitas Fáceis de Bolo de Cenoura", "Como Cuidar de Plantas Suculentas"]
+    )
+    assert s_dist >= 90.0
+
+    # 3. Histórico com tema moderadamente similar (mesmo nicho, 0.25 < sim <= 0.60)
+    s_sim, r_sim = quality_score.calculate_originality(
+        "Carros Velozes e a Física de Colisão",
+        ["Carros Antigos e a Mecânica Tradicional"]
+    )
+    assert 50.0 <= s_sim <= 85.0
+
+    # 4. Histórico com tema quase duplicado / muito similar (sim > 0.60)
+    s_dup, r_dup = quality_score.calculate_originality(
+        "Carros Velozes e a Física de Colisão",
+        ["Carros Velozes e a Física de Colisão"]
+    )
+    assert s_dup == 0.0
+    assert any("repetitivo" in r or "idêntico" in r for r in r_dup)
+
+
+def test_inspect_held_quality_videos_with_populated_history(temp_db, tmp_path):
+    """Garante que inspect_held_videos roda sem NameError quando há histórico real no banco."""
+    tid = "task-audit-prod-sim"
+    v_dir = tmp_path / "tasks" / tid
+    v_dir.mkdir(parents=True)
+    v_file = v_dir / "final-1.mp4"
+    v_file.write_bytes(b"\x00" * 4096)
+
+    # Popula histórico em monetization_safety e content_quality_scores
+    with sqlite3.connect(temp_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO monetization_safety (
+                task_id, preset, topic, hook_text, safety_status, actual_duration, checked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("task-prev-1", "youtube_shorts_original", "Curiosidades sobre o espaço sideral",
+             "Você sabia disso sobre o espaço?", const.SAFETY_STATUS_PASS, 55.0, "2026-10-15T10:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO content_quality_scores (
+                task_id, topic, niche, preset, hook_text, quality_score, quality_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (tid, "Elevador despencando: o que fazer para sobreviver", "Curiosidades", "cross_platform",
+             "O que fazer se um elevador estiver despencando?", 69.2, "REVIEW", "2026-10-16T12:00:00Z"),
+        )
+
+    safety_gate.save_safety_assessment({
+        "task_id": tid,
+        "preset": "cross_platform",
+        "safety_status": const.SAFETY_STATUS_PASS,
+        "safety_reasons": [],
+        "actual_duration": 58.0,
+        "checked_at": "2026-10-16T12:00:00Z",
+    }, db_path=temp_db)
+
+    # Executa a auditoria — NÃO PODE lançar NameError nem exception
+    report = inspect_held_videos(db_path=temp_db, task_base_dir=str(tmp_path / "tasks"))
+
+    assert report["status"] == "ok"
+    assert report["held_by_quality_count"] == 1
+    cand = report["candidates"][0]
+    assert cand["task_id"] == tid
+    assert cand["mp4_exists"] is True
+    assert cand["qg_v2_quality_score"] >= 70.0
+
+

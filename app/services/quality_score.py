@@ -209,6 +209,14 @@ def calculate_originality(
     if not recent_topics or not norm_topic:
         return 95.0, ["Tema original sem repetições no histórico recente (+)"]
 
+    max_sim = 0.0
+    for prev in recent_topics:
+        norm_prev = _normalize_text(prev)
+        if norm_prev:
+            sim = SequenceMatcher(None, norm_topic, norm_prev).ratio()
+            if sim > max_sim:
+                max_sim = sim
+
     # Calibração QG-V2: sim <= 0.25 indica temas lexicalmente distintos com apenas termos comuns/sintaxe
     if max_sim <= 0.25:
         orig_score = 95.0

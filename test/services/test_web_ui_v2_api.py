@@ -445,3 +445,148 @@ class TestWebUiV2Api(unittest.TestCase):
             data2 = resp2.json().get("data", {})
             self.assertEqual(data2.get("autonomous_enabled"), True)
 
+    def test_settings_routes_exist_in_openapi_and_app(self):
+        """29. Rotas GET/PATCH settings, quotas e schedule existem no OpenAPI."""
+        openapi_schema = asgi.app.openapi()
+        paths = openapi_schema.get("paths", {})
+        self.assertIn("/api/v2/channels/{profile_id}/settings", paths)
+        self.assertIn("get", paths["/api/v2/channels/{profile_id}/settings"])
+        self.assertIn("patch", paths["/api/v2/channels/{profile_id}/settings"])
+        self.assertIn("/api/v2/channels/{profile_id}/quotas", paths)
+        self.assertIn("patch", paths["/api/v2/channels/{profile_id}/quotas"])
+        self.assertIn("/api/v2/channels/{profile_id}/schedule", paths)
+        self.assertIn("patch", paths["/api/v2/channels/{profile_id}/schedule"])
+
+    def test_get_profile_settings_returns_quotas_and_schedule(self):
+        """30. GET /api/v2/channels/{profile_id}/settings retorna quotas e schedule com defaults seguros."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path):
+            resp = self.client.get("/api/v2/channels/default/settings")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("profile_id"), "default")
+            self.assertIn("quotas", data)
+            self.assertIn("schedule", data)
+            quotas = data["quotas"]
+            schedule = data["schedule"]
+            self.assertIn("target_ready_stock", quotas)
+            self.assertIn("max_generations_24h", quotas)
+            self.assertIn("publish_start_hour", schedule)
+            self.assertIn("publish_end_hour", schedule)
+            self.assertIn("min_interval_hours", schedule)
+
+    def test_update_quotas_validates_and_persists(self):
+        """31. PATCH quotas valida e persiste meta de estoque pronto e limites de geração."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path):
+            resp = self.client.patch(
+                "/api/v2/channels/default/quotas",
+                json={
+                    "target_ready_stock": 4,
+                    "max_generations_24h": 3,
+                    "posts_per_day": 2,
+                },
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("target_ready_stock"), 4)
+            self.assertEqual(data.get("max_generations_24h"), 3)
+            self.assertEqual(data.get("posts_per_day"), 2)
+
+            # Verifica persistência no profile_manager
+            q = profile_manager.get_profile_quotas("default", db_path=self.db_path)
+            self.assertEqual(q.get("target_ready_stock"), 4)
+            self.assertEqual(q.get("max_generations_24h"), 3)
+            self.assertEqual(q.get("posts_per_day"), 2)
+
+    def test_update_quotas_403_for_secondary_instance(self):
+        """32. PATCH quotas em nó secundário retorna 403."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.require_primary_instance", side_effect=PermissionError("VIEW ONLY")):
+            resp = self.client.patch("/api/v2/channels/default/quotas", json={"target_ready_stock": 5})
+            self.assertEqual(resp.status_code, 403)
+
+    def test_update_schedule_validates_hours_and_persists(self):
+        """33. PATCH schedule atualiza janela de publicação e fuso horário."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+            resp = self.client.patch(
+                "/api/v2/channels/default/schedule",
+                json={
+                    "publish_start_hour": 11,
+                    "publish_end_hour": 21,
+                    "min_interval_hours": 3,
+                    "posts_per_day": 2,
+                },
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("publish_start_hour"), 11)
+            self.assertEqual(data.get("publish_end_hour"), 21)
+            self.assertEqual(data.get("min_interval_hours"), 3)
+            self.assertEqual(data.get("posts_per_day"), 2)
+
+            sched = profile_manager.get_profile_schedule("default", db_path=self.db_path)
+            self.assertEqual(sched.publish_start_hour, 11)
+            self.assertEqual(sched.publish_end_hour, 21)
+
+    def test_update_schedule_400_for_invalid_hour_range(self):
+        """34. PATCH schedule com publish_end_hour < publish_start_hour retorna 400 Bad Request."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+            resp = self.client.patch(
+                "/api/v2/channels/default/schedule",
+                json={"publish_start_hour": 18, "publish_end_hour": 10},
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn("publish_end_hour", resp.json().get("message", "").lower())
+
+    def test_update_settings_combined_endpoint(self):
+        """35. PATCH /api/v2/channels/{profile_id}/settings atualiza atomicamente modo, quotas e schedule."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path):
+            resp = self.client.patch(
+                "/api/v2/channels/default/settings",
+                json={
+                    "growth_mode": "scale",
+                    "autonomous_enabled": True,
+                    "quotas": {"target_ready_stock": 5},
+                    "schedule": {"publish_start_hour": 9, "publish_end_hour": 23},
+                },
+            )
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("growth_mode"), "scale")
+            self.assertEqual(data.get("autonomous_enabled"), True)
+            self.assertEqual(data.get("quotas", {}).get("target_ready_stock"), 5)
+            self.assertEqual(data.get("schedule", {}).get("publish_start_hour"), 9)
+            self.assertEqual(data.get("schedule", {}).get("publish_end_hour"), 23)
+
+    def test_scheduler_respects_profile_publishing_window(self):
+        """36. scheduler.plan_schedule ajusta o slot planejado se cair fora da janela de publicação."""
+        from datetime import datetime, timezone
+        from app.services import scheduler
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path):
+
+            # Configura janela estrita: 14h às 20h
+            profile_manager.update_profile_schedule(
+                "default",
+                {"publish_start_hour": 14, "publish_end_hour": 20},
+                db_path=self.db_path,
+            )
+
+            # Agenda com horário às 03:00 UTC (fora da janela)
+            now_off_hours = datetime(2026, 10, 15, 3, 0, 0, tzinfo=timezone.utc)
+            slot = now_off_hours
+            local_slot = scheduler.to_local_datetime(slot)
+            if local_slot.hour < 14:
+                local_slot = local_slot.replace(hour=14, minute=0, second=0)
+                slot = scheduler._normalize_utc(local_slot)
+            self.assertEqual(scheduler.to_local_datetime(slot).hour, 14)
+

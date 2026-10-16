@@ -69,6 +69,16 @@ class AutomationSettings(BaseModel):
     autonomous_enabled: Optional[bool] = None
     target_ready_stock: Optional[int] = None
     posts_per_day: Optional[int] = None
+    max_generations_24h: Optional[int] = None
+    max_attempts_24h: Optional[int] = None
+
+
+class ScheduleSettings(BaseModel):
+    publish_start_hour: int = 10
+    publish_end_hour: int = 22
+    timezone: str = "America/Sao_Paulo"
+    min_interval_hours: int = 2
+    posts_per_day: int = 1
 
 
 class MusicSettings(BaseModel):
@@ -86,6 +96,7 @@ class ChannelWorkspaceSettings(BaseModel):
     subtitle: SubtitleSettings = Field(default_factory=SubtitleSettings)
     automation: AutomationSettings = Field(default_factory=AutomationSettings)
     music: MusicSettings = Field(default_factory=MusicSettings)
+    schedule: ScheduleSettings = Field(default_factory=ScheduleSettings)
 
     def to_json(self) -> str:
         return self.model_dump_json()
@@ -945,6 +956,135 @@ def update_profile_settings(
             )
 
     return settings_model
+
+
+def get_profile_schedule(profile_id: str, db_path: Optional[str] = None) -> ScheduleSettings:
+    """Recupera as configurações de agendamento e janela de publicação do perfil."""
+    settings = get_profile_settings(profile_id, db_path=db_path)
+    return getattr(settings, "schedule", ScheduleSettings())
+
+
+def update_profile_schedule(
+    profile_id: str,
+    schedule_data: Union[ScheduleSettings, Dict[str, Any]],
+    db_path: Optional[str] = None,
+) -> ScheduleSettings:
+    """Atualiza as configurações de agendamento e janela de publicação do perfil."""
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    clean_id = str(profile_id or "").strip()
+    existing = get_profile(clean_id, db_path=db_path)
+    if not existing:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    if isinstance(schedule_data, ScheduleSettings):
+        model = schedule_data
+    elif isinstance(schedule_data, dict):
+        model = ScheduleSettings.model_validate(schedule_data)
+    else:
+        raise ValueError("Dados de agendamento inválidos.")
+
+    if not (0 <= model.publish_start_hour <= 23):
+        raise ValueError("publish_start_hour deve estar entre 0 e 23.")
+    if not (0 <= model.publish_end_hour <= 23):
+        raise ValueError("publish_end_hour deve estar entre 0 e 23.")
+    if model.publish_end_hour < model.publish_start_hour:
+        raise ValueError("publish_end_hour não pode ser menor que publish_start_hour.")
+    if model.min_interval_hours < 1:
+        raise ValueError("min_interval_hours deve ser pelo menos 1.")
+    if model.posts_per_day < 1:
+        raise ValueError("posts_per_day deve ser pelo menos 1.")
+
+    current_settings = get_profile_settings(clean_id, db_path=db_path)
+    current_settings.schedule = model
+    if model.posts_per_day:
+        current_settings.automation.posts_per_day = model.posts_per_day
+
+    update_profile_settings(clean_id, current_settings, db_path=db_path)
+    return model
+
+
+def get_profile_quotas(profile_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Retorna as quotas e limites operacionais canônicos do perfil."""
+    from app.services import autonomous_production
+    clean_id = str(profile_id or "").strip()
+    prof = get_profile(clean_id, db_path=db_path)
+    if not prof:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    settings = get_profile_settings(clean_id, db_path=db_path)
+    growth_mode = prof.get("growth_mode") or const.DEFAULT_GROWTH_MODE
+    target_stock = autonomous_production.get_target_ready_stock(clean_id, db_path=db_path)
+    max_gen = autonomous_production.get_max_generations_24h(clean_id, db_path=db_path)
+    max_att = autonomous_production.get_max_attempts_24h(clean_id, db_path=db_path)
+    posts_day = (
+        settings.automation.posts_per_day
+        or (settings.schedule.posts_per_day if hasattr(settings, "schedule") else None)
+        or 1
+    )
+
+    return {
+        "profile_id": clean_id,
+        "growth_mode": growth_mode,
+        "target_ready_stock": target_stock,
+        "max_generations_24h": max_gen,
+        "max_attempts_24h": max_att,
+        "posts_per_day": posts_day,
+    }
+
+
+def update_profile_quotas(
+    profile_id: str,
+    quotas: Dict[str, Any],
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Atualiza as quotas e limites operacionais do perfil com validação e clamping canônico."""
+    from app.services import autonomous_production, operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    clean_id = str(profile_id or "").strip()
+    prof = get_profile(clean_id, db_path=db_path)
+    if not prof:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    current_settings = get_profile_settings(clean_id, db_path=db_path)
+
+    if "target_ready_stock" in quotas and quotas["target_ready_stock"] is not None:
+        target = int(quotas["target_ready_stock"])
+        if target < 1:
+            raise ValueError("target_ready_stock deve ser >= 1.")
+        autonomous_production.set_target_ready_stock(target, profile_id=clean_id, db_path=db_path)
+        current_settings.automation.target_ready_stock = target
+
+    if "max_generations_24h" in quotas and quotas["max_generations_24h"] is not None:
+        val = int(quotas["max_generations_24h"])
+        if val < 1:
+            raise ValueError("max_generations_24h deve ser >= 1.")
+        autonomous_production.set_max_generations_24h(val, profile_id=clean_id, db_path=db_path)
+        current_settings.automation.max_generations_24h = val
+
+    if "max_attempts_24h" in quotas and quotas["max_attempts_24h"] is not None:
+        att = int(quotas["max_attempts_24h"])
+        if att < 1:
+            raise ValueError("max_attempts_24h deve ser >= 1.")
+        autonomous_production.set_autonomous_setting(
+            f"{autonomous_production.KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_id}",
+            str(att),
+            db_path=db_path,
+        )
+        current_settings.automation.max_attempts_24h = att
+
+    if "posts_per_day" in quotas and quotas["posts_per_day"] is not None:
+        ppd = int(quotas["posts_per_day"])
+        if ppd < 1:
+            raise ValueError("posts_per_day deve ser >= 1.")
+        current_settings.automation.posts_per_day = ppd
+        if hasattr(current_settings, "schedule"):
+            current_settings.schedule.posts_per_day = ppd
+
+    update_profile_settings(clean_id, current_settings, db_path=db_path)
+    return get_profile_quotas(clean_id, db_path=db_path)
 
 
 def backfill_legacy_channels_external_ids(db_path: Optional[str] = None) -> Dict[str, str]:

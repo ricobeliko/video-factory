@@ -1397,6 +1397,24 @@ def plan_schedule(
 
             target_slot = candidate_base
 
+            # Janela de Publicação por perfil (R7 Phase 2)
+            try:
+                from app.services import profile_manager
+                prof_settings = profile_manager.get_profile_settings(task_profile_id, db_path=db_path)
+                if prof_settings and hasattr(prof_settings, "schedule"):
+                    sched_cfg = prof_settings.schedule
+                    start_h = getattr(sched_cfg, "publish_start_hour", 10)
+                    end_h = getattr(sched_cfg, "publish_end_hour", 22)
+                    local_slot = to_local_datetime(target_slot)
+                    if local_slot.hour < start_h:
+                        local_slot = local_slot.replace(hour=start_h, minute=0, second=0)
+                        target_slot = _normalize_utc(local_slot)
+                    elif local_slot.hour >= end_h:
+                        local_slot = (local_slot + timedelta(days=1)).replace(hour=start_h, minute=0, second=0)
+                        target_slot = _normalize_utc(local_slot)
+            except Exception:
+                pass
+
             # 3. Verificação final de idempotência antes da inserção (Camada 1 - V16.4.2B)
             from app.services import publishing_idempotency
             with get_connection(db_path) as conn:

@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { getExecutionDetail, runFactoryCycle, updateProfileGrowthMode, updateProfileAutonomousMode } from '../api';
+import {
+  getExecutionDetail,
+  runFactoryCycle,
+  updateProfileGrowthMode,
+  updateProfileAutonomousMode,
+  getProfileSettings,
+  updateProfileSettings,
+} from '../api';
 import { STAGE_BY_CODE } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
 
@@ -37,8 +44,81 @@ export default function ExecutionDrawer({
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState(null);
   const [settingsErrorMsg, setSettingsErrorMsg] = useState(null);
 
+  // R7 Phase 2: Per-profile quotas and schedule states
+  const [targetStockVal, setTargetStockVal] = useState(3);
+  const [maxGenerationsVal, setMaxGenerationsVal] = useState(2);
+  const [postsPerDayVal, setPostsPerDayVal] = useState(1);
+  const [publishStartHour, setPublishStartHour] = useState(10);
+  const [publishEndHour, setPublishEndHour] = useState(22);
+  const [minIntervalHours, setMinIntervalHours] = useState(2);
+  const [isSavingCustomSettings, setIsSavingCustomSettings] = useState(false);
+
   const currentGrowthMode = (channelData?.growth_mode || 'warmup').toLowerCase();
   const currentAutonomous = Boolean(channelData?.autonomous_enabled);
+
+  // Load factual profile settings on drawer open
+  useEffect(() => {
+    if (!isOpen || !channelData?.profile_id) return;
+    let isMounted = true;
+    getProfileSettings(channelData.profile_id)
+      .then((res) => {
+        if (!isMounted) return;
+        const d = res?.data || {};
+        if (d.quotas) {
+          if (typeof d.quotas.target_ready_stock === 'number') setTargetStockVal(d.quotas.target_ready_stock);
+          if (typeof d.quotas.max_generations_24h === 'number') setMaxGenerationsVal(d.quotas.max_generations_24h);
+          if (typeof d.quotas.posts_per_day === 'number') setPostsPerDayVal(d.quotas.posts_per_day);
+        }
+        if (d.schedule) {
+          if (typeof d.schedule.publish_start_hour === 'number') setPublishStartHour(d.schedule.publish_start_hour);
+          if (typeof d.schedule.publish_end_hour === 'number') setPublishEndHour(d.schedule.publish_end_hour);
+          if (typeof d.schedule.min_interval_hours === 'number') setMinIntervalHours(d.schedule.min_interval_hours);
+          if (typeof d.schedule.posts_per_day === 'number' && !d.quotas?.posts_per_day) {
+            setPostsPerDayVal(d.schedule.posts_per_day);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Configurações detalhadas não puderam ser carregadas:', err.message);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, channelData?.profile_id]);
+
+  const handleSaveScheduleAndQuotas = async () => {
+    if (isSavingCustomSettings || !channelData?.profile_id) return;
+    setIsSavingCustomSettings(true);
+    setSettingsSuccessMsg(null);
+    setSettingsErrorMsg(null);
+
+    try {
+      await updateProfileSettings(channelData.profile_id, {
+        quotas: {
+          target_ready_stock: Number(targetStockVal),
+          max_generations_24h: Number(maxGenerationsVal),
+          posts_per_day: Number(postsPerDayVal),
+        },
+        schedule: {
+          publish_start_hour: Number(publishStartHour),
+          publish_end_hour: Number(publishEndHour),
+          min_interval_hours: Number(minIntervalHours),
+          posts_per_day: Number(postsPerDayVal),
+        },
+      });
+      setSettingsSuccessMsg('Quotas e janela de publicação salvas com sucesso!');
+      if (onRefresh) await onRefresh();
+      setTimeout(() => setSettingsSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error('Falha ao salvar quotas e janela:', err);
+      let msg = err.message || 'Falha ao salvar configurações';
+      if (err.status === 403) msg = 'Bloqueado: somente nó primário pode salvar configurações.';
+      setSettingsErrorMsg(msg);
+      setTimeout(() => setSettingsErrorMsg(null), 5000);
+    } finally {
+      setIsSavingCustomSettings(false);
+    }
+  };
 
   const handleToggleGrowthMode = async (targetMode) => {
     if (isUpdatingSettings || targetMode === currentGrowthMode) return;
@@ -322,6 +402,141 @@ export default function ExecutionDrawer({
                       title={currentAutonomous ? 'Clique para pausar produção autônoma (MANUAL)' : 'Clique para ativar produção autônoma (AUTO)'}
                     >
                       {currentAutonomous ? '● AUTO (Ativo)' : '○ MANUAL (Pausado)'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. Quotas & Limites Operacionais (R7 Phase 2) */}
+                <div className="drawer-subcard-settings">
+                  <div className="drawer-subcard-header">
+                    <span className="drawer-subcard-title">📊 Quotas & Limites Operacionais</span>
+                  </div>
+
+                  <div className="drawer-controls-row">
+                    <div className="drawer-control-col">
+                      <label className="drawer-field-label" title="Meta de vídeos finalizados mantidos em estoque (3 a 6)">
+                        Meta Estoque Pronto:
+                      </label>
+                      <div className="drawer-btn-group">
+                        {[3, 4, 5, 6].map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            className={`drawer-num-btn ${Number(targetStockVal) === num ? 'active' : ''}`}
+                            onClick={() => setTargetStockVal(num)}
+                            disabled={isSavingCustomSettings}
+                          >
+                            {num}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="drawer-control-col">
+                      <label className="drawer-field-label" title="Teto de vídeos aprovados criados por dia">
+                        Gerações 24h:
+                      </label>
+                      <div className="drawer-btn-group">
+                        {[1, 2, 3, 4, 5].map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            className={`drawer-num-btn ${Number(maxGenerationsVal) === num ? 'active' : ''}`}
+                            onClick={() => setMaxGenerationsVal(num)}
+                            disabled={isSavingCustomSettings}
+                          >
+                            {num}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="drawer-control-col">
+                      <label className="drawer-field-label" title="Frequência diária de publicações">
+                        Posts / Dia:
+                      </label>
+                      <div className="drawer-btn-group">
+                        {[1, 2, 3].map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            className={`drawer-num-btn ${Number(postsPerDayVal) === num ? 'active' : ''}`}
+                            onClick={() => setPostsPerDayVal(num)}
+                            disabled={isSavingCustomSettings}
+                          >
+                            {num}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Janela de Publicação & Agendamento (R7 Phase 2) */}
+                <div className="drawer-subcard-settings">
+                  <div className="drawer-subcard-header">
+                    <span className="drawer-subcard-title">⏰ Janela de Publicação & Agendamento</span>
+                    <span className="drawer-tz-tag">America/Sao_Paulo (UTC-3)</span>
+                  </div>
+
+                  <div className="drawer-controls-row">
+                    <div className="drawer-control-col">
+                      <label className="drawer-field-label">Início da Janela:</label>
+                      <select
+                        className="drawer-select"
+                        value={publishStartHour}
+                        onChange={(e) => setPublishStartHour(Number(e.target.value))}
+                        disabled={isSavingCustomSettings}
+                      >
+                        {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map((h) => (
+                          <option key={h} value={h}>
+                            {String(h).padStart(2, '0')}:00
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="drawer-control-col">
+                      <label className="drawer-field-label">Fim da Janela:</label>
+                      <select
+                        className="drawer-select"
+                        value={publishEndHour}
+                        onChange={(e) => setPublishEndHour(Number(e.target.value))}
+                        disabled={isSavingCustomSettings}
+                      >
+                        {[12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map((h) => (
+                          <option key={h} value={h}>
+                            {String(h).padStart(2, '0')}:00
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="drawer-control-col">
+                      <label className="drawer-field-label">Intervalo Mínimo:</label>
+                      <select
+                        className="drawer-select"
+                        value={minIntervalHours}
+                        onChange={(e) => setMinIntervalHours(Number(e.target.value))}
+                        disabled={isSavingCustomSettings}
+                      >
+                        <option value={1}>1 hora</option>
+                        <option value={2}>2 horas</option>
+                        <option value={3}>3 horas</option>
+                        <option value={4}>4 horas</option>
+                        <option value={6}>6 horas</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="drawer-save-row">
+                    <button
+                      type="button"
+                      className="drawer-save-settings-btn"
+                      onClick={handleSaveScheduleAndQuotas}
+                      disabled={isSavingCustomSettings}
+                    >
+                      {isSavingCustomSettings ? 'Salvando...' : '💾 Salvar Quotas e Janela'}
                     </button>
                   </div>
                 </div>

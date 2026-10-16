@@ -3,7 +3,7 @@
 from typing import Optional
 
 from fastapi import Depends, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.controllers import base
 from app.controllers.v2.base import new_router
@@ -261,6 +261,28 @@ class UpdateAutonomousRequest(BaseModel):
     enabled: bool
 
 
+class UpdateQuotasRequest(BaseModel):
+    target_ready_stock: Optional[int] = Field(None, ge=1, le=10, description="Meta de estoque pronto")
+    max_generations_24h: Optional[int] = Field(None, ge=1, le=15, description="Teto de gerações diárias aprovadas")
+    max_attempts_24h: Optional[int] = Field(None, ge=1, le=30, description="Teto de tentativas totais de geração em 24h")
+    posts_per_day: Optional[int] = Field(None, ge=1, le=10, description="Publicações diárias desejadas")
+
+
+class UpdateScheduleRequest(BaseModel):
+    publish_start_hour: Optional[int] = Field(None, ge=0, le=23, description="Horário inicial da janela de publicação (0-23)")
+    publish_end_hour: Optional[int] = Field(None, ge=0, le=23, description="Horário final da janela de publicação (0-23)")
+    timezone: Optional[str] = Field(None, description="Fuso horário (ex: America/Sao_Paulo)")
+    min_interval_hours: Optional[int] = Field(None, ge=1, le=24, description="Intervalo mínimo entre posts em horas")
+    posts_per_day: Optional[int] = Field(None, ge=1, le=10, description="Publicações diárias")
+
+
+class UpdateProfileSettingsRequest(BaseModel):
+    growth_mode: Optional[str] = Field(None, description="Modo de crescimento (warmup | scale)")
+    autonomous_enabled: Optional[bool] = Field(None, description="Status de autonomia operacional")
+    quotas: Optional[UpdateQuotasRequest] = Field(None, description="Configurações de quotas e limites")
+    schedule: Optional[UpdateScheduleRequest] = Field(None, description="Configurações de agendamento e janela")
+
+
 @router.patch(
     "/channels/{profile_id}/growth-mode",
     summary="Update channel Growth Mode (WARMUP / SCALE)",
@@ -385,6 +407,234 @@ def enable_profile_autonomous(request: Request, profile_id: str):
 )
 def disable_profile_autonomous(request: Request, profile_id: str):
     return update_profile_autonomous_mode(request, profile_id, UpdateAutonomousRequest(enabled=False))
+
+
+@router.get(
+    "/channels/{profile_id}/settings",
+    summary="Get comprehensive per-profile settings including quotas and schedule (R7 Phase 2)",
+)
+@router.get(
+    "/profiles/{profile_id}/settings",
+    summary="Get comprehensive per-profile settings including quotas and schedule (alias)",
+)
+def get_channel_settings(request: Request, profile_id: str):
+    request_id = base.get_task_id(request)
+    profile = profile_manager.get_profile(profile_id)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+    quotas = profile_manager.get_profile_quotas(clean_p)
+    schedule_model = profile_manager.get_profile_schedule(clean_p)
+    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p)
+    ws_settings = profile_manager.get_profile_settings(clean_p)
+
+    data = {
+        "profile_id": clean_p,
+        "profile_name": profile.get("name"),
+        "growth_mode": profile.get("growth_mode", "WARMUP"),
+        "autonomous_enabled": is_auto,
+        "quotas": quotas,
+        "schedule": schedule_model.model_dump(),
+        "workspace_settings": ws_settings.model_dump(),
+    }
+    return utils.get_response(200, data)
+
+
+@router.patch(
+    "/channels/{profile_id}/settings",
+    summary="Update per-profile settings, quotas and schedule (R7 Phase 2)",
+)
+@router.patch(
+    "/profiles/{profile_id}/settings",
+    summary="Update per-profile settings, quotas and schedule (alias)",
+)
+def update_channel_settings(
+    request: Request,
+    profile_id: str,
+    payload: UpdateProfileSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    profile = profile_manager.get_profile(profile_id)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    # Enforce primary node authority
+    try:
+        operator_console.require_primary_instance()
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile settings ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile settings ({exc})",
+        )
+
+    try:
+        if payload.growth_mode is not None:
+            clean_mode = str(payload.growth_mode).strip().lower()
+            if clean_mode not in ("warmup", "scale"):
+                raise ValueError("growth_mode must be 'warmup' or 'scale'")
+            profile_manager.update_profile(clean_p, growth_mode=clean_mode)
+
+        if payload.autonomous_enabled is not None:
+            operator_console.set_autonomous_mode_enabled_op(payload.autonomous_enabled, profile_id=clean_p)
+
+        if payload.quotas is not None:
+            q_dict = payload.quotas.model_dump(exclude_unset=True)
+            if q_dict:
+                profile_manager.update_profile_quotas(clean_p, q_dict)
+
+        if payload.schedule is not None:
+            s_dict = payload.schedule.model_dump(exclude_unset=True)
+            if s_dict:
+                cur_sched = profile_manager.get_profile_schedule(clean_p).model_dump()
+                cur_sched.update(s_dict)
+                profile_manager.update_profile_schedule(clean_p, cur_sched)
+
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile settings: {exc}",
+        )
+
+    return get_channel_settings(request, clean_p)
+
+
+@router.patch(
+    "/channels/{profile_id}/quotas",
+    summary="Update quotas and generation limits for a channel/profile (R7 Phase 2)",
+)
+@router.patch(
+    "/profiles/{profile_id}/quotas",
+    summary="Update quotas and generation limits for a channel/profile (alias)",
+)
+def update_channel_quotas(
+    request: Request,
+    profile_id: str,
+    payload: UpdateQuotasRequest,
+):
+    request_id = base.get_task_id(request)
+    profile = profile_manager.get_profile(profile_id)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    try:
+        operator_console.require_primary_instance()
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile quotas ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile quotas ({exc})",
+        )
+
+    try:
+        q_dict = payload.model_dump(exclude_unset=True)
+        res = profile_manager.update_profile_quotas(clean_p, q_dict)
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile quotas: {exc}",
+        )
+
+    return utils.get_response(200, res, message="Profile quotas updated successfully")
+
+
+@router.patch(
+    "/channels/{profile_id}/schedule",
+    summary="Update schedule and publishing window for a channel/profile (R7 Phase 2)",
+)
+@router.patch(
+    "/profiles/{profile_id}/schedule",
+    summary="Update schedule and publishing window for a channel/profile (alias)",
+)
+def update_channel_schedule(
+    request: Request,
+    profile_id: str,
+    payload: UpdateScheduleRequest,
+):
+    request_id = base.get_task_id(request)
+    profile = profile_manager.get_profile(profile_id)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    try:
+        operator_console.require_primary_instance()
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile schedule ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile schedule ({exc})",
+        )
+
+    try:
+        s_dict = payload.model_dump(exclude_unset=True)
+        cur_sched = profile_manager.get_profile_schedule(clean_p).model_dump()
+        cur_sched.update(s_dict)
+        res = profile_manager.update_profile_schedule(clean_p, cur_sched)
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile schedule: {exc}",
+        )
+
+    return utils.get_response(200, res.model_dump(), message="Profile schedule updated successfully")
 
 
 @router.get(

@@ -713,6 +713,154 @@ class TestFlowProvenanceContract(unittest.TestCase):
             )
         self.assertFalse(passed, "Gate deve reprovar se Flow status for NEEDS_RECOVERY")
 
+    # =========================================================================
+    # Regressões Direcionadas: Hotfix Flow Parcial
+    # =========================================================================
+    def test_partial_flow_all_used_scenes_proven_pass(self):
+        """1. Flow parcialmente falho (ex: FAILED_SCENE_11) com todas as cenas efetivamente usadas comprovadas -> PASS."""
+        # Cria clipes Flow para as cenas completadas [1, 2, 5]
+        for s_idx in [1, 2, 5]:
+            clip_f = os.path.join(self.clips_dir, f"flow_scene_{s_idx:02d}.mp4")
+            with open(clip_f, "wb") as f:
+                f.write(b"\x00" * 1024)
+
+        # Cria clipes Pexels para cenas alternativas [3, 11]
+        for s_idx in [3, 11]:
+            clip_f = os.path.join(self.task_dir, f"pexels_scene_{s_idx:02d}.mp4")
+            with open(clip_f, "wb") as f:
+                f.write(b"\x00" * 1024)
+
+        # Manifesto com status FAILED_SCENE_11 e completed_scenes=[1, 2, 5]
+        manifest = {
+            "project_name": "flow",
+            "flow_generation": {
+                "status": "FAILED_SCENE_11",
+                "completed_scenes": [1, 2, 5],
+            },
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+                {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+                {"scene_index": 5, "expected_clip": "flow_scene_05.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+                {"scene_index": 11, "expected_clip": "flow_scene_11.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+            ],
+        }
+        with open(os.path.join(self.flow_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+
+        # material_sources: cenas 1, 2, 5 como Flow; cenas 3, 11 como Pexels
+        sources = [
+            {"provider": "google_flow", "asset_id": "flow_scene_01.mp4", "local_file": os.path.join(self.clips_dir, "flow_scene_01.mp4"), "scene_index": 1},
+            {"provider": "google_flow", "asset_id": "flow_scene_02.mp4", "local_file": os.path.join(self.clips_dir, "flow_scene_02.mp4"), "scene_index": 2},
+            {"provider": "pexels", "asset_id": "px_3", "local_file": os.path.join(self.task_dir, "pexels_scene_03.mp4"), "scene_index": 3},
+            {"provider": "google_flow", "asset_id": "flow_scene_05.mp4", "local_file": os.path.join(self.clips_dir, "flow_scene_05.mp4"), "scene_index": 5},
+            {"provider": "pexels", "asset_id": "px_11", "local_file": os.path.join(self.task_dir, "pexels_scene_11.mp4"), "scene_index": 11},
+        ]
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "material_sources": sources,
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertTrue(passed, f"Gate deveria aprovar Flow parcial com todas as cenas comprovadas: {reason}")
+        self.assertEqual(details.get("copyright_provenance_gate"), "PASS")
+        self.assertEqual(details.get("flow_provenance_status"), "GENERATED_FLOW_PROVENANCE_VERIFIED")
+        self.assertEqual(details.get("flow_clips_verified"), 3)
+
+    def test_partial_flow_unproven_scene_fails_gate(self):
+        """2. Flow parcialmente falho com cena Flow não comprovada (não concluída no manifesto) -> BLOCK."""
+        # Cria clipes Flow para as cenas completadas [1, 2, 5]
+        for s_idx in [1, 2, 5]:
+            clip_f = os.path.join(self.clips_dir, f"flow_scene_{s_idx:02d}.mp4")
+            with open(clip_f, "wb") as f:
+                f.write(b"\x00" * 1024)
+
+        # Cria clipe não completado da cena 11
+        clip_11 = os.path.join(self.clips_dir, "flow_scene_11.mp4")
+        with open(clip_11, "wb") as f:
+            f.write(b"\x00" * 1024)
+
+        manifest = {
+            "project_name": "flow",
+            "flow_generation": {
+                "status": "FAILED_SCENE_11",
+                "completed_scenes": [1, 2, 5],
+            },
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+                {"scene_index": 11, "expected_clip": "flow_scene_11.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+            ],
+        }
+        with open(os.path.join(self.flow_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+
+        # material_sources tenta usar cena 11 como google_flow mesmo sem estar em completed_scenes
+        sources = [
+            {"provider": "google_flow", "asset_id": "flow_scene_01.mp4", "local_file": os.path.join(self.clips_dir, "flow_scene_01.mp4"), "scene_index": 1},
+            {"provider": "google_flow", "asset_id": "flow_scene_11.mp4", "local_file": clip_11, "scene_index": 11},
+        ]
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "material_sources": sources,
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertFalse(passed, "Gate deve reprovar se cena Flow não estiver em completed_scenes")
+        self.assertEqual(details.get("copyright_provenance_gate"), "FAIL")
+        self.assertIn("completed_scenes", reason)
+
+    def test_full_flow_valid_continues_pass(self):
+        """3. Flow completo válido continua PASS."""
+        for s_idx in [1, 2]:
+            clip_f = os.path.join(self.clips_dir, f"flow_scene_{s_idx:02d}.mp4")
+            with open(clip_f, "wb") as f:
+                f.write(b"\x00" * 1024)
+
+        manifest = {
+            "project_name": "flow",
+            "flow_generation": {
+                "status": "COMPLETE",
+                "completed_scenes": [1, 2],
+            },
+            "scenes": [
+                {"scene_index": 1, "expected_clip": "flow_scene_01.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+                {"scene_index": 2, "expected_clip": "flow_scene_02.mp4", "is_flow_premium": True, "duration_hint": 5.0},
+            ],
+        }
+        with open(os.path.join(self.flow_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+
+        sources = [
+            {"provider": "google_flow", "asset_id": "flow_scene_01.mp4", "local_file": os.path.join(self.clips_dir, "flow_scene_01.mp4"), "scene_index": 1},
+            {"provider": "google_flow", "asset_id": "flow_scene_02.mp4", "local_file": os.path.join(self.clips_dir, "flow_scene_02.mp4"), "scene_index": 2},
+        ]
+        self._create_script_json({
+            "params": {"bgm_type": "none", "bgm_volume": 0.0},
+            "material_sources": sources,
+        })
+
+        with patch("scripts.flow_workflow.validate_clip_file", return_value={"valid": True, "duration": 5.0}), \
+             patch("app.utils.utils.task_dir", return_value=self.task_dir):
+            passed, reason, details = copyright_gate.evaluate_copyright_provenance_gate(
+                task_id=self.task_id,
+                task_base_dir=self.test_dir,
+            )
+
+        self.assertTrue(passed, f"Gate deveria aprovar Flow completo válido: {reason}")
+        self.assertEqual(details.get("copyright_provenance_gate"), "PASS")
+        self.assertEqual(details.get("flow_clips_verified"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

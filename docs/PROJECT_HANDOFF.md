@@ -16,15 +16,15 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `QG-V2.2B — CORREÇÃO COPYRIGHT UNKNOWN E REDUÇÃO DE LATÊNCIA DA CENTRAL DE REVISÃO`
+- **CURRENT_FOCUS:** `HOTFIX COPYRIGHT FLOW PARCIAL & DETALHAMENTO DE MOTIVOS NA CENTRAL DE REVISÃO (QG-V2.2C)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2B_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / FLOW_PARTIAL_COPYRIGHT_HOTFIX_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `881da1a6c068676e054649d4c5e33fa3925a5a7b` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `881da1a6c068676e054649d4c5e33fa3925a5a7b` (origin/main)
+- **CURRENT_MAIN_SHA:** `824e1edb8ffc7c8402efa3b90d821b47f3ecda0d` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `824e1edb8ffc7c8402efa3b90d821b47f3ecda0d` (origin/main)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `QG-V2.2B LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `FLOW PARTIAL COPYRIGHT HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
@@ -226,7 +226,14 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
 ### Histórico Recente de Merges no Main:
-- **`fix(voice): enforce global ui voice precedence over stored profile settings`**: Hotfix alinhando a precedência em `get_generation_profile_context` para que a Voz Global da Fábrica selecionada e salva pelo operador em `config.ui['voice_name']` prevaleça sobre a voz legada/congelada do perfil (ex: GTA VI).
+- **`HOTFIX QG-V2.2C` (`fix(copyright-gate): allow provenance validation for completed flow scenes in partial workflow runs`)**:
+  - **Causa Raiz & Contexto:** Na tarefa `d6daebe0-69fb-414e-8409-7ae955ea749e` (vídeo do elevador em produção), a listagem rápida exibia `Copyright: PASS` devido ao match preliminar de provider (`fast_listing=True`), mas a aprovação completa (`fast_listing=False`) falhava com `BLOCK` genérico. A validação profunda em `validate_flow_clip_provenance` exigia que o lote global do Flow estivesse em `flow_generation.status == "COMPLETE"`, rejeitando tarefas onde a geração parou em cena posterior (ex: `FAILED_SCENE_11`), mesmo que as cenas Flow efetivamente utilizadas (1, 2, 5) estivessem comprovadas em `completed_scenes`, com clipes físicos íntegros, e as demais cenas fossem Pexels autorizadas.
+  - **Correções Aplicadas:**
+    1. Em `app/services/copyright_gate.py`: `validate_flow_clip_provenance` normaliza caminhos relativos para `task_dir` e aprova cenas individualmente concluídas em `completed_scenes` quando `flow_generation.status` reflete falha em cena posterior (`FAILED_SCENE_*` ou `FALLBACK_STOCK_SCENE_*`), mantendo fail-closed estrito para `FLOW_GENERATION_NEEDS_RECOVERY` e cenas não completadas. Provider aceita `google_flow` e `flow`.
+    2. Em `app/services/quality_recovery.py`: `fast_listing=True` marca tarefas com clipes Flow pendentes de validação como `UNKNOWN` em vez de falso `PASS`. Na validação profunda e aprovação manual, o motivo real retornado pelo Copyright Gate é exposto na íntegra ao operador.
+    3. Três testes direcionados adicionados e aprovados (3/3 PASS) em `test/services/test_flow_provenance_contract.py`.
+- **`824e1ed` (`fix(review-center): handle copyright unknown safely and optimize listing latency`)**: QG-V2.2B - Suporte fail-safe a status UNKNOWN na Central de Revisão e otimização da listagem rápida.
+- **`881da1a` (`fix(quality-recovery): optimize review queue listing latency and fix human approval counting`)**: QG-V2.2 - Otimização de latência e contagem humana.
 - **`5bdb1ec` (`fix(deps): update edge-tts to 7.3.1`)**: Fix definitivo da dependência alinhando pyproject.toml, requirements.txt e uv.lock com a versão 7.3.1 confirmada funcional em produção (2,16s / 30.096 bytes).
 - **`c8b1444`:** `docs: record edge-tts streaming hotfix in PROJECT_HANDOFF`
 - **`c5841b4`:** `fix(voice): consume native edge-tts async stream to prevent sync deadlock and propagate errors` — Elimina deadlock upstream de `edge_tts.Communicate.stream_sync()` ao consumir nativamente `communicate.stream()` assíncrono em loop dedicado com timeout, propagação imediata de erros de rede/handshake (<0.05s) e cleanup de áudio vazio.

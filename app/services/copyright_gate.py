@@ -105,8 +105,11 @@ def validate_flow_clip_provenance(
         return False, "local_file ausente na proveniência do clipe Flow"
 
     task_dir_path = _resolve_task_dir(task_id, task_base_dir)
-    local_file_abs = os.path.abspath(local_file)
     task_dir_abs = os.path.abspath(task_dir_path)
+    if not os.path.isabs(local_file):
+        local_file_abs = os.path.abspath(os.path.join(task_dir_abs, local_file))
+    else:
+        local_file_abs = os.path.abspath(local_file)
 
     # 1. Arquivo dentro do diretório da tarefa
     try:
@@ -155,16 +158,10 @@ def validate_flow_clip_provenance(
     except Exception as exc:
         return False, f"Manifesto Flow corrompido ou ilegível: {exc}"
 
-    # 5. flow_generation.status == COMPLETE e sem recovery pendente
-    flow_gen = manifest.get("flow_generation", {})
-    flow_status = flow_gen.get("status")
-    if flow_status != "COMPLETE":
-        return False, f"Status da geração Flow não é COMPLETE (status={flow_status})"
+    if not isinstance(manifest, dict):
+        return False, "Manifesto Flow inválido (não é um objeto JSON)"
 
-    if flow_status == "FLOW_GENERATION_NEEDS_RECOVERY" or manifest.get("status") == "FLOW_GENERATION_NEEDS_RECOVERY":
-        return False, "Flow possui recovery pendente"
-
-    # 6. Cena correspondente no manifesto (match EXATO por expected_clip; sem fallback)
+    # 5. Cena correspondente no manifesto (match EXATO por expected_clip; sem fallback)
     clip_filename = os.path.basename(local_file_abs)
     manifest_scenes = manifest.get("scenes", []) or []
     matching_scene = None
@@ -183,17 +180,42 @@ def validate_flow_clip_provenance(
             f"({matching_scene.get('scene_index')}) para '{clip_filename}'"
         )
 
-    # 7. is_flow_premium == True
+    # 6. is_flow_premium == True
     if not matching_scene.get("is_flow_premium", False):
         return False, f"Cena {matching_scene.get('scene_index')} no manifesto não está marcada como is_flow_premium=True"
 
-    # 8. scene_index em completed_scenes
+    # 7. scene_index em completed_scenes
     scene_idx = matching_scene.get("scene_index")
+    flow_gen = manifest.get("flow_generation", {})
+    if not isinstance(flow_gen, dict):
+        flow_gen = {}
     completed_scenes = flow_gen.get("completed_scenes", [])
-    if scene_idx not in completed_scenes:
+    completed_set = {str(s) for s in (completed_scenes or [])}
+    if str(scene_idx) not in completed_set:
         return False, f"Cena Flow {scene_idx} não consta em completed_scenes do manifesto"
 
-    return True, "GENERATED_FLOW_PROVENANCE_VERIFIED"
+    # 8. Verificação de status e recovery da geração Flow
+    flow_status = str(flow_gen.get("status") or "").strip()
+    manifest_status = str(manifest.get("status") or "").strip()
+
+    if (
+        flow_status == "FLOW_GENERATION_NEEDS_RECOVERY"
+        or manifest_status == "FLOW_GENERATION_NEEDS_RECOVERY"
+    ):
+        return False, "Flow possui recovery pendente"
+
+    if flow_status == "COMPLETE":
+        return True, "GENERATED_FLOW_PROVENANCE_VERIFIED"
+
+    if (
+        flow_status.startswith("FAILED_SCENE_")
+        or flow_status.startswith("FALLBACK_STOCK_SCENE_")
+    ):
+        if flow_status == f"FAILED_SCENE_{scene_idx}":
+            return False, f"Cena Flow {scene_idx} falhou na geração"
+        return True, "GENERATED_FLOW_PROVENANCE_VERIFIED"
+
+    return False, f"Status da geração Flow não é COMPLETE (status={flow_status})"
 
 
 def _reconstruct_legacy_flow_materials(
@@ -958,7 +980,7 @@ def evaluate_copyright_provenance_gate(
                 },
             )
 
-        if provider == "google_flow":
+        if provider in ("google_flow", "flow"):
             valid, reason = validate_flow_clip_provenance(
                 task_id=task_id,
                 clip=clip,

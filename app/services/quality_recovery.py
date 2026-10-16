@@ -237,6 +237,7 @@ def inspect_single_held_task(
 
         # 4. Consulta Copyright Gate
         cp_status = "UNKNOWN"
+        copyright_reason = ""
         if _table_exists(active_conn, "copyright_provenance"):
             cp_row = active_conn.execute(
                 "SELECT status FROM copyright_provenance WHERE task_id = ? ORDER BY id DESC LIMIT 1;",
@@ -246,6 +247,7 @@ def inspect_single_held_task(
                 raw_status = str(cp_row["status"]).upper().strip()
                 if raw_status in ("BLOCK", "BLOCKED", "FAIL", "FAILED", "REJECTED"):
                     cp_status = "BLOCK"
+                    copyright_reason = "Bloqueio registrado em copyright_provenance."
                 elif raw_status in ("PASS", "APPROVED"):
                     cp_status = "PASS"
 
@@ -318,43 +320,57 @@ def inspect_single_held_task(
                             clips = prov.get("visual_clips") or []
                             if bgm_blocked:
                                 cp_status = "BLOCK"
+                                copyright_reason = "BGM de origem não autorizada ou legada."
                             elif not clips:
                                 cp_status = "UNKNOWN"
+                                copyright_reason = "Nenhum clipe visual com proveniência registrada."
                             else:
-                                allowed_providers = {"pexels", "pixabay", "coverr", "google_flow", "flow"}
+                                allowed_stock_providers = {"pexels", "pixabay", "coverr"}
                                 all_clips_safe = True
                                 any_blocked = False
+                                has_unverified_flow = False
                                 for cl in clips:
                                     cl_provider = str(cl.get("provider") or "").lower().strip()
                                     cl_status = str(cl.get("provenance_status") or "").upper().strip()
                                     local_f = cl.get("local_file")
                                     if cl_status in ("FAIL", "BLOCK", "BLOCKED", "UNAUTHORIZED"):
                                         any_blocked = True
+                                        copyright_reason = f"Clipe com status adverso: {cl_status}"
                                         break
-                                    if cl_provider not in allowed_providers or not local_f:
+                                    if cl_provider in ("google_flow", "flow"):
+                                        if cl_status != "GENERATED_FLOW_PROVENANCE_VERIFIED":
+                                            has_unverified_flow = True
+                                    elif cl_provider not in allowed_stock_providers or not local_f:
                                         all_clips_safe = False
 
                                 if any_blocked:
                                     cp_status = "BLOCK"
+                                elif has_unverified_flow:
+                                    cp_status = "UNKNOWN"
+                                    copyright_reason = "Contém clipes Google Flow pendentes de validação completa no primário."
                                 elif bgm_ok and all_clips_safe and len(clips) > 0:
                                     cp_status = "PASS"
                                 else:
                                     cp_status = "UNKNOWN"
+                                    copyright_reason = "Proveniência visual ou de áudio incompleta para aprovação rápida."
                         else:
                             cp_status = "UNKNOWN"
+                            copyright_reason = "Proveniência de ativos ausente."
             else:
                 try:
-                    cp_ok, _, _ = copyright_gate.evaluate_copyright_provenance_gate(
+                    cp_ok, cp_reason, _ = copyright_gate.evaluate_copyright_provenance_gate(
                         task_id=clean_tid,
                         task_base_dir=effective_task_dir,
                         db_path=effective_db,
                     )
                     if not cp_ok:
                         cp_status = "BLOCK"
+                        copyright_reason = cp_reason
                     else:
                         cp_status = "PASS"
-                except Exception:
+                except Exception as exc:
                     cp_status = "BLOCK"
+                    copyright_reason = f"Exceção na avaliação de copyright: {exc}"
 
         # 5. Consulta perfil associado
         profile_id = None
@@ -521,7 +537,7 @@ def inspect_single_held_task(
             reason = f"Safety Gate não aprovado ({safety_status})."
         elif cp_status == "BLOCK":
             classification = CLASS_BLOCKED
-            reason = "Copyright Gate bloqueado (violação ou material não licenciado)."
+            reason = f"Copyright Gate bloqueado: {copyright_reason}" if copyright_reason else "Copyright Gate bloqueado (violação ou material não licenciado)."
         elif cp_status == "UNKNOWN":
             classification = CLASS_NEEDS_REVIEW
             reason = f"Copyright Gate pendente de validação em nó primário (UNKNOWN); score QG-V2 ({v2_score:.1f} - {v2_label})."
@@ -554,6 +570,7 @@ def inspect_single_held_task(
             "mp4_path": video_path or "N/A",
             "safety_status": safety_status,
             "copyright_status": cp_status,
+            "copyright_reason": copyright_reason,
             "original_quality_score": orig_score,
             "original_quality_label": orig_label,
             "qg_v2_quality_score": v2_score,
@@ -1005,7 +1022,8 @@ def apply_human_review_decision(
         raise ValueError(f"Bloqueio: Safety Gate não aprovado ({cand['safety_status']}). Conteúdo inseguro não pode ser liberado.")
 
     if cand["copyright_status"] != "PASS":
-        raise ValueError(f"Bloqueio: Copyright Gate não aprovado ({cand['copyright_status']}). Conteúdo com pendência de direitos não pode ser liberado.")
+        cp_detail = cand.get("copyright_reason") or cand.get("reason") or "pendência de direitos"
+        raise ValueError(f"Bloqueio: Copyright Gate não aprovado ({cand['copyright_status']}) - {cp_detail}")
 
     if cand["classification"] == CLASS_ALREADY_PUBLISHED:
         raise ValueError(f"Bloqueio: Tarefa '{clean_tid}' já foi publicada no YouTube.")

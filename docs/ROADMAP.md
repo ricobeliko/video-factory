@@ -12,16 +12,18 @@
 
 # Estado Atual Canônico — 16/10/2026
 
-- **CURRENT_FOCUS** = `R7 — PER-PROFILE CONTROLS & GROWTH MODE MIGRATION (DEV)` / `FLOW-MA1 PRODUCTION SETUP & PILOT RESUMPTION (PROD)`
+- **CURRENT_FOCUS** = `R8 — WEB UI V2 CONSOLIDATION & PRODUCTION PREP (CONCLUÍDA EM DEV)` / `FLOW-MA1 PRODUCTION SETUP & PILOT RESUMPTION (PROD)`
 - **CURRENT_PHASE** = `V1.5E`
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
 - **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS** = `ACTIVE_DEV / FLOW-MA1_MERGED`
+- **PROJECT_STATUS** = `ACTIVE_DEV / R8_CONSOLIDATED / FLOW-MA1_MERGED`
 - **CURRENT_MAIN_SHA** = `4acda536bb024f81858d8a5f67f6f0ea3746195f` (main branch)
 - **DEV_BRANCH_HEAD_SHA** = `4acda536bb024f81858d8a5f67f6f0ea3746195f` (main branch)
 - **LAST_PRODUCTION_DEPLOY_SHA** = `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte)
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `R7 — PER-PROFILE SETTINGS & CONTROLS (DEV) / PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
+- **NEXT_GATE** = `PRODUCTION DEPLOY & FLOW-MA1 HOMOLOGATION (PROD)`
+- **R8_STATUS** = `COMPLETED / DEV VALIDATED (Web UI V2 Production Consolidation: Same-Origin FastAPI serving webui-v2/dist via SPAStaticFiles on port 8080, health endpoints /health and /api/v2/health, production launcher scripts/start_webui_v2.ps1, migration runbook docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, Streamlit fallback preserved on 8501, 42/42 targeted tests PASS)`
+- **R7_STATUS** = `COMPLETED / DEV VALIDATED (Per-Profile Settings, Growth Mode, Autonomous Mode, Quotas and Publishing Windows, 36/36 unit tests PASS)`
 - **R6B_STATUS** = `COMPLETED / DEV VALIDATED (Operational Controls & Dispatch: GET /api/v2/channels, POST /api/v2/factory/pause, POST /api/v2/factory/resume, POST /api/v2/factory/run-cycle, integração frontend Web UI V2 com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso, 19/19 testes unitários PASS)`
 - **FLOW_MA1_STATUS** = `MERGED / READY_FOR_PRODUCTION_DEPLOY`
 - **FLOW_UI_001_STATUS** = `DEV VALIDATED (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)`
@@ -199,9 +201,9 @@ A existência de um item no checklist **NÃO significa que o código deve ser re
 - **CURRENT_BEHAVIOR:** Backend continua funcional, mas ações simples da interface podem levar tempo excessivo devido ao modelo atual do Streamlit e ao crescimento da aplicação.
 - **KNOWN_CANONICAL_SOURCE:** Arquitetura Streamlit (reruns completos de script) vs Backend assíncrono.
 - **CURRENT_RISK:** `LOW` para backend / `MEDIUM` para operação/usabilidade.
-- **PLANNED_ACTION:** Migrar gradualmente para Web UI v2 com API leve e frontend separado, preservando toda regra de negócio existente.
-- **TARGET_PHASE:** `R4 / R5 / R6 / R7`
-- **STATUS:** `OPEN`
+- **PLANNED_ACTION:** Migrar gradualmente para Web UI v2 com API leve e frontend separado, preservando toda regra de negócio existente. Concluído na R8 com Web UI V2 desacoplada (React/Vite) servida em Same-Origin pelo FastAPI, eliminando reruns e preservando o Streamlit como fallback seguro na porta 8501.
+- **TARGET_PHASE:** `R4 / R5 / R6 / R7 / R8`
+- **STATUS:** `DEV_CONSOLIDATED_V2`
 
 #### UI-004
 - **ID:** `UI-004`

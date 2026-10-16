@@ -143,6 +143,13 @@ def public_dir(sub_dir: str = ""):
     return d
 
 
+def webui_v2_dist_dir(sub_dir: str = "") -> str:
+    d = os.path.join(root_dir(), "webui-v2", "dist")
+    if sub_dir:
+        d = os.path.join(d, sub_dir)
+    return d
+
+
 def get_ffmpeg_binary() -> str:
     """
     解析当前进程应该使用的 FFmpeg 可执行文件。

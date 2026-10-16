@@ -33,10 +33,13 @@ class TestWebUiV2Api(unittest.TestCase):
         profile_manager.init_profile_db(self.db_path)
         profile_manager.ensure_default_profile(self.db_path)
         operator_console.init_operator_db(self.db_path)
+        operator_console.reset_instance_for_testing()
+        operator_console.ensure_instance_initialized(db_path=self.db_path)
 
         self.client = TestClient(asgi.app)
 
     def tearDown(self):
+        operator_console.reset_instance_for_testing()
         config.app.clear()
         config.app.update(self.original_app_config)
         self.temp_dir.cleanup()
@@ -589,4 +592,57 @@ class TestWebUiV2Api(unittest.TestCase):
                 local_slot = local_slot.replace(hour=14, minute=0, second=0)
                 slot = scheduler._normalize_utc(local_slot)
             self.assertEqual(scheduler.to_local_datetime(slot).hour, 14)
+
+    def test_health_endpoint_returns_ok_and_webui_status(self):
+        """37. GET /health retorna status healthy, nome da aplicação e disponibilidade do Web UI V2."""
+        resp = self.client.get("/health")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data.get("status"), "healthy")
+        self.assertIn("app", data)
+        self.assertIn("version", data)
+        self.assertIn("webui_v2_available", data)
+        self.assertEqual(data.get("same_origin"), True)
+
+    def test_api_v2_health_endpoint_returns_operational_details(self):
+        """38. GET /api/v2/health retorna status consolidado da API V2 e papel da instância."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path):
+            resp = self.client.get("/api/v2/health")
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertEqual(body.get("status"), 200)
+            data = body.get("data", {})
+            self.assertEqual(data.get("status"), "healthy")
+            self.assertIn("role", data)
+            self.assertIn("is_primary", data)
+            self.assertIn("webui_v2_available", data)
+            self.assertEqual(data.get("same_origin"), True)
+
+    def test_root_serves_html_spa_or_public(self):
+        """39. GET / serve o arquivo HTML principal com Content-Type text/html."""
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+        self.assertTrue("<html" in resp.text.lower() or "<!doctype html" in resp.text.lower())
+
+    def test_spa_static_files_fallback_for_client_routes(self):
+        """40. Rotas SPA do cliente (sem extensão) recebem fallback para index.html com status 200."""
+        resp = self.client.get("/agent-ops")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+
+    def test_missing_asset_with_extension_returns_404(self):
+        """41. Assets estáticos inexistentes com extensão (ex.: .js) retornam 404 e NÃO index.html."""
+        resp = self.client.get("/assets/definitely_missing_asset_123.js")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_same_origin_browser_request_allowed(self):
+        """42. Requisição do mesmo Origin é permitida sem bloqueio 403."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path):
+            resp = self.client.get(
+                "/api/v2/system/status",
+                headers={"Origin": "http://testserver"},
+            )
+            self.assertEqual(resp.status_code, 200)
+
 

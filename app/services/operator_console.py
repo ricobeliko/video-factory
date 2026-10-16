@@ -222,7 +222,7 @@ def acquire_instance_lock(
     Se o lock for adquirido ou recuperado -> retorna (ROLE_PRIMARY, info).
     Se outra instância estiver ativa e saudável -> retorna (ROLE_SECONDARY_VIEW_ONLY, info).
     """
-    global _current_node_id, _current_role, _current_node_name, _current_started_at
+    global _current_node_id, _current_role, _current_node_name, _current_started_at, _instance_initialized
     init_operator_db(db_path)
 
     now_utc = datetime.now(timezone.utc)
@@ -452,6 +452,7 @@ def acquire_instance_lock(
             _current_role = ROLE_PRIMARY
             _current_node_name = outcome_dict.get("node_name") or chosen_node_name
             _current_started_at = _parse_iso_utc(outcome_dict.get("started_at")) or now_utc
+            _instance_initialized = True
 
             for ev in events_to_log:
                 log_operational_event(
@@ -476,8 +477,10 @@ def _enter_view_only(
     db_path: Optional[str],
 ) -> Tuple[str, Dict[str, Any]]:
     """Configura o processo atual para operar estritamente em SECONDARY_VIEW_ONLY."""
-    global _current_role, _current_node_name
+    global _current_role, _current_node_name, _instance_initialized
     _current_role = ROLE_SECONDARY_VIEW_ONLY
+    _instance_initialized = True
+
     _current_node_name = node_name
     stop_instance_heartbeat()
 

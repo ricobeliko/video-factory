@@ -207,6 +207,30 @@ async def protect_generated_task_files(request: Request, call_next):
     return await call_next(request)
 
 
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles subclass with Single Page Application (SPA) routing fallback.
+
+    If a requested file is not found (404) and the path does not target an asset
+    with a file extension (e.g. .js, .css, .png, etc.), it serves index.html to allow
+    client-side routing to handle the URL without 404 errors.
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                base_name = os.path.basename(path.rstrip("/"))
+                # Only fallback for client-side navigation routes, never for missing static assets (.ext)
+                if not base_name or "." not in base_name:
+                    return await super().get_response("index.html", scope)
+            raise
+
+
+
 # 默认遵循浏览器同源策略；仅在用户显式配置可信网页来源时开放跨域。
 cors_allowed_origins = parse_cors_allowed_origins(
     os.getenv("CORS_ALLOWED_ORIGINS", "")
@@ -214,7 +238,15 @@ cors_allowed_origins = parse_cors_allowed_origins(
 configure_browser_access(app, cors_allowed_origins)
 
 task_dir = utils.task_dir()
-app.mount("/tasks", StaticFiles(directory=task_dir, html=True), name="")
+app.mount("/tasks", StaticFiles(directory=task_dir, html=True), name="tasks")
 
-public_dir = utils.public_dir()
-app.mount("/", StaticFiles(directory=public_dir, html=True), name="")
+webui_dist = utils.webui_v2_dist_dir()
+if os.path.isdir(webui_dist) and os.path.isfile(os.path.join(webui_dist, "index.html")):
+    frontend_dir = webui_dist
+    logger.info(f"Serving Web UI V2 production build from {frontend_dir}")
+else:
+    frontend_dir = utils.public_dir()
+    logger.info(f"Serving fallback public directory from {frontend_dir}")
+
+app.mount("/", SPAStaticFiles(directory=frontend_dir, html=True), name="webui")
+

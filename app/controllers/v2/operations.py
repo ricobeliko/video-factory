@@ -719,3 +719,36 @@ def get_agent_ops(request: Request):
     snapshot = agent_ops.get_agent_ops_snapshot()
     return utils.get_response(200, snapshot)
 
+
+@router.get(
+    "/health",
+    summary="Get Web UI V2 and API operational readiness",
+)
+def get_v2_health(request: Request):
+    from app.config import config
+    import os
+    webui_dist = utils.webui_v2_dist_dir()
+    webui_built = os.path.isdir(webui_dist) and os.path.isfile(
+        os.path.join(webui_dist, "index.html")
+    )
+    db_path = operator_console.get_db_path()
+    is_primary = operator_console.is_primary_instance(db_path=db_path)
+    role = (
+        operator_console.ROLE_PRIMARY
+        if is_primary
+        else operator_console.ROLE_SECONDARY_VIEW_ONLY
+    )
+    return utils.get_response(
+        200,
+        {
+            "status": "healthy",
+            "app": config.project_name,
+            "version": config.project_version,
+            "role": role,
+            "is_primary": is_primary,
+            "webui_v2_available": webui_built,
+            "same_origin": True,
+        },
+    )
+
+

@@ -5,10 +5,25 @@
  */
 
 async function fetchJson(endpoint, options = {}) {
-  const apiKey = typeof window !== 'undefined'
-    ? (window.__API_KEY__ || localStorage.getItem('api_key') || sessionStorage.getItem('api_key') || '')
-    : '';
+  let apiKey = '';
+  if (typeof window !== 'undefined') {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryKey = urlParams.get('api_key');
+      if (queryKey) {
+        sessionStorage.setItem('api_key', queryKey);
+      }
+    } catch {
+      // Ignore URL parsing errors
+    }
+    apiKey =
+      (typeof window !== 'undefined' && window.__API_KEY__) ||
+      (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('api_key')) ||
+      (typeof localStorage !== 'undefined' && localStorage.getItem('api_key')) ||
+      '';
+  }
   const authHeaders = apiKey ? { 'x-api-key': apiKey } : {};
+
 
   const response = await fetch(endpoint, {
     headers: {
@@ -173,4 +188,9 @@ export async function updateProfileSchedule(profileId, schedule) {
     body: JSON.stringify(schedule),
   });
 }
+
+export async function getHealth() {
+  return fetchJson('/api/v2/health');
+}
+
 

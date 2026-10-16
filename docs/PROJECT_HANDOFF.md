@@ -16,19 +16,19 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `R10 PREPARAÇÃO DO PACOTE DE DEPLOY CONTROLADO DE PRODUÇÃO (PC FORTE)`
+- **CURRENT_FOCUS:** `R10 RELEASE CONSOLIDADA WEB UI V2 — PACOTE DE DEPLOY CONTROLADO PRONTO`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / R9.3_HOMOLOGATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / R10_RELEASE_CANDIDATE_READY`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (HEAD local em DEV com R9.1/R9.2/R9.3)
+- **DEV_BRANCH_HEAD_SHA:** `96b9c112bcd912c95ac0ca05de19a6e057059585` (HEAD local em DEV com R9.1 + R9.2 + R9.3 + R10)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
 - **CURRENT_GATE:** `R10 CONTROLLED PRODUCTION ROLLOUT PACKAGE (PROD)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
-- **R10_STATUS:** `PROD PENDING (Controlled Production Rollout Package no PC Forte via start_webui_v2.ps1 porta 8080, Streamlit mantido na 8501)`
+- **R10_STATUS:** `READY_FOR_CONTROLLED_PRODUCTION_DEPLOY (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip gerado e verificado, runbook atualizado docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, zero migrações de banco, autostart via Task Scheduler porta 8080, Streamlit 8501 preservado)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2149,6 +2149,28 @@ Entregas V16.4.1A:
   - Build Vite frontend: `npm run build` PASS (408.87 kB JS, 70.86 kB CSS, 0 erros, tempo: 7.22s).
 - **Limitações Registradas:**
   - Binários do browser headless Playwright não instalados no host Windows (conforme instrução, ferramentas pesadas não foram instaladas e a validação foi realizada via testes de componentes e contratos de API com fidelidade integral).
+
+### V16.27 — R10: Pacote Consolidado de Release da Web UI V2 (DEV)
+- **Status:** `RELEASE_CANDIDATE_READY / READY_FOR_CONTROLLED_PRODUCTION_DEPLOY` (16/10/2026)
+- **Base:** `96b9c112bcd912c95ac0ca05de19a6e057059585` (HEAD local em DEV)
+- **Pacote Oficial Gerado:**
+  - **Arquivo:** `releases/webui-v2-dist-96b9c11.zip`
+  - **Tamanho:** 140.17 KB (143.535 bytes)
+  - **SHA-256:** `3bebaf3b5307cf1becd07e4b97a61c42b38a924d2bf242b75fd54e5ff9213b4e`
+  - **Checksum:** `releases/webui-v2-dist-96b9c11.zip.sha256`
+  - **Validação de Integridade:** 100% VERIFICADO E APROVADO via `scripts/package_webui_v2.ps1`
+- **Frentes Incorporadas no Pacote Único:**
+  - **R9.1:** Live Pipeline real com 12 nós, checkpoints em `task.py`, resolução de provedores e gates factuais sem aprovação sintética.
+  - **R9.2:** Operações multicanal, foco manual persistente contra polling de 3s, rastreamento dinâmico ativo, cards de verificação de gates no drawer e sanitização universal contra HTML bruto (`sanitizeDisplayText`).
+  - **R9.3:** Homologação integrada dos 6 cenários (A..F), correção de precedência de profile em tarefas ativas e padronização da etapa `SCHEDULER`.
+- **Garantias Operacionais para o PC Forte:**
+  - **Zero Downtime / Zero Quebra:** O serviço principal `VideoFactory Production` (Streamlit na porta 8501) permanece em execução ininterrupta.
+  - **FastAPI Same-Origin na Porta 8080:** Servindo os arquivos estáticos de `webui-v2/dist/` e rotas `/api/v2/*` em modo `SECONDARY_VIEW_ONLY` (sem disputar lock `PRIMARY`).
+  - **Autostart Persistente:** Instalação idempotente via `.\scripts\register_webui_v2_task.ps1` criando a tarefa `VideoFactory WebUI V2` no Windows Task Scheduler.
+  - **Zero Migração de Banco:** Nenhum schema SQLite ou tabela alterada.
+  - **Rollback Seguro:** Reversão imediata parando a porta 8080 ou via `register_webui_v2_task.ps1 -Unregister` sem sobrescrever dados do banco.
+- **Runbook Atualizado:** [docs/WEB_UI_V2_MIGRATION_RUNBOOK.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2_MIGRATION_RUNBOOK.md) atualizado com instruções passo a passo seguras para execução no PowerShell do PC Forte.
+
 
 
 

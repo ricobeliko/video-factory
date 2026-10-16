@@ -1,12 +1,12 @@
-# RUNBOOK — Migração e Operação da Web UI V2 no PC Forte (Fase R8)
+# RUNBOOK — Migração e Operação da Web UI V2 no PC Forte (Release Consolidada R10)
 
-Este documento especifica o procedimento operacional canônico para instalar, inicializar, validar e operar a **Web UI V2** no **PC Forte** (`C:\Projetos\MoneyPrinterTurbo`), preservando integralmente o Streamlit legado como fallback.
+Este documento especifica o procedimento operacional canônico para instalar, inicializar, validar e operar a **Web UI V2** no **PC Forte** (`C:\Projetos\MoneyPrinterTurbo`), consolidando as frentes **R9.1 (Live Pipeline Real)**, **R9.2 (Operação Multicanal & UX)** e **R9.3 (Homologação Integrada)**, preservando integralmente o Streamlit legado na porta 8501 como fallback operacional.
 
 ---
 
 ## 1. Arquitetura em Modo de Produção
 
-Na Fase R8, a Web UI V2 foi consolidada para operar em modo de produção integrada ao backend FastAPI existente:
+Na Release Consolidada R10, a Web UI V2 opera integrada ao backend FastAPI existente:
 
 - **Mesma Origem (Same-Origin):** O backend FastAPI (`main.py` / `app.asgi:app`) serve tanto os arquivos estáticos compilados do frontend (`webui-v2/dist/`) quanto as rotas da API V2 (`/api/v2/...`). Não é necessário executar o servidor Vite (`npm run dev`) em produção.
 - **Porta Dedicada (8080):** O FastAPI roda em `http://0.0.0.0:8080`.
@@ -20,7 +20,7 @@ Na Fase R8, a Web UI V2 foi consolidada para operar em modo de produção integr
 
 1. **Repositório Atualizado:** Branch `main` sincronizada via avanço fast-forward (`git pull --ff-only origin main`).
 2. **Python:** Ambiente virtual `.venv` existente (`.venv\Scripts\python.exe`) com Python 3.11.x e dependências instaladas.
-3. **Node.js / npm:** **NÃO NECESSÁRIOS NO PC FORTE**. O frontend é compilado no ambiente DEV e transferido via pacote ZIP pré-validado (`releases/webui-v2-dist-c64e9bf.zip`).
+3. **Node.js / npm:** **NÃO NECESSÁRIOS NO PC FORTE**. O frontend é compilado no ambiente DEV e transferido via pacote ZIP pré-validado (`releases/webui-v2-dist-96b9c11.zip`).
 4. **Streamlit Ativo:** O serviço de produção `VideoFactory Production` (Streamlit na porta 8501) permanece em execução normal durante todo o processo.
 
 ---
@@ -28,39 +28,53 @@ Na Fase R8, a Web UI V2 foi consolidada para operar em modo de produção integr
 ## 3. Procedimento de Instalação Sem Node.js (Pacote Pré-Compilado)
 
 O pacote de distribuição oficial é gerado no ambiente DEV através de `scripts/package_webui_v2.ps1` e disponibilizado em `releases/`:
-- **Arquivo ZIP:** `releases/webui-v2-dist-c64e9bf.zip` (139.13 KB / 142.473 bytes)
-- **SHA-256:** `0db1af19c0a0abd54c8d5fc821110f3828609eb5e2fe15b9d785659c9b76d0d2`
+- **Arquivo ZIP:** `releases/webui-v2-dist-96b9c11.zip` (140.17 KB / 143.535 bytes)
+- **SHA-256:** `3bebaf3b5307cf1becd07e4b97a61c42b38a924d2bf242b75fd54e5ff9213b4e`
+- **Target Git SHA:** `96b9c112bcd912c95ac0ca05de19a6e057059585`
 - **Conteúdo:** `dist/index.html`, `dist/assets/*.js`, `dist/assets/*.css`, `manifest.json`, `INSTALL.md`
 
-### 3.1 Procedimento no PC Forte (PowerShell):
+### 3.1 Procedimento Unificado e Seguro no PC Forte (PowerShell):
 
 ```powershell
-# 1. Atualizar o código backend via fast-forward (sem mexer na main)
+# 1. Preflight sem mutação: verificar integridade do repositório
 cd C:\Projetos\MoneyPrinterTurbo
+git status
+git branch --show-current
+
+# 2. Checagem de atividade: certificar-se de que não há tarefa em geração ativa
+.venv\Scripts\python.exe -c "from app.services import operator_console; st = operator_console.get_live_execution_overview(); running = [c['profile_name'] for c in st['channels'] if c['status'] == 'RUNNING']; print('TAREFAS ATIVAS:', running if running else 'NENHUMA (LIVRE)')"
+
+# 3. Atualizar o código backend via fast-forward estrito
 git pull --ff-only origin main
 
-# 2. Copiar o arquivo webui-v2-dist-c64e9bf.zip para C:\Projetos\MoneyPrinterTurbo\webui-v2
-# Validar o checksum SHA-256 do pacote:
-$ExpectedHash = "0db1af19c0a0abd54c8d5fc821110f3828609eb5e2fe15b9d785659c9b76d0d2"
-$ActualHash = (Get-FileHash -Path ".\webui-v2\webui-v2-dist-c64e9bf.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+# 4. Validar SHA instalado
+$InstalledSha = (git rev-parse HEAD).Trim()
+Write-Host "SHA Instalado: $InstalledSha" -ForegroundColor Green
+if ($InstalledSha -ne "96b9c112bcd912c95ac0ca05de19a6e057059585") {
+    Write-Warning "Aviso: SHA instalado ($InstalledSha) difere do release candidate esperado."
+}
+
+# 5. Copiar e validar o checksum SHA-256 do pacote pré-compilado:
+$ExpectedHash = "3bebaf3b5307cf1becd07e4b97a61c42b38a924d2bf242b75fd54e5ff9213b4e"
+$ActualHash = (Get-FileHash -Path ".\releases\webui-v2-dist-96b9c11.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($ActualHash -ne $ExpectedHash) {
     Write-Error "FALHA DE INTEGRIDADE: SHA-256 divergente do pacote!"
     exit 1
 }
 Write-Host "Integridade do pacote verificada com sucesso (PASS)." -ForegroundColor Green
 
-# 3. Descompactar os artefatos compilados em webui-v2\dist
+# 6. Descompactar os artefatos compilados em webui-v2\dist
 $WebUiDist = "C:\Projetos\MoneyPrinterTurbo\webui-v2\dist"
 if (Test-Path $WebUiDist) {
     Remove-Item -Path $WebUiDist -Recurse -Force
 }
 New-Item -ItemType Directory -Path $WebUiDist -Force | Out-Null
 
-Expand-Archive -Path ".\webui-v2\webui-v2-dist-c64e9bf.zip" -DestinationPath ".\webui-v2\temp_extract" -Force
+Expand-Archive -Path ".\releases\webui-v2-dist-96b9c11.zip" -DestinationPath ".\webui-v2\temp_extract" -Force
 Copy-Item -Path ".\webui-v2\temp_extract\dist\*" -Destination $WebUiDist -Recurse -Force
 Remove-Item -Path ".\webui-v2\temp_extract" -Recurse -Force
 
-# 4. Validar os artefatos instalados
+# 7. Validar presença dos artefatos estáticos
 Test-Path "$WebUiDist\index.html"
 Test-Path "$WebUiDist\assets"
 ```

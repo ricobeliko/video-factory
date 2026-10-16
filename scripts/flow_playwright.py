@@ -2660,13 +2660,17 @@ def generate_flow_scene(
     initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
     initial_status = rt_before.get("status", "AVAILABLE")
 
-    # Pre-dispatch failover se conta estiver em status não elegível
+    # Pre-dispatch failover se conta estiver em status não elegível ou com saldo insuficiente
     failover_done = False
-    if can_failover_account(manifest) and initial_status in ("EXHAUSTED", "AUTH_FAILED", "DISABLED", "COOLDOWN"):
+    needs_pre_failover = (
+        initial_status in ("EXHAUSTED", "AUTH_FAILED", "AUTH_REQUIRED", "DISABLED", "COOLDOWN")
+        or (credits_before is not None and credits_before < 15)
+    )
+    if can_failover_account(manifest) and needs_pre_failover:
         alt_acc = failover_flow_account(
             manifest_path,
             flow_account_id,
-            f"Account in non-eligible status: {initial_status}",
+            f"Account in non-eligible status or insufficient credits: status={initial_status}, credits={credits_before}",
         )
         if alt_acc:
             failover_done = True
@@ -2761,8 +2765,20 @@ def generate_flow_scene(
         if raw_status in ("SUCCESS", "ALREADY_COMPLETE", "PRE_FLIGHT_TRIAL_PASS"):
             record_account_success(flow_account_id, task_id=task_id)
         else:
-            is_auth = (raw_res.get("login_status") != "AUTHENTICATED" or "auth" in str(raw_res.get("error")).lower())
-            is_exh = (raw_status in ("EXHAUSTED", "FLOW_ACCOUNT_EXHAUSTED") or "exhaust" in str(raw_res.get("error")).lower())
+            login_st = raw_res.get("login_status")
+            err_str = str(raw_res.get("error") or raw_status or "").lower()
+            is_edge_profile_locked = "awaiting_flow_edge_profile_close" in err_str
+            is_auth = (
+                not is_edge_profile_locked
+                and (
+                    login_st in ("AWAITING_INITIAL_HUMAN_LOGIN", "BLOCKED_CAPTCHA")
+                    or "auth_failed" in err_str
+                    or "auth_required" in err_str
+                    or "unauthenticated" in err_str
+                    or ("login" in err_str and "flow_login" not in err_str)
+                )
+            )
+            is_exh = (raw_status in ("EXHAUSTED", "FLOW_ACCOUNT_EXHAUSTED") or "exhaust" in err_str)
             record_account_error(
                 flow_account_id,
                 error=raw_res.get("error") or raw_status,

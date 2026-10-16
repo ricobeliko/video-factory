@@ -2018,3 +2018,37 @@ Entregas V16.4.1A:
   - Status: `SUCCESS`.
 - **Testes Unitários:**
   - 102/102 testes PASS em 2.99s (`test/services/test_flow_playwright.py`).
+
+
+### V16.23 — Hotfix FLOW-MA1: Autenticação Operacional e Failover do Pool Google Flow (Conta B)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (16/10/2026)
+- **Base:** `7c6c7547840411b4832f7a903ca649dcbad604b2` (main)
+- **Problema Operacional Identificado:**
+  - No PC Forte, a Conta B (`flow-b`) estava autenticada no Edge nativo com 1.038 créditos lidos.
+  - A Web UI V2 exibia `Falha Auth` (`AUTH_FAILED`) com 1.038 créditos `VERIFIED`.
+  - A conta primária estava praticamente sem créditos e a fábrica não realizou failover automático para a Conta B.
+- **Diagnóstico da Causa Raiz:**
+  1. *Falso Positivo de Autenticação em Erros de Perfil Bloqueado:* Em `scripts/flow_playwright.py` (linha 2764), a expressão `is_auth = (raw_res.get("login_status") != "AUTHENTICATED" or ...)` avaliava `None != "AUTHENTICATED"` como `True` sempre que ocorriam falhas antes ou durante o launch (ex: `AWAITING_FLOW_EDGE_PROFILE_CLOSE` quando o Edge estava aberto pelo operador). Isso marcava a conta indevidamente com `status = STATUS_AUTH_FAILED`.
+  2. *Incapacidade de Recuperação na Reconciliação:* Em `app/services/flow_account_pool.py`, `record_verified_credit_balance` só transicionava para `STATUS_AVAILABLE` contas com status em `(EXHAUSTED, LOW_CREDITS, AVAILABLE_UNKNOWN_CREDITS)`. Se a conta estivesse em `STATUS_AUTH_FAILED` ou `STATUS_AUTH_REQUIRED`, o método atualizava os créditos mas preservava o status de erro e o `last_error`, impedindo o desbloqueio mesmo após leitura confirmada da UI.
+  3. *Ineligibilidade no Mecanismo de Seleção e Failover:* Por estar em `STATUS_AUTH_FAILED`, `flow-b` era rejeitada por `NON_ELIGIBLE_STATUSES` em `select_flow_account`. Logo, quando `flow-primary` precisava de failover pré-dispatch, `failover_flow_account` não encontrava nenhuma conta elegível.
+  4. *Falta de Failover Proativo para Saldo Insuficiente:* No pre-dispatch failover de `flow_playwright.py` e em `resolve_manifest_account`, contas não-stickies com saldo insuficiente (< 15 créditos) não eram alternadas proativamente antes do disparo da tentativa.
+  5. *Anúncio Indevido de Saldo Bloqueado:* `get_flow_accounts_status` somava créditos de contas em `AUTH_FAILED` no `total_known_credits`, exibindo pool com capacidade enganosa.
+- **Implementação Realizada:**
+  - `app/services/flow_account_pool.py`:
+    - `record_verified_credit_balance`: transiciona contas em `STATUS_AUTH_FAILED`, `STATUS_AUTH_REQUIRED` e `STATUS_COOLDOWN` para `STATUS_AVAILABLE` (ou `STATUS_LOW_CREDITS` se $\le 15$), limpando `last_error` e `cooldown_until`.
+    - `verify_flow_account_session`: limpa `last_error` e define `STATUS_AVAILABLE` ao validar `st == "AUTHENTICATED"`.
+    - `get_flow_accounts_status`: `total_known_credits` soma apenas contas operacionais e elegíveis (`status not in NON_ELIGIBLE_STATUSES` e `enabled == True`).
+    - `resolve_manifest_account` e `select_flow_account`: alternam proativamente para contas elegíveis com saldo viável ($\ge 15$) em manifestos não-iniciados (pré-dispatch).
+  - `scripts/flow_playwright.py`:
+    - Refinada a avaliação de `is_auth` para ignorar bloqueios de perfil (`AWAITING_FLOW_EDGE_PROFILE_CLOSE`) e launch errors não-relacionados a credenciais.
+    - Pre-dispatch failover expandido para incluir `STATUS_AUTH_REQUIRED` e contas com saldo insuficiente (< 15 créditos).
+  - `webui-v2/src/components/FlowAccountsSection.jsx`:
+    - Contas com `AUTH_FAILED` ou `AUTH_REQUIRED` exibem badge `HISTÓRICO BLOQUEADO`, unidade `créditos (bloqueados)` e texto de capacidade explicitando "Saldo histórico inacessível até revalidação de autenticação".
+    - `npm run build` executado e compilado em `webui-v2/dist`.
+- **Validação Local:**
+  - 25/25 testes PASS em `test/services/test_flow_account_pool.py`.
+  - 8/8 testes direcionados PASS em `test/services/test_flow_playwright.py`.
+- **Ação Operacional Obrigatória no PC Forte:**
+  1. Fechar qualquer janela aberta do Microsoft Edge (`Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force`).
+  2. Executar: `.venv\Scripts\python.exe -m app.services.flow_account_pool verify --account-id flow-b`.
+  3. Com a sessão confirmada, `flow-b` é promovida imediatamente para `AVAILABLE`, tornando-se a conta ativa principal do pool devido aos 1.038 créditos.

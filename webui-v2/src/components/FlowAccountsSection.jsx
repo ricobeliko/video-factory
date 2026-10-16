@@ -68,7 +68,17 @@ function getStatusDetails(status, creditsSource, creditsRemaining) {
  * NUNCA exibir percentual de plano ou denominador inventado (sem credit_limit canônico).
  * Exibir com destaque numérico claro.
  */
-function getCreditDisplay(remaining, source) {
+function getCreditDisplay(remaining, source, status) {
+  if (status === 'AUTH_FAILED' || status === 'AUTH_REQUIRED') {
+    return {
+      formattedNumber: remaining !== null && remaining !== undefined ? Number(remaining).toLocaleString('pt-BR') : '—',
+      unit: 'créditos (bloqueados)',
+      sourceLabel: 'HISTÓRICO BLOQUEADO',
+      sourceClass: 'source-unknown',
+      isKnown: false,
+    };
+  }
+
   if (source === 'FLOW_UI_VERIFIED' && remaining !== null && remaining !== undefined) {
     return {
       formattedNumber: Number(remaining).toLocaleString('pt-BR'),
@@ -163,7 +173,7 @@ export default function FlowAccountsSection({ flowPool }) {
           accounts.map((acct) => {
             const isActive = acct.account_id === active_account_id;
             const statusInfo = getStatusDetails(acct.status, acct.credits_source, acct.credits_remaining);
-            const creditDisplay = getCreditDisplay(acct.credits_remaining, acct.credits_source);
+            const creditDisplay = getCreditDisplay(acct.credits_remaining, acct.credits_source, acct.status);
             const taskInfo = formatCurrentTask(acct.current_task_id);
 
             // Future-proof capacity percentage check (only if backend canonically sends credit_limit)
@@ -236,7 +246,11 @@ export default function FlowAccountsSection({ flowPool }) {
                     {canonicalPct !== null ? (
                       <span>{canonicalPct}% da cota ({acct.credits_remaining} / {acct.credit_limit})</span>
                     ) : (
-                      <span>Saldo factual verificado no Google Flow</span>
+                      <span>
+                        {acct.status === 'AUTH_FAILED' || acct.status === 'AUTH_REQUIRED'
+                          ? 'Saldo histórico inacessível até revalidação de autenticação'
+                          : 'Saldo factual verificado no Google Flow'}
+                      </span>
                     )}
                   </div>
                 </div>

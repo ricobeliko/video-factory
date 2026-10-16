@@ -2371,6 +2371,27 @@ class TestFlowPlaywright(unittest.TestCase):
             self.assertIn("credits_before", res.details)
             self.assertIn("credits_after_estimated", res.details)
 
+    def test_generate_flow_scene_locked_edge_profile_does_not_flag_auth_failed(self):
+        """FLOW-MA1: Erro de perfil bloqueado (AWAITING_FLOW_EDGE_PROFILE_CLOSE) não gera falso positivo AUTH_FAILED."""
+        raw_res = {
+            "status": "AWAITING_FLOW_EDGE_PROFILE_CLOSE",
+            "error": "AWAITING_FLOW_EDGE_PROFILE_CLOSE",
+            "login_status": None,
+        }
+        with patch("scripts.flow_playwright.run_playwright_flow_poc", return_value=raw_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test", "expected_clip": "clip.mp4"}],
+                 "flow_account_id": "flow-b",
+             }))), \
+             patch("app.services.flow_account_pool.record_account_error") as mock_record_err, \
+             patch("scripts.flow_playwright.atomic_write_json"):
+            res = generate_flow_scene("dummy_manifest.json", scene_index=1)
+            mock_record_err.assert_called_once()
+            _, kwargs = mock_record_err.call_args
+            self.assertFalse(kwargs.get("is_auth"))
+
+
 
     def test_check_studio_surface_readiness_composer_available(self):
         """Readiness: detecta COMPOSER_AVAILABLE quando editor ProseMirror está visível."""

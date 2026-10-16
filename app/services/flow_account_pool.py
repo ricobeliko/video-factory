@@ -299,8 +299,13 @@ def record_verified_credit_balance(
             curr["status"] = STATUS_EXHAUSTED
         elif bal <= 15:
             curr["status"] = STATUS_LOW_CREDITS
-        elif curr.get("status") in (STATUS_EXHAUSTED, STATUS_LOW_CREDITS, STATUS_AVAILABLE_UNKNOWN_CREDITS):
+            if curr.get("status") in (STATUS_AUTH_FAILED, STATUS_AUTH_REQUIRED, STATUS_COOLDOWN):
+                curr["last_error"] = None
+                curr["cooldown_until"] = None
+        else:
             curr["status"] = STATUS_AVAILABLE
+            curr["last_error"] = None
+            curr["cooldown_until"] = None
 
         accounts_rt[account_id] = curr
         save_runtime_state(state, runtime_path)
@@ -379,7 +384,8 @@ def select_flow_account(
                 res = dict(target)
                 res["runtime"] = rt
                 return res
-            if target.get("enabled", True) and rt.get("status") not in NON_ELIGIBLE_STATUSES:
+            rem = rt.get("credits_remaining")
+            if target.get("enabled", True) and rt.get("status") not in NON_ELIGIBLE_STATUSES and (rem is None or rem >= 15):
                 res = dict(target)
                 res["runtime"] = rt
                 return res
@@ -498,11 +504,61 @@ def resolve_manifest_account(
     """Resolve ou atribui atomicamente flow_account_id no manifesto da tarefa."""
     current_aid = manifest.get("flow_account_id")
     if current_aid:
+        has_url = bool(manifest.get("flow_project_url"))
+        has_completed = bool(manifest.get("flow_generation", {}).get("completed_scenes"))
+        is_sticky = has_url or has_completed
+
+        rt = get_account_runtime(current_aid, runtime_path)
+        rem = rt.get("credits_remaining")
+        st = rt.get("status")
+
+        # Se for sticky, preserva a conta vinculada (não troca de conta em projeto já iniciado)
+        if is_sticky:
+            config = load_accounts_config(config_path)
+            for a in config.get("accounts", []):
+                if a.get("account_id") == current_aid:
+                    res = dict(a)
+                    res["runtime"] = rt
+                    return res
+            return {
+                "account_id": current_aid,
+                "display_name": current_aid,
+                "enabled": True,
+                "priority": 100,
+                "user_data_dir": resolve_user_data_dir(current_aid),
+                "runtime": rt,
+            }
+
+        # Se NÃO for sticky (pré-dispatch), avalia se a conta atual é elegível e possui saldo viável (>= 15)
+        is_ineligible = st in NON_ELIGIBLE_STATUSES or (rem is not None and rem < 15)
+        if not is_ineligible:
+            config = load_accounts_config(config_path)
+            for a in config.get("accounts", []):
+                if a.get("account_id") == current_aid and a.get("enabled", True):
+                    res = dict(a)
+                    res["runtime"] = rt
+                    return res
+
+        # Pré-dispatch: se a conta vinculada for inelegível ou com saldo insuficiente, seleciona melhor conta no pool
+        chosen = select_flow_account(manifest, config_path=config_path, runtime_path=runtime_path)
+        if chosen and chosen.get("account_id") != current_aid:
+            logger.info(
+                f"[FLOW_ACCOUNT_RESOLVER] Pré-dispatch switch: conta '{current_aid}' "
+                f"(status={st}, rem={rem}) substituída por '{chosen['account_id']}'."
+            )
+            manifest["flow_account_id"] = chosen["account_id"]
+            if manifest_path and os.path.exists(manifest_path):
+                try:
+                    atomic_write_json(manifest_path, manifest)
+                except Exception as exc:
+                    logger.warning(f"Erro ao persistir novo flow_account_id no manifest: {exc}")
+            return chosen
+
         config = load_accounts_config(config_path)
         for a in config.get("accounts", []):
             if a.get("account_id") == current_aid:
                 res = dict(a)
-                res["runtime"] = get_account_runtime(current_aid, runtime_path)
+                res["runtime"] = rt
                 return res
         return {
             "account_id": current_aid,
@@ -510,7 +566,7 @@ def resolve_manifest_account(
             "enabled": True,
             "priority": 100,
             "user_data_dir": resolve_user_data_dir(current_aid),
-            "runtime": get_account_runtime(current_aid, runtime_path),
+            "runtime": rt,
         }
 
     # Manifesto legado com projeto já existente
@@ -782,7 +838,12 @@ def get_flow_accounts_status(
         aid = acct.get("account_id")
         rt = get_account_runtime(aid, runtime_path)
         rem = rt.get("credits_remaining")
-        if rem is not None:
+        st = rt.get("status", STATUS_AVAILABLE)
+        is_enabled = acct.get("enabled", True)
+
+        # Apenas contas operacionais e elegíveis somam ao total utilizável do pool
+        is_usable = is_enabled and st not in NON_ELIGIBLE_STATUSES
+        if rem is not None and is_usable:
             total_known += rem
             any_known = True
 
@@ -1014,9 +1075,23 @@ def verify_flow_account_session(
                         result["credits_source"] = src
                         record_verified_credit_balance(valid_id, bal, runtime_path=runtime_path)
                     else:
-                        update_account_runtime(valid_id, {"status": STATUS_AVAILABLE}, runtime_path=runtime_path)
+                        update_account_runtime(
+                            valid_id,
+                            {
+                                "status": STATUS_AVAILABLE,
+                                "last_error": None,
+                            },
+                            runtime_path=runtime_path,
+                        )
                 except Exception:
-                    update_account_runtime(valid_id, {"status": STATUS_AVAILABLE}, runtime_path=runtime_path)
+                    update_account_runtime(
+                        valid_id,
+                        {
+                            "status": STATUS_AVAILABLE,
+                            "last_error": None,
+                        },
+                        runtime_path=runtime_path,
+                    )
             else:
                 result["login_status"] = "AUTH_REQUIRED"
                 result["message"] = f"Sessão não autenticada no Flow: {st}"

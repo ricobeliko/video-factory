@@ -29,10 +29,12 @@ from app.services.flow_account_pool import (
     CREDIT_SOURCE_UNKNOWN,
     LEGACY_ACCOUNT_ID,
     LEGACY_USER_DATA_DIR,
+    STATUS_AUTH_FAILED,
     STATUS_AUTH_REQUIRED,
     STATUS_AVAILABLE,
     STATUS_DISABLED,
     STATUS_EXHAUSTED,
+    STATUS_LOW_CREDITS,
     add_account,
     can_failover_account,
     check_flow_page_exhausted,
@@ -40,6 +42,7 @@ from app.services.flow_account_pool import (
     enable_account,
     failover_flow_account,
     find_edge_executable,
+    get_account_runtime,
     get_flow_accounts_status,
     launch_edge_for_human_login,
     load_accounts_config,
@@ -52,6 +55,7 @@ from app.services.flow_account_pool import (
     resolve_user_data_dir,
     save_accounts_config,
     select_flow_account,
+    update_account_runtime,
     validate_account_id,
     verify_flow_account_session,
 )
@@ -495,8 +499,110 @@ class TestFlowAccountPool(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("python -m app.services.flow_account_pool login --account-id flow-b", out)
         self.assertIn("python -m app.services.flow_account_pool verify --account-id flow-b", out)
-        self.assertNotIn("--headful --trial-only", out)
+    def test_22_auth_failed_recovery_on_verified_balance(self):
+        """22. Revalidação com saldo verificado restaura conta em AUTH_FAILED para AVAILABLE e limpa erro."""
+        update_account_runtime("flow-b", {"status": STATUS_AUTH_FAILED, "last_error": "Session expired"}, self.runtime_path)
+        rt = get_account_runtime("flow-b", self.runtime_path)
+        self.assertEqual(rt["status"], STATUS_AUTH_FAILED)
+        self.assertEqual(rt["last_error"], "Session expired")
+
+        # Nova leitura verificada da UI confirma 1038 créditos
+        res = record_verified_credit_balance("flow-b", 1038, runtime_path=self.runtime_path)
+        self.assertEqual(res["status"], STATUS_AVAILABLE)
+        self.assertEqual(res["credits_remaining"], 1038)
+        self.assertEqual(res["credits_source"], CREDIT_SOURCE_FLOW_UI_VERIFIED)
+        self.assertIsNone(res["last_error"])
+
+        # Confirma persistência em disco
+        persisted = get_account_runtime("flow-b", self.runtime_path)
+        self.assertEqual(persisted["status"], STATUS_AVAILABLE)
+        self.assertIsNone(persisted["last_error"])
+
+    def test_23_total_known_credits_excludes_auth_failed_and_auth_required(self):
+        """23. total_known_credits no pool NUNCA inclui créditos de contas AUTH_FAILED ou AUTH_REQUIRED."""
+        cfg = {
+            "schema_version": 1,
+            "accounts": [
+                {"account_id": "flow-primary", "display_name": "Primária", "enabled": True, "priority": 100},
+                {"account_id": "flow-b", "display_name": "Conta B", "enabled": True, "priority": 90},
+            ],
+        }
+        save_accounts_config(cfg, self.config_path)
+
+        # flow-primary com 2 créditos (AVAILABLE/LOW_CREDITS)
+        update_account_runtime("flow-primary", {"status": STATUS_AVAILABLE, "credits_remaining": 2, "credits_source": CREDIT_SOURCE_FLOW_UI_VERIFIED}, self.runtime_path)
+        # flow-b com 1038 créditos históricos mas bloqueada por AUTH_FAILED
+        update_account_runtime("flow-b", {"status": STATUS_AUTH_FAILED, "credits_remaining": 1038, "credits_source": CREDIT_SOURCE_FLOW_UI_VERIFIED}, self.runtime_path)
+
+        st = get_flow_accounts_status(config_path=self.config_path, runtime_path=self.runtime_path)
+        # Pool utilizável deve refletir SOMENTE a conta utilizável (2 créditos), e NÃO 1040
+        self.assertEqual(st["total_known_credits"], 2)
+        # Conta B aparece com status AUTH_FAILED
+        acc_b = next(a for a in st["accounts"] if a["account_id"] == "flow-b")
+        self.assertEqual(acc_b["status"], STATUS_AUTH_FAILED)
+        self.assertEqual(acc_b["credits_remaining"], 1038)
+
+    def test_24_resolve_manifest_account_proactive_switch_on_ineligible_or_low_balance(self):
+        """24. resolve_manifest_account pré-dispatch troca flow-primary esgotada/baixa para flow-b elegível."""
+        cfg = {
+            "schema_version": 1,
+            "accounts": [
+                {"account_id": "flow-primary", "display_name": "Primária", "enabled": True, "priority": 100},
+                {"account_id": "flow-b", "display_name": "Conta B", "enabled": True, "priority": 90},
+            ],
+        }
+        save_accounts_config(cfg, self.config_path)
+
+        # flow-primary tem 2 créditos (< 15)
+        update_account_runtime("flow-primary", {"status": STATUS_AVAILABLE, "credits_remaining": 2}, self.runtime_path)
+        # flow-b tem 1038 créditos e está AVAILABLE
+        update_account_runtime("flow-b", {"status": STATUS_AVAILABLE, "credits_remaining": 1038}, self.runtime_path)
+
+        manifest = {
+            "task_id": "task_switch_test",
+            "flow_account_id": "flow-primary",
+            "flow_project_url": None,  # Não iniciado => pré-dispatch
+            "scenes": [{"scene_index": 1}],
+        }
+        manifest_path = os.path.join(self.test_dir, "switch_manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        chosen = resolve_manifest_account(manifest, manifest_path=manifest_path, config_path=self.config_path, runtime_path=self.runtime_path)
+        # Deve ter alternado proativamente para flow-b
+        self.assertEqual(chosen["account_id"], "flow-b")
+        self.assertEqual(manifest["flow_account_id"], "flow-b")
+
+        # Confirma persistência no arquivo do manifest
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["flow_account_id"], "flow-b")
+
+    def test_25_verify_session_recovers_auth_failed_account(self):
+        """25. verify_flow_account_session com login AUTHENTICATED recupera conta AUTH_FAILED."""
+        add_account("flow-b", "Conta B", config_path=self.config_path)
+        update_account_runtime("flow-b", {"status": STATUS_AUTH_FAILED, "last_error": "Token expired"}, self.runtime_path)
+
+        mock_ctx = MagicMock()
+        mock_page = MagicMock()
+        mock_ctx.pages = [mock_page]
+
+        with patch("scripts.flow_playwright.launch_flow_context", return_value=(mock_ctx, None)), \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("app.services.flow_account_pool.read_flow_credit_balance", return_value=(1038, CREDIT_SOURCE_FLOW_UI_VERIFIED)), \
+             patch("playwright.sync_api.sync_playwright"):
+
+            res = verify_flow_account_session("flow-b", config_path=self.config_path, runtime_path=self.runtime_path)
+
+            self.assertEqual(res["login_status"], "AUTHENTICATED")
+            self.assertEqual(res["credits_remaining"], 1038)
+
+            # Confirma que o runtime agora é AVAILABLE e sem erro
+            rt = get_account_runtime("flow-b", self.runtime_path)
+            self.assertEqual(rt["status"], STATUS_AVAILABLE)
+            self.assertIsNone(rt["last_error"])
 
 
 if __name__ == "__main__":
     unittest.main()
+

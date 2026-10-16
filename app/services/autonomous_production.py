@@ -1017,6 +1017,8 @@ def check_asset_eligibility_for_destination(
 
     channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
 
+    dur = float(task_data.get("audio_duration") or task_data.get("duration") or 0.0)
+
     if clean_plat == "youtube":
         yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
         enabled_yt = [c for c in channels if c.get("platform", "").lower().strip() == "youtube" and c.get("is_enabled")]
@@ -1034,10 +1036,28 @@ def check_asset_eligibility_for_destination(
                 "enabled": False,
                 "reasons": ["no_enabled_youtube_channel_for_profile"],
             }
+        # Validação de duração específica para YouTube Shorts (15s a 180s; < 60s permitido)
+        if dur > 0.0:
+            if dur < 15.0:
+                return {
+                    "platform": "youtube",
+                    "eligible": False,
+                    "enabled": True,
+                    "reasons": ["youtube_shorts_duration_too_short"],
+                }
+            if dur > 180.0:
+                return {
+                    "platform": "youtube",
+                    "eligible": False,
+                    "enabled": True,
+                    "reasons": ["youtube_shorts_duration_exceeds_180s"],
+                }
         return {
             "platform": "youtube",
             "eligible": True,
             "enabled": True,
+            "duration_eligible": True,
+            "monetization_eligible": True,
             "reasons": [],
         }
     elif clean_plat == "tiktok":
@@ -1057,11 +1077,31 @@ def check_asset_eligibility_for_destination(
                 "enabled": False,
                 "reasons": ["tiktok_channel_not_available_or_ambiguous"],
             }
+        # Validação de duração TikTok: upload normal vs Creator Rewards (> 60s)
+        creator_rewards_eligible = dur > 60.0 if dur > 0.0 else False
+        if dur > 0.0:
+            if dur < 15.0:
+                return {
+                    "platform": "tiktok",
+                    "eligible": False,
+                    "enabled": True,
+                    "reasons": ["tiktok_duration_too_short"],
+                }
+            if dur > 600.0:
+                return {
+                    "platform": "tiktok",
+                    "eligible": False,
+                    "enabled": True,
+                    "reasons": ["tiktok_duration_too_long"],
+                }
+        tt_reasons = [] if creator_rewards_eligible else ["tiktok_creator_rewards_requires_gt_60s"]
         return {
             "platform": "tiktok",
             "eligible": True,
             "enabled": True,
-            "reasons": [],
+            "duration_eligible": True,
+            "creator_rewards_eligible": creator_rewards_eligible,
+            "reasons": tt_reasons,
         }
     return {
         "platform": clean_plat,
@@ -1433,26 +1473,44 @@ def evaluate_completed_task_gates(
 
     # Resolução canônica de Channel para isolamento estrito (V15-C.2)
     channel_id = task_data.get("channel_id") or resolve_autonomous_youtube_channel(profile_id, db_path=db_path)
+    target_plat = "youtube"
+    actual_dur = task_data.get("audio_duration") or (safety_rec.get("actual_duration") if safety_rec else None)
+    preset_used = task_data.get("monetization_preset") or (safety_rec.get("preset") if safety_rec else None)
 
     # 3. Avalia Quality Score (Fase V12-E.1: MIN_QUALITY_SCORE_FOR_AUTONOMOUS = 70.0)
     q_eval = quality_score.evaluate_quality(
         topic=topic,
         niche=niche,
+        hook_text=task_data.get("hook_text"),
+        script_text=task_data.get("video_script") or task_data.get("script") or task_data.get("script_text"),
         task_id=task_id,
         profile_id=profile_id,
         channel_id=channel_id,
+        preset=preset_used,
+        actual_duration=actual_dur,
+        platform=target_plat,
         persist=True,
         db_path=db_path,
     )
     q_score = q_eval.get("quality_score", 0.0)
     q_label = q_eval.get("quality_label", "WEAK")
 
+    is_borderline = quality_score.is_borderline_review_candidate(
+        quality_score=q_score,
+        safety_status=clean_status,
+        copyright_status="PASS",
+        has_valid_mp4=bool(video_path and os.path.isfile(video_path)),
+    )
+
     if q_score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS or q_label in (quality_score.LABEL_WEAK, quality_score.LABEL_REVIEW):
-        return False, f"Quality Score insuficiente para produção autônoma ({q_score:.1f} - {q_label} < {MIN_QUALITY_SCORE_FOR_AUTONOMOUS})", {
+        metrics_ret = {
             "quality_score": q_score,
             "quality_label": q_label,
             "safety_status": clean_status,
+            "borderline_candidate": is_borderline,
+            "reasons": q_eval.get("reasons", []),
         }
+        return False, f"Quality Score insuficiente para produção autônoma ({q_score:.1f} - {q_label} < {MIN_QUALITY_SCORE_FOR_AUTONOMOUS})", metrics_ret
 
     # Garante persistência na tabela content_quality_scores caso evaluate_quality
     # tenha sido interceptada por mock ou não tenha persistido.

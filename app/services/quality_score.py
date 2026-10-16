@@ -44,6 +44,12 @@ CONCRETE_VISUAL_KEYWORDS = {
     "ouro", "diamante", "castelo", "piramide", "navio", "carro", "trem", "cidade",
     "planeta", "estrela", "universo", "robo", "maquina", "rocha", "pedra",
     "dinossauro", "fossil", "deserto", "tempestade", "raio", "floresta",
+    "elevador", "queda", "predio", "edificio", "ponte", "casa", "laboratorio",
+    "hospital", "computador", "celular", "tela", "luz", "espelho", "arma",
+    "explosao", "tiro", "policia", "dinheiro", "helicoptero", "motor", "foguete",
+    "porta", "janela", "tunel", "buraco", "estrada", "asfalto", "velocidade",
+    "reflexo", "vidro", "metal", "abelha", "mel", "colmeia", "inseto",
+    "game", "jogo", "jogador", "grafico", "personagem", "combate", "corrida",
 }
 
 # Palavras-chave abstratas (baixo potencial visual imediato)
@@ -203,15 +209,17 @@ def calculate_originality(
     if not recent_topics or not norm_topic:
         return 95.0, ["Tema original sem repetições no histórico recente (+)"]
 
-    max_sim = 0.0
-    for prev in recent_topics:
-        norm_prev = _normalize_text(prev)
-        if norm_prev:
-            sim = SequenceMatcher(None, norm_topic, norm_prev).ratio()
-            if sim > max_sim:
-                max_sim = sim
+    # Calibração QG-V2: sim <= 0.25 indica temas lexicalmente distintos com apenas termos comuns/sintaxe
+    if max_sim <= 0.25:
+        orig_score = 95.0
+    elif max_sim <= 0.60:
+        # Entre 0.25 e 0.60: tópicos distintos no mesmo nicho/canal, escala suavemente de 95 a 70
+        orig_score = 95.0 - ((max_sim - 0.25) / 0.35) * 25.0
+    else:
+        # Acima de 0.60: sobreposição significativa real (quase duplicata)
+        orig_score = max(0.0, 70.0 - ((max_sim - 0.60) / 0.40) * 70.0)
 
-    orig_score = round(max(0.0, min(100.0, (1.0 - max_sim) * 100.0)), 1)
+    orig_score = round(max(0.0, min(100.0, orig_score)), 1)
     if orig_score >= 80.0:
         reasons = ["Tema com alta originalidade e baixo overlap recente (+)"]
     elif orig_score >= 50.0:
@@ -273,12 +281,18 @@ def calculate_niche_relevance(
         if any(tok in norm_t for tok in political_tokens):
             return 20.0, ["Tema institucional/político com baixa aderência ao nicho de curiosidades (-)"]
 
-        curiosity_tokens = ["por que", "como", "fatos", "misterio", "segredo", "descobri", "verdade", "sabia"]
+        curiosity_tokens = [
+            "por que", "como", "fatos", "misterio", "segredo", "descobri", "verdade", "sabia",
+            "o que acontece", "o que fazer", "e se", "sobreviver", "perigo", "descubra",
+            "coisas que", "mito", "realidade", "queda", "incrivel", "fascinante", "curioso",
+            "ciencia", "corpo humano", "espaco", "universo", "fenomeno", "desastre", "curiosidade",
+            "curiosidades"
+        ]
         if any(tok in norm_t for tok in curiosity_tokens):
             return 85.0, ["Termos com alta aderência ao nicho de curiosidades (+)"]
         if norm_n in norm_t:
             return 65.0, ["Menciona curiosidades mas sem gancho instigante"]
-        return 60.0, ["Aderência moderada ao nicho de curiosidades"]
+        return 65.0, ["Aderência moderada ao nicho de curiosidades"]
 
     if norm_n in norm_t:
         return 90.0, [f"Alinhamento direto com o nicho '{niche}' (+)"]
@@ -342,7 +356,7 @@ def calculate_repetition_risk(
         return 95.0, ["Sem risco de repetição contra o histórico recente (+)"]
 
     norm_topic = _normalize_text(topic)
-    risk = 10.0  # baseline baixo risco
+    risk = 5.0  # baseline baixo risco quando histórico existe
 
     # 1. Risco por similaridade de tópico
     max_sim = 0.0
@@ -352,7 +366,10 @@ def calculate_repetition_risk(
             sim = SequenceMatcher(None, norm_topic, prev_t).ratio()
             if sim > max_sim:
                 max_sim = sim
-    risk += max_sim * 50.0
+
+    # Calibração QG-V2: só adiciona risco se sim > 0.25
+    if max_sim > 0.25:
+        risk += min(55.0, ((max_sim - 0.25) / 0.75) * 55.0)
 
     # 2. Risco por repetição excessiva da mesma estrutura narrativa recente
     if narrative_structure and len(recent_items) >= 2:
@@ -428,21 +445,49 @@ def calculate_duration_fit(
     actual_duration: Optional[float] = None,
     word_count: Optional[int] = None,
     preset: Optional[str] = None,
+    platform: Optional[str] = None,
 ) -> Tuple[Optional[float], List[str]]:
-    """Avalia se a duração prevista ou real está alinhada às metas do preset."""
-    # Duração real pós-TTS sempre prevalece
+    """Avalia se a duração prevista ou real está alinhada às metas do preset e da plataforma.
+    
+    Separa explicitamente YouTube Shorts (vídeos verticais < 60s são válidos, até 180s)
+    da exigência do TikTok Creator Rewards (> 60s).
+    """
     duration = actual_duration or estimated_duration
     if duration is None and word_count:
-        # Estimativa pré-TTS: ~2.3 palavras faladas por segundo
         duration = word_count / 2.3
 
-    if duration is None or not preset:
+    if duration is None:
         return None, []
 
+    clean_platform = str(platform or "").strip().lower()
+
+    # YouTube Shorts: permite verticais < 60s, até 180s (3 minutos)
+    if clean_platform == "youtube" or preset == const.PRESET_YOUTUBE_ORIGINAL or preset == "youtube":
+        if 45.0 <= duration <= 90.0:
+            return 100.0, [f"Duração ideal ({duration:.1f}s) para YouTube Shorts (+)"]
+        elif (30.0 <= duration < 45.0) or (90.0 < duration <= 180.0):
+            return 85.0, [f"Duração aceitável ({duration:.1f}s) para YouTube Shorts"]
+        elif 15.0 <= duration < 30.0:
+            return 70.0, [f"Duração curta ({duration:.1f}s), tecnicamente válida para Shorts"]
+        else:
+            return 30.0, [f"Duração ({duration:.1f}s) fora dos limites operacionais do YouTube Shorts (15–180s) (-)"]
+
+    # TikTok Creator Rewards: exige > 60s
+    if clean_platform == "tiktok" or preset == const.PRESET_TIKTOK_REWARDS:
+        if 62.0 <= duration <= 75.0:
+            return 100.0, [f"Duração ideal ({duration:.1f}s) para TikTok Rewards (62–75s) (+)"]
+        elif duration >= 60.0:
+            return 85.0, [f"Duração aceitável ({duration:.1f}s) para TikTok Rewards (>= 60s)"]
+        else:
+            return 30.0, [f"Duração ({duration:.1f}s) abaixo do mínimo de 60s para TikTok Rewards (-)"]
+
+    # Preset cross_platform / fallback geral
     from app.services import safety_gate
-    spec = safety_gate.MONETIZATION_PRESET_SPECS.get(preset)
+    spec = safety_gate.MONETIZATION_PRESET_SPECS.get(preset or "")
     if not spec:
-        return 75.0, ["Preset sem limites estritos"]
+        if 30.0 <= duration <= 120.0:
+            return 85.0, [f"Duração adequada ({duration:.1f}s)"]
+        return 70.0, [f"Duração ({duration:.1f}s) dentro dos parâmetros gerais"]
 
     target_min = spec["target_duration_min"]
     target_max = spec["target_duration_max"]
@@ -452,9 +497,11 @@ def calculate_duration_fit(
         return 100.0, [f"Duração ideal ({duration:.1f}s) dentro da meta ({target_min}–{target_max}s) (+)"]
     elif duration >= min_acceptable:
         return 85.0, [f"Duração aceitável ({duration:.1f}s) para o preset '{preset}'"]
+    elif duration >= 30.0:
+        # Entre 30s e 60s: perfeitamente válido para YouTube Shorts, embora subótimo para TikTok Rewards
+        return 75.0, [f"Duração ({duration:.1f}s) válida para YouTube Shorts, mas < 60s para TikTok Rewards"]
     else:
-        # Violação de duração mínima (ex: < 60s no TikTok Rewards)
-        return 30.0, [f"Duração ({duration:.1f}s) abaixo do mínimo aceitável ({min_acceptable}s) (-)"]
+        return 30.0, [f"Duração ({duration:.1f}s) muito curta (< 30s) (-)"]
 
 
 def calculate_historical_performance_signal(
@@ -778,6 +825,7 @@ def evaluate_quality(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    platform: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Avalia determinística e integralmente a qualidade e potencial do conteúdo."""
     effective_hook = hook_text or (script_text.split(".")[0] if script_text else topic)
@@ -883,6 +931,7 @@ def evaluate_quality(
         actual_duration=actual_duration,
         word_count=word_count,
         preset=preset,
+        platform=platform,
     )
     all_reasons.extend(r_dur)
 
@@ -969,7 +1018,110 @@ def evaluate_quality(
         "components": components,
         "reasons": selected_reasons,
         "created_at": created_iso,
+        "platform": platform,
     }
+
+
+def evaluate_pre_generation_editorial_quality(
+    task_id: str,
+    topic: str,
+    script: str,
+    preset: Optional[str] = None,
+    niche: Optional[str] = None,
+    narrative_structure: Optional[str] = None,
+    platform: Optional[str] = "youtube",
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Avaliação editorial pré-geração executada antes do consumo de créditos de materiais/Flow.
+
+    Verifica se o roteiro, tema, gancho, originalidade e alinhamento possuem qualidade
+    mínima aceitável (não WEAK / score >= 55.0) para justificar a geração de vídeos pagos.
+    """
+    from app.services import safety_gate
+    hook_text = safety_gate.extract_hook(script) if script else ""
+    word_count = safety_gate.count_spoken_words(script) if script else 0
+    est_dur = safety_gate.estimate_duration_seconds(word_count)
+
+    eval_res = evaluate_quality(
+        topic=topic,
+        script_text=script,
+        hook_text=hook_text,
+        niche=niche,
+        preset=preset,
+        narrative_structure=narrative_structure,
+        word_count=word_count,
+        estimated_duration=est_dur,
+        actual_duration=None,
+        task_id=task_id,
+        platform=platform,
+        persist=False,
+        db_path=db_path,
+    )
+
+    q_score = eval_res.get("quality_score", 0.0)
+    q_label = eval_res.get("quality_label", LABEL_WEAK)
+    comps = eval_res.get("components", {})
+    hook_score = comps.get("hook_strength")
+    dur_score = comps.get("duration_fit")
+    orig_score = comps.get("originality")
+    rep_score = comps.get("repetition_risk")
+
+    reasons = list(eval_res.get("reasons", []))
+    can_proceed = True
+
+    # Critérios rigorosos pré-geração para evitar desperdício de créditos:
+    # 1. Score geral WEAK (< 55.0)
+    if q_label == LABEL_WEAK or q_score < 55.0:
+        can_proceed = False
+    # 2. Duração flagrantemente inviável (ex.: 4s ou > 180s)
+    elif dur_score is not None and dur_score <= 30.0:
+        can_proceed = False
+        reasons.append("Duração estimada incompatível com os parâmetros mínimos do formato (-)")
+    # 3. Hook genérico/clichê reprovado (<= 30.0)
+    elif hook_score is not None and hook_score <= 30.0:
+        can_proceed = False
+        reasons.append("Abertura com preâmbulo genérico/clichê reprovada pré-geração (-)")
+    # 4. Sobreposição quase duplicada
+    elif orig_score is not None and orig_score < 40.0:
+        can_proceed = False
+        reasons.append("Sobreposição quase duplicada com histórico recente (-)")
+    elif rep_score is not None and rep_score < 40.0:
+        can_proceed = False
+        reasons.append("Alto risco de repetição temática detectado pré-geração (-)")
+
+    return {
+        "task_id": task_id,
+        "quality_score": q_score,
+        "quality_label": q_label,
+        "can_proceed_to_visuals": can_proceed,
+        "components": comps,
+        "reasons": reasons,
+    }
+
+
+def is_borderline_review_candidate(
+    quality_score: float,
+    safety_status: Optional[str] = None,
+    copyright_status: Optional[str] = None,
+    has_valid_mp4: bool = False,
+) -> bool:
+    """Identifica se uma tarefa retida em REVIEW (65.0 a 69.9) é candidata a auditoria/reavaliação.
+
+    Critérios fundamentados em evidências:
+    - Score na faixa limítrofe [65.0, 69.9].
+    - Safety Status == PASS explícito (rejeita BLOCK e REVIEW).
+    - Copyright Status == PASS explícito (rejeita BLOCK).
+    - MP4 final fisicamente existente e íntegro.
+    NÃO aprova automaticamente — serve para inspeção e auditoria fundamentada.
+    """
+    clean_safety = str(safety_status or "").upper().strip()
+    clean_cp = str(copyright_status or "").upper().strip()
+    return (
+        65.0 <= quality_score < 70.0
+        and clean_safety == const.SAFETY_STATUS_PASS
+        and clean_cp in ("PASS", "APPROVED")
+        and has_valid_mp4
+    )
 
 
 def get_recent_quality_scores(

@@ -2847,6 +2847,7 @@ def _run_pipeline(
             script=video_script,
             preset=getattr(params, "monetization_preset", None),
             narrative_structure=getattr(params, "narrative_structure", None),
+            platform=getattr(params, "platform", None) or "youtube",
         )
         params.safety_status = assessment.get("safety_status")
         params.safety_reasons = "; ".join(assessment.get("safety_reasons", []))
@@ -2858,6 +2859,14 @@ def _run_pipeline(
             narrative_structure=assessment.get("narrative_structure"),
         )
         logger.info(f"[SAFETY][PRE_RESULT] task_id={task_id} status={params.safety_status} reasons={params.safety_reasons}")
+        if params.safety_status == const.SAFETY_STATUS_BLOCK:
+            logger.error(f"[SAFETY][BLOCK_PRE_TTS] task_id={task_id} reasons={params.safety_reasons}")
+            return _mark_task_failed(
+                task_id,
+                "script",
+                f"Safety Gate blocked script: {params.safety_reasons}",
+                details={"safety_status": params.safety_status, "safety_reasons": assessment.get("safety_reasons", [])},
+            )
     except Exception as exc:
         logger.warning(f"[SafetyGate] Falha ao avaliar roteiro pré-TTS para {task_id}: {exc}")
 
@@ -2972,6 +2981,7 @@ def _run_pipeline(
             task_id=task_id,
             actual_duration=audio_duration,
             preset=getattr(params, "monetization_preset", None),
+            platform=getattr(params, "platform", None) or "youtube",
         )
         params.safety_status = dur_assessment.get("safety_status")
         params.safety_reasons = "; ".join(dur_assessment.get("safety_reasons", []))
@@ -2984,6 +2994,14 @@ def _run_pipeline(
         # Atualiza script.json com os parâmetros validados
         save_script_data(task_id, video_script, video_terms, params)
         logger.info(f"[SAFETY][POST_RESULT] task_id={task_id} status={params.safety_status} reasons={params.safety_reasons}")
+        if params.safety_status == const.SAFETY_STATUS_BLOCK:
+            logger.error(f"[SAFETY][BLOCK_POST_TTS] task_id={task_id} reasons={params.safety_reasons}")
+            return _mark_task_failed(
+                task_id,
+                "audio",
+                f"Safety Gate blocked audio duration: {params.safety_reasons}",
+                details={"safety_status": params.safety_status, "safety_reasons": dur_assessment.get("safety_reasons", [])},
+            )
     except Exception as exc:
         logger.warning(f"[SafetyGate] Falha ao avaliar duração pós-TTS para {task_id}: {exc}")
 
@@ -3061,6 +3079,48 @@ def _run_pipeline(
     cancel_res = _check_cancellation(task_id, "before_materials", progress=40)
     if cancel_res:
         return cancel_res
+
+    # Safety Check: Nunca gastar créditos de materiais/Flow se Safety Gate reprovou
+    if getattr(params, "safety_status", None) == const.SAFETY_STATUS_BLOCK:
+        reason = f"Safety Gate bloqueado pré-materiais: {getattr(params, 'safety_reasons', '')}"
+        logger.error(f"[SAFETY][BLOCK_PRE_MATERIALS] task_id={task_id} reason={reason}")
+        return _mark_task_failed(
+            task_id,
+            "materials",
+            reason,
+            details={"safety_status": params.safety_status, "reason": "SAFETY_GATE_BLOCK"},
+        )
+
+    # Quality Gate V2: Avaliação editorial pré-geração (evita desperdício de créditos Flow)
+    try:
+        from app.services import quality_score
+        target_plat = getattr(params, "platform", None) or "youtube"
+        editorial_eval = quality_score.evaluate_pre_generation_editorial_quality(
+            task_id=task_id,
+            topic=params.video_subject,
+            script=video_script,
+            preset=getattr(params, "monetization_preset", None),
+            niche=getattr(params, "niche", None),
+            narrative_structure=getattr(params, "narrative_structure", None),
+            platform=target_plat,
+        )
+        if not editorial_eval.get("can_proceed_to_visuals", True):
+            q_score = editorial_eval.get("quality_score", 0.0)
+            reasons_str = "; ".join(editorial_eval.get("reasons", []))
+            logger.error(f"[QUALITY][BLOCK_PRE_MATERIALS] task_id={task_id} score={q_score:.1f} reasons={reasons_str}")
+            return _mark_task_failed(
+                task_id,
+                "materials",
+                f"Quality Gate editorial pré-geração reprovou roteiro ({q_score:.1f} < 55.0): {reasons_str}",
+                details={"quality_score": q_score, "quality_label": "WEAK", "reasons": editorial_eval.get("reasons", [])},
+            )
+        sm.state.update_task(
+            task_id,
+            pre_quality_score=editorial_eval.get("quality_score"),
+            pre_quality_label=editorial_eval.get("quality_label"),
+        )
+    except Exception as q_exc:
+        logger.warning(f"[QualityGate] Falha ao avaliar qualidade pré-materiais para {task_id}: {q_exc}")
 
     # 5. Get video materials
     logger.info(f"[MATERIAL][START] task_id={task_id}")

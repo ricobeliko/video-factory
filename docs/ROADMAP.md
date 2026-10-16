@@ -26,6 +26,7 @@
 - **R9_2_STATUS** = `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle de rastreamento dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS** = `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS** = `READY_FOR_CONTROLLED_PRODUCTION_DEPLOY (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip gerado e verificado, runbook atualizado docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, zero migrações de banco, autostart via Task Scheduler porta 8080, Streamlit 8501 preservado)`
+- **QG_V2_STATUS** = `DEV VALIDATED (Hotfix QG-V2: Qualidade Inteligente, Duração por Plataforma e Proteção de Créditos; portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical/visual sem redução do threshold 70.0, scripts/inspect_held_quality_videos.py, 9 testes direcionados PASS)`
 - **R8_STATUS** = `COMPLETED / DEV VALIDATED (Web UI V2 Production Consolidation: Same-Origin FastAPI serving webui-v2/dist via SPAStaticFiles on port 8080, health endpoints /health and /api/v2/health, production launcher scripts/start_webui_v2.ps1, migration runbook docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, Streamlit fallback preserved on 8501, 42/42 targeted tests PASS)`
 - **R7_STATUS** = `COMPLETED / DEV VALIDATED (Per-Profile Settings, Growth Mode, Autonomous Mode, Quotas and Publishing Windows, 36/36 unit tests PASS)`
 - **R6B_STATUS** = `COMPLETED / DEV VALIDATED (Operational Controls & Dispatch: GET /api/v2/channels, POST /api/v2/factory/pause, POST /api/v2/factory/resume, POST /api/v2/factory/run-cycle, integração frontend Web UI V2 com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso, 19/19 testes unitários PASS)`
@@ -40,8 +41,8 @@
 - **DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT** = 6
 - **LOCAL_GENERATIVE_VIDEO_GPU_STATUS** = `NOT_RECOMMENDED_ON_CURRENT_HARDWARE (MuseTalk/RX580 frozen as lab/fallback)`
 - **TEMPORARY_PRODUCTION_EXCEPTION** = `Perfil Dose Diária de GTA VI mantido temporariamente em SCALE aguardando publicação agendada para 11/10/2026 às 22:11; não usar GTA VI no piloto autônomo; retornar a WARMUP pós-publicação`
-- **DEFERRED_ITEMS** = `CFG-005 (Preset cross_platform em destino YouTube-only com restrições TikTok Rewards adiado); GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, ver UI-003)`
-- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 7 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005`, `CFG-004`, `CFG-005`)
+- **DEFERRED_ITEMS** = `CFG-005 (RESOLVIDO EM DEV via HOTFIX QG-V2: Duração YouTube Shorts [15s-180s] desacoplada de TikTok Rewards [>60s]); GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION (GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA — perfil é a fonte canônica; adiado, não bloqueia produção, ver UI-001/UI-002); WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION (Lentidão por reruns amplos do Streamlit — backlog futuro, ver UI-003)`
+- **MIGRATION_CHECKLIST** = `ATIVO` (Seção canônica abaixo e especificação em `docs/WEB_UI_V2.md`; 7 itens: `UI-001`, `UI-002`, `UI-003`, `UI-004`, `UI-005`, `CFG-004`, `CFG-005` [resolvido em DEV])
 - **BLOCKED_BY** = `NONE`
 
 > [!IMPORTANT]
@@ -1474,6 +1475,16 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
   - Scheduler permanece OFF durante homologação;
   - TikTok permanece OFF.
 - **Status:** ✅ CONCLUÍDA / PRONTA PARA HOMOLOGAÇÃO
+
+### V16.28 — HOTFIX QG-V2: Qualidade Inteligente, Duração por Plataforma e Proteção de Créditos
+- **Objetivo:** Eliminar o desperdício de créditos Google Flow protegendo o pipeline contra descartes tardios de vídeos tecnicamente válidos, sem reduzir os padrões de Safety, Copyright ou o limiar mínimo de 70.0 do Quality Gate.
+- **Entregáveis:**
+  - **Triagem Editorial Pré-Geração:** `evaluate_pre_generation_editorial_quality` em `quality_score.py` e checagem em `task.py` antes de invocar o Google Flow ou gastar créditos com materiais.
+  - **Desacoplamento de Duração por Plataforma:** YouTube Shorts aceita vertical de 15s a 180s com faixa ideal 45-90s; regras de TikTok Creator Rewards (>60s) isoladas exclusivamente para TikTok (que permanece OFF). Resolução definitiva de `CFG-005`.
+  - **Calibração de Vocabulário e Originalidade:** 40+ substantivos e entidades físicas reais adicionadas ao vocabulário concreto; atenuação de falso risco de repetição por palavras-chave canônicas de nicho; limiar 70.0 rigidamente mantido (`REVIEW` < 70 nunca auto-aprovado).
+  - **Inspeção e Recuperação de Estoque Sem Regeneração:** Script CLI read-only `scripts/inspect_held_quality_videos.py` identificando tarefas retidas com MP4 íntegro para aprovação auditável sem custo de computação.
+- **Validação:** 9/9 testes unitários e de integração direcionados PASS em `test/services/test_quality_gate_v2.py`.
+- **Status:** ✅ DEV VALIDATED
 
 ---
 

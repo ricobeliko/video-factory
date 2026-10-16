@@ -509,6 +509,7 @@ def evaluate_script_safety(
     preset: Optional[str] = None,
     narrative_structure: Optional[str] = None,
     history: Optional[List[Dict[str, Any]]] = None,
+    platform: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Avalia o roteiro (pré-TTS) contra repetição, clichês e estimativa de duração.
@@ -557,7 +558,19 @@ def evaluate_script_safety(
             break
 
     # 3. Estimativa de duração pré-TTS
-    if preset_spec["enforce_tiktok_rule"]:
+    clean_plat = str(platform or "").strip().lower()
+    if clean_plat == "youtube":
+        if est_duration < 15.0 or word_count < 35:
+            reasons.append(
+                f"Estimativa de duração ({est_duration:.1f}s, {word_count} palavras) muito curta para YouTube Shorts (< 15s)"
+            )
+            status = const.SAFETY_STATUS_BLOCK
+        elif est_duration > 180.0:
+            reasons.append(
+                f"Estimativa de duração ({est_duration:.1f}s) excede o limite máximo de 180s do YouTube Shorts"
+            )
+            status = const.SAFETY_STATUS_BLOCK
+    elif preset_spec["enforce_tiktok_rule"]:
         if est_duration < 55.0 or word_count < 130:
             reasons.append(
                 f"Estimativa de duração ({est_duration:.1f}s, {word_count} palavras) abaixo do alvo de 62–75s"
@@ -642,13 +655,15 @@ def evaluate_duration_safety(
     task_id: str,
     actual_duration: float,
     preset: Optional[str] = None,
+    platform: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Reavalia a segurança da tarefa após a síntese de áudio (pós-TTS).
     
-    Aplica a regra rígida de duração:
-    - TikTok Rewards / Cross-platform: < 60s -> BLOCK absoluto
-    - Alvo 62–75s -> PASS
+    Aplica regras de duração por plataforma:
+    - YouTube Shorts: vídeos verticais < 60s são perfeitamente válidos; limite oficial até 180s (3 min). Mínimo técnico: 15s.
+    - TikTok Creator Rewards: exige estritamente > 60s.
+    - Presets com enforce_tiktok_rule gerando para YouTube: PASS para YouTube Shorts com nota informativa (zero BLOCK).
     """
     assessment = get_safety_assessment(task_id, db_path=db_path)
     if not assessment:
@@ -674,26 +689,82 @@ def evaluate_duration_safety(
     actual_duration = round(float(actual_duration), 1)
     assessment["actual_duration"] = actual_duration
 
-    # Regra para TikTok Rewards / Cross-Platform
-    if preset_spec["enforce_tiktok_rule"]:
-        if actual_duration < preset_spec["min_acceptable_duration"]:
+    clean_platform = str(platform or "").strip().lower()
+    if not clean_platform:
+        try:
+            from app.services import scheduler
+            plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+            if "youtube" in plats and "tiktok" not in plats:
+                clean_platform = "youtube"
+            elif "tiktok" in plats:
+                clean_platform = "tiktok"
+            else:
+                tt_on = scheduler.get_setting("tiktok_enabled", "false", db_path=db_path).lower() == "true"
+                clean_platform = "youtube" if not tt_on else ""
+        except Exception:
+            clean_platform = "youtube"
+
+    if clean_platform == "youtube":
+        if actual_duration < 15.0:
             reasons.append(
-                f"Duração de {actual_duration:.1f}s abaixo do mínimo de 60s para {preset_spec['name']}"
+                f"Duração de {actual_duration:.1f}s insuficiente para YouTube Shorts (< 15s)"
             )
             status = const.SAFETY_STATUS_BLOCK
-        elif actual_duration < preset_spec["target_duration_min"]:
+        elif actual_duration > 180.0:
             reasons.append(
-                f"Duração de {actual_duration:.1f}s ligeiramente abaixo do alvo de 62–75s"
+                f"Duração de {actual_duration:.1f}s excede o limite oficial de 180s (3 minutos) do YouTube Shorts"
             )
+            status = const.SAFETY_STATUS_BLOCK
+        else:
+            # YouTube Shorts válido (< 60s ou até 180s)
+            if actual_duration < 60.0 and preset_spec.get("enforce_tiktok_rule"):
+                reasons.append(
+                    f"Duração de {actual_duration:.1f}s aprovada para YouTube Shorts (< 60s permitido); ineligível para TikTok Creator Rewards"
+                )
             if status != const.SAFETY_STATUS_BLOCK:
-                status = const.SAFETY_STATUS_REVIEW
+                status = const.SAFETY_STATUS_PASS
+    elif clean_platform == "tiktok":
+        if preset_spec["enforce_tiktok_rule"]:
+            if actual_duration < preset_spec["min_acceptable_duration"]:
+                reasons.append(
+                    f"Duração de {actual_duration:.1f}s abaixo do mínimo de 60s para TikTok Creator Rewards"
+                )
+                status = const.SAFETY_STATUS_BLOCK
+            elif actual_duration < preset_spec["target_duration_min"]:
+                reasons.append(
+                    f"Duração de {actual_duration:.1f}s ligeiramente abaixo do alvo de 62–75s"
+                )
+                if status != const.SAFETY_STATUS_BLOCK:
+                    status = const.SAFETY_STATUS_REVIEW
+            else:
+                if status != const.SAFETY_STATUS_BLOCK:
+                    status = const.SAFETY_STATUS_PASS
+        else:
+            if actual_duration < 15.0:
+                reasons.append(f"Duração de {actual_duration:.1f}s muito curta para TikTok (< 15s)")
+                status = const.SAFETY_STATUS_BLOCK
+            elif status != const.SAFETY_STATUS_BLOCK:
+                status = const.SAFETY_STATUS_PASS
     else:
-        # YouTube Shorts Original
-        if actual_duration < preset_spec["min_acceptable_duration"]:
-            reasons.append(
-                f"Duração de {actual_duration:.1f}s muito curta para {preset_spec['name']}"
-            )
-            status = const.SAFETY_STATUS_BLOCK
+        # Fallback multi-plataforma sem plataforma única definida
+        if preset_spec["enforce_tiktok_rule"]:
+            if actual_duration < preset_spec["min_acceptable_duration"]:
+                reasons.append(
+                    f"Duração de {actual_duration:.1f}s abaixo do mínimo de 60s para {preset_spec['name']} (válido no YouTube Shorts; ineligível no TikTok Rewards)"
+                )
+                status = const.SAFETY_STATUS_BLOCK
+            elif actual_duration < preset_spec["target_duration_min"]:
+                reasons.append(
+                    f"Duração de {actual_duration:.1f}s ligeiramente abaixo do alvo de 62–75s"
+                )
+                if status != const.SAFETY_STATUS_BLOCK:
+                    status = const.SAFETY_STATUS_REVIEW
+        else:
+            if actual_duration < preset_spec["min_acceptable_duration"]:
+                reasons.append(
+                    f"Duração de {actual_duration:.1f}s muito curta para {preset_spec['name']}"
+                )
+                status = const.SAFETY_STATUS_BLOCK
 
     assessment["safety_status"] = status
     assessment["safety_reasons"] = reasons

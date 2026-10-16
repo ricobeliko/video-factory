@@ -29,6 +29,7 @@
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `READY_FOR_CONTROLLED_PRODUCTION_DEPLOY (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip gerado e verificado, runbook atualizado docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, zero migrações de banco, autostart via Task Scheduler porta 8080, Streamlit 8501 preservado)`
+- **QG_V2_STATUS:** `DEV VALIDATED (Hotfix QG-V2: Qualidade Inteligente, Duração por Plataforma e Proteção de Créditos; portão editorial prévio antes do despacho Flow, desacoplamento de duração YouTube Shorts [15s-180s] vs TikTok Rewards [>60s], calibração lexical/visual sem redução do threshold 70.0 [REVIEW nunca auto-aprovado], tool read-only scripts/inspect_held_quality_videos.py, 9 testes direcionados PASS)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -92,9 +93,8 @@
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**
   - `CFG-005 — YouTube-only destination using cross_platform preset`:
-    - **Descrição:** O destino operacional atual é YouTube-only, porém o preset `cross_platform` mantém restrições de TikTok Rewards e pode causar rejeições desnecessárias (ex.: task de 58s rejeitada pelo Safety Gate porque Cross Platform exige >= 60s).
-    - **Status:** `DEFERRED`.
-    - **Decisão Futura:** Avaliar se o profile default deve usar `youtube_original` enquanto TikTok OFF. Nenhuma regra de gate ou threshold alterada neste hotfix.
+    - **Descrição:** O destino operacional atual é YouTube-only, porém o preset `cross_platform` mantinha restrições de TikTok Rewards e causava rejeições desnecessárias (ex.: task de 48s rejeitada pelo Safety Gate porque Cross Platform exigia >= 60s).
+    - **Status:** `RESOLVIDO EM DEV (HOTFIX QG-V2)`. Desacoplada a duração de YouTube Shorts (15s a 180s permitidos com nota informativa) das restrições de TikTok Rewards (>60s). Vídeos de YouTube Shorts < 60s agora recebem PASS no Safety Gate e pontuação adequada no Quality Score quando TikTok está OFF.
   - `GLOBAL_VS_PROFILE_GROWTH_MODE_UI_CONFUSION`: Existe seletor global de Growth Mode no Streamlit que pode mudar o estado visual exibido, mas não altera efetivamente o Growth Mode operacional dos perfis. A fonte operacional canônica real é o Growth Mode configurado por perfil/canal (`profile growth_mode`). Exemplo confirmado em produção: *Dose Diária de GTA VI* com perfil em `SCALE` é considerado como `SCALE` pelo Scheduler e Autonomous loop. Portanto: `GLOBAL GROWTH MODE UI != FONTE OPERACIONAL CANÔNICA`.
     - **Decisão:** `DEFERRED / NÃO BLOQUEIA PRODUÇÃO`. Não corrigir agora, não remover agora, não alterar backend agora. Mapeado no checklist de migração como `UI-001` e `UI-002`.
   - `WEB_UI_V2 / STREAMLIT_REPLACEMENT_EVALUATION`: Streamlit atualmente apresenta lentidão operacional perceptível devido ao crescimento da aplicação e reruns amplos da interface.
@@ -2170,6 +2170,49 @@ Entregas V16.4.1A:
   - **Zero Migração de Banco:** Nenhum schema SQLite ou tabela alterada.
   - **Rollback Seguro:** Reversão imediata parando a porta 8080 ou via `register_webui_v2_task.ps1 -Unregister` sem sobrescrever dados do banco.
 - **Runbook Atualizado:** [docs/WEB_UI_V2_MIGRATION_RUNBOOK.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2_MIGRATION_RUNBOOK.md) atualizado com instruções passo a passo seguras para execução no PowerShell do PC Forte.
+
+### V16.28 — HOTFIX QG-V2: Qualidade Inteligente, Duração por Plataforma e Proteção de Créditos (DEV)
+- **Status:** `DEV_VALIDATED / COMMITTED_DEV` (16/10/2026)
+- **Base:** `96b9c112bcd912c95ac0ca05de19a6e057059585`
+- **Contexto Operacional e Problema:**
+  - Vídeos reais de alta qualidade visual gerados com consumo de créditos Google Flow foram retidos pelo Quality Gate (< 70.0) ou Safety Gate após o render completo (ex.: *"GTA 5 vs GTA 6"* 63.3 REVIEW; *"Elevador despencando"* 69.2 REVIEW retido por 0.8 ponto).
+  - Investigação de causa raiz comprovou dois gargalos:
+    1. *Descompasso de plataforma na duração:* Restrições de TikTok Creator Rewards (>60s) eram aplicadas globalmente, inclusive em presets cruzados ou destinos YouTube-only (`CFG-005`), penalizando vídeos de 40-58s com `SAFETY_STATUS_BLOCK` e `duration_fit = 30.0`.
+    2. *Desperdício de créditos pré-render:* Roteiros editoriais fracos eram enviados ao Google Flow sem triagem preliminar de viabilidade, consumindo créditos reais antes de serem reprovados no final da esteira.
+    3. *Vocabulário visual e distância léxica subcalibrados:* Roteiros altamente descritivos ("elevador", "queda", "prédio", "carro", "reflexo", "velocidade", "abelha", "game") sofriam penalizações severas por vocabulário concreto ausente e distância léxica artificialmente deprimida por palavras-chave do nicho.
+- **Implementação Realizada:**
+  - `app/services/quality_score.py`:
+    - Adicionado filtro pré-render `evaluate_pre_generation_editorial_quality(topic, script_text, hook_text)` que avalia a viabilidade editorial antes de qualquer chamada ao Google Flow ou síntese pesada.
+    - Desacoplamento da dimensão `calculate_duration_fit`: suporte à plataforma `youtube` (Shorts: 15s a 180s, faixa ideal 45s a 90s pontuando 100.0) vs `tiktok` (>60s para Rewards).
+    - Expansão do vocabulário concreto (`CONCRETE_VISUAL_KEYWORDS`) com 40+ substantivos e entidades físicas reais (ações, objetos, ambientes, física, games).
+    - Calibração de `calculate_originality` e `calculate_repetition_risk` prevenindo depressão artificial decorrente de termos-chave do nicho do canal.
+    - Adicionado helper factual `is_borderline_review_candidate` identificando tarefas com score 65.0..69.9 e MP4 íntegro para inspeção humana, **sem nunca auto-aprovar REVIEW (< 70.0)**.
+    - Limiar mínimo de aprovação autônoma mantido estritamente em **70.0** (`GOOD`/`STRONG`).
+  - `app/services/safety_gate.py`:
+    - Adicionado parâmetro `platform` em `evaluate_duration_safety` e `evaluate_script_safety`.
+    - Quando o destino é YouTube (ou resolvido como YouTube com TikTok OFF), durações < 60s (15s a 180s) recebem status `PASS` com nota informativa, eliminando o falso bloqueio `SAFETY_STATUS_BLOCK`.
+  - `app/services/task.py`:
+    - Implementada checagem pré-materiais / pré-Flow no `_run_pipeline`:
+      1. Se o roteiro sofrer `SAFETY_STATUS_BLOCK` antes do TTS/materiais, a tarefa falha de imediato sem gastar créditos.
+      2. Se `evaluate_pre_generation_editorial_quality` retornar `viable == False` (`WEAK`), a geração é cancelada imediatamente com `_mark_task_failed(..., 'Roteiro reprovado no gate editorial pré-geração')`.
+  - `app/services/autonomous_production.py`:
+    - Atualizado `check_asset_eligibility_for_destination` com regras de duração por plataforma: YouTube Shorts 15s a 180s; TikTok normal vs TikTok Rewards (>60s).
+    - Em `evaluate_completed_task_gates`: repasse correto de `hook_text`, `script_text`, `actual_duration` e `platform="youtube"` para `evaluate_quality`. Mantida a rejeição estrita (fail-closed) para scores < 70.0.
+  - `scripts/inspect_held_quality_videos.py`:
+    - Criado script CLI operacional e estritamente read-only para auditoria e recuperação de tarefas retidas por Quality Gate com MP4 íntegro no disco.
+    - Exibe tabela formatada com Task ID, Tópico, Duração, Score, Status e caminho do arquivo de vídeo.
+- **Validação Local:**
+  - 9/9 testes unitários e de integração direcionados PASS em `test/services/test_quality_gate_v2.py`:
+    - `test_youtube_shorts_accepts_under_60s` (PASS)
+    - `test_tiktok_creator_rewards_requires_gt_60s` (PASS)
+    - `test_quality_score_below_70_is_rejected_never_auto_pass` (PASS - fail-closed < 70)
+    - `test_safety_and_copyright_remain_strictly_blocking` (PASS - fail-closed)
+    - `test_pre_generation_editorial_gate_stops_weak_script` (PASS - zero desperdício)
+    - `test_inspect_held_quality_videos_identifies_intact_mp4` (PASS)
+    - `test_flow_idempotency_preserves_valid_scenes` (PASS - reuso sem regeneração)
+    - `test_ready_stock_receives_only_eligible_content` (PASS)
+    - `test_calibrated_audit_cases` (PASS - 4 casos reais da auditoria avaliados com sucesso)
+
 
 
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
 import AgentAvatar from './AgentAvatar';
+import { sanitizeDisplayText } from '../utils/stageVisuals';
 
 /**
  * LaneHeaderNode — Channel Mission Control & Hero Context Banner (R6A.6).
@@ -30,7 +31,7 @@ export default function LaneHeaderNode({ data }) {
     onOpenDrawer,
   } = data;
 
-  const primaryName = channelName || profileName || channelId;
+  const primaryName = sanitizeDisplayText(channelName || profileName || channelId);
   const platformLabel = data.platform === 'tiktok' ? 'TikTok' : 'YouTube';
   const secondaryDetails = `${platformLabel} • ${channelId || profileId}`;
 
@@ -97,8 +98,8 @@ export default function LaneHeaderNode({ data }) {
         )}
 
         {topic && (
-          <div className="lane-topic-pill" title={topic}>
-            <span>Pauta:</span> {topic}
+          <div className="lane-topic-pill" title={sanitizeDisplayText(topic)}>
+            <span>Pauta:</span> {sanitizeDisplayText(topic)}
           </div>
         )}
       </div>

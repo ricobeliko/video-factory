@@ -457,3 +457,14 @@ export function getEdgeSemantics(fromStatus, toStatus) {
     className: 'edge-dimmed',
   };
 }
+
+/**
+ * Sanitizes display text by stripping any accidental or raw HTML tags.
+ * Ensures the operations panel and drawers never render raw HTML tags.
+ */
+export function sanitizeDisplayText(str) {
+  if (!str) return '';
+  if (typeof str !== 'string') return String(str);
+  return str.replace(/<[^>]*>?/gm, '').trim();
+}
+

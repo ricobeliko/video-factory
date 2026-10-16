@@ -3220,15 +3220,19 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                                 provider = task.get("voice_name") or "tts"
 
                         if pipeline_stage == "VISUALS" and provider in ("Google Flow", "google_flow"):
-                            try:
-                                from app.services import flow_account_pool
-                                pool_st = flow_account_pool.get_flow_accounts_status()
-                                for acct in pool_st.get("accounts", []):
-                                    if acct.get("current_task_id") == current_task_id:
-                                        provider = f"Google Flow ({acct.get('account_id')})"
-                                        break
-                            except Exception:
-                                pass
+                            flow_aid = task.get("flow_account_id") or task.get("flow_account")
+                            if flow_aid:
+                                provider = f"Google Flow ({flow_aid})"
+                            else:
+                                try:
+                                    from app.services import flow_account_pool
+                                    pool_st = flow_account_pool.get_flow_accounts_status()
+                                    for acct in pool_st.get("accounts", []):
+                                        if acct.get("current_task_id") == current_task_id:
+                                            provider = f"Google Flow ({acct.get('account_id')})"
+                                            break
+                                except Exception:
+                                    pass
 
                         STAGE_ORDER = [
                             "TOPIC", "SCRIPT", "NARRATION", "VISUALS", "RENDER",
@@ -3245,6 +3249,14 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                         component = "task"
                         provider = None
                         next_stage = None
+
+                    gates_data = {
+                        "safety_status": task.get("safety_status"),
+                        "quality_score": task.get("quality_score"),
+                        "copyright_status": task.get("copyright_status") or task.get("copyright_provenance_gate"),
+                        "gate_status": task.get("gate_status"),
+                        "gate_reason": task.get("gate_reason"),
+                    }
 
                     execution = {
                         "task_id": current_task_id,
@@ -3267,6 +3279,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                         "fallback_state": None,
                         "next_stage": next_stage,
                         "error": None,
+                        "gates": gates_data,
                         "publication_state": None,
                     }
                 elif t_state == const.TASK_STATE_FAILED:
@@ -3276,7 +3289,14 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     if not failed_prov and pipeline_stage == "RENDER":
                         failed_prov = "ffmpeg"
                     elif not failed_prov and pipeline_stage == "VISUALS" and task.get("flow_enabled"):
-                        failed_prov = "Google Flow"
+                        failed_prov = f"Google Flow ({task.get('flow_account_id')})" if task.get("flow_account_id") else "Google Flow"
+                    gates_data = {
+                        "safety_status": task.get("safety_status"),
+                        "quality_score": task.get("quality_score"),
+                        "copyright_status": task.get("copyright_status") or task.get("copyright_provenance_gate"),
+                        "gate_status": task.get("gate_status") or "rejected",
+                        "gate_reason": task.get("gate_reason") or error_msg,
+                    }
                     execution = {
                         "task_id": current_task_id,
                         "profile_id": pid,
@@ -3298,10 +3318,18 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                         "fallback_state": None,
                         "next_stage": None,
                         "error": error_msg,
+                        "gates": gates_data,
                         "publication_state": None,
                     }
                 elif t_state == const.TASK_STATE_COMPLETE:
                     status = "WAITING"
+                    gates_data = {
+                        "safety_status": task.get("safety_status") or "APPROVED",
+                        "quality_score": task.get("quality_score"),
+                        "copyright_status": task.get("copyright_status") or task.get("copyright_provenance_gate") or "PASS",
+                        "gate_status": task.get("gate_status") or "approved",
+                        "gate_reason": task.get("gate_reason"),
+                    }
                     execution = {
                         "task_id": current_task_id,
                         "profile_id": pid,
@@ -3323,6 +3351,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                         "fallback_state": None,
                         "next_stage": "SCHEDULER",
                         "error": None,
+                        "gates": gates_data,
                         "publication_state": None,
                     }
 

@@ -3036,6 +3036,17 @@ def _run_pipeline(
         if getattr(params, "flow_enabled", False)
         else (getattr(params, "video_source", None) or "materials")
     )
+    flow_aid = None
+    if getattr(params, "flow_enabled", False):
+        try:
+            from app.services import flow_account_pool
+            acct = flow_account_pool.select_flow_account()
+            if acct and acct.get("account_id"):
+                flow_aid = acct.get("account_id")
+                visuals_prov = f"Google Flow ({flow_aid})"
+        except Exception:
+            pass
+
     sm.state.update_task(
         task_id,
         state=const.TASK_STATE_PROCESSING,
@@ -3043,6 +3054,7 @@ def _run_pipeline(
         stage="VISUALS",
         provider=visuals_prov,
         flow_enabled=getattr(params, "flow_enabled", False),
+        flow_account_id=flow_aid,
     )
 
     # Checkpoint 5: Antes de baixar materiais

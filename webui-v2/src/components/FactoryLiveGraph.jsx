@@ -60,15 +60,37 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       let provider = null;
 
       if (executionStatus === 'IDLE') {
-        if ((channel.ready_stock > 0 || channel.stock > 0) && stageDef.step <= 9) {
-          stageStatus = 'SUCCESS';
+        // When channel is in IDLE, NO task is actively traversing the pipeline.
+        // Node 9 (READY_STOCK) reflects existing stock, but stages 1..8 and 10..12 are IDLE.
+        if (stageDef.code === 'READY_STOCK' && (channel.ready_stock > 0 || channel.stock > 0)) {
+          stageStatus = 'IDLE';
+          provider = `${channel.ready_stock || channel.stock} em estoque`;
         } else {
           stageStatus = 'IDLE';
         }
       } else if (executionStatus === 'RUNNING' || executionStatus === 'PROCESSING') {
         if (activeStep !== null) {
           if (stageDef.step < activeStep) {
-            stageStatus = 'SUCCESS';
+            // Steps 1..5: sequential generation stages that completed
+            if (stageDef.step <= 5) {
+              stageStatus = 'SUCCESS';
+            } else {
+              // GATES (step 6=SAFETY, 7=QUALITY, 8=COPYRIGHT):
+              // Distinguish sequential advance from factual gate approval.
+              const gates = execution?.gates || {};
+              if (stageDef.code === 'SAFETY') {
+                const sSt = String(gates.safety_status || '').toUpperCase();
+                stageStatus = (sSt === 'APPROVED' || sSt === 'PASS' || sSt === 'GOOD') ? 'SUCCESS' : 'PENDING';
+              } else if (stageDef.code === 'QUALITY') {
+                const qScore = gates.quality_score;
+                stageStatus = (typeof qScore === 'number' && qScore >= 70.0) ? 'SUCCESS' : 'PENDING';
+              } else if (stageDef.code === 'COPYRIGHT') {
+                const cSt = String(gates.copyright_status || '').toUpperCase();
+                stageStatus = (cSt === 'PASS' || cSt === 'APPROVED') ? 'SUCCESS' : 'PENDING';
+              } else {
+                stageStatus = 'SUCCESS';
+              }
+            }
           } else if (stageDef.step === activeStep) {
             stageStatus = 'RUNNING';
             progress = execution?.progress;
@@ -83,7 +105,23 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       } else if (executionStatus === 'FAILED') {
         if (activeStep !== null) {
           if (stageDef.step < activeStep) {
-            stageStatus = 'SUCCESS';
+            if (stageDef.step <= 5) {
+              stageStatus = 'SUCCESS';
+            } else {
+              const gates = execution?.gates || {};
+              if (stageDef.code === 'SAFETY') {
+                const sSt = String(gates.safety_status || '').toUpperCase();
+                stageStatus = (sSt === 'APPROVED' || sSt === 'PASS' || sSt === 'GOOD') ? 'SUCCESS' : 'PENDING';
+              } else if (stageDef.code === 'QUALITY') {
+                const qScore = gates.quality_score;
+                stageStatus = (typeof qScore === 'number' && qScore >= 70.0) ? 'SUCCESS' : 'PENDING';
+              } else if (stageDef.code === 'COPYRIGHT') {
+                const cSt = String(gates.copyright_status || '').toUpperCase();
+                stageStatus = (cSt === 'PASS' || cSt === 'APPROVED') ? 'SUCCESS' : 'PENDING';
+              } else {
+                stageStatus = 'SUCCESS';
+              }
+            }
           } else if (stageDef.step === activeStep) {
             stageStatus = 'FAILED';
             progress = execution?.progress;
@@ -108,11 +146,12 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
           stageStatus = 'RETRY';
         }
       } else if (executionStatus === 'WAITING') {
-        // Video finished and in ready stock awaiting schedule slot
-        if (stageDef.step < 9) {
+        // Video finished generation and factually passed all gates; awaiting scheduling slot
+        if (stageDef.step <= 8) {
           stageStatus = 'SUCCESS';
         } else if (stageDef.step === 9) {
           stageStatus = 'WAITING';
+          provider = 'Aguardando agendamento';
         } else {
           stageStatus = 'PENDING';
         }
@@ -141,10 +180,12 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       };
     });
 
-    // Count strictly terminal positive REAL states
-    const completedCount = stageEvaluations.filter(
-      (e) => e.stageStatus === 'SUCCESS' || e.stageStatus === 'COMPLETE'
-    ).length;
+    // Count strictly terminal positive REAL states for active pipelines (0 on IDLE)
+    const completedCount = executionStatus === 'IDLE'
+      ? 0
+      : stageEvaluations.filter(
+          (e) => e.stageStatus === 'SUCCESS' || e.stageStatus === 'COMPLETE'
+        ).length;
 
     // Detect currently active stage for pipeline hero readout
     const activeEval = stageEvaluations.find(

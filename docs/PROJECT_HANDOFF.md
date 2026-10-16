@@ -16,14 +16,19 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `GATE FINAL PRÉ-DEPLOY WEB UI V2 (CONTROLLED PROD MIGRATION)`
+- **CURRENT_FOCUS:** `R9.1 + R9.2 CONSOLIDAÇÃO DO LIVE PIPELINE E OPERAÇÃO MULTICANAL (DEV)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
-- **FLOW_TRACK:** `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro).
-- **PROJECT_STATUS:** `ACTIVE_DEV / PRE_DEPLOY_GATE_APPROVED`
+- **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
+- **PROJECT_STATUS:** `ACTIVE_DEV / R9.1_R9.2_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (docs: record edge-tts streaming hotfix in PROJECT_HANDOFF)
-- **DEV_BRANCH_HEAD_SHA:** `427cff410d32f3ece3746e596a1337b025ebbfa9` (branch `main` em DEV, ahead de origin/main por 4 commits)
+- **CURRENT_MAIN_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (HEAD local em DEV com Live Pipeline e R9.1/R9.2)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
+- **CURRENT_GATE:** `R9.3 E2E SMOKE & POLISH (DEV) -> R10 CONTROLLED PRODUCTION ROLLOUT`
+- **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
+- **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
+- **R9_3_STATUS:** `DEV PENDING (E2E Validation & Polish em DEV com fixtures locais, sem consumo de créditos Flow nem geração pesada)`
+- **R10_STATUS:** `PROD PENDING (Controlled Production Rollout Package no PC Forte via start_webui_v2.ps1 porta 8080, Streamlit mantido na 8501)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2085,4 +2090,39 @@ Entregas V16.4.1A:
   - 17/17 testes PASS em `test/services/test_api_v2_readonly.py` (incluindo validação de fallback de tarefas ativas, atribuição de provedor Google Flow e detecção de status de retry).
   - 3/3 testes direcionados PASS em `test/services/test_task.py`.
   - Build Vite frontend: `npm run build` PASS (406 kB bundle, 128 kB gzip, zero erros).
+
+### V16.25 — R9.1 + R9.2: Consolidação do Live Pipeline e Operação Multicanal (DEV)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (16/10/2026)
+- **Base:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (HEAD local em DEV)
+- **Problemas Operacionais Identificados:**
+  1. *Acoplamento Indevido de Gates:* O grafo marcava etapas de Gate (Safety, Quality, Copyright) como SUCCESS simplesmente porque a tarefa passou para a etapa seguinte, sem validação factual de veredito.
+  2. *Estado IDLE Enganoso:* Canais sem tarefa em execução exibiam nós como concluídos (falsa impressão de progresso), quando deveriam estar em IDLE com apenas o Ready Stock exibindo o inventário real disponível.
+  3. *Inconsistência de Foco Multicanal:* Durante o polling periódico (3s), a UI perdia a seleção manual do operador ou não permitia alternar entre foco dinâmico no canal ativo e fixação manual explícita.
+  4. *Exibição de HTML Bruto:* Mensagens de erro ou logs com tags HTML/XML renderizavam código bruto na interface (`<br>`, `<div...`) em painéis de operações, drawers e títulos de cards.
+  5. *Associação Factual do Provedor Google Flow:* Ausência de persistência explícita do `flow_account_id` da conta ativa utilizada durante o estágio `VISUALS` no `_run_pipeline`.
+- **Implementação Realizada:**
+  - `app/services/operator_console.py`:
+    - Adicionado objeto factual `gates` no payload de `execution` (`safety_status`, `quality_score`, `copyright_status`, `gate_status`, `gate_reason`).
+    - Enriquecida a resolução do provedor para `VISUALS` recuperando a conta Flow factual vinculada à tarefa ou pool ativo.
+  - `app/services/task.py`:
+    - No estágio `VISUALS` de `_run_pipeline`, registra explicitamente o `flow_account_id` e atribui o provedor `Google Flow (<account_id>)` quando habilitado.
+  - `webui-v2/src/utils/stageVisuals.js`:
+    - Criado helper universal `sanitizeDisplayText(str)` que remove tags HTML brutas via regex segura antes da renderização.
+  - `webui-v2/src/components/FactoryLiveGraph.jsx`:
+    - Desacoplada a progressão: etapas 1..5 (`TOPIC`..`RENDER`) avançam com `activeStep`, enquanto Gates 6, 7 e 8 (`SAFETY`, `QUALITY`, `COPYRIGHT`) exigem veredito factual em `execution.gates`.
+    - No estado IDLE, todos os nós 1..8 e 10..12 permanecem em `IDLE`, e `completedCount` é rigidamente 0 (eliminando falsa percepção de progresso).
+  - `webui-v2/src/components/ExecutionDrawer.jsx`:
+    - Adicionada seção de "Verificação de Gates" com cards dedicados para Safety Gate, Quality Score (threshold >= 70.0) e Copyright Gate.
+    - Sanitização aplicada em mensagens de erro, timeline e descrições.
+  - `webui-v2/src/components/ChannelCard.jsx` e `LaneHeaderNode.jsx`:
+    - Sanitização aplicada a títulos e tópicos de tarefas.
+  - `webui-v2/src/components/AgentOps/AgentOpsView.jsx`:
+    - Sanitização aplicada a mensagens e ações de ferramentas.
+  - `webui-v2/src/App.jsx`:
+    - Adicionado seletor/toggle no header do Factory Live permitindo alternar explicitamente entre "Foco Manual" e "Rastreamento Dinâmico Ativo".
+- **Validação Local:**
+  - 17/17 testes PASS em `test/services/test_api_v2_readonly.py`.
+  - 3/3 testes direcionados PASS em `test/services/test_task.py`.
+  - Build Vite frontend: `npm run build` PASS (409 kB bundle, 128 kB gzip, zero erros).
+
 

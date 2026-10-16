@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import AgentAvatar from '../AgentAvatar';
 import { getAgentOps } from '../../api';
+import { sanitizeDisplayText } from '../../utils/stageVisuals';
 
 const ACTOR_PERSONAS = {
   ARCHITECT: {
@@ -484,12 +485,12 @@ export default function AgentOpsView() {
                       </div>
 
                       <div className="entry-action-headline">
-                        {evt.tool_action || evt.message || 'Atividade registrada'}
+                        {sanitizeDisplayText(evt.tool_action || evt.message) || 'Atividade registrada'}
                       </div>
 
                       {evt.message && evt.message !== evt.tool_action && (
                         <div className="entry-detail-text">
-                          {evt.message}
+                          {sanitizeDisplayText(evt.message)}
                         </div>
                       )}
 

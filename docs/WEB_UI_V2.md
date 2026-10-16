@@ -6,9 +6,15 @@
 `FASE R5B: LIVE MULTI-CHANNEL EXECUTION CONTRACT / UI-005 (COMPLETED)`
 `FASE R6A: WEB UI V2 / FACTORY LIVE MVP (COMPLETED)`
 `FASE R6A.3: VISUAL IDENTITY + METRICS + MULTI-CHANNEL LIVE (COMPLETED)`
-`FASE R6A.5: VISUAL IDENTITY SYSTEM + SINGLE-FOCUS PIPELINE (DEV IMPLEMENTED / PENDING HUMAN VISUAL APPROVAL)`
+`FASE R6A.5: VISUAL IDENTITY SYSTEM + SINGLE-FOCUS PIPELINE (COMPLETED / HUMAN APPROVED)`
+`FASE R6A.6: ORGANIC MOTION LANGUAGE + SCALABILITY (DEV IMPLEMENTED)`
 `FLOW-UI-001: GOOGLE FLOW TELEMETRY IN FACTORY LIVE = DEV VALIDATED`
 `FLOW-CREDIT-002: REAL BALANCE EXTRACTION VIA VERIFY = DEV VALIDATED`
+`FASE R8: PRODUCTION CONSOLIDATION & LAUNCHER = DEV VALIDATED`
+`FASE R9.1: LIVE PIPELINE TELEMETRY CONSOLIDATION = DEV VALIDATED`
+`FASE R9.2: MULTI-CHANNEL OPERATIONS & UX CONSOLIDATION = DEV VALIDATED`
+`FASE R9.3: E2E SMOKE & POLISH = DEV PENDING`
+`FASE R10: CONTROLLED PRODUCTION ROLLOUT PACKAGE = PROD PENDING`
 
 ---
 
@@ -735,4 +741,33 @@ Após validação visual do operador, o layout linear contínuo de 12 estágios 
    - Tipografia de alto impacto para saldo numérico verificado (`balance-number` com glow ciano).
    - Gauge qualitativo e slot preparado para futura cota/capacidade percentual quando houver denominador canônico.
    - Total verificado de 1.214 créditos em destaque.
+
+---
+
+### H. FASES R9.1, R9.2, R9.3 e R10 — Plano Canônico de Fechamento da Web UI V2
+
+1. **R9.1 — Live Pipeline Telemetry Consolidation (DEV VALIDATED):**
+   - **Checkpoints Determinísticos:** Gravação explícita de `stage` em `app/services/task.py` em cada fase (`TOPIC`, `SCRIPT`, `NARRATION`, `VISUALS`, `RENDER`, `READY_STOCK`), além de `_mark_task_failed(stage=...)`.
+   - **Provedor Factual:** Resolução precisa da conta utilizada no Google Flow (`flow_account_id`), FFmpeg e engine TTS, expostos no payload read-only do `/api/v2/executions/live`.
+   - **Desacoplamento de Gates:** Separação estrita entre progressão mecânica de etapas e aprovação factual de Gates (Safety, Quality, Copyright). Gates permanecem `PENDING` até a verificação factual de seus vereditos e scores em `execution.gates`, nunca sendo promovidos a `SUCCESS` meramente por avanço da tarefa.
+   - **Correção do Estado IDLE:** Canais sem tarefas em execução permanecem com nós 1..8 em `IDLE` (0% de progresso concluído), com o nó `READY_STOCK` refletindo estritamente o inventário real sem falso progresso prévio.
+
+2. **R9.2 — Multi-Channel Operations & UX Consolidation (DEV VALIDATED):**
+   - **Foco Persistente & Rastreamento Inteligente:** Implementação de toggle no header do Factory Live permitindo alternar entre "Foco Manual" (preservando o canal selecionado pelo operador durante o polling de 3s) e "Rastreamento Dinâmico Ativo" (acompanhando automaticamente qualquer canal com processamento ativo).
+   - **Sanitização de HTML Bruto:** Utilização universal da função `sanitizeDisplayText(str)` em `ChannelCard`, `ExecutionDrawer`, `LaneHeaderNode` e `AgentOpsView`, eliminando exibição acidental de tags HTML brutas em erros, logs ou títulos.
+   - **Cards Factuais de Gates no Drawer:** Exibição dedicada no `ExecutionDrawer` dos status individuais de Safety, Quality Score (com indicação do threshold $\ge 70.0$) e Copyright.
+   - **Estados de Publicação:** Suporte visual completo aos estados `SCHEDULED` e `RETRYING` no grafo e no drawer.
+   - **Acessibilidade e Fluidez:** Respeito absoluto a `prefers-reduced-motion` e atualização sem flicker.
+
+3. **R9.3 — E2E Smoke & Edge Cases Validation (DEV PENDING):**
+   - Validação E2E em DEV com fixtures simulando transições multicanal completas.
+   - Verificação visual de cenários de erro do pool Flow (`AUTH_FAILED`, `LOW_CREDITS`, `COOLDOWN`).
+   - Smoke test de responsividade e Drawer de Execução sem disparar tarefas reais nem consumir créditos.
+
+4. **R10 — Controlled Production Rollout Package (PROD PENDING):**
+   - Execução do deploy em produção no PC Forte na porta 8080 (`scripts/start_webui_v2.ps1`).
+   - Servidor FastAPI servindo os assets compilados do `webui-v2/dist` via `SPAStaticFiles`.
+   - Streamlit original preservado na porta 8501 como fallback operacional.
+   - Transição assistida e homologada com o operador.
+
 

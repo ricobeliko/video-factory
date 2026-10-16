@@ -189,6 +189,41 @@ export default function App() {
                 <span className="section-subtitle">
                   Clique em um canal para alternar o pipeline em tempo real
                 </span>
+                {hasUserManuallySelected ? (
+                  <button
+                    type="button"
+                    className="auto-track-toggle-btn manual"
+                    onClick={() => setHasUserManuallySelected(false)}
+                    title="Clique para voltar a focar automaticamente no canal com tarefa em execução"
+                    style={{
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      border: '1px solid rgba(56, 189, 248, 0.4)',
+                      backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                      color: '#38bdf8',
+                      cursor: 'pointer',
+                      marginLeft: '8px',
+                    }}
+                  >
+                    🎯 Foco Manual [Voltar para Auto]
+                  </button>
+                ) : (
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      color: '#34d399',
+                      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      marginLeft: '8px',
+                    }}
+                    title="O pipeline acompanha automaticamente o canal com tarefa em andamento"
+                  >
+                    ● Rastreamento Dinâmico Ativo
+                  </span>
+                )}
               </div>
               {channels.length > 2 && (
                 <div className="deck-scroll-hint">

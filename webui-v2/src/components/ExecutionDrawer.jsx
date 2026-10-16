@@ -7,7 +7,7 @@ import {
   getProfileSettings,
   updateProfileSettings,
 } from '../api';
-import { STAGE_BY_CODE } from '../utils/stageVisuals';
+import { STAGE_BY_CODE, sanitizeDisplayText } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
 
 /**
@@ -629,17 +629,43 @@ export default function ExecutionDrawer({
                 <div className="info-box-value">{execution?.next_stage || '—'}</div>
               </div>
 
+              {/* Factual Gate Verifications */}
+              <div className="info-box">
+                <div className="info-box-label">Safety Gate</div>
+                <div className="info-box-value mono">
+                  {detail?.task_snapshot?.safety_status || execution?.gates?.safety_status || 'PENDING'}
+                </div>
+              </div>
+
+              <div className="info-box">
+                <div className="info-box-label">Quality Score</div>
+                <div className="info-box-value mono">
+                  {detail?.task_snapshot?.quality_score !== null && detail?.task_snapshot?.quality_score !== undefined
+                    ? `${detail.task_snapshot.quality_score} pts`
+                    : (execution?.gates?.quality_score !== null && execution?.gates?.quality_score !== undefined
+                        ? `${execution.gates.quality_score} pts`
+                        : 'PENDING')}
+                </div>
+              </div>
+
+              <div className="info-box">
+                <div className="info-box-label">Copyright Gate</div>
+                <div className="info-box-value mono">
+                  {detail?.task_snapshot?.copyright_status || execution?.gates?.copyright_status || 'PENDING'}
+                </div>
+              </div>
+
               {execution?.error && (
                 <div className="info-box full-width" style={{ borderColor: 'var(--status-failed)' }}>
                   <div className="info-box-label" style={{ color: 'var(--status-failed)' }}>Erro Registrado</div>
-                  <div className="info-box-value" style={{ color: '#fca5a5' }}>{execution.error}</div>
+                  <div className="info-box-value" style={{ color: '#fca5a5' }}>{sanitizeDisplayText(execution.error)}</div>
                 </div>
               )}
 
               {execution?.message && (
                 <div className="info-box full-width">
                   <div className="info-box-label">Mensagem Operacional</div>
-                  <div className="info-box-value">{execution.message}</div>
+                  <div className="info-box-value">{sanitizeDisplayText(execution.message)}</div>
                 </div>
               )}
             </div>
@@ -706,7 +732,7 @@ export default function ExecutionDrawer({
                       {evt.created_at ? new Date(evt.created_at).toLocaleTimeString() : '—'} • {evt.component || 'sistema'}
                     </div>
                     <div className="timeline-msg">
-                      <strong>{evt.event_type}</strong>: {evt.message || '—'}
+                      <strong>{sanitizeDisplayText(evt.event_type)}</strong>: {sanitizeDisplayText(evt.message) || '—'}
                     </div>
                   </div>
                 ))}

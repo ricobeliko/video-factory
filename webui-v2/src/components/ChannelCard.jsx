@@ -1,5 +1,5 @@
 import React from 'react';
-import { STAGE_BY_CODE } from '../utils/stageVisuals';
+import { STAGE_BY_CODE, sanitizeDisplayText } from '../utils/stageVisuals';
 
 /**
  * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.6).
@@ -35,7 +35,7 @@ export default function ChannelCard({
   const isIdle = !execution || execution.status === 'IDLE';
 
   // Prioritize channel_name as primary identity, fallback to profile_name
-  const primaryTitle = channel_name || profile_name || channel_id;
+  const primaryTitle = sanitizeDisplayText(channel_name || profile_name || channel_id);
   const platformLabel = platform === 'tiktok' ? 'TikTok' : 'YouTube';
   const secondarySubtitle = `${platformLabel} • ${channel_id || profile_id}`;
   const profileMeta = `Perfil: ${profile_id || 'default'}`;
@@ -156,8 +156,8 @@ export default function ChannelCard({
           </div>
         ) : (
           <div className="channel-current-task">
-            <div className="task-topic-preview" title={execution.topic || 'Sem título'}>
-              {execution.topic || 'Tarefa em andamento'}
+            <div className="task-topic-preview" title={sanitizeDisplayText(execution.topic) || 'Sem título'}>
+              {sanitizeDisplayText(execution.topic) || 'Tarefa em andamento'}
             </div>
             <div className="task-meta-row">
               <span className={`mini-badge ${execution.status === 'RUNNING' ? 'running' : 'status-tag'}`}>

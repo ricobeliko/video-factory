@@ -2358,6 +2358,35 @@ class TestTaskService(unittest.TestCase):
         result = tm.start(task_id=task_id, params=params)
         print(result)
 
+    def test_pipeline_checkpoints_record_stage_and_provider(self):
+        """Pipeline persists real stages (TOPIC, SCRIPT, etc.) in task state."""
+        from app.services import state as sm
+        task_id = "test-checkpoints-" + uuid4().hex
+        params = VideoParams(
+            video_subject="Test Checkpoints",
+            video_script="Test script content for stage checkpoint validation",
+            video_source="local",
+            voice_name="pt-BR-AntonioNeural-Male",
+        )
+        # Running with stop_at='script' stops after script checkpoint
+        tm._run_pipeline(task_id, params, stop_at="script")
+        t = sm.state.get_task(task_id)
+        self.assertIsNotNone(t)
+        self.assertEqual(t.get("stage"), "SCRIPT")
+        self.assertEqual(t.get("state"), tm.const.TASK_STATE_COMPLETE)
+
+    def test_mark_task_failed_records_stage_and_failed_stage(self):
+        """_mark_task_failed updates both failed_stage and stage."""
+        from app.services import state as sm
+        task_id = "test-failed-stage-" + uuid4().hex
+        tm._mark_task_failed(task_id, stage="materials", error="Mock flow timeout")
+        t = sm.state.get_task(task_id)
+        self.assertIsNotNone(t)
+        self.assertEqual(t.get("failed_stage"), "materials")
+        self.assertEqual(t.get("stage"), "materials")
+        self.assertEqual(t.get("state"), tm.const.TASK_STATE_FAILED)
+
 
 if __name__ == "__main__":
     unittest.main()
+

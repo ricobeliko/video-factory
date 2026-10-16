@@ -3153,7 +3153,44 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
         execution = None
         status = "IDLE"
 
-        # 1. Verifica se há task em execução ativa (current_task_id)
+        # 1. Verifica se há task em execução ativa (current_task_id ou fallback factual em webui_task/sm.state)
+        if not current_task_id:
+            try:
+                from app.services import webui_task
+                for aid in webui_task.get_active_task_ids():
+                    t_prof = profile_manager.get_task_profile_id(aid, db_path=db_path)
+                    if not t_prof:
+                        t_obj = sm.state.get_task(aid) or {}
+                        t_prof = t_obj.get("profile_id")
+                    is_match = (
+                        (t_prof == pid)
+                        if pid and pid not in (profile_manager.DEFAULT_PROFILE_ID, "default")
+                        else (not t_prof or t_prof in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+                    )
+                    if is_match:
+                        current_task_id = aid
+                        break
+            except Exception:
+                pass
+
+        if not current_task_id:
+            try:
+                all_tasks, _ = sm.state.get_all_tasks(1, 30)
+                for t in all_tasks:
+                    if t.get("state") == const.TASK_STATE_PROCESSING:
+                        tid = t.get("task_id")
+                        t_prof = t.get("profile_id") or profile_manager.get_task_profile_id(tid, db_path=db_path)
+                        is_match = (
+                            (t_prof == pid)
+                            if pid and pid not in (profile_manager.DEFAULT_PROFILE_ID, "default")
+                            else (not t_prof or t_prof in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+                        )
+                        if is_match:
+                            current_task_id = tid
+                            break
+            except Exception:
+                pass
+
         if current_task_id:
             task = sm.state.get_task(current_task_id)
             if task:
@@ -3170,8 +3207,39 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     if raw_stage:
                         pipeline_stage = normalize_pipeline_stage(raw_stage)
                         component = "task"
-                        provider = "ffmpeg" if pipeline_stage == "RENDER" else None
-                        next_stage = "SAFETY" if pipeline_stage == "RENDER" else None
+                        provider = task.get("provider")
+                        if not provider:
+                            if pipeline_stage == "RENDER":
+                                provider = "ffmpeg"
+                            elif pipeline_stage == "VISUALS":
+                                if task.get("flow_enabled"):
+                                    provider = "Google Flow"
+                                else:
+                                    provider = task.get("video_source") or "materials"
+                            elif pipeline_stage == "NARRATION":
+                                provider = task.get("voice_name") or "tts"
+
+                        if pipeline_stage == "VISUALS" and provider in ("Google Flow", "google_flow"):
+                            try:
+                                from app.services import flow_account_pool
+                                pool_st = flow_account_pool.get_flow_accounts_status()
+                                for acct in pool_st.get("accounts", []):
+                                    if acct.get("current_task_id") == current_task_id:
+                                        provider = f"Google Flow ({acct.get('account_id')})"
+                                        break
+                            except Exception:
+                                pass
+
+                        STAGE_ORDER = [
+                            "TOPIC", "SCRIPT", "NARRATION", "VISUALS", "RENDER",
+                            "SAFETY", "QUALITY", "COPYRIGHT", "READY_STOCK",
+                            "SCHEDULER", "PUBLISHER", "YOUTUBE"
+                        ]
+                        if pipeline_stage in STAGE_ORDER:
+                            idx = STAGE_ORDER.index(pipeline_stage)
+                            next_stage = STAGE_ORDER[idx + 1] if idx + 1 < len(STAGE_ORDER) else None
+                        else:
+                            next_stage = None
                     else:
                         pipeline_stage = None
                         component = "task"
@@ -3203,7 +3271,12 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     }
                 elif t_state == const.TASK_STATE_FAILED:
                     status = "FAILED"
-                    pipeline_stage = normalize_pipeline_stage(failed_stage) if failed_stage else None
+                    pipeline_stage = normalize_pipeline_stage(failed_stage) if failed_stage else (normalize_pipeline_stage(raw_stage) if raw_stage else None)
+                    failed_prov = task.get("provider")
+                    if not failed_prov and pipeline_stage == "RENDER":
+                        failed_prov = "ffmpeg"
+                    elif not failed_prov and pipeline_stage == "VISUALS" and task.get("flow_enabled"):
+                        failed_prov = "Google Flow"
                     execution = {
                         "task_id": current_task_id,
                         "profile_id": pid,
@@ -3216,7 +3289,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                         "status": "FAILED",
                         "progress": progress,
                         "component": "task",
-                        "provider": None,
+                        "provider": failed_prov,
                         "started_at": task.get("created_at"),
                         "updated_at": None,
                         "elapsed_seconds": None,
@@ -3289,7 +3362,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     """
                     SELECT id, task_id, scheduled_at, status, attempts, last_error
                     FROM scheduled_posts
-                    WHERE profile_id = ? AND status IN ('pending', 'failed')
+                    WHERE profile_id = ? AND status IN ('pending', 'failed', 'ready')
                     ORDER BY scheduled_at ASC LIMIT 1;
                     """,
                     (pid,)
@@ -3345,15 +3418,16 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     else:
                         is_retrying = s_attempts > 0
                         status = "RETRYING" if is_retrying else "SCHEDULED"
+                        pipeline_stage = "PUBLISHER" if is_retrying else "SCHEDULER"
                         execution = {
                             "task_id": s_task_id,
                             "profile_id": pid,
                             "profile_name": pname,
                             "channel_id": cid,
                             "channel_name": cname,
-                            "topic": "Vídeo agendado",
-                            "pipeline_stage": "SCHEDULER",
-                            "pipeline_stage_label": STAGE_LABELS["SCHEDULER"],
+                            "topic": "Tentativa de publicação" if is_retrying else "Vídeo agendado",
+                            "pipeline_stage": pipeline_stage,
+                            "pipeline_stage_label": STAGE_LABELS.get(pipeline_stage, "Publicador") if is_retrying else STAGE_LABELS["SCHEDULER"],
                             "status": status,
                             "progress": 100,
                             "component": "scheduler_worker",
@@ -3364,7 +3438,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                             "message": f"Retry {s_attempts}: {s_err}" if is_retrying and s_err else f"Agendado para {s_dict.get('scheduled_at')}",
                             "retry_state": {"attempts": s_attempts, "is_retrying": is_retrying, "error": s_err} if is_retrying else None,
                             "fallback_state": None,
-                            "next_stage": "PUBLISHER",
+                            "next_stage": "YOUTUBE" if is_retrying else "PUBLISHER",
                             "error": s_err if s_dict.get("status") == "failed" else None,
                             "publication_state": None,
                         }
@@ -3531,8 +3605,15 @@ def get_execution_detail(task_id: str, db_path: Optional[str] = None) -> Optiona
     if pub_dict:
         provider_name = "post_for_me / youtube"
     elif task:
-        if task.get("stage") and "RENDER" in task.get("stage"):
+        norm_s = normalize_pipeline_stage(task.get("stage"))
+        if norm_s == "RENDER":
             provider_name = "ffmpeg"
+        elif norm_s == "VISUALS":
+            provider_name = task.get("provider") or ("Google Flow" if task.get("flow_enabled") else task.get("video_source", "materials"))
+        elif norm_s == "NARRATION":
+            provider_name = f"tts ({task.get('voice_name')})" if task.get("voice_name") else (task.get("provider") or "tts")
+        elif task.get("provider"):
+            provider_name = task.get("provider")
         elif task.get("voice_name"):
             provider_name = f"tts ({task.get('voice_name')})"
     trace.append({

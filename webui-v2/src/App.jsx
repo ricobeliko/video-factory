@@ -34,6 +34,7 @@ export default function App() {
 
   // Focus selection for the detailed pipeline below
   const [userSelectedChannelId, setUserSelectedChannelId] = useState(null);
+  const [hasUserManuallySelected, setHasUserManuallySelected] = useState(false);
 
   // Drawer state
   const [drawerChannel, setDrawerChannel] = useState(null);
@@ -78,7 +79,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [pollData]);
 
-  // Latch initial channel ID once loaded so polling never auto-switches focus behind the operator's back
+  // Set default initial channel ID once loaded
   useEffect(() => {
     if (!userSelectedChannelId && channels.length > 0) {
       const initialRunning = channels.find(
@@ -93,7 +94,25 @@ export default function App() {
   const focusedChannel = useMemo(() => {
     if (!channels || channels.length === 0) return null;
 
-    // 1. If operator manually picked a channel, look it up
+    // 1. If operator explicitly clicked a channel, honor that manual selection
+    if (hasUserManuallySelected && userSelectedChannelId) {
+      const found = channels.find(
+        (c) => (c.channel_id || c.profile_id) === userSelectedChannelId
+      );
+      if (found) return found;
+    }
+
+    // 2. Dynamic tracking: prefer channel with active running or retrying task
+    const active = channels.find(
+      (c) =>
+        c.execution?.status === 'RUNNING' ||
+        c.status === 'RUNNING' ||
+        c.execution?.status === 'RETRYING' ||
+        c.status === 'RETRYING'
+    );
+    if (active) return active;
+
+    // 3. Fallback: Previously defaulted channel
     if (userSelectedChannelId) {
       const found = channels.find(
         (c) => (c.channel_id || c.profile_id) === userSelectedChannelId
@@ -101,15 +120,9 @@ export default function App() {
       if (found) return found;
     }
 
-    // 2. Fallback: Channel with active running task
-    const running = channels.find(
-      (c) => c.execution?.status === 'RUNNING' || c.status === 'RUNNING'
-    );
-    if (running) return running;
-
-    // 3. Fallback: First channel
+    // 4. Fallback: First channel
     return channels[0];
-  }, [channels, userSelectedChannelId]);
+  }, [channels, userSelectedChannelId, hasUserManuallySelected]);
 
   // Sync activeTab with URL hash changes
   useEffect(() => {
@@ -137,6 +150,7 @@ export default function App() {
   const handleSelectFocus = (channel) => {
     const id = channel.channel_id || channel.profile_id;
     setUserSelectedChannelId(id);
+    setHasUserManuallySelected(true);
   };
 
   const handleOpenDrawer = (channel, taskId = null, stage = null) => {

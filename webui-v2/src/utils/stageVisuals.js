@@ -410,6 +410,30 @@ export function getEdgeSemantics(fromStatus, toStatus) {
     };
   }
 
+  if (toStatus === 'RETRY' || toStatus === 'RETRYING' || fromStatus === 'RETRY' || fromStatus === 'RETRYING') {
+    return {
+      type: 'retry',
+      stroke: '#f97316',
+      strokeWidth: 2.5,
+      animated: true,
+      markerColor: '#f97316',
+      strokeDasharray: '6 3',
+      className: 'edge-retry active-edge',
+    };
+  }
+
+  if (isFromDone && toStatus === 'SCHEDULED') {
+    return {
+      type: 'scheduled',
+      stroke: '#a5b4fc',
+      strokeWidth: 2,
+      animated: false,
+      markerColor: '#a5b4fc',
+      strokeDasharray: '4 4',
+      className: 'edge-scheduled',
+    };
+  }
+
   if (isFromDone && (toStatus === 'WAITING' || toStatus === 'QUEUED')) {
     return {
       type: 'waiting',

@@ -48,7 +48,11 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
     const activeStage = execution?.pipeline_stage;
     const executionStatus = execution?.status || 'IDLE';
 
-    // 1. Calculate status for all 12 stages
+    // Find the active step number (1..12) if activeStage is recognized
+    const matchedActiveDef = STAGE_DEFINITIONS.find((s) => s.code === activeStage);
+    const activeStep = matchedActiveDef ? matchedActiveDef.step : null;
+
+    // 1. Calculate status for all 12 stages strictly based on factual execution telemetry
     const stageEvaluations = STAGE_DEFINITIONS.map((stageDef) => {
       let stageStatus = 'PENDING';
       let progress = null;
@@ -56,30 +60,76 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       let provider = null;
 
       if (executionStatus === 'IDLE') {
-        stageStatus = 'IDLE';
-      } else if (activeStage === stageDef.code) {
-        stageStatus = executionStatus;
-        progress = execution?.progress;
-        provider = execution?.provider;
-      } else if (
-        executionStatus === 'RUNNING' &&
-        !activeStage &&
-        ['SCRIPT', 'NARRATION', 'VISUALS'].includes(stageDef.code)
-      ) {
-        stageStatus = 'RUNNING';
-        isGap = true;
-        progress = execution?.progress;
-      } else if (
-        stageDef.code === 'YOUTUBE' &&
-        execution?.publication_state?.status === 'success'
-      ) {
+        if ((channel.ready_stock > 0 || channel.stock > 0) && stageDef.step <= 9) {
+          stageStatus = 'SUCCESS';
+        } else {
+          stageStatus = 'IDLE';
+        }
+      } else if (executionStatus === 'RUNNING' || executionStatus === 'PROCESSING') {
+        if (activeStep !== null) {
+          if (stageDef.step < activeStep) {
+            stageStatus = 'SUCCESS';
+          } else if (stageDef.step === activeStep) {
+            stageStatus = 'RUNNING';
+            progress = execution?.progress;
+            provider = execution?.provider;
+          } else {
+            stageStatus = 'PENDING';
+          }
+        } else {
+          // If active stage is not reported, do NOT fabricate or guess. Keep pending.
+          stageStatus = 'PENDING';
+        }
+      } else if (executionStatus === 'FAILED') {
+        if (activeStep !== null) {
+          if (stageDef.step < activeStep) {
+            stageStatus = 'SUCCESS';
+          } else if (stageDef.step === activeStep) {
+            stageStatus = 'FAILED';
+            progress = execution?.progress;
+            provider = execution?.provider;
+          } else {
+            stageStatus = 'PENDING';
+          }
+        } else {
+          stageStatus = 'FAILED';
+        }
+      } else if (executionStatus === 'RETRY' || executionStatus === 'RETRYING') {
+        if (activeStep !== null) {
+          if (stageDef.step < activeStep) {
+            stageStatus = 'SUCCESS';
+          } else if (stageDef.step === activeStep) {
+            stageStatus = 'RETRY';
+            provider = execution?.provider;
+          } else {
+            stageStatus = 'PENDING';
+          }
+        } else {
+          stageStatus = 'RETRY';
+        }
+      } else if (executionStatus === 'WAITING') {
+        // Video finished and in ready stock awaiting schedule slot
+        if (stageDef.step < 9) {
+          stageStatus = 'SUCCESS';
+        } else if (stageDef.step === 9) {
+          stageStatus = 'WAITING';
+        } else {
+          stageStatus = 'PENDING';
+        }
+      } else if (executionStatus === 'SCHEDULED') {
+        if (stageDef.step <= 9) {
+          stageStatus = 'SUCCESS';
+        } else if (stageDef.step === 10) {
+          stageStatus = 'SCHEDULED';
+          provider = execution?.provider;
+        } else {
+          stageStatus = 'PENDING';
+        }
+      } else if (executionStatus === 'SUCCESS') {
         stageStatus = 'SUCCESS';
-      } else if (
-        stageDef.code === 'READY_STOCK' &&
-        (channel.ready_stock > 0 || channel.stock > 0) &&
-        executionStatus === 'IDLE'
-      ) {
-        stageStatus = 'SUCCESS';
+        if (stageDef.code === 'YOUTUBE') {
+          provider = execution?.provider;
+        }
       }
 
       return {
@@ -96,13 +146,18 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       (e) => e.stageStatus === 'SUCCESS' || e.stageStatus === 'COMPLETE'
     ).length;
 
-    // Detect currently running stage for pipeline hero readout
-    const runningStageEval = stageEvaluations.find(
-      (e) => e.stageStatus === 'RUNNING' || e.stageStatus === 'PROCESSING'
+    // Detect currently active stage for pipeline hero readout
+    const activeEval = stageEvaluations.find(
+      (e) =>
+        e.stageStatus === 'RUNNING' ||
+        e.stageStatus === 'PROCESSING' ||
+        e.stageStatus === 'RETRY' ||
+        e.stageStatus === 'RETRYING' ||
+        e.stageStatus === 'FAILED'
     );
-    const activePersona = runningStageEval?.stageDef?.persona || null;
-    const activeStageDef = runningStageEval?.stageDef || null;
-    const activeProgress = runningStageEval?.progress || null;
+    const activePersona = activeEval?.stageDef?.persona || null;
+    const activeStageDef = activeEval?.stageDef || null;
+    const activeProgress = activeEval?.progress || null;
 
     // 2. Channel Section Header Banner
     const headerNodeId = `header-${channelId}`;
@@ -175,7 +230,10 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
     // 4. Edges with state semantics (R6A.6 motion language)
     // Edge from Header to Stage #1 (TOPIC)
     const topicStatus = stageEvaluations[0]?.stageStatus || 'IDLE';
-    const isTopicActive = topicStatus === 'RUNNING' || executionStatus === 'RUNNING';
+    const isTopicCompleted = topicStatus === 'SUCCESS';
+    const isTopicRunning = topicStatus === 'RUNNING';
+    const headerEdgeColor = isTopicRunning ? '#38bdf8' : (isTopicCompleted ? '#10b981' : '#334155');
+    const headerEdgeClass = isTopicRunning ? 'active-edge edge-running' : (isTopicCompleted ? 'edge-completed' : 'edge-dimmed');
     calculatedEdges.push({
       id: `edge-${headerNodeId}-topic`,
       source: headerNodeId,
@@ -183,19 +241,19 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       target: stageNodeIds[1],
       targetHandle: 'target-top',
       type: 'factoryEdge',
-      data: { isRunning: isTopicActive },
-      className: isTopicActive ? 'active-edge edge-running' : 'edge-dimmed',
-      animated: isTopicActive,
+      data: { isRunning: isTopicRunning },
+      className: headerEdgeClass,
+      animated: isTopicRunning,
       style: {
-        stroke: isTopicActive ? '#38bdf8' : '#334155',
-        strokeWidth: isTopicActive ? 2 : 1.5,
-        strokeDasharray: isTopicActive ? '6 4' : '3 3',
+        stroke: headerEdgeColor,
+        strokeWidth: isTopicRunning ? 2.5 : (isTopicCompleted ? 2 : 1.5),
+        strokeDasharray: isTopicRunning ? '6 4' : (isTopicCompleted ? undefined : '3 3'),
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 10,
         height: 10,
-        color: isTopicActive ? '#38bdf8' : '#475569',
+        color: headerEdgeColor,
       },
     });
 

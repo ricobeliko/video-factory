@@ -285,6 +285,7 @@ def _mark_task_failed(
         "state": const.TASK_STATE_FAILED,
         "progress": progress,
         "failed_stage": stage,
+        "stage": stage,
         "error": message,
     }
     # 某些外部任务已经创建了可用于恢复或排障的远端 ID。失败状态需要保留
@@ -298,6 +299,7 @@ def _mark_task_failed(
         state=failure["state"],
         progress=failure["progress"],
         failed_stage=failure["failed_stage"],
+        stage=failure["stage"],
         error=failure["error"],
         **failure_details,
     )
@@ -2711,7 +2713,13 @@ def _run_pipeline(
 ):
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
     logger.info(f"[GEN][START] task_id={task_id} preset={getattr(params, 'monetization_preset', None)} structure={getattr(params, 'narrative_structure', None)}")
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=5,
+        stage="TOPIC",
+        profile_id=getattr(params, "profile_id", None),
+    )
 
     if (
         stop_at in {"materials", "video"}
@@ -2853,7 +2861,12 @@ def _run_pipeline(
     except Exception as exc:
         logger.warning(f"[SafetyGate] Falha ao avaliar roteiro pré-TTS para {task_id}: {exc}")
 
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=10)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=10,
+        stage="SCRIPT",
+    )
 
     if stop_at == "script":
         sm.state.update_task(
@@ -2921,7 +2934,14 @@ def _run_pipeline(
         )
         return {"script": video_script, "terms": video_terms}
 
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=20)
+    voice_prov = getattr(params, "voice_name", None) or "tts"
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=20,
+        stage="NARRATION",
+        provider=voice_prov,
+    )
 
     # Checkpoint 3: Antes do áudio/TTS
     cancel_res = _check_cancellation(task_id, "before_audio", progress=20)
@@ -2967,7 +2987,13 @@ def _run_pipeline(
     except Exception as exc:
         logger.warning(f"[SafetyGate] Falha ao avaliar duração pós-TTS para {task_id}: {exc}")
 
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=30)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=30,
+        stage="NARRATION",
+        provider=voice_prov,
+    )
 
     # Checkpoint 4: Depois do áudio/TTS
     cancel_res = _check_cancellation(task_id, "after_audio", progress=30)
@@ -3005,7 +3031,19 @@ def _run_pipeline(
         )
         return {"subtitle_path": subtitle_path}
 
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=40)
+    visuals_prov = (
+        "Google Flow"
+        if getattr(params, "flow_enabled", False)
+        else (getattr(params, "video_source", None) or "materials")
+    )
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=40,
+        stage="VISUALS",
+        provider=visuals_prov,
+        flow_enabled=getattr(params, "flow_enabled", False),
+    )
 
     # Checkpoint 5: Antes de baixar materiais
     cancel_res = _check_cancellation(task_id, "before_materials", progress=40)
@@ -3112,7 +3150,13 @@ def _run_pipeline(
         )
         return {"materials": downloaded_videos}
 
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=50)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=50,
+        stage="RENDER",
+        provider="ffmpeg",
+    )
 
     # Checkpoint 6: Antes do render final FFmpeg
     cancel_res = _check_cancellation(task_id, "before_render", progress=50)
@@ -3308,7 +3352,12 @@ def _run_pipeline(
     }
 
     sm.state.update_task(
-        task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs
+        task_id,
+        state=const.TASK_STATE_COMPLETE,
+        progress=100,
+        stage="READY_STOCK",
+        provider="ffmpeg",
+        **kwargs,
     )
 
     if should_cross_post:

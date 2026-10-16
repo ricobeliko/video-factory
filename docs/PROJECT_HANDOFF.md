@@ -14,7 +14,7 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `15/10/2026`
+- **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
 - **CURRENT_FOCUS:** `GATE FINAL PRÉ-DEPLOY WEB UI V2 (CONTROLLED PROD MIGRATION)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
@@ -53,6 +53,7 @@
 - **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
 - **FLOW_UI_001_STATUS:** `DEV VALIDATED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
 - **FLOW_CREDIT_002_STATUS:** `DEV VALIDATED` (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)
+- **LIVE_PIPELINE_STATUS:** `DEV VALIDATED` (Integração de telemetria real do pipeline na Web UI V2; checkpoints em task.py, fallback de tarefas ativas por canal, provedor factual e progressão viva no Factory Live Graph)
 - **R6A_5_STATUS:** `COMPLETED / HUMAN APPROVED` (Checkpoint `14387b021943d1c14b6a8972839a4be31556de8b` aprovado pelo humano; Visual Identity System, single-focus detailed pipeline para escalabilidade, 12 personas, preenchimento tonal, AI Compute Vault do Flow)
 - **R6A_6_STATUS:** `COMPLETED / DEV IMPLEMENTED` (Organic Factory Live / Motion Language + 10+ Channel Scalability; rail horizontal responsiva com cards confortáveis 320-430px e scroll-snap, latching de foco imune a polling, componente tech-factory AgentAvatar para as 12 personas consistente entre node e drawer, nodes orgânicos com profundidade tonal e auras localizadas, motion language orientada a estado com FactoryEdge e packets de energia SVG <animateMotion>, hero do pipeline contextualizado com agente ativo factual, superfície elevada do Google Flow e prefers-reduced-motion)
 - **AGENT_OPS_V1_1_STATUS:** `COMPLETED / DEV VALIDATED` (Aba independente Agent Ops no Web UI V2 desacoplada do Factory Live. Navegação no header `Factory Live` | `Agent Ops` com URL hash sync, central de operações com 4 papéis visuais, Current Mission Card com elapsed e metadados factuais, feed cronológico sanitizado sem segredos ou prompts, endpoint read-only `GET /api/v2/agent-ops` resolvendo `AGENT_BRIDGE_ROOT`, polling 2s restrito à aba ativa, 13 testes direcionados PASS em `test/services/test_agent_ops.py`)
@@ -2052,3 +2053,36 @@ Entregas V16.4.1A:
   1. Fechar qualquer janela aberta do Microsoft Edge (`Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force`).
   2. Executar: `.venv\Scripts\python.exe -m app.services.flow_account_pool verify --account-id flow-b`.
   3. Com a sessão confirmada, `flow-b` é promovida imediatamente para `AVAILABLE`, tornando-se a conta ativa principal do pool devido aos 1.038 créditos.
+
+### V16.24 — Web UI V2 / Integração de Telemetria Real do Pipeline e Factory Live Graph
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (16/10/2026)
+- **Base:** `d5d0f43649a32b209a30653790840453b9346b36` (origin/main)
+- **Problema Operacional Identificado:**
+  - A Web UI V2 exibia os 12 nós do pipeline como IDLE mesmo quando a fábrica já tinha tarefa em processamento (ex.: 40% de progresso), sem destacar a etapa ativa correspondente no Factory Live Graph.
+- **Diagnóstico da Causa Raiz:**
+  1. *Ausência de `stage` na Atualização da Tarefa:* Em `app/services/task.py`, as chamadas a `sm.state.update_task` persistiam `progress` (ex.: 5, 10, 20, 30, 40, 50, 100), mas nunca passavam o campo `stage`. Como resultado, `task.get("stage")` no banco era `None`.
+  2. *Regra Anti-Inferência Estrita no Backend:* `app/services/operator_console.py` seguia a política correta de não inferir estágio via percentual (`raw_stage = task.get("stage")`). Como `raw_stage` vinha nulo, `pipeline_stage` permanecia `None`.
+  3. *Escopo de Busca de Tarefas Restrito:* `operator_console.get_live_execution_overview` buscava a tarefa ativa exclusivamente em `auto_status.get("current_task_id")`. Se o vídeo fosse disparado via Web UI V2 (`/run-cycle`) ou fora do tick autônomo, a tarefa em execução era ignorada e o canal caía para IDLE.
+  4. *Ausência de Provedor Factual:* O endpoint não preenchia o provedor real (ex.: `"Google Flow (flow-b)"`, TTS ou FFmpeg), deixando a telemetria genérica.
+  5. *Grafo sem Progressão e Foco Rígido no Frontend:* `FactoryLiveGraph.jsx` só alterava o nó que casava exatamente com `activeStage`, mantendo todos os nós anteriores como PENDING/IDLE. Além disso, `App.jsx` fixava o foco no primeiro canal da lista (`channels[0]`), impedindo que canais em processamento ativo fossem focados por padrão se o operador não clicasse neles.
+- **Implementação Realizada:**
+  - `app/services/task.py`:
+    - Instrumentados checkpoints factuais em `_run_pipeline`: `TOPIC` (5%), `SCRIPT` (10%), `NARRATION` (20% & 30%, `provider=voice_prov`), `VISUALS` (40%, `provider="Google Flow"` se habilitado), `RENDER` (50%, `provider="ffmpeg"`), `READY_STOCK` (100%, `provider="ffmpeg"`).
+    - `_mark_task_failed` atualizado para persistir `stage=stage` juntamente com `failed_stage=stage`.
+  - `app/services/operator_console.py`:
+    - `get_live_execution_overview`: adicionada descoberta de tarefas ativas em processamento (`status in ('running', 'processing')`) via `webui_task.get_active_task_ids()` e fallback determinístico em `sm.state.get_all_tasks(1, 30)` filtrado estritamente por perfil (`profile_id == pid`).
+    - Resolução factual de provedor para `Google Flow` (com conta ativa se disponível), FFmpeg e voz TTS.
+    - Suporte a retentativas de publicação (`status == "RETRYING"`, `stage == "PUBLISHER"`) via consulta a `scheduled_posts` com `attempts > 0`.
+    - `get_execution_detail`: mapeamento aprimorado de provedores para os eventos cronológicos de execução.
+  - `webui-v2/src/utils/stageVisuals.js`:
+    - Adicionada semântica de aresta para `RETRY`/`RETRYING` (laranja pulsante `#f97316`) e `SCHEDULED`.
+  - `webui-v2/src/components/FactoryLiveGraph.jsx`:
+    - Implementada progressão linear factual baseada na ordem dos 12 estágios: nós anteriores ao ativo são marcados como `SUCCESS` com arestas sólidas e nós futuros como `PENDING`. O nó ativo recebe estado `RUNNING`, `FAILED` ou `RETRY` com badge de provedor real e pacotes de energia SVG `<animateMotion>`.
+    - Suporte completo aos estados especiais `WAITING` (espera de aprovação humana no Quality Gate) e `SCHEDULED` (agendamento no Post For Me).
+  - `webui-v2/src/App.jsx`:
+    - Adicionado controle `hasUserManuallySelected` para que o grafo acompanhe dinamicamente canais com processamento ativo, preservando a seleção manual explícita caso o operador clique em um canal.
+- **Validação Local:**
+  - 17/17 testes PASS em `test/services/test_api_v2_readonly.py` (incluindo validação de fallback de tarefas ativas, atribuição de provedor Google Flow e detecção de status de retry).
+  - 3/3 testes direcionados PASS em `test/services/test_task.py`.
+  - Build Vite frontend: `npm run build` PASS (406 kB bundle, 128 kB gzip, zero erros).
+

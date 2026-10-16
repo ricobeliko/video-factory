@@ -426,7 +426,72 @@ class TestApiV2ReadOnly(unittest.TestCase):
             self.assertIn("RESULT", nodes)
             self.assertIn("NEXT_SERVICE", nodes)
 
+    def test_live_execution_active_task_fallback_and_flow_provider(self):
+        """16. Tarefa ativa descoberta via fallback de estado reporta VISUALS, Google Flow e próximo estágio RENDER."""
+        from app.models import const
+        fake_flow_task = {
+            "task_id": "task-flow-visuals-4040",
+            "profile_id": "default",
+            "state": const.TASK_STATE_PROCESSING,
+            "progress": 40,
+            "video_subject": "Histórias Misteriosas da Sibéria",
+            "stage": "VISUALS",
+            "flow_enabled": True,
+            "provider": "Google Flow",
+        }
+
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.autonomous_production.get_autonomous_status", return_value={
+                 "enabled": True, "state": "idle", "message": "Loop ocioso", "current_task_id": None, "waiting_task_id": None
+             }), \
+             patch("app.services.webui_task.get_active_task_ids", return_value=["task-flow-visuals-4040"]), \
+             patch("app.services.state.state.get_task", return_value=fake_flow_task):
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            ch = next(c for c in resp.json()["data"]["channels"] if c["profile_id"] == "default")
+            self.assertEqual(ch["status"], "RUNNING")
+            self.assertIsNotNone(ch["execution"])
+            self.assertEqual(ch["execution"]["task_id"], "task-flow-visuals-4040")
+            self.assertEqual(ch["execution"]["pipeline_stage"], "VISUALS")
+            self.assertEqual(ch["execution"]["provider"], "Google Flow")
+            self.assertEqual(ch["execution"]["next_stage"], "RENDER")
+            self.assertEqual(ch["execution"]["progress"], 40)
+
+    def test_live_execution_scheduled_post_retry_detection(self):
+        """17. Agendamento em retry com status ready e attempts > 0 reporta RETRYING na etapa PUBLISHER."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.autonomous_production.get_autonomous_status", return_value={
+                 "enabled": True, "state": "idle", "message": "Idle", "current_task_id": None, "waiting_task_id": None
+             }), \
+             patch("app.services.state.state.get_task", return_value=None):
+
+            with scheduler.get_connection(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO scheduled_posts (
+                        task_id, platform, scheduled_at, status, created_at, attempts, last_error, profile_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    ("task-retry-pub-555", "youtube", "2026-10-16T12:00:00Z", "ready", "2026-10-16T11:00:00Z", 2, "YouTube API 503 Service Unavailable", "default")
+                )
+
+            resp = self.client.get("/api/v2/executions/live")
+            self.assertEqual(resp.status_code, 200)
+            ch = next(c for c in resp.json()["data"]["channels"] if c["profile_id"] == "default")
+            self.assertEqual(ch["status"], "RETRYING")
+            self.assertIsNotNone(ch["execution"])
+            self.assertEqual(ch["execution"]["pipeline_stage"], "PUBLISHER")
+            self.assertEqual(ch["execution"]["next_stage"], "YOUTUBE")
+            self.assertIsNotNone(ch["execution"]["retry_state"])
+            self.assertEqual(ch["execution"]["retry_state"]["attempts"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

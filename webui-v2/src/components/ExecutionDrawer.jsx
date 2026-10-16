@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getExecutionDetail } from '../api';
+import { getExecutionDetail, runFactoryCycle } from '../api';
 import { STAGE_BY_CODE } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
 
@@ -10,6 +10,7 @@ import AgentAvatar from './AgentAvatar';
  * - Deep Causal Trace ("Quem chamou quem").
  * - Execution snapshot and chronological timeline.
  * - Terminal publication confirmation with direct YouTube link.
+ * - Supervised channel run cycle trigger.
  */
 export default function ExecutionDrawer({
   isOpen,
@@ -17,10 +18,60 @@ export default function ExecutionDrawer({
   channelData,
   taskId: propTaskId,
   selectedStage: propSelectedStage,
+  onRefresh,
+  isPaused,
 }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Channel dispatch state
+  const [isChannelMutating, setIsChannelMutating] = useState(false);
+  const [confirmChannelCycle, setConfirmChannelCycle] = useState(false);
+  const [channelActionMsg, setChannelActionMsg] = useState(null);
+  const [channelActionError, setChannelActionError] = useState(null);
+
+  const isChannelRunning = channelData?.execution?.status === 'RUNNING';
+  const isFactoryPaused = Boolean(isPaused);
+
+  const handleTriggerChannelCycle = async () => {
+    if (isChannelMutating || isChannelRunning || isFactoryPaused) return;
+    setIsChannelMutating(true);
+    setChannelActionMsg(null);
+    setChannelActionError(null);
+
+    try {
+      await runFactoryCycle({
+        profileId: channelData?.profile_id,
+        channelId: channelData?.channel_id,
+        force: true,
+        oneShot: true,
+      });
+      setConfirmChannelCycle(false);
+      setChannelActionMsg('Ciclo disparado com sucesso para este canal!');
+      if (onRefresh) {
+        await onRefresh();
+      }
+      setTimeout(() => setChannelActionMsg(null), 5000);
+    } catch (err) {
+      console.error('Falha ao disparar ciclo do canal:', err);
+      let msg = err.message || 'Falha ao processar disparo';
+      if (err.status === 409) {
+        if (msg.toLowerCase().includes('already in progress') || msg.toLowerCase().includes('em andamento')) {
+          msg = 'Ciclo de produção já em andamento.';
+        } else if (msg.toLowerCase().includes('paused') || msg.toLowerCase().includes('pausada')) {
+          msg = 'Fábrica pausada — retome antes de disparar.';
+        }
+      } else if (err.status === 403) {
+        msg = 'Bloqueado: somente nó primário pode executar.';
+      }
+      setConfirmChannelCycle(false);
+      setChannelActionError(msg);
+      setTimeout(() => setChannelActionError(null), 6000);
+    } finally {
+      setIsChannelMutating(false);
+    }
+  };
 
   // Active taskId resolution
   const activeTaskId = propTaskId || channelData?.execution?.task_id;
@@ -87,10 +138,59 @@ export default function ExecutionDrawer({
               {channelData?.channel_name ? `${channelData.channel_name} • ` : ''}Perfil: <code>{channelData?.profile_id}</code>
             </div>
           </div>
-          <button className="drawer-close-btn" onClick={onClose} title="Fechar painel">
-            ✕
-          </button>
         </div>
+
+        {/* Channel Dispatch Action Bar */}
+        {channelData && (
+          <div className="drawer-channel-actions">
+            <div className="drawer-channel-actions-label">
+              <span>Disparo Supervisionado:</span>
+            </div>
+            {!confirmChannelCycle ? (
+              <button
+                type="button"
+                className="drawer-dispatch-btn"
+                onClick={() => {
+                  setChannelActionError(null);
+                  setChannelActionMsg(null);
+                  setConfirmChannelCycle(true);
+                }}
+                disabled={isChannelMutating || isChannelRunning || isFactoryPaused}
+                title={
+                  isFactoryPaused
+                    ? 'Fábrica pausada — retome antes de disparar'
+                    : isChannelRunning
+                    ? 'Canal já possui tarefa em execução'
+                    : 'Disparar ciclo autônomo específico para este canal'
+                }
+              >
+                {isChannelRunning ? '⏳ Em Execução' : isFactoryPaused ? '⏸ Fábrica Pausada' : '⚡ Disparar Ciclo do Canal'}
+              </button>
+            ) : (
+              <div className="drawer-confirm-inline">
+                <span className="drawer-confirm-text">Disparar ciclo agora?</span>
+                <button
+                  type="button"
+                  className="drawer-confirm-yes"
+                  onClick={handleTriggerChannelCycle}
+                  disabled={isChannelMutating}
+                >
+                  {isChannelMutating ? 'Disparando...' : 'Sim'}
+                </button>
+                <button
+                  type="button"
+                  className="drawer-confirm-no"
+                  onClick={() => setConfirmChannelCycle(false)}
+                  disabled={isChannelMutating}
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
+            {channelActionMsg && <span className="drawer-action-success">✓ {channelActionMsg}</span>}
+            {channelActionError && <span className="drawer-action-error">⚠️ {channelActionError}</span>}
+          </div>
+        )}
 
         <div className="drawer-body">
           {/* Active Agent Persona Card */}

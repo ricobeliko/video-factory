@@ -244,6 +244,8 @@ export default function App() {
         channelData={drawerChannel}
         taskId={drawerTaskId}
         selectedStage={drawerStage}
+        onRefresh={pollData}
+        isPaused={Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED')}
       />
         </>
       )}

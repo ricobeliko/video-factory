@@ -23,7 +23,9 @@ async function fetchJson(endpoint, options = {}) {
     let errorDetail = `HTTP ${response.status}: ${response.statusText}`;
     try {
       const body = await response.json();
-      if (body.detail) {
+      if (body.message) {
+        errorDetail = typeof body.message === 'string' ? body.message : JSON.stringify(body.message);
+      } else if (body.detail) {
         errorDetail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
       }
     } catch {
@@ -92,5 +94,22 @@ export async function pauseFactory() {
 export async function resumeFactory() {
   return fetchJson('/api/v2/factory/resume', {
     method: 'POST',
+  });
+}
+
+export async function runFactoryCycle(options = {}) {
+  const { profileId, channelId, force = true, oneShot = true } = options;
+  const body = {};
+  if (profileId) body.profile_id = profileId;
+  if (channelId) body.channel_id = channelId;
+  body.force = force;
+  body.one_shot = oneShot;
+
+  return fetchJson('/api/v2/factory/run-cycle', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
   });
 }

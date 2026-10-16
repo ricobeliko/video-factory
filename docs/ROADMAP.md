@@ -10,18 +10,19 @@
 
 ---
 
-# Estado Atual Canônico — 13/10/2026
+# Estado Atual Canônico — 16/10/2026
 
-- **CURRENT_FOCUS** = `R6B — WEB UI V2 OPERATIONAL CONTROLS MVP (DEV)` / `FLOW-MA1 PRODUCTION SETUP & PILOT RESUMPTION (PROD)`
+- **CURRENT_FOCUS** = `R7 — PER-PROFILE CONTROLS & GROWTH MODE MIGRATION (DEV)` / `FLOW-MA1 PRODUCTION SETUP & PILOT RESUMPTION (PROD)`
 - **CURRENT_PHASE** = `V1.5E`
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
 - **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
 - **PROJECT_STATUS** = `ACTIVE_DEV / FLOW-MA1_MERGED`
-- **CURRENT_MAIN_SHA** = `3f8b09644e6399af8829bb9a196e3c4195de4723` (main branch)
-- **DEV_BRANCH_HEAD_SHA** = `b20878cc1297822378f4be48db5483ece9d7d9ff` (feat/web-ui-v2-read-api)
-- **LAST_PRODUCTION_DEPLOY_SHA** = `1702e8b5a345ad7ffd3390a4173f9f6319238d4e` (PR #96 deployado e homologado no PC Forte)
-- **ACTIVE_BRANCH** = `feat/web-ui-v2-read-api`
-- **NEXT_GATE** = `R6B — OPERATIONAL CONTROLS MVP (DEV: api-v2-channels-overview) / PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
+- **CURRENT_MAIN_SHA** = `4acda536bb024f81858d8a5f67f6f0ea3746195f` (main branch)
+- **DEV_BRANCH_HEAD_SHA** = `4acda536bb024f81858d8a5f67f6f0ea3746195f` (main branch)
+- **LAST_PRODUCTION_DEPLOY_SHA** = `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte)
+- **ACTIVE_BRANCH** = `main`
+- **NEXT_GATE** = `R7 — PER-PROFILE SETTINGS & CONTROLS (DEV) / PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
+- **R6B_STATUS** = `COMPLETED / DEV VALIDATED (Operational Controls & Dispatch: GET /api/v2/channels, POST /api/v2/factory/pause, POST /api/v2/factory/resume, POST /api/v2/factory/run-cycle, integração frontend Web UI V2 com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso, 19/19 testes unitários PASS)`
 - **FLOW_MA1_STATUS** = `MERGED / READY_FOR_PRODUCTION_DEPLOY`
 - **FLOW_UI_001_STATUS** = `DEV VALIDATED (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)`
 - **FLOW_CREDIT_002_STATUS** = `DEV VALIDATED (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)`

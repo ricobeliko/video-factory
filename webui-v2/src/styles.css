@@ -1459,6 +1459,108 @@ body {
   color: var(--text-primary);
 }
 
+/* Drawer Channel Actions Bar (R6B) */
+.drawer-channel-actions {
+  padding: 8px 20px;
+  background-color: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.drawer-channel-actions-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.drawer-dispatch-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  background-color: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.drawer-dispatch-btn:hover:not(:disabled) {
+  background-color: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.6);
+  transform: translateY(-1px);
+}
+
+.drawer-dispatch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: rgba(100, 116, 139, 0.3);
+  background-color: rgba(100, 116, 139, 0.1);
+  color: var(--text-muted);
+}
+
+.drawer-confirm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 14px;
+  background-color: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.drawer-confirm-text {
+  font-size: 11px;
+  color: #e2e8f0;
+}
+
+.drawer-confirm-yes {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: none;
+  background-color: #0284c7;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.drawer-confirm-yes:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.drawer-confirm-no {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #475569;
+  background-color: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.drawer-action-success {
+  font-size: 11px;
+  color: var(--status-success);
+  display: inline-flex;
+  align-items: center;
+}
+
+.drawer-action-error {
+  font-size: 11px;
+  color: var(--status-failed);
+  display: inline-flex;
+  align-items: center;
+}
+
 .drawer-body {
   padding: 20px;
   display: flex;

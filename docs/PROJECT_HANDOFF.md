@@ -51,7 +51,7 @@
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
     2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `R6B — WEB UI V2 OPERATIONAL CONTROLS MVP (DEV)` / `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
+- **CURRENT_GATE:** `R7 — PER-PROFILE CONTROLS & GROWTH MODE MIGRATION (DEV)` / `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
 - **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
 - **FLOW_UI_001_STATUS:** `DEV VALIDATED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
 - **FLOW_CREDIT_002_STATUS:** `DEV VALIDATED` (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)
@@ -83,8 +83,8 @@
     - **Sintoma:** Geração completa do canal *Dose Diária de GTA VI* funcionou e foi aprovada, mas a voz utilizada no vídeo não correspondeu à voz selecionada e salva pelo operador no painel Channel Factory.
     - **Causa Raiz:** A Channel Factory expõe "Voz Global da Fábrica" com a garantia de ser a voz TTS única para todos os canais da fábrica (`config.ui["voice_name"]`). Porém, o onboarding gravava uma cópia da voz no `settings_json` do perfil e `get_generation_profile_context()` avaliava `profile_voice or global_voice`, fazendo com que a voz congelada na criação do canal sobrescrevesse a Voz Global selecionada e salva pelo operador.
     - **Correção:** Em `profile_manager.get_generation_profile_context()`, a precedência foi corrigida para `global_voice or profile_voice or fallback_voice`, garantindo que a Voz Global selecionada e salva em `config.ui['voice_name']` seja soberana para todas as próximas gerações da fábrica, com fallback gracioso para o perfil apenas quando a global estiver vazia. Teste direcionado com duas vozes diferentes confirmou a alternância imediata. Tarefas e vídeos já gerados preservados intactos.
-- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R6B OPERATIONAL CONTROLS MVP (DEV)`
-- **WEB_UI_V2_STATUS:** `ACTIVE DEV (R6B IN PROGRESS na branch feat/web-ui-v2-read-api; zero alterações no main)`
+- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R7 PER-PROFILE SETTINGS & CONTROLS (DEV)`
+- **WEB_UI_V2_STATUS:** `R6B COMPLETED / READY FOR R7 (DEV)`
 - **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
 - **DEFERRED_ITEMS:**
   - `CFG-005 — YouTube-only destination using cross_platform preset`:
@@ -99,7 +99,8 @@
 - **R4A_WEB_UI_V2_DISCOVERY_STATUS:** Concluído documentalmente em paralelo ([docs/WEB_UI_V2.md](file:///d:/Projetos/MoneyPrinterTurbo/docs/WEB_UI_V2.md)), mapeando o monólito Streamlit (14.315 linhas, 34 funções operacionais e proposta de API fina FastAPI preservando backend), com ZERO alteração funcional, ZERO impacto no banco operacional e ZERO interferência no piloto autônomo em andamento.
 - **R5B_LIVE_EXECUTION_CONTRACT_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), contrato read-only e causal para tela Factory Live (UI-005) com 2 novos endpoints GET (`/api/v2/executions/live` e `/api/v2/executions/{task_id}`), grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS.
 - **R6A_WEB_UI_V2_FACTORY_LIVE_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), primeira interface desacoplada Web UI V2 em `webui-v2/` (React 18, Vite 6, `@xyflow/react` v12, Vanilla CSS) com tela Factory Live (cards de canal dinâmicos, grafo em lanes horizontais dos 12 estágios, trace causal e drawer de execução com terminal YouTube state, polling 3s, build PASS 112 kB gzip; zero alteração no backend ou Streamlit). NEXT_GATE de produção permanece estritamente `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` no PC Forte.
-- **R6B_OPERATIONAL_CONTROLS_STATUS:** `IN_PROGRESS (DEV)` — Transição para endpoints de controle e comando da Web UI V2 (Missão 2: `GET /api/v2/channels`; Missão 3: `POST /api/v2/factory/pause` e `/resume`).
+- **R6B_OPERATIONAL_CONTROLS_STATUS:** `COMPLETED / DEV VALIDATED` — Controles operacionais e de despacho entregues: endpoints `GET /api/v2/channels`, `POST /api/v2/factory/pause`, `POST /api/v2/factory/resume`, `POST /api/v2/factory/run-cycle` com 19/19 testes unitários direcionados PASS em `test/services/test_web_ui_v2_api.py`; integração frontend completa em `webui-v2/` (`api.js`, `FactoryHeader.jsx` e `ExecutionDrawer.jsx`) com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso.
+
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.
@@ -152,6 +153,11 @@
 - **PR #96 (`1702e8b`):** `fix(copyright-gate): manual audit approval bound to final artifact SHA-256 for legacy hybrid tasks` — Deployado e homologado no PC Forte em 11/10/2026.
 
 ### Histórico Recente de Entregas em DEV (`feat/web-ui-v2-read-api`):
+- **`R6B_FRONTEND_DISPATCH`:** `feat(webui-v2): integrate factory run-cycle operational dispatch controls` — Integração completa no frontend Web UI V2 em `webui-v2/src/api.js`, `FactoryHeader.jsx` e `ExecutionDrawer.jsx` com disparo global e por canal, diálogos de confirmação inline e feedback de erro/sucesso.
+- **`c07ab33`:** `feat(api-v2): add factory run-cycle endpoint for supervised operations` — Endpoint `POST /api/v2/factory/run-cycle` com suporte a profile/channel scoping, validações de lock e concorrência 409/403.
+- **`aa8ae8c`:** `feat(webui-v2): integrate factory pause and resume controls in header` — Botão Pause/Resume integrado ao header com confirmação inline.
+- **`663bb1f`:** `feat(api-v2): add factory pause and resume endpoints for web ui v2` — Endpoints `POST /api/v2/factory/pause` e `/resume`.
+- **`6f68f71`:** `feat(api-v2): add read-only channels overview endpoint for web ui v2` — Endpoint `GET /api/v2/channels` consolidado.
 - **`b20878c`:** `fix(webui): improve agent ops telemetry projection` — Hotfix na projeção read-only da telemetria Agent Ops: unwrapping do stream-json (`step_update`), mapeamento de ferramentas para EXECUTOR, eliminação de ruídos (collapse ACTIVE/DONE), derivação factual de elapsed (zero 00:00 falso), resolução de branch por payload e 13 testes unitários PASS em `test/services/test_agent_ops.py`.
 - **`4fbbd2f`:** `feat(webui): add agent ops live telemetry view` — Tela desacoplada Agent Ops com feed em tempo real, 4 agentes operacionais e endpoint `GET /api/v2/agent-ops`.
 - **`40ed659`:** `feat(webui): evolve factory live motion and channel scalability` (R6A.6) — Motion language orgânica com SVG `<animateMotion>`, rail horizontal responsiva e cards 320-430px.

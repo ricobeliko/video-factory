@@ -119,12 +119,12 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/v2/health"
 Se o operador acessar a interface de outro computador na rede local ou via VPN:
 
 1. **URL de Acesso:** `http://<IP_DO_PC_FORTE>:8080/`
-2. **Autenticação com API Key:**
-   Se uma chave de API estiver configurada em `config.toml` (`[app] api_key = "..."`), a interface suporta persistência transparente da credencial. Basta acessar uma vez via:
-   ```
-   http://<IP_DO_PC_FORTE>:8080/?api_key=<SUA_CHAVE>
-   ```
-   A interface armazena a chave em `sessionStorage` e envia automaticamente o header `x-api-key` em todas as chamadas subseqüentes.
+2. **Autenticação com API Key (Sem Exposição em URL):**
+   Se uma chave de API estiver configurada em `config.toml` (`[app] api_key = "..."`):
+   - Ao acessar `http://<IP_DO_PC_FORTE>:8080/`, caso a API exija autenticação (HTTP 401), a interface solicitará a API Key através de um prompt nativo seguro no navegador.
+   - A credencial informada é armazenada estritamente em `sessionStorage` (volátil, restrita à aba/sessão atual, sem persistir em disco, sem aparecer na barra de endereços e sem vazar em logs de tráfego/histórico).
+   - O operador também pode configurar a chave diretamente no console do navegador via `sessionStorage.setItem('api_key', 'SUA_CHAVE')`.
+   - Se porventura a URL for aberta com `?api_key=...`, a interface captura a chave para o `sessionStorage` e **remove imediatamente o parâmetro da barra de endereços** através de `history.replaceState()`, eliminando o vazamento no histórico do navegador.
 3. **Firewall do Windows:**
    Caso o acesso remoto seja bloqueado, autorize a porta TCP 8080 no Firewall do Windows:
    ```powershell
@@ -141,16 +141,21 @@ Se o operador acessar a interface de outro computador na rede local ou via VPN:
 
 ---
 
-## 8. Procedimento de Rollback
+## 8. Procedimento de Rollback Seguro
 
-Caso seja necessário reverter a Web UI V2:
+Caso seja necessário desativar ou reverter a Web UI V2:
 
-1. **Parar o Processo na Porta 8080:**
-   - Feche o terminal ou encerre o processo do Uvicorn (PID registrado em `storage\logs\webui_v2\webui_v2_startup.log`).
-2. **Preservação de Dados:**
-   - Nenhum banco de dados ou estado operacional é modificado pela parada do serviço na 8080.
-3. **Rollback de Código (se necessário):**
-   ```powershell
-   git switch --detach <COMMIT_ANTERIOR>
-   ```
-4. **O Streamlit permanece ativo e inalterado na porta 8501.**
+1. **Desativação Imediata (Sem impacto em Git ou dados):**
+   - Encerre o processo do Uvicorn na porta 8080 (CTRL+C ou encerre o PID registrado em `storage\logs\webui_v2\webui_v2_startup.log`).
+   - A Web UI V2 fica imediatamente inativa.
+   - O Streamlit na porta 8501 continua operando normalmente como autoridade primária ou interface ativa.
+
+2. **Preservação Obrigatória da Branch `main` (Sem Detached HEAD):**
+   - **NUNCA** execute `git switch --detach` ou `git checkout <SHA>` no PC Forte. O repositório operacional deve permanecer estritamente na branch `main`.
+   - Como todas as alterações da R8 são aditivas e não alteram tabelas de banco de dados nem o runtime do Streamlit, parar o serviço da porta 8080 é 100% suficiente para o rollback operacional.
+   - Caso seja necessário reverter alterações no histórico do Git, realize a reversão no ambiente DEV através de commit limpo (ex.: `git revert`), envie ao repositório remoto via PR/push autorizado e puxe no PC Forte estritamente via avanço fast-forward:
+     ```powershell
+     git pull --ff-only origin main
+     ```
+     mantendo a branch `main` limpa, sincronizada e íntegra.
+

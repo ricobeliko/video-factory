@@ -14,15 +14,15 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `14/10/2026`
-- **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop)
-- **CURRENT_FOCUS:** `HOMOLOGAÇÃO_E2E_PILOTO_AUTONOMO_INTERNET`
+- **LAST_UPDATED:** `15/10/2026`
+- **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
+- **CURRENT_FOCUS:** `GATE FINAL PRÉ-DEPLOY WEB UI V2 (CONTROLLED PROD MIGRATION)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `FROZEN / DEFERRED` (Não é a próxima frente. Não remover implementação existente. Não trabalhar em melhorias de Flow agora. Retomada será decidida explicitamente no futuro).
-- **PROJECT_STATUS:** `ACTIVE_DEV / HOMOLOGATION_PENDING`
+- **PROJECT_STATUS:** `ACTIVE_DEV / PRE_DEPLOY_GATE_APPROVED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (docs: record edge-tts streaming hotfix in PROJECT_HANDOFF)
-- **DEV_BRANCH_HEAD_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (branch `main` em DEV)
+- **DEV_BRANCH_HEAD_SHA:** `427cff410d32f3ece3746e596a1337b025ebbfa9` (branch `main` em DEV, ahead de origin/main por 4 commits)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
@@ -49,8 +49,7 @@
   - **Motivo:** Publicação já agendada para **11/10/2026 às 22:11** horário local (a menção anterior a 12/10 às 10:11 estava incorreta).
   - **Decisão Operacional Obrigatória:**
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
-    3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `R8 (Production Migration Prep & Consolidation Concluded) / PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
+- **CURRENT_GATE:** `WEB_UI_V2_PRE_DEPLOY_GATE_APPROVED / READY_FOR_CONTROLLED_PROD_DEPLOY` (Pendente autorização humana de push para origin/main)
 - **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
 - **FLOW_UI_001_STATUS:** `DEV VALIDATED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
 - **FLOW_CREDIT_002_STATUS:** `DEV VALIDATED` (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)
@@ -82,9 +81,9 @@
     - **Sintoma:** Geração completa do canal *Dose Diária de GTA VI* funcionou e foi aprovada, mas a voz utilizada no vídeo não correspondeu à voz selecionada e salva pelo operador no painel Channel Factory.
     - **Causa Raiz:** A Channel Factory expõe "Voz Global da Fábrica" com a garantia de ser a voz TTS única para todos os canais da fábrica (`config.ui["voice_name"]`). Porém, o onboarding gravava uma cópia da voz no `settings_json` do perfil e `get_generation_profile_context()` avaliava `profile_voice or global_voice`, fazendo com que a voz congelada na criação do canal sobrescrevesse a Voz Global selecionada e salva pelo operador.
     - **Correção:** Em `profile_manager.get_generation_profile_context()`, a precedência foi corrigida para `global_voice or profile_voice or fallback_voice`, garantindo que a Voz Global selecionada e salva em `config.ui['voice_name']` seja soberana para todas as próximas gerações da fábrica, com fallback gracioso para o perfil apenas quando a global estiver vazia. Teste direcionado com duas vozes diferentes confirmou a alternância imediata. Tarefas e vídeos já gerados preservados intactos.
-- **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R8 WEB UI V2 CONSOLIDATION (DEV)`
-- **WEB_UI_V2_STATUS:** `R8 (Consolidation & Production Preparation) COMPLETED / DEV VALIDATED`
-- **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
+- **CURRENT_PRIORITY:** `WEB_UI_V2 CONTROLLED FIRST DEPLOY (PROD)` / `FLOW-MA1 ONBOARDING (PROD)`
+- **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
+- **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**
   - `CFG-005 — YouTube-only destination using cross_platform preset`:
     - **Descrição:** O destino operacional atual é YouTube-only, porém o preset `cross_platform` mantém restrições de TikTok Rewards e pode causar rejeições desnecessárias (ex.: task de 58s rejeitada pelo Safety Gate porque Cross Platform exige >= 60s).
@@ -104,10 +103,63 @@
 - **R8_STATUS:** `COMPLETED / DEV VALIDATED` — Consolidação da Web UI V2 e preparação segura para execução em produção no PC Forte.
   - **Servidor Same-Origin:** FastAPI (`app.asgi:app`) integrado para servir estáticos do Vite (`webui-v2/dist/`) via `SPAStaticFiles` na mesma origem das rotas `/api/v2/...`, com fallback limpo para `index.html` em rotas client-side sem extensão (ex.: `/agent-ops`) e HTTP 404 estrito para assets ausentes. Fallback gracioso para `resource/public` se o build não existir.
   - **Verificação de Saúde (Health Check):** Dois endpoints dedicados implementados: `GET /health` (infraestrutura/não-autenticado reportando status healthy, versão e disponibilidade do build) e `GET /api/v2/health` (operacional reportando papel PRIMARY/SECONDARY, `same_origin=True` e integridade da fábrica).
-  - **Autenticação & Acesso Remoto:** Preservação estrita do contrato de segurança de tokens (`x-api-key`). Adicionada extração automática de `?api_key=...` via URL com armazenamento em `sessionStorage` para facilitar acesso remoto seguro do operador via browser (`http://<PC_FORTE_IP>:8080/?api_key=<KEY>`).
   - **Script de Inicialização de Produção:** Criado `scripts/start_webui_v2.ps1` com bind 0.0.0.0 na porta 8080, logging operacional em `storage/logs/webui_v2/`, verificação automática de build e convivência pacífica com o Streamlit legado na porta 8501.
   - **Runbook Operacional de Migração:** Criado `docs/WEB_UI_V2_MIGRATION_RUNBOOK.md` detalhando build, inicialização, verificação, segurança, coexistência e rollback seguro no PC Forte sem tocar na produção durante o desenvolvimento.
-  - **Validação de Testes:** Suíte direcionada `test/services/test_web_ui_v2_api.py` expandida de 36 para 42 testes (100% PASS em 21.20s). Smoke test live via HTTP 200 confirmado no endpoint `/`, assets JS/CSS e rotas `/api/v2/...`.
+  - **Validação de Testes:** Suíte direcionada `test/services/test_web_ui_v2_api.py` com 42 testes (100% PASS em 25.92s). Smoke test live via HTTP 200 confirmado no endpoint `/`, assets JS/CSS e rotas `/api/v2/...`.
+
+- **WEB_UI_V2_PRE_DEPLOY_GATE (15/10/2026):** `STATUS = READY`
+  - **1. Auth Safety (Sem Exposição de Credenciais na URL):**
+    - Se `?api_key=...` for fornecido na URL, a Web UI V2 armazena a chave em `sessionStorage` e **remove imediatamente o parâmetro da barra de endereços** através de `window.history.replaceState()`, eliminando o risco de vazamento em logs de proxy, tráfego ou histórico do navegador.
+    - Se a API retornar HTTP 401 Unauthorized no browser, um prompt nativo interativo (`window.prompt`) solicita a API Key ao operador, grava em `sessionStorage` e refaz a requisição de forma transparente, sem credenciais na URL.
+  - **2. Dual-Process Safety (Coexistência Segura FastAPI 8080 & Streamlit 8501):**
+    - O processo FastAPI (`main.py` -> `app.asgi:app`) não inicializa workers de scheduler (`scheduler.start_scheduler_worker()` nunca é chamado). O scheduler continua exclusivo da instância PRIMARY (Streamlit).
+    - Se o Streamlit na porta 8501 possuir o lock de instância SQLite (`ROLE_PRIMARY`), o FastAPI entra compulsoriamente em `_enter_view_only()` (`ROLE_SECONDARY_VIEW_ONLY`).
+    - Todas as rotas de mutação (`POST /api/v2/factory/pause`, `POST /api/v2/factory/resume`, `POST /api/v2/factory/run-cycle`, `PATCH /api/v2/channels/...`) exigem estritamente `require_primary_instance()` e são rejeitadas com HTTP 403 `PermissionError` em modo secundário. Leituras (`GET`) continuam 100% ativas e funcionais.
+    - É estritamente impossível existirem duas autoridades PRIMARY ou mutações concorrentes descontroladas.
+  - **3. Rollback Seguro (Sem Detached HEAD):**
+    - Procedimento de rollback atualizado em `docs/WEB_UI_V2_MIGRATION_RUNBOOK.md`. Proibido categoricamente o uso de `git switch --detach` ou `git checkout <SHA>` no PC Forte.
+    - Como a R8 é puramente aditiva (sem alteração de banco SQLite nem impacto no runtime do Streamlit), o rollback operacional consiste unicamente em parar o processo na porta 8080 (CTRL+C ou encerramento do PID registrado em `storage/logs/webui_v2/webui_v2_startup.log`). O Streamlit permanece 100% operacional.
+    - Rollback de código, se necessário no futuro, deve ser feito via commit/revert em DEV e puxado via `git pull --ff-only origin main` no PC Forte.
+  - **4. Deploy Source Availability:**
+    - Branch local `main` em DEV está 4 commits à frente de `origin/main` (`145cbca`, `8b752ce`, `cdd7a1b`, `427cff4`).
+    - Os commits da R8 **NÃO** estão disponíveis no remote de produção até que o operador humano autorize e execute o push.
+
+### Comandos Canônicos de Deploy (Separados por Ambiente):
+
+#### Ambiente DEV (`D:\Projetos\MoneyPrinterTurbo`):
+Publicar os commits validados no repositório remoto (após autorização humana):
+```powershell
+git push origin main
+```
+
+#### Ambiente PRODUÇÃO / PC Forte (`C:\Projetos\MoneyPrinterTurbo`):
+Executar no PC Forte com o Streamlit em execução na porta 8501:
+```powershell
+# 1. Puxar as atualizações da main de forma limpa (sem detached HEAD)
+cd C:\Projetos\MoneyPrinterTurbo
+git pull --ff-only origin main
+
+# 2. Compilar o frontend React/Vite
+cd webui-v2
+npm ci
+npm run build
+cd ..
+
+# 3. Iniciar a Web UI V2 na porta 8080 (em nova janela do PowerShell)
+.\scripts\start_webui_v2.ps1
+
+# 4. Validar os endpoints de saúde
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/health"
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/v2/health"
+```
+
+#### Procedimento de Rollback no PC Forte:
+Caso seja necessário desativar a Web UI V2:
+```powershell
+# Encerre o processo do Uvicorn na porta 8080 (CTRL+C ou encerre o PID registrado em storage\logs\webui_v2\webui_v2_startup.log)
+# O Streamlit na 8501 permanece intacto e 100% operacional.
+# NUNCA execute git switch --detach ou git checkout no PC Forte.
+```
 
 
 

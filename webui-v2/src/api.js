@@ -4,26 +4,39 @@
  * BACKEND = SOURCE OF TRUTH / FRONTEND = PRESENTATION ONLY
  */
 
-async function fetchJson(endpoint, options = {}) {
-  let apiKey = '';
-  if (typeof window !== 'undefined') {
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const queryKey = urlParams.get('api_key');
-      if (queryKey) {
+let isPromptingApiKey = false;
+
+function resolveStoredApiKey() {
+  if (typeof window === 'undefined') return '';
+  return (
+    window.__API_KEY__ ||
+    (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('api_key')) ||
+    (typeof localStorage !== 'undefined' && localStorage.getItem('api_key')) ||
+    ''
+  );
+}
+
+// Sanitize URL immediately: if ?api_key= exists, store in sessionStorage and remove from URL
+if (typeof window !== 'undefined' && window.location && window.location.search) {
+  try {
+    const url = new URL(window.location.href);
+    const queryKey = url.searchParams.get('api_key');
+    if (queryKey) {
+      if (typeof sessionStorage !== 'undefined') {
         sessionStorage.setItem('api_key', queryKey);
       }
-    } catch {
-      // Ignore URL parsing errors
+      url.searchParams.delete('api_key');
+      const cleanUrl = url.pathname + (url.search || '') + (url.hash || '');
+      window.history.replaceState({}, document.title, cleanUrl);
     }
-    apiKey =
-      (typeof window !== 'undefined' && window.__API_KEY__) ||
-      (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('api_key')) ||
-      (typeof localStorage !== 'undefined' && localStorage.getItem('api_key')) ||
-      '';
+  } catch {
+    // Ignore URL sanitization error in non-standard environments
   }
-  const authHeaders = apiKey ? { 'x-api-key': apiKey } : {};
+}
 
+async function fetchJson(endpoint, options = {}, isRetry = false) {
+  const apiKey = resolveStoredApiKey();
+  const authHeaders = apiKey ? { 'x-api-key': apiKey } : {};
 
   const response = await fetch(endpoint, {
     headers: {
@@ -35,6 +48,26 @@ async function fetchJson(endpoint, options = {}) {
   });
 
   if (!response.ok) {
+    // If unauthorized (401) and in browser, prompt operator for key and retry once
+    if (response.status === 401 && typeof window !== 'undefined' && !isRetry && !isPromptingApiKey) {
+      isPromptingApiKey = true;
+      try {
+        const inputKey = window.prompt('Autenticação necessária. Digite a API Key da Video Factory:');
+        if (inputKey && inputKey.trim()) {
+          const cleanKey = inputKey.trim();
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem('api_key', cleanKey);
+          }
+          isPromptingApiKey = false;
+          return fetchJson(endpoint, options, true);
+        }
+      } catch {
+        // window.prompt may be unavailable in some browser sandboxes
+      } finally {
+        isPromptingApiKey = false;
+      }
+    }
+
     let errorDetail = `HTTP ${response.status}: ${response.statusText}`;
     try {
       const body = await response.json();
@@ -192,5 +225,20 @@ export async function updateProfileSchedule(profileId, schedule) {
 export async function getHealth() {
   return fetchJson('/api/v2/health');
 }
+
+export function setApiKey(key) {
+  if (typeof sessionStorage !== 'undefined') {
+    if (key) {
+      sessionStorage.setItem('api_key', key);
+    } else {
+      sessionStorage.removeItem('api_key');
+    }
+  }
+}
+
+export function getStoredApiKey() {
+  return resolveStoredApiKey();
+}
+
 
 

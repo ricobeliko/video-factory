@@ -16,15 +16,15 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `HOTFIX COPYRIGHT FLOW PARCIAL & DETALHAMENTO DE MOTIVOS NA CENTRAL DE REVISÃO (QG-V2.2C)`
+- **CURRENT_FOCUS:** `HOTFIX PLAYER WEB UI V2 — ESTABILIZAÇÃO DO CICLO DE VIDA E CANCELAMENTO DE STREAMING`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / FLOW_PARTIAL_COPYRIGHT_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / WEB_UI_V2_PLAYER_HOTFIX_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `824e1edb8ffc7c8402efa3b90d821b47f3ecda0d` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `824e1edb8ffc7c8402efa3b90d821b47f3ecda0d` (origin/main)
+- **CURRENT_MAIN_SHA:** `1684da7b6422c298551952668c449cf9fe2cf7ae` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `1684da7b6422c298551952668c449cf9fe2cf7ae` (origin/main)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `FLOW PARTIAL COPYRIGHT HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `WEB_UI_V2 PLAYER HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
@@ -226,7 +226,16 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - **Entrega:** Extração factual de créditos no verify sem consumir créditos nem gerar vídeos.
 
 ### Histórico Recente de Merges no Main:
-- **`HOTFIX QG-V2.2C` (`fix(copyright-gate): allow provenance validation for completed flow scenes in partial workflow runs`)**:
+- **`HOTFIX PLAYER WEB UI V2` (`fix(webui-v2): stabilize review player lifecycle and cancel pending media streams on task change`)**:
+  - **Causa Raiz Comprovada:** O componente `<video>` da Central de Revisão utilizava `key={selectedTask.task_id}`, forçando o React a desmontar e recriar o elemento DOM a cada seleção de tarefa. No Chromium (Brave / Edge), o descarte do nó sem cancelamento explícito deixava requisições e sockets HTTP/1.1 de streaming de mídia abertos em background aguardando fechamento do servidor ou timeout de socket keep-alive, esgotando o limite de conexões simultâneas por host e mantendo novas requisições `/video` presas em `(pending)` por 30 a 60 segundos.
+  - **Correções Aplicadas:**
+    1. Instância do player estável no DOM via `ref={videoRef}`, eliminando recriações por `key` e atribuição direta de `src` no JSX.
+    2. Sequência atômica de cancelamento da mídia anterior ao trocar de tarefa (`video.pause()`, `video.removeAttribute('src')`, `video.load()`), abortando imediatamente streams de rede pendentes e liberando os sockets HTTP no Chromium.
+    3. Atribuição determinística da nova URL (`video.src = url`) seguida de `video.load()`.
+    4. Cleanup adequado no desmonte do componente.
+    5. Preservação do layout 9:16, controles nativos, `preload="metadata"` e seleção reativa.
+  - **Validação:** Compilação Vite (`npm run build`) concluída com sucesso em 8.38s (0 erros, bundle gerado com sucesso).
+- **`HOTFIX QG-V2.2C` (`1684da7` / `fix(copyright-gate): allow provenance validation for completed flow scenes in partial workflow runs`)**:
   - **Causa Raiz & Contexto:** Na tarefa `d6daebe0-69fb-414e-8409-7ae955ea749e` (vídeo do elevador em produção), a listagem rápida exibia `Copyright: PASS` devido ao match preliminar de provider (`fast_listing=True`), mas a aprovação completa (`fast_listing=False`) falhava com `BLOCK` genérico. A validação profunda em `validate_flow_clip_provenance` exigia que o lote global do Flow estivesse em `flow_generation.status == "COMPLETE"`, rejeitando tarefas onde a geração parou em cena posterior (ex: `FAILED_SCENE_11`), mesmo que as cenas Flow efetivamente utilizadas (1, 2, 5) estivessem comprovadas em `completed_scenes`, com clipes físicos íntegros, e as demais cenas fossem Pexels autorizadas.
   - **Correções Aplicadas:**
     1. Em `app/services/copyright_gate.py`: `validate_flow_clip_provenance` normaliza caminhos relativos para `task_dir` e aprova cenas individualmente concluídas em `completed_scenes` quando `flow_generation.status` reflete falha em cena posterior (`FAILED_SCENE_*` ou `FALLBACK_STOCK_SCENE_*`), mantendo fail-closed estrito para `FLOW_GENERATION_NEEDS_RECOVERY` e cenas não completadas. Provider aceita `google_flow` e `flow`.
@@ -2345,6 +2354,32 @@ Entregas V16.4.1A:
   - `test_10_fast_listing_with_representative_history_and_accurate_counts` (PASS): histórico com 22 tarefas, contagens sem inflação (pending=3, approved=2, discarded=1), latência < 1.0s.
   - `test_11_historical_video_without_asset_provenance_reconstructed` (PASS): vídeo histórico sem `asset_provenance` tem proveniência reconstruída, recebe `copyright_status="PASS"` e aparece em `pending` com `is_actionable=True`.
   - `test_12_approval_blocked_when_copyright_unknown` (PASS): vídeo com Copyright `UNKNOWN` é listado como pendente de validação (`is_actionable=False`) e tentativa de aprovação bloqueia com HTTP 400 (`Bloqueio: Copyright Gate não aprovado`).
+
+---
+
+## V16.34 — Hotfix Player Web UI V2: Estabilização do Ciclo de Vida e Cancelamento Explícito de Streaming
+
+- **Data:** `16/10/2026`
+- **Status:** `DEV_VALIDATED (Vite build PASS em 8.38s)`
+- **Objetivo:**
+  Corrigir a lentidão na troca de vídeos na Central de Revisão da Web UI V2 (reprodução demorando de 30 a 60 segundos após selecionar nova tarefa).
+- **Diagnóstico e Causa Raiz:**
+  - O componente `<video>` utilizava `key={selectedTask.task_id}`, forçando o React a desmontar e recriar o elemento DOM a cada seleção.
+  - No Chromium (Brave / Edge), a desmontagem do elemento sem cancelamento prévio deixava os sockets HTTP/1.1 de streaming de mídia abertos em background aguardando fechamento pelo servidor ou timeout de socket keep-alive.
+  - O pool de conexões simultâneas por host do Chromium era esgotado, fazendo com que as novas requisições `/video` permanecessem em `(pending)` por 30 a 60 segundos até a expiração das conexões órfãs.
+- **Implementações Técnicas (`webui-v2/src/components/VideoReview/VideoReviewView.jsx`):**
+  1. *Instância Estável do Player:* Removido `key={selectedTask.task_id}` e `src={videoUrl}` da tag `<video>`, associando a tag via `ref={videoRef}` para manter uma instância DOM estável e permanente.
+  2. *Cancelamento Atômico e Sequencial:* Ao trocar de tarefa (`useEffect` atrelado a `[selectedTask?.task_id]`), executa a sequência canônica recomendada pela especificação HTML5 para descarte de mídia:
+     - `video.pause()`
+     - `video.removeAttribute('src')`
+     - `video.load()` (aborta imediatamente sockets HTTP/1.1 de streaming e libera o pool de conexões do navegador).
+  3. *Atribuição e Carregamento Determinístico:* Atribui a nova URL via `video.src = url` e aciona `video.load()` para a tarefa recém-selecionada.
+  4. *Cleanup no Unmount:* Executa a mesma rotina de cancelamento ao desmontar o componente ou antes da próxima seleção.
+  5. *Preservação Estrita:* Mantidos o layout 9:16, controles nativos, `preload="metadata"`, `playsInline` e lógica reativa de seleção.
+- **Validação de Testes:**
+  - Build de produção do frontend (`npm run build` em `webui-v2/`) executado com sucesso em 8.38s sem avisos ou erros.
+  - Nenhuma dependência adicionada, nenhuma alteração em backend, SQLite, streaming HTTP Range ou gates.
+
 
 
 

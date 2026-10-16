@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   getReviewTasks,
   getReviewTaskVideoUrl,
@@ -25,6 +25,7 @@ function VideoReviewView() {
   const [editorialNote, setEditorialNote] = useState('');
   const [confirmDialog, setConfirmDialog] = useState(null); // { type: 'approve' | 'discard', task }
   const [showFullScript, setShowFullScript] = useState(false);
+  const videoRef = useRef(null);
 
   // Carrega fila de revisão do backend
   const loadReviewQueue = useCallback(async (currentFilter = filter) => {
@@ -64,6 +65,46 @@ function VideoReviewView() {
     if (!tasks || tasks.length === 0) return null;
     return tasks.find((t) => t.task_id === selectedTaskId) || tasks[0];
   }, [tasks, selectedTaskId]);
+
+  // Ciclo de vida explícito da mídia: cancela requisições pendentes da tarefa anterior
+  // evitando bloqueio do pool de sockets de streaming no Chromium (Brave / Edge)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // 1. Pausa e aborta qualquer streaming de rede em andamento
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load(); // Cancela imediatamente sockets HTTP pendentes no Chromium
+    } catch {
+      // Ignora erro de cancelamento
+    }
+
+    // 2. Conecta a nova mídia e carrega os metadados do vídeo selecionado
+    if (selectedTask?.task_id) {
+      const url = getReviewTaskVideoUrl(selectedTask.task_id);
+      video.src = url;
+      try {
+        video.load();
+      } catch {
+        // Ignora erro de carregamento
+      }
+    }
+
+    // 3. Cleanup rigoroso no unmount ou antes da próxima seleção
+    return () => {
+      if (video) {
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        } catch {
+          // Ignora erro de cleanup
+        }
+      }
+    };
+  }, [selectedTask?.task_id]);
 
   // Manipulador de Aprovação
   const handleApprove = async () => {
@@ -128,9 +169,6 @@ function VideoReviewView() {
       setIsActionInProgress(false);
     }
   };
-
-  const videoUrl = selectedTask ? getReviewTaskVideoUrl(selectedTask.task_id) : '';
-
   return (
     <div className="review-container" style={{ padding: '24px 32px', maxWidth: '1440px', margin: '0 auto', color: '#f8fafc' }}>
       {/* 1. Header & Navigation */}
@@ -338,8 +376,7 @@ function VideoReviewView() {
             {/* Video Canvas Container (9:16 aspect ratio) */}
             <div style={{ position: 'relative', width: '100%', aspectRatio: '9 / 16', backgroundColor: '#020617', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
               <video
-                key={selectedTask.task_id}
-                src={videoUrl}
+                ref={videoRef}
                 controls
                 playsInline
                 preload="metadata"

@@ -22,7 +22,7 @@
 - **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_REVIEW_CENTER_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `4eed5563e435e0db8af520cd4f769bc8eb4de8f3` (base QG-V2.2 CLI; complemento Web UI V2 implementado localmente)
+- **DEV_BRANCH_HEAD_SHA:** `4342b8d2af485f6b5c612bfd3fcc6f9b294e5bc3` (base QG-V2.2 CLI e Web UI V2 Review Center validados localmente)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
 - **CURRENT_GATE:** `QG-V2.2 REVIEW CENTER LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`

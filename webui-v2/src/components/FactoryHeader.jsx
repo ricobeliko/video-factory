@@ -89,10 +89,12 @@ export default function FactoryHeader({
         <div className="header-brand">
           <div className="brand-title">
             <span>⚙️ VIDEO FACTORY</span>
-            <span className="brand-badge">{activeTab === 'agent-ops' ? 'Agent Ops' : 'Factory Live'}</span>
+            <span className="brand-badge">
+              {activeTab === 'agent-ops' ? 'Agent Ops' : activeTab === 'video-review' ? 'Revisão' : 'Factory Live'}
+            </span>
           </div>
 
-          {/* Navigation Tab Switcher: Factory Live | Agent Ops */}
+          {/* Navigation Tab Switcher: Factory Live | Agent Ops | Revisão de Vídeos */}
           <nav className="header-nav-switcher" aria-label="Navegação Principal">
             <button
               type="button"
@@ -109,6 +111,14 @@ export default function FactoryHeader({
             >
               <span className="tab-icon">🤖</span>
               <span>Agent Ops</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-switch-tab ${activeTab === 'video-review' ? 'active' : ''}`}
+              onClick={() => onSelectTab && onSelectTab('video-review')}
+            >
+              <span className="tab-icon">🎬</span>
+              <span>Revisão de Vídeos</span>
             </button>
           </nav>
         </div>

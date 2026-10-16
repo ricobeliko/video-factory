@@ -12,21 +12,21 @@
 
 # Estado Atual Canônico — 16/10/2026
 
-- **CURRENT_FOCUS** = `QG-V2.2 — RECUPERAÇÃO SEGURA DE VÍDEOS JÁ GERADOS (RETIDOS POR QUALITY GATE)`
+- **CURRENT_FOCUS** = `QG-V2.2 — CENTRAL DE REVISÃO VISUAL NA WEB UI V2 (COMPLEMENTO HUMANO EXCLUSIVO)`
 - **CURRENT_PHASE** = `V1.5E`
 - **AUTONOMOUS_PILOT_CHANNEL** = `Dose Diária De Internet`
 - **FLOW_TRACK** = `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS** = `ACTIVE_DEV / QG_V2_2_DEV_VALIDATED`
+- **PROJECT_STATUS** = `ACTIVE_DEV / QG_V2_2_REVIEW_CENTER_VALIDATED`
 - **CURRENT_MAIN_SHA** = `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (origin/main)
-- **DEV_BRANCH_HEAD_SHA** = `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (base de produção; QG-V2.2 implementado localmente em DEV)
+- **DEV_BRANCH_HEAD_SHA** = `4eed5563e435e0db8af520cd4f769bc8eb4de8f3` (base QG-V2.2 CLI; complemento Web UI V2 implementado localmente)
 - **LAST_PRODUCTION_DEPLOY_SHA** = `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `QG-V2.2 LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **NEXT_GATE** = `QG-V2.2 REVIEW CENTER LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS** = `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão de etapas no Live Graph desacoplada da verificação real dos 3 Gates [Safety, Quality, Copyright], estado IDLE com 0% falso)`
 - **R9_2_STATUS** = `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle de rastreamento dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS** = `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS** = `PRODUCTION_DEPLOYED (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip instalado no PC Forte, Task Scheduler porta 8080 ativa, Streamlit 8501 preservado)`
-- **QG_V2_STATUS** = `QG-V2.2 DEV VALIDATED (Recuperação Segura de Vídeos Retidos por Quality Gate: CLI scripts/recover_held_quality_videos.py com modo dry-run padrão, promoção segura para Ready Stock via app/services/quality_recovery.py, fail-closed, preservação de histórico, zero regeneração/custos, 10 testes direcionados PASS)`
+- **QG_V2_STATUS** = `QG-V2.2 COMPLETO (Recuperação Segura CLI + Central de Revisão Humana na Web UI V2: player 9:16 seguro, aprovação editorial com override de score < 70, descarte persistente, ponte SECONDARY->PRIMARY via SQLite, 9 testes direcionados PASS, build Vite 11.35s PASS)`
 - **R8_STATUS** = `COMPLETED / DEV VALIDATED (Web UI V2 Production Consolidation: Same-Origin FastAPI serving webui-v2/dist via SPAStaticFiles on port 8080, health endpoints /health and /api/v2/health, production launcher scripts/start_webui_v2.ps1, migration runbook docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, Streamlit fallback preserved on 8501, 42/42 targeted tests PASS)`
 - **R7_STATUS** = `COMPLETED / DEV VALIDATED (Per-Profile Settings, Growth Mode, Autonomous Mode, Quotas and Publishing Windows, 36/36 unit tests PASS)`
 - **R6B_STATUS** = `COMPLETED / DEV VALIDATED (Operational Controls & Dispatch: GET /api/v2/channels, POST /api/v2/factory/pause, POST /api/v2/factory/resume, POST /api/v2/factory/run-cycle, integração frontend Web UI V2 com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso, 19/19 testes unitários PASS)`

@@ -240,5 +240,50 @@ export function getStoredApiKey() {
   return resolveStoredApiKey();
 }
 
+export async function getReviewTasks(filter = 'pending', profileId = null) {
+  const params = new URLSearchParams();
+  if (filter) params.set('filter', filter);
+  if (profileId) params.set('profile_id', profileId);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return fetchJson(`/api/v2/review/tasks${qs}`);
+}
+
+export function getReviewTaskVideoUrl(taskId) {
+  if (!taskId) return '';
+  const apiKey = resolveStoredApiKey();
+  const query = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : '';
+  return `/api/v2/review/tasks/${encodeURIComponent(taskId)}/video${query}`;
+}
+
+export async function approveReviewTask(taskId, options = {}) {
+  const { operatorId = 'operator', note = '', confirm = 'APPROVE_FOR_STOCK' } = options;
+  return fetchJson(`/api/v2/review/tasks/${encodeURIComponent(taskId)}/approve`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      operator_id: operatorId,
+      note,
+      confirm,
+    }),
+  });
+}
+
+export async function discardReviewTask(taskId, options = {}) {
+  const { operatorId = 'operator', note = '', confirm = 'DISCARD_HELD_VIDEO' } = options;
+  return fetchJson(`/api/v2/review/tasks/${encodeURIComponent(taskId)}/discard`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      operator_id: operatorId,
+      note,
+      confirm,
+    }),
+  });
+}
+
 
 

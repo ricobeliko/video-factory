@@ -16,20 +16,20 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `QG-V2.2 — RECUPERAÇÃO SEGURA DE VÍDEOS JÁ GERADOS (RETIDOS POR QUALITY GATE)`
+- **CURRENT_FOCUS:** `QG-V2.2 — CENTRAL DE REVISÃO VISUAL NA WEB UI V2 (COMPLEMENTO HUMANO EXCLUSIVO)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_DEV_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_REVIEW_CENTER_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (base de produção; QG-V2.2 implementado localmente em DEV)
+- **DEV_BRANCH_HEAD_SHA:** `4eed5563e435e0db8af520cd4f769bc8eb4de8f3` (base QG-V2.2 CLI; complemento Web UI V2 implementado localmente)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `QG-V2.2 LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `QG-V2.2 REVIEW CENTER LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `PRODUCTION_DEPLOYED (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip instalado no PC Forte, Task Scheduler porta 8080 ativa, Streamlit 8501 preservado)`
-- **QG_V2_STATUS:** `QG-V2.2 DEV VALIDATED (Recuperação Segura de Vídeos Retidos por Quality Gate: CLI scripts/recover_held_quality_videos.py com modo dry-run padrão, promoção segura para Ready Stock via app/services/quality_recovery.py, fail-closed, preservação de histórico, zero regeneração/custos, 10 testes direcionados PASS)`
+- **QG_V2_STATUS:** `QG-V2.2 COMPLETO (Recuperação Segura CLI + Central de Revisão Humana na Web UI V2: player 9:16 seguro, aprovação editorial com override de score < 70, descarte persistente, ponte SECONDARY->PRIMARY via SQLite, 9 testes direcionados PASS, build Vite 11.35s PASS)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2286,6 +2286,34 @@ Entregas V16.4.1A:
     - `test_8_video_already_scheduled_cannot_be_recovered` (PASS - previne agendamento duplicado).
     - `test_9_repeated_application_idempotent_no_duplication` (PASS - idempotência perfeita).
     - `test_10_preserves_history_and_no_automatic_publication` (PASS - histórico preservado, evento de auditoria gerado, ZERO agendamento ou publicação automática).
+
+---
+
+## V16.32 — QG-V2.2 Complemento: Central de Revisão Visual na Web UI V2
+
+- **Data:** `16/10/2026`
+- **Status:** `DEV_VALIDATED (9/9 testes direcionados PASS | Vite build PASS)`
+- **Objetivo:**
+  Integrar à Web UI V2 uma Central de Revisão Humana permanente como rota de exceção estrita, permitindo ao operador assistir e decidir visualmente sobre vídeos retidos exclusivamente pelo Quality Gate editorial.
+- **Regras Operacionais e Arquitetura:**
+  1. *Rota de Exceção Estrita:* Vídeos com Quality Gate PASS continuam seguindo diretamente pelo Ready Stock e Scheduler normais sem qualquer intervenção humana. Apenas vídeos retidos com MP4 válido e Safety/Copyright PASS são listados na fila de pendentes.
+  2. *Player Vertical Seguro:* Visualização 9:16 nativa em `/api/v2/review/tasks/{task_id}/video` com validação de regex alfanumérico para `task_id`, resolução canônica de diretório via `utils.task_dir()` e bloqueio de path traversal.
+  3. *Aprovação Editorial Humana:* Decisão explícita registrada em `operator_video_reviews` com operador, timestamp, nota e confirmação obrigatória `APPROVE_FOR_STOCK`. Permite override editorial quando score < 70 sem jamais falsificar o score original.
+  4. *Descarte Persistente:* Registra `DISCARDED` com confirmação `DISCARD_HELD_VIDEO`, removendo a tarefa permanentemente de `pending` sem apagar arquivos de mídia nem histórico.
+  5. *Ponte Segura PRIMARY / SECONDARY_VIEW_ONLY:* Em nós secundários (Web UI V2), ações de escrita são enfileiradas na tabela `operator_review_commands` para execução pelo nó PRIMARY no worker loop, garantindo integridade e conformidade de governança.
+  6. *Integração ao Frontend Web UI V2:* Nova aba "Revisão de Vídeos" com player 9:16, contadores em tempo real (Pendentes, Aprovados, Descartados), filtros por estado, metadados de hooks, roteiro expansível e botões de ação com diálogo de confirmação seguro.
+- **Validação de Testes:**
+  - 9/9 testes direcionados PASS em `test/services/test_video_review_ui_v2.py`:
+    - `test_1_automatic_review_queue_discovery` (PASS)
+    - `test_2_stream_video_player_and_path_traversal_protection` (PASS)
+    - `test_3_human_approval_editorial_override_below_70` (PASS)
+    - `test_4_persistent_discard_survives_restart` (PASS)
+    - `test_5_safety_and_copyright_rejections_block_approval` (PASS)
+    - `test_6_missing_or_empty_mp4_blocks_approval` (PASS)
+    - `test_7_duplicate_and_published_protection` (PASS)
+    - `test_8_primary_secondary_governance_and_safe_bridge` (PASS)
+    - `test_9_auto_pass_video_bypasses_review_center_completely` (PASS - regressão obrigatória de fluxo normal)
+
 
 
 

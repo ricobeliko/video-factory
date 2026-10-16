@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -45,7 +46,14 @@ from app.services import (
 )
 from app.utils import utils
 
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 CONFIRM_RECOVERY = "RECOVER_HELD_VIDEOS"
+CONFIRM_APPROVE_FOR_STOCK = "APPROVE_FOR_STOCK"
+CONFIRM_DISCARD_HELD_VIDEO = "DISCARD_HELD_VIDEO"
 
 # Estados de classificação
 CLASS_ELIGIBLE = "ELIGIBLE"
@@ -54,6 +62,61 @@ CLASS_ALREADY_STOCKED = "ALREADY_STOCKED"
 CLASS_ALREADY_SCHEDULED = "ALREADY_SCHEDULED"
 CLASS_ALREADY_PUBLISHED = "ALREADY_PUBLISHED"
 CLASS_NEEDS_REVIEW = "NEEDS_REVIEW"
+CLASS_DISCARDED = "DISCARDED"
+
+DECISION_APPROVED = "APPROVED"
+DECISION_DISCARDED = "DISCARDED"
+
+
+def init_review_db(db_path: Optional[str] = None) -> None:
+    """Inicializa as tabelas de revisão humana e comandos operacionais no SQLite."""
+    effective_db, _ = _resolve_paths(db_path)
+    scheduler.init_db(effective_db)
+    with sqlite3.connect(effective_db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operator_video_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT UNIQUE NOT NULL,
+                decision TEXT NOT NULL,
+                operator_id TEXT NOT NULL,
+                note TEXT,
+                original_score REAL,
+                recalculated_score REAL,
+                approved_below_threshold INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                metadata_json TEXT
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_vid_reviews_task ON operator_video_reviews(task_id);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_vid_reviews_dec ON operator_video_reviews(decision);"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operator_review_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                operator_id TEXT NOT NULL,
+                note TEXT,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                processed_at TEXT,
+                processed_by_node TEXT
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_rev_cmd_status ON operator_review_commands(status);"
+        )
+        conn.commit()
 
 
 def _resolve_paths(
@@ -62,7 +125,7 @@ def _resolve_paths(
 ) -> Tuple[str, str]:
     """Resolve caminhos canônicos do banco e diretório de tarefas."""
     effective_db = db_path or scheduler.get_db_path()
-    effective_task_dir = task_base_dir or os.path.join(utils.root_dir(), "storage", "tasks")
+    effective_task_dir = task_base_dir or utils.task_dir()
     return effective_db, effective_task_dir
 
 
@@ -269,22 +332,44 @@ def inspect_single_held_task(
             ).fetchone()
             has_task_platform_yt = bool(tp_row)
 
+        # Consulta decisão de revisão humana prévia (se existir)
+        human_review = None
+        if _table_exists(conn, "operator_video_reviews"):
+            hr_row = conn.execute(
+                "SELECT decision, operator_id, note, approved_below_threshold, created_at FROM operator_video_reviews WHERE task_id = ?;",
+                (clean_tid,),
+            ).fetchone()
+            if hr_row:
+                human_review = dict(hr_row)
+
+        human_decision = human_review.get("decision") if human_review else None
+
         is_already_stocked = (
             not is_published
             and not is_scheduled
-            and orig_score >= 70.0
-            and orig_label in ("GOOD", "STRONG")
-            and safety_status == const.SAFETY_STATUS_PASS
-            and cp_status == "PASS"
-            and mp4_exists
-            and has_task_platform_yt
+            and (
+                human_decision == DECISION_APPROVED
+                or (
+                    orig_score >= 70.0
+                    and orig_label in ("GOOD", "STRONG")
+                    and safety_status == const.SAFETY_STATUS_PASS
+                    and cp_status == "PASS"
+                    and mp4_exists
+                )
+            )
         )
 
         # 12. Determina classificação e motivo da decisão
         classification = CLASS_NEEDS_REVIEW
         reason = ""
 
-        if is_published:
+        if human_decision == DECISION_DISCARDED:
+            classification = CLASS_DISCARDED
+            reason = f"Vídeo descartado da fila de revisão pelo operador ({human_review.get('operator_id')})."
+        elif human_decision == DECISION_APPROVED:
+            classification = CLASS_ALREADY_STOCKED
+            reason = f"Vídeo aprovado pelo operador ({human_review.get('operator_id')}) para o Ready Stock."
+        elif is_published:
             classification = CLASS_ALREADY_PUBLISHED
             reason = "Vídeo já publicado com sucesso no YouTube."
         elif is_scheduled:
@@ -307,7 +392,7 @@ def inspect_single_held_task(
             reason = f"Aprovado no QG-V2 ({v2_score:.1f} - {v2_label} >= 70.0). Elegível para recuperação de estoque."
         else:
             classification = CLASS_NEEDS_REVIEW
-            reason = f"Score sob QG-V2 ({v2_score:.1f} - {v2_label}) insuficiente para aprovação autônoma (limiar >= 70.0)."
+            reason = f"Score sob QG-V2 ({v2_score:.1f} - {v2_label}) insuficiente para aprovação autônoma (limiar >= 70.0); aguarda decisão editorial humana."
 
         return {
             "task_id": clean_tid,
@@ -331,7 +416,8 @@ def inspect_single_held_task(
             "classification": classification,
             "reason": reason,
             "reasons": reasons,
-            "is_actionable": classification == CLASS_ELIGIBLE,
+            "is_actionable": classification in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW),
+            "human_review": human_review,
         }
     finally:
         conn.close()
@@ -560,3 +646,485 @@ def recover_held_quality_task(
         "qg_v2_quality_label": new_label,
         "ready_stock_eligible": True,
     }
+
+
+def get_review_queue(
+    filter: str = "pending",
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retorna a fila de tarefas para a Central de Revisão de Vídeos.
+
+    Filtros suportados:
+    - 'pending': vídeos íntegros com MP4 válido, Safety e Copyright PASS, não publicados,
+                 aguardando aprovação ou descarte do operador.
+    - 'approved': vídeos aprovados manualmente ou com QG-V2 >= 70 no Ready Stock.
+    - 'discarded': vídeos explicitamente descartados pelo operador (nunca reaparecem em pending).
+    - 'all': todos os vídeos inspecionados.
+    """
+    effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
+    init_review_db(effective_db)
+
+    inspection = inspect_all_held_tasks(
+        db_path=effective_db,
+        task_base_dir=effective_task_dir,
+        profile_id=profile_id,
+    )
+    all_candidates = inspection.get("candidates", [])
+
+    pending_list = []
+    approved_list = []
+    discarded_list = []
+
+    for c in all_candidates:
+        cls = c["classification"]
+        hr = c.get("human_review")
+        # Regra de exclusão estrita: se não tiver MP4, ou Safety!=PASS, ou Copyright!=PASS,
+        # ou se já foi publicado, nunca aparece como candidato à aprovação pendente.
+        if cls == CLASS_DISCARDED or (hr and hr.get("decision") == DECISION_DISCARDED):
+            discarded_list.append(c)
+        elif cls == CLASS_ALREADY_STOCKED or (hr and hr.get("decision") == DECISION_APPROVED):
+            approved_list.append(c)
+        elif cls in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW):
+            # Apenas tarefas com MP4 válido, Safety PASS, Copyright PASS e não publicadas
+            if c.get("mp4_exists") and c.get("safety_status") == const.SAFETY_STATUS_PASS and c.get("copyright_status") == "PASS":
+                pending_list.append(c)
+
+    clean_filter = str(filter or "pending").lower().strip()
+    if clean_filter == "approved":
+        selected_tasks = approved_list
+    elif clean_filter == "discarded":
+        selected_tasks = discarded_list
+    elif clean_filter == "all":
+        selected_tasks = all_candidates
+    else:  # default "pending"
+        selected_tasks = pending_list
+
+    return {
+        "status": "ok",
+        "filter": clean_filter,
+        "counts": {
+            "pending": len(pending_list),
+            "approved": len(approved_list),
+            "discarded": len(discarded_list),
+            "total_inspected": len(all_candidates),
+        },
+        "tasks": selected_tasks,
+    }
+
+
+def apply_human_review_decision(
+    task_id: str,
+    action: str,
+    operator_id: Optional[str] = "operator",
+    note: Optional[str] = None,
+    confirm: Optional[str] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Aplica a decisão editorial humana explícita (APPROVE ou DISCARD).
+    
+    Exige:
+    - Execução sob nó PRIMARY (require_primary_instance).
+    - Confirmação explícita:
+      - APPROVE: confirm == 'APPROVE_FOR_STOCK'
+      - DISCARD: confirm == 'DISCARD_HELD_VIDEO'
+    - Revalidação estrita de MP4, Safety, Copyright e plataforma.
+    - Preservação do histórico e score original (NUNCA falsificado).
+    - Gravação em operator_video_reviews e operational_events.
+    """
+    effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
+    clean_tid = str(task_id or "").strip()
+    raw_action = str(action or "").upper().strip()
+    if raw_action in ("APPROVE", "APPROVED"):
+        clean_action = DECISION_APPROVED
+    elif raw_action in ("DISCARD", "DISCARDED"):
+        clean_action = DECISION_DISCARDED
+    else:
+        raise ValueError(f"Ação inválida: '{action}'. Opções permitidas: APPROVE, DISCARD.")
+
+    clean_op = str(operator_id or "operator").strip()
+    clean_note = str(note or "").strip()
+
+    if not clean_tid:
+        raise ValueError("task_id inválido ou ausente.")
+
+    # 1. PRIMARY Guard estrito
+    operator_console.require_primary_instance(db_path=effective_db)
+    init_review_db(effective_db)
+
+    # Inspeciona candidato atual
+    cand = inspect_single_held_task(clean_tid, db_path=effective_db, task_base_dir=effective_task_dir)
+
+    now_iso = _now_iso()
+
+    if clean_action == DECISION_DISCARDED:
+        if confirm != CONFIRM_DISCARD_HELD_VIDEO:
+            raise ValueError(
+                f"Confirmação explícita '{CONFIRM_DISCARD_HELD_VIDEO}' é obrigatória "
+                f"para descartar tarefas da revisão."
+            )
+        
+        # Registra o descarte em operator_video_reviews
+        with sqlite3.connect(effective_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO operator_video_reviews (
+                    task_id, decision, operator_id, note, original_score, recalculated_score,
+                    approved_below_threshold, created_at, updated_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    decision = excluded.decision,
+                    operator_id = excluded.operator_id,
+                    note = excluded.note,
+                    updated_at = excluded.updated_at,
+                    metadata_json = excluded.metadata_json;
+                """,
+                (
+                    clean_tid,
+                    DECISION_DISCARDED,
+                    clean_op,
+                    clean_note,
+                    cand["original_quality_score"],
+                    cand["qg_v2_quality_score"],
+                    now_iso,
+                    now_iso,
+                    json.dumps({"reasons": cand.get("reasons", [])}, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+
+        # Log auditável em operational_events
+        operator_console.log_operational_event(
+            component="quality_gate",
+            severity=operator_console.SEVERITY_INFO,
+            event_type="held_task_human_discarded",
+            task_id=clean_tid,
+            message=f"Tarefa {clean_tid} descartada da revisão humana pelo operador {clean_op}.",
+            metadata={
+                "task_id": clean_tid,
+                "operator_id": clean_op,
+                "note": clean_note,
+                "original_quality_score": cand["original_quality_score"],
+                "qg_v2_quality_score": cand["qg_v2_quality_score"],
+            },
+            db_path=effective_db,
+        )
+
+        return {
+            "status": "success",
+            "decision": DECISION_DISCARDED,
+            "task_id": clean_tid,
+            "message": f"Tarefa {clean_tid} descartada com sucesso da fila de revisão.",
+        }
+
+    # Caso DECISION_APPROVED:
+    if confirm != CONFIRM_APPROVE_FOR_STOCK:
+        raise ValueError(
+            f"Confirmação explícita '{CONFIRM_APPROVE_FOR_STOCK}' é obrigatória "
+            f"para aprovar tarefas para o estoque."
+        )
+
+    # 2. Verificações de bloqueio estritas (fail-closed)
+    if not cand["mp4_exists"]:
+        raise ValueError(f"Bloqueio: Arquivo de vídeo final-1.mp4 ausente ou vazio para a tarefa '{clean_tid}'.")
+
+    if cand["safety_status"] != const.SAFETY_STATUS_PASS:
+        raise ValueError(f"Bloqueio: Safety Gate não aprovado ({cand['safety_status']}). Conteúdo inseguro não pode ser liberado.")
+
+    if cand["copyright_status"] != "PASS":
+        raise ValueError(f"Bloqueio: Copyright Gate não aprovado ({cand['copyright_status']}). Conteúdo com pendência de direitos não pode ser liberado.")
+
+    if cand["classification"] == CLASS_ALREADY_PUBLISHED:
+        raise ValueError(f"Bloqueio: Tarefa '{clean_tid}' já foi publicada no YouTube.")
+
+    if cand["classification"] == CLASS_ALREADY_SCHEDULED:
+        raise ValueError(f"Bloqueio: Tarefa '{clean_tid}' já está agendada no Scheduler.")
+
+    # 3. Tratamento de score
+    # Se QG-V2 >= 70.0, é uma recuperação normal QG-V2
+    # Se QG-V2 < 70.0, é uma aprovação editorial humana abaixo do limiar (approved_below_threshold = 1)
+    # Em NENHUM dos casos o score original é falsificado!
+    is_below_threshold = (cand["qg_v2_quality_score"] < 70.0)
+
+    if not is_below_threshold:
+        quality_score.evaluate_quality(
+            topic=cand["topic"],
+            niche=cand["niche"],
+            hook_text=cand["hook_text"],
+            script_text=cand.get("script_text"),
+            preset=cand.get("preset"),
+            narrative_structure=cand.get("narrative_structure"),
+            actual_duration=cand.get("actual_duration"),
+            task_id=clean_tid,
+            profile_id=cand.get("profile_id"),
+            platform="youtube",
+            persist=True,
+            db_path=effective_db,
+        )
+
+    # Garante task_platforms com youtube
+    scheduler.save_task_platforms(clean_tid, ["youtube"], db_path=effective_db)
+
+    # Garante task_profiles
+    assigned_profile = cand.get("profile_id") or profile_manager.DEFAULT_PROFILE_ID
+    profile_manager.save_task_profile(clean_tid, assigned_profile, db_path=effective_db)
+
+    # Grava aprovação em operator_video_reviews
+    with sqlite3.connect(effective_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO operator_video_reviews (
+                task_id, decision, operator_id, note, original_score, recalculated_score,
+                approved_below_threshold, created_at, updated_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                decision = excluded.decision,
+                operator_id = excluded.operator_id,
+                note = excluded.note,
+                approved_below_threshold = excluded.approved_below_threshold,
+                updated_at = excluded.updated_at,
+                metadata_json = excluded.metadata_json;
+            """,
+            (
+                clean_tid,
+                DECISION_APPROVED,
+                clean_op,
+                clean_note,
+                cand["original_quality_score"],
+                cand["qg_v2_quality_score"],
+                1 if is_below_threshold else 0,
+                now_iso,
+                now_iso,
+                json.dumps({
+                    "topic": cand["topic"],
+                    "approved_by_operator": clean_op,
+                    "approved_below_threshold": is_below_threshold,
+                }, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+
+    # Atualiza sm.state
+    try:
+        from app.services import state as sm
+        sm.state.patch_task(
+            clean_tid,
+            state=const.TASK_STATE_COMPLETE,
+            gate_status="approved",
+            gate_reason=f"Aprovado humanamente pelo operador {clean_op}" + (" (override editorial)" if is_below_threshold else ""),
+            quality_score=cand["qg_v2_quality_score"] if not is_below_threshold else cand["original_quality_score"],
+            quality_label=cand["qg_v2_quality_label"] if not is_below_threshold else cand["original_quality_label"],
+            video_file=cand["mp4_path"],
+            planned_platforms=["youtube"],
+            profile_id=assigned_profile,
+        )
+    except Exception as exc:
+        logger.debug(f"[QUALITY_RECOVERY] Falha ao atualizar sm.state para {clean_tid}: {exc}")
+
+    # Log de auditoria em operational_events
+    operator_console.log_operational_event(
+        component="quality_gate",
+        severity=operator_console.SEVERITY_INFO,
+        event_type="held_task_human_approved",
+        task_id=clean_tid,
+        message=(
+            f"Tarefa {clean_tid} aprovada pelo operador {clean_op} para o Ready Stock "
+            f"(Score original: {cand['original_quality_score']:.1f}, "
+            f"QG-V2: {cand['qg_v2_quality_score']:.1f}"
+            + (" - Override editorial com score < 70" if is_below_threshold else "")
+            + ")."
+        ),
+        metadata={
+            "task_id": clean_tid,
+            "operator_id": clean_op,
+            "note": clean_note,
+            "original_quality_score": cand["original_quality_score"],
+            "original_quality_label": cand["original_quality_label"],
+            "qg_v2_quality_score": cand["qg_v2_quality_score"],
+            "qg_v2_quality_label": cand["qg_v2_quality_label"],
+            "approved_below_threshold": is_below_threshold,
+            "safety_status": cand["safety_status"],
+            "copyright_status": cand["copyright_status"],
+            "mp4_path": cand["mp4_path"],
+            "profile_id": assigned_profile,
+        },
+        db_path=effective_db,
+    )
+
+    return {
+        "status": "success",
+        "decision": DECISION_APPROVED,
+        "task_id": clean_tid,
+        "message": f"Tarefa {clean_tid} aprovada pelo operador e integrada ao Ready Stock.",
+        "approved_below_threshold": is_below_threshold,
+        "original_quality_score": cand["original_quality_score"],
+        "qg_v2_quality_score": cand["qg_v2_quality_score"],
+        "ready_stock_eligible": True,
+    }
+
+
+def enqueue_review_command(
+    task_id: str,
+    action: str,
+    operator_id: Optional[str] = "operator",
+    note: Optional[str] = None,
+    confirm: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> int:
+    """Enfileira um comando de revisão no SQLite para ser processado pelo nó PRIMARY."""
+    effective_db, _ = _resolve_paths(db_path)
+    init_review_db(effective_db)
+
+    now_iso = _now_iso()
+    with sqlite3.connect(effective_db) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO operator_review_commands (
+                task_id, action, operator_id, note, status, created_at
+            ) VALUES (?, ?, ?, ?, 'PENDING', ?);
+            """,
+            (task_id, action, operator_id, note or "", now_iso),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def has_pending_review_commands(db_path: Optional[str] = None) -> bool:
+    """Verifica de forma ultra-leve se existem comandos pendentes."""
+    effective_db, _ = _resolve_paths(db_path)
+    if not os.path.isfile(effective_db):
+        return False
+    with sqlite3.connect(effective_db) as conn:
+        if not _table_exists(conn, "operator_review_commands"):
+            return False
+        row = conn.execute("SELECT 1 FROM operator_review_commands WHERE status = 'PENDING' LIMIT 1;").fetchone()
+        return bool(row)
+
+
+def process_pending_review_commands(
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Processa todos os comandos de revisão pendentes. EXECUTADO APENAS PELO NÓ PRIMARY."""
+    effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
+    init_review_db(effective_db)
+
+    if not operator_console.is_primary_instance(db_path=effective_db):
+        return []
+
+    with sqlite3.connect(effective_db) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM operator_review_commands WHERE status = 'PENDING' ORDER BY id ASC;"
+        ).fetchall()
+
+    results = []
+    for r in rows:
+        cid = r["id"]
+        tid = r["task_id"]
+        act = r["action"]
+        op = r["operator_id"]
+        note = r["note"]
+        confirm_token = CONFIRM_APPROVE_FOR_STOCK if str(act).upper() in ("APPROVE", "APPROVED") else CONFIRM_DISCARD_HELD_VIDEO
+
+        now_iso = _now_iso()
+        try:
+            res = apply_human_review_decision(
+                task_id=tid,
+                action=act,
+                operator_id=op,
+                note=note,
+                confirm=confirm_token,
+                db_path=effective_db,
+                task_base_dir=effective_task_dir,
+            )
+            with sqlite3.connect(effective_db) as conn:
+                conn.execute(
+                    """
+                    UPDATE operator_review_commands
+                    SET status = 'COMPLETED', result_json = ?, processed_at = ?, processed_by_node = ?
+                    WHERE id = ?;
+                    """,
+                    (json.dumps(res, ensure_ascii=False), now_iso, "PRIMARY", cid),
+                )
+                conn.commit()
+            results.append({"command_id": cid, "status": "completed", "result": res})
+        except Exception as exc:
+            with sqlite3.connect(effective_db) as conn:
+                conn.execute(
+                    """
+                    UPDATE operator_review_commands
+                    SET status = 'FAILED', error_message = ?, processed_at = ?, processed_by_node = ?
+                    WHERE id = ?;
+                    """,
+                    (str(exc), now_iso, "PRIMARY", cid),
+                )
+                conn.commit()
+            results.append({"command_id": cid, "status": "failed", "error": str(exc)})
+
+    return results
+
+
+def submit_or_apply_review_decision(
+    task_id: str,
+    action: str,
+    operator_id: Optional[str] = "operator",
+    note: Optional[str] = None,
+    confirm: Optional[str] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+    wait_for_primary_sec: float = 2.0,
+) -> Dict[str, Any]:
+    """Ponte de execução de decisão de revisão:
+    - Se for nó PRIMARY: aplica imediatamente.
+    - Se for nó SECONDARY_VIEW_ONLY: enfileira o comando para o PRIMARY e aguarda até wait_for_primary_sec.
+    """
+    effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
+    init_review_db(effective_db)
+
+    is_primary = operator_console.is_primary_instance(db_path=effective_db)
+    if is_primary:
+        return apply_human_review_decision(
+            task_id=task_id,
+            action=action,
+            operator_id=operator_id,
+            note=note,
+            confirm=confirm,
+            db_path=effective_db,
+            task_base_dir=effective_task_dir,
+        )
+
+    # Se for SECONDARY_VIEW_ONLY, NÃO executa diretamente!
+    cmd_id = enqueue_review_command(
+        task_id=task_id,
+        action=action,
+        operator_id=operator_id,
+        note=note,
+        confirm=confirm,
+        db_path=effective_db,
+    )
+
+    import time
+    start_t = time.time()
+    while (time.time() - start_t) < wait_for_primary_sec:
+        time.sleep(0.15)
+        with sqlite3.connect(effective_db) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM operator_review_commands WHERE id = ?;", (cmd_id,)).fetchone()
+            if row and row["status"] == "COMPLETED":
+                res_data = json.loads(row["result_json"]) if row["result_json"] else {}
+                return {**res_data, "executed_by": "PRIMARY_BRIDGE", "command_id": cmd_id}
+            if row and row["status"] == "FAILED":
+                raise ValueError(row["error_message"] or "Falha no processamento pelo nó PRIMARY")
+
+    return {
+        "status": "queued",
+        "command_id": cmd_id,
+        "message": "Decisão registrada com sucesso e enfileirada para execução pelo nó PRIMARY.",
+        "task_id": task_id,
+        "action": action,
+    }
+

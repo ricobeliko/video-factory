@@ -2360,10 +2360,28 @@ def _scheduler_worker_loop(interval_seconds: int = 30) -> None:
                 autonomous_production.run_enabled_profiles_autonomous_cycle()
             except Exception as ap_exc:
                 logger.warning(f"[SCHEDULER][WORKER] Erro no ciclo de produção autônoma multi-perfil (não fatal): {ap_exc}")
+
+            # Fase QG-V2.2: Processamento de comandos da Central de Revisão Humana
+            try:
+                from app.services import quality_recovery
+                quality_recovery.process_pending_review_commands()
+            except Exception as qr_exc:
+                logger.warning(f"[SCHEDULER][WORKER] Erro ao processar comandos de revisão (não fatal): {qr_exc}")
         except Exception as exc:
             logger.exception(f"[SCHEDULER][WORKER] Erro inesperado no ciclo de execução: {exc}")
             _set_executor_status(state="error", message=f"Erro no worker: {exc}")
-        _worker_stop_event.wait(interval_seconds)
+
+        # Espera responsiva: aguarda interval_seconds verificando comandos pendentes a cada 2s
+        steps = max(1, interval_seconds // 2)
+        for _ in range(steps):
+            if _worker_stop_event.wait(2):
+                break
+            try:
+                from app.services import quality_recovery
+                if quality_recovery.has_pending_review_commands():
+                    quality_recovery.process_pending_review_commands()
+            except Exception:
+                pass
 
 
 def start_scheduler_worker(interval_seconds: int = 30) -> None:

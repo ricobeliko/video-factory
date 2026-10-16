@@ -1987,9 +1987,25 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         profile = conn.execute(
             "SELECT profile_id FROM task_profiles WHERE task_id = ?", (task_id,),
         ).fetchone()
+
+        human_review = None
+        has_review_tbl = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';"
+        ).fetchone()
+        if has_review_tbl:
+            human_review = conn.execute(
+                "SELECT decision, operator_id, approved_below_threshold FROM operator_video_reviews WHERE task_id = ? AND decision = 'APPROVED';",
+                (task_id,),
+            ).fetchone()
+
     score = float(quality["quality_score"]) if quality else float("nan")
-    if (not math.isfinite(score) or score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS
-            or quality["quality_label"] not in ("GOOD", "STRONG")):
+    is_auto_quality_approved = (
+        math.isfinite(score)
+        and score >= MIN_QUALITY_SCORE_FOR_AUTONOMOUS
+        and quality
+        and quality["quality_label"] in ("GOOD", "STRONG")
+    )
+    if not is_auto_quality_approved and not human_review:
         raise ValueError("waiting_quality_not_approved")
     persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
     if "youtube" not in persisted_plats and "youtube" not in (task.get("planned_platforms") or []):
@@ -2019,10 +2035,11 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     if not combined_plats:
         raise ValueError("waiting_no_eligible_destinations")
 
+    quality_lbl = quality["quality_label"] if quality else ("APPROVED_BY_OPERATOR" if human_review else "UNKNOWN")
     task.update(task_id=task_id, state=const.TASK_STATE_COMPLETE, video_file=video,
                 safety_status=const.SAFETY_STATUS_PASS, planned_platforms=combined_plats,
                 profile_id=prof_id, quality_score=score,
-                quality_label=quality["quality_label"],
+                quality_label=quality_lbl,
                 channel_id=chan_id,
                 copyright_provenance_gate="PASS")
     return task

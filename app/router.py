@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from app.controllers import ping
 from app.controllers.v1 import llm, video
 from app.controllers.v2 import operations as operations_v2
+from app.controllers.v2 import review as review_v2
 
 root_api_router = APIRouter()
 root_api_router.include_router(ping.router)
@@ -22,4 +23,5 @@ root_api_router.include_router(llm.router)
 
 # v2
 root_api_router.include_router(operations_v2.router)
+root_api_router.include_router(review_v2.router)
 

@@ -5,23 +5,26 @@ import FlowAccountsSection from './components/FlowAccountsSection';
 import FactoryLiveGraph from './components/FactoryLiveGraph';
 import ExecutionDrawer from './components/ExecutionDrawer';
 import AgentOpsView from './components/AgentOps/AgentOpsView';
+import VideoReviewView from './components/VideoReview/VideoReviewView';
 import { getLiveExecutions, getSystemStatus } from './api';
 import './styles.css';
 
 /**
- * App — Factory Live Command Console & Agent Ops Room (R6A.6 + Agent Ops V1.1).
+ * App — Factory Live Command Console, Agent Ops Room & Video Review Center.
  * Features:
  * - Single-focus detailed pipeline architecture for extreme scalability.
  * - Automatic deterministic selection of RUNNING channel, with fallback to first channel.
  * - Manual operator focus switching via top channel deck cards.
  * - Decoupled narrative execution drawer.
  * - Independent Agent Ops control room for real agent observability.
+ * - Human Video Review Center for safe Quality Gate inspection and recovery.
  */
 export default function App() {
-  // Navigation tab state (Factory Live | Agent Ops) with URL hash persistence
+  // Navigation tab state (Factory Live | Agent Ops | Video Review) with URL hash persistence
   const [activeTab, setActiveTab] = useState(() => {
-    if (typeof window !== 'undefined' && window.location.hash === '#agent-ops') {
-      return 'agent-ops';
+    if (typeof window !== 'undefined') {
+      if (window.location.hash === '#agent-ops') return 'agent-ops';
+      if (window.location.hash === '#video-review') return 'video-review';
     }
     return 'factory-live';
   });
@@ -131,6 +134,8 @@ export default function App() {
         const hash = window.location.hash;
         if (hash === '#agent-ops') {
           setActiveTab('agent-ops');
+        } else if (hash === '#video-review') {
+          setActiveTab('video-review');
         } else {
           setActiveTab('factory-live');
         }
@@ -143,7 +148,7 @@ export default function App() {
   const handleSelectTab = (tab) => {
     setActiveTab(tab);
     if (typeof window !== 'undefined') {
-      window.location.hash = tab === 'agent-ops' ? '#agent-ops' : '#factory-live';
+      window.location.hash = tab === 'agent-ops' ? '#agent-ops' : tab === 'video-review' ? '#video-review' : '#factory-live';
     }
   };
 
@@ -172,9 +177,11 @@ export default function App() {
         onSelectTab={handleSelectTab}
       />
 
-      {/* 2. Main View: Factory Live vs Agent Ops */}
+      {/* 2. Main View: Factory Live vs Agent Ops vs Video Review */}
       {activeTab === 'agent-ops' ? (
         <AgentOpsView />
+      ) : activeTab === 'video-review' ? (
+        <VideoReviewView />
       ) : (
         <>
           {/* Top Channels Deck — Dynamic Multi-Channel Overview */}

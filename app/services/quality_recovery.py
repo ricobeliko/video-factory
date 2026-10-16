@@ -169,6 +169,7 @@ def inspect_single_held_task(
     db_path: Optional[str] = None,
     task_base_dir: Optional[str] = None,
     fast_listing: bool = False,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
     """Inspeciona e classifica determinísticamente uma tarefa candidata sem aplicar mutações."""
     effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
@@ -182,8 +183,13 @@ def inspect_single_held_task(
             "is_actionable": False,
         }
 
-    conn = sqlite3.connect(effective_db, timeout=15.0)
-    conn.row_factory = sqlite3.Row
+    close_conn = False
+    if conn is None:
+        active_conn = sqlite3.connect(effective_db, timeout=15.0)
+        active_conn.row_factory = sqlite3.Row
+        close_conn = True
+    else:
+        active_conn = conn
 
     try:
         # 1. Consulta metadados de script.json
@@ -193,8 +199,8 @@ def inspect_single_held_task(
 
         # 2. Consulta avaliação mais recente em content_quality_scores
         q_row = None
-        if _table_exists(conn, "content_quality_scores"):
-            q_row = conn.execute(
+        if _table_exists(active_conn, "content_quality_scores"):
+            q_row = active_conn.execute(
                 """
                 SELECT * FROM content_quality_scores
                 WHERE task_id = ?
@@ -204,10 +210,21 @@ def inspect_single_held_task(
                 (clean_tid,),
             ).fetchone()
 
-        # 3. Consulta Safety Gate
-        safety_rec = safety_gate.get_safety_assessment(clean_tid, db_path=effective_db) or {}
-        safety_status = str(safety_rec.get("safety_status") or "MISSING").upper().strip()
-        actual_duration = safety_rec.get("actual_duration")
+        # 3. Consulta Safety Gate diretamente via active_conn para evitar DDL/reconexões redundantes
+        safety_status = "MISSING"
+        actual_duration = None
+        s_topic = None
+        s_hook = None
+        if _table_exists(active_conn, "monetization_safety"):
+            s_row = active_conn.execute(
+                "SELECT safety_status, actual_duration, topic, hook_text FROM monetization_safety WHERE task_id = ? LIMIT 1;",
+                (clean_tid,),
+            ).fetchone()
+            if s_row:
+                safety_status = str(s_row["safety_status"] or "MISSING").upper().strip()
+                actual_duration = s_row["actual_duration"]
+                s_topic = s_row["topic"]
+                s_hook = s_row["hook_text"]
 
         # Se duração não estiver em safety_rec, tenta ler de params
         if actual_duration is None:
@@ -220,8 +237,8 @@ def inspect_single_held_task(
 
         # 4. Consulta Copyright Gate
         cp_status = "UNKNOWN"
-        if _table_exists(conn, "copyright_provenance"):
-            cp_row = conn.execute(
+        if _table_exists(active_conn, "copyright_provenance"):
+            cp_row = active_conn.execute(
                 "SELECT status FROM copyright_provenance WHERE task_id = ? ORDER BY id DESC LIMIT 1;",
                 (clean_tid,),
             ).fetchone()
@@ -232,26 +249,97 @@ def inspect_single_held_task(
                 elif raw_status in ("PASS", "APPROVED"):
                     cp_status = "PASS"
 
-        # Se não estiver explicitamente bloqueado no banco, valida proveniência / aprovação manual legada de forma fail-closed
+        # Se não estiver explicitamente bloqueado no banco, valida proveniência de forma fail-closed
         if cp_status != "BLOCK":
             if fast_listing:
-                # Otimização crítica: na listagem rápida, verifica aprovação prévia sem ler arquivos de vídeo gigantes para hash SHA-256
                 if cp_status == "UNKNOWN":
+                    # 4.1. Verifica aprovação manual legada em operational_events
                     has_manual_appr = False
-                    if _table_exists(conn, "operational_events"):
-                        row_appr = conn.execute(
+                    if _table_exists(active_conn, "operational_events"):
+                        row_appr = active_conn.execute(
                             "SELECT 1 FROM operational_events WHERE task_id = ? AND event_type = ? LIMIT 1;",
                             (clean_tid, copyright_gate.EVENT_TASK_COPYRIGHT_MANUAL_APPROVAL),
                         ).fetchone()
                         has_manual_appr = bool(row_appr)
+
                     if has_manual_appr:
                         cp_status = "PASS"
                     else:
+                        # 4.2. Obtém ou reconstrói proveniência via build_asset_provenance
                         prov = script_data.get("asset_provenance") if isinstance(script_data, dict) else None
+                        if not prov:
+                            mat_sources = script_data.get("material_sources")
+                            if not mat_sources and script_data.get("scene_materials"):
+                                mat_sources = [
+                                    {
+                                        "provider": sm.get("provider"),
+                                        "asset_id": sm.get("asset_id"),
+                                        "local_file": sm.get("material_path"),
+                                        "source_page": sm.get("source_url") or "",
+                                        "search_term": sm.get("search_term_used") or "",
+                                        "duration": sm.get("duration", 0),
+                                        "used_duration_sec": sm.get("duration", 0),
+                                        "scene_index": sm.get("scene_index"),
+                                        "visual_source_type": sm.get("visual_source_type", "stock"),
+                                    }
+                                    for sm in script_data.get("scene_materials", [])
+                                ]
+                            prov = copyright_gate.build_asset_provenance(
+                                task_id=clean_tid,
+                                params=params_data,
+                                material_sources=mat_sources,
+                                task_base_dir=effective_task_dir,
+                            )
+
+                        # 4.3. Avalia proveniência respeitando o contrato real do Copyright Gate
+                        # Não declara PASS simplesmente porque BGM está off ou parece stock:
+                        # exige conformidade de BGM E conformidade de todos os clips visuais.
                         if prov and isinstance(prov, dict):
                             bgm = prov.get("bgm") or {}
-                            bgm_ok = bgm.get("provenance_status") in ("SAFE_NO_BGM", "PROVENANCE_TRACKED", "CLEAN") or not bgm.get("enabled")
-                            cp_status = "PASS" if bgm_ok else "BLOCK"
+                            bgm_enabled = bgm.get("enabled", False)
+                            bgm_source = str(bgm.get("source", "")).lower()
+                            bgm_status = str(bgm.get("provenance_status", "")).upper()
+                            bgm_type = str(params_data.get("bgm_type") or "").lower().strip()
+
+                            bgm_ok = False
+                            bgm_blocked = False
+
+                            if bgm_enabled:
+                                if bgm_type == "ambient_auto" and (bgm_source == "procedural" or bgm_status == "SAFE_PROCEDURAL"):
+                                    bgm_ok = True
+                                elif "legacy" in bgm_source or "songs" in bgm_source or bgm_type in ("random", "preset"):
+                                    bgm_blocked = True
+                                else:
+                                    bgm_blocked = False
+                                    bgm_ok = False
+                            else:
+                                bgm_ok = True
+
+                            clips = prov.get("visual_clips") or []
+                            if bgm_blocked:
+                                cp_status = "BLOCK"
+                            elif not clips:
+                                cp_status = "UNKNOWN"
+                            else:
+                                allowed_providers = {"pexels", "pixabay", "coverr", "google_flow", "flow"}
+                                all_clips_safe = True
+                                any_blocked = False
+                                for cl in clips:
+                                    cl_provider = str(cl.get("provider") or "").lower().strip()
+                                    cl_status = str(cl.get("provenance_status") or "").upper().strip()
+                                    local_f = cl.get("local_file")
+                                    if cl_status in ("FAIL", "BLOCK", "BLOCKED", "UNAUTHORIZED"):
+                                        any_blocked = True
+                                        break
+                                    if cl_provider not in allowed_providers or not local_f:
+                                        all_clips_safe = False
+
+                                if any_blocked:
+                                    cp_status = "BLOCK"
+                                elif bgm_ok and all_clips_safe and len(clips) > 0:
+                                    cp_status = "PASS"
+                                else:
+                                    cp_status = "UNKNOWN"
                         else:
                             cp_status = "UNKNOWN"
             else:
@@ -270,8 +358,8 @@ def inspect_single_held_task(
 
         # 5. Consulta perfil associado
         profile_id = None
-        if _table_exists(conn, "task_profiles"):
-            tp_row = conn.execute(
+        if _table_exists(active_conn, "task_profiles"):
+            tp_row = active_conn.execute(
                 "SELECT profile_id FROM task_profiles WHERE task_id = ? LIMIT 1;",
                 (clean_tid,),
             ).fetchone()
@@ -279,7 +367,7 @@ def inspect_single_held_task(
                 profile_id = str(tp_row["profile_id"]).strip()
 
         if not profile_id:
-            profile_id = params_data.get("profile_id") or profile_manager.get_task_profile_id(clean_tid, db_path=effective_db)
+            profile_id = params_data.get("profile_id") or profile_manager.DEFAULT_PROFILE_ID
 
         # 6. Verifica arquivo MP4 final
         video_path = scheduler.get_task_final_video(clean_tid, task_base_dir=effective_task_dir)
@@ -288,16 +376,16 @@ def inspect_single_held_task(
 
         # 7. Verifica se já publicado no YouTube
         is_published = False
-        if _table_exists(conn, "publication_events"):
-            pub_row = conn.execute(
+        if _table_exists(active_conn, "publication_events"):
+            pub_row = active_conn.execute(
                 "SELECT 1 FROM publication_events WHERE task_id = ? AND platform = 'youtube' AND status = 'success' LIMIT 1;",
                 (clean_tid,),
             ).fetchone()
             if pub_row:
                 is_published = True
 
-        if not is_published and _table_exists(conn, "scheduled_posts"):
-            pub_sp = conn.execute(
+        if not is_published and _table_exists(active_conn, "scheduled_posts"):
+            pub_sp = active_conn.execute(
                 "SELECT 1 FROM scheduled_posts WHERE task_id = ? AND platform = 'youtube' AND status = 'published' LIMIT 1;",
                 (clean_tid,),
             ).fetchone()
@@ -306,8 +394,8 @@ def inspect_single_held_task(
 
         # 8. Verifica se já agendado no Scheduler
         is_scheduled = False
-        if not is_published and _table_exists(conn, "scheduled_posts"):
-            sched_sp = conn.execute(
+        if not is_published and _table_exists(active_conn, "scheduled_posts"):
+            sched_sp = active_conn.execute(
                 "SELECT 1 FROM scheduled_posts WHERE task_id = ? AND platform = 'youtube' AND status IN ('scheduled', 'processing') LIMIT 1;",
                 (clean_tid,),
             ).fetchone()
@@ -318,14 +406,14 @@ def inspect_single_held_task(
         topic = (
             (q_row["topic"] if q_row else None)
             or params_data.get("video_subject")
-            or safety_rec.get("topic")
+            or s_topic
             or clean_tid
         )
         niche = (q_row["niche"] if q_row else None) or params_data.get("niche") or "Geral"
         preset = (q_row["preset"] if q_row else None) or params_data.get("preset") or "youtube_shorts_original"
         hook_text = (
             (q_row["hook_text"] if q_row else None)
-            or safety_rec.get("hook_text")
+            or s_hook
             or (script_text.split(".")[0] if script_text else topic)
         )
         narrative_structure = (q_row["narrative_structure"] if q_row else None) or params_data.get("narrative_structure")
@@ -338,7 +426,12 @@ def inspect_single_held_task(
         v2_label = orig_label
         reasons = []
 
-        if orig_score >= 70.0 and orig_label in ("GOOD", "STRONG"):
+        if (is_published or is_scheduled) and fast_listing:
+            # Tarefas já comprovadamente publicadas ou agendadas não precisam de recálculo no fast_listing
+            v2_score = orig_score
+            v2_label = orig_label
+            reasons = []
+        elif orig_score >= 70.0 and orig_label in ("GOOD", "STRONG"):
             # Vídeo já aprovado com excelência no Quality Gate original; não recalcula nem gasta CPU/I/O
             v2_score = orig_score
             v2_label = orig_label
@@ -367,8 +460,8 @@ def inspect_single_held_task(
 
         # 11. Verifica se já está aprovado e no Ready Stock
         has_task_platform_yt = False
-        if _table_exists(conn, "task_platforms"):
-            tp_row = conn.execute(
+        if _table_exists(active_conn, "task_platforms"):
+            tp_row = active_conn.execute(
                 "SELECT 1 FROM task_platforms WHERE task_id = ? AND platform = 'youtube' LIMIT 1;",
                 (clean_tid,),
             ).fetchone()
@@ -376,8 +469,8 @@ def inspect_single_held_task(
 
         # Consulta decisão de revisão humana prévia (se existir)
         human_review = None
-        if _table_exists(conn, "operator_video_reviews"):
-            hr_row = conn.execute(
+        if _table_exists(active_conn, "operator_video_reviews"):
+            hr_row = active_conn.execute(
                 "SELECT decision, operator_id, note, approved_below_threshold, created_at FROM operator_video_reviews WHERE task_id = ?;",
                 (clean_tid,),
             ).fetchone()
@@ -426,15 +519,25 @@ def inspect_single_held_task(
         elif safety_status != const.SAFETY_STATUS_PASS:
             classification = CLASS_BLOCKED
             reason = f"Safety Gate não aprovado ({safety_status})."
-        elif cp_status != "PASS":
+        elif cp_status == "BLOCK":
             classification = CLASS_BLOCKED
-            reason = f"Copyright Gate não aprovado ({cp_status})."
+            reason = "Copyright Gate bloqueado (violação ou material não licenciado)."
+        elif cp_status == "UNKNOWN":
+            classification = CLASS_NEEDS_REVIEW
+            reason = f"Copyright Gate pendente de validação em nó primário (UNKNOWN); score QG-V2 ({v2_score:.1f} - {v2_label})."
         elif v2_score >= 70.0 and v2_label in ("GOOD", "STRONG"):
             classification = CLASS_ELIGIBLE
             reason = f"Aprovado no QG-V2 ({v2_score:.1f} - {v2_label} >= 70.0). Elegível para recuperação de estoque."
         else:
             classification = CLASS_NEEDS_REVIEW
             reason = f"Score sob QG-V2 ({v2_score:.1f} - {v2_label}) insuficiente para aprovação autônoma (limiar >= 70.0); aguarda decisão editorial humana."
+
+        is_actionable = (
+            classification in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW)
+            and cp_status == "PASS"
+            and safety_status == const.SAFETY_STATUS_PASS
+            and mp4_exists
+        )
 
         return {
             "task_id": clean_tid,
@@ -458,11 +561,12 @@ def inspect_single_held_task(
             "classification": classification,
             "reason": reason,
             "reasons": reasons,
-            "is_actionable": classification in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW),
+            "is_actionable": is_actionable,
             "human_review": human_review,
         }
     finally:
-        conn.close()
+        if close_conn:
+            active_conn.close()
 
 
 def inspect_all_held_tasks(
@@ -480,6 +584,11 @@ def inspect_all_held_tasks(
             "message": f"Banco de dados não encontrado em {effective_db}",
             "candidates": [],
         }
+
+    # Inicializações DDL executadas uma única vez antes das leituras
+    init_review_db(effective_db)
+    safety_gate.init_safety_db(effective_db)
+    profile_manager.init_profile_db(effective_db)
 
     conn = sqlite3.connect(effective_db, timeout=15.0)
     conn.row_factory = sqlite3.Row
@@ -521,22 +630,23 @@ def inspect_all_held_tasks(
                         _add_tid(entry)
             except OSError:
                 pass
+
+        candidates = []
+        clean_target_profile = str(profile_id or "").strip()
+
+        for tid in task_ids:
+            cand = inspect_single_held_task(
+                tid,
+                db_path=effective_db,
+                task_base_dir=effective_task_dir,
+                fast_listing=fast_listing,
+                conn=conn,
+            )
+            if clean_target_profile and cand.get("profile_id") != clean_target_profile:
+                continue
+            candidates.append(cand)
     finally:
         conn.close()
-
-    candidates = []
-    clean_target_profile = str(profile_id or "").strip()
-
-    for tid in task_ids:
-        cand = inspect_single_held_task(
-            tid,
-            db_path=effective_db,
-            task_base_dir=effective_task_dir,
-            fast_listing=fast_listing,
-        )
-        if clean_target_profile and cand.get("profile_id") != clean_target_profile:
-            continue
-        candidates.append(cand)
 
     # Ordenação: ELIGIBLE primeiro, depois por QG-V2 score decrescente
     sort_priority = {
@@ -742,8 +852,8 @@ def get_review_queue(
         elif hr and hr.get("decision") == DECISION_APPROVED:
             approved_list.append(c)
         elif cls in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW) and not (hr and hr.get("decision")):
-            # Apenas tarefas com MP4 válido, Safety PASS, Copyright PASS e não publicadas
-            if c.get("mp4_exists") and c.get("safety_status") == const.SAFETY_STATUS_PASS and c.get("copyright_status") == "PASS":
+            # Tarefas com MP4 válido, Safety PASS, Copyright PASS ou UNKNOWN (pendente de validação)
+            if c.get("mp4_exists") and c.get("safety_status") == const.SAFETY_STATUS_PASS and c.get("copyright_status") in ("PASS", "UNKNOWN"):
                 pending_list.append(c)
 
     clean_filter = str(filter or "pending").lower().strip()
@@ -809,8 +919,14 @@ def apply_human_review_decision(
     operator_console.require_primary_instance(db_path=effective_db)
     init_review_db(effective_db)
 
-    # Inspeciona candidato atual
-    cand = inspect_single_held_task(clean_tid, db_path=effective_db, task_base_dir=effective_task_dir)
+    # No momento da aprovação, executa obrigatoriamente fast_listing=False para validação integral
+    is_approval = (clean_action == DECISION_APPROVED)
+    cand = inspect_single_held_task(
+        clean_tid,
+        db_path=effective_db,
+        task_base_dir=effective_task_dir,
+        fast_listing=(not is_approval),
+    )
 
     now_iso = _now_iso()
 

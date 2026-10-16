@@ -721,3 +721,170 @@ def test_10_fast_listing_with_representative_history_and_accurate_counts(env):
     assert disc_data["tasks"][0]["task_id"] == "task-human-discarded-0"
 
 
+def test_11_historical_video_without_asset_provenance_reconstructed(env):
+    """Cenário 11 (Hotfix QG-V2.2B): Vídeo histórico sem asset_provenance em script.json
+    
+    Valida:
+    - Reconstrução via build_asset_provenance usando material_sources e params.
+    - Status de copyright avaliado como PASS quando provedor e clipes são comprovados.
+    - Exibição correta na fila 'pending' com is_actionable=True.
+    """
+    db = env["db"]
+    tasks_dir = env["tasks_dir"]
+    tid = "task-hist-no-prov"
+
+    t_dir = os.path.join(tasks_dir, tid)
+    os.makedirs(t_dir, exist_ok=True)
+    with open(os.path.join(t_dir, "final-1.mp4"), "wb") as f:
+        f.write(b"\x00" * 2048)
+
+    # script.json histórico SEM a chave 'asset_provenance'
+    script_payload = {
+        "script": "Texto do roteiro histórico narrado sobre a natureza...",
+        "material_sources": [
+            {
+                "provider": "pexels",
+                "asset_id": "pexels-987",
+                "local_file": "pexels_nature.mp4",
+                "duration": 55.0,
+            }
+        ],
+        "params": {
+            "video_subject": "A Beleza das Florestas",
+            "bgm_type": "none",
+            "actual_duration": 55.0,
+            "profile_id": "default",
+        },
+    }
+    with open(os.path.join(t_dir, "script.json"), "w", encoding="utf-8") as f:
+        json.dump(script_payload, f)
+
+    safety_gate.save_safety_assessment({
+        "task_id": tid,
+        "preset": "youtube_shorts_original",
+        "safety_status": const.SAFETY_STATUS_PASS,
+        "safety_reasons": [],
+        "actual_duration": 55.0,
+        "topic": "A Beleza das Florestas",
+        "hook_text": "Você já viu florestas assim?",
+        "checked_at": "2026-10-15T12:00:00Z",
+    }, db_path=db)
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO content_quality_scores (
+                task_id, topic, niche, preset, hook_text, quality_score, quality_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (tid, "A Beleza das Florestas", "Curiosidades", "youtube_shorts_original", "Você já viu florestas assim?", 64.0, "REVIEW", "2026-10-15T12:05:00Z"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?);",
+            (tid, "default", "2026-10-15T12:00:00Z"),
+        )
+
+    client = TestClient(app)
+    resp = client.get("/api/v2/review/tasks?filter=pending")
+    assert resp.status_code == 200
+    pending_tasks = resp.json()["data"]["tasks"]
+
+    found = next((t for t in pending_tasks if t["task_id"] == tid), None)
+    assert found is not None, "Vídeo histórico sem asset_provenance deve ser descoberto na fila de revisão"
+    assert found["copyright_status"] == "PASS"
+    assert found["is_actionable"] is True
+
+
+def test_12_approval_blocked_when_copyright_unknown(env):
+    """Cenário 12 (Hotfix QG-V2.2B): Aprovação bloqueada quando Copyright for UNKNOWN
+    
+    Valida:
+    - Evidência insuficiente mantém Copyright como UNKNOWN.
+    - Exibição na fila 'pending' como pendente de validação (is_actionable=False).
+    - Tentativa de aprovação executa obrigatoriamente fast_listing=False e bloqueia fail-closed.
+    - Tarefa não é inserida no Ready Stock nem em operator_video_reviews como aprovada.
+    """
+    db = env["db"]
+    tasks_dir = env["tasks_dir"]
+    tid = "task-copyright-unknown"
+
+    t_dir = os.path.join(tasks_dir, tid)
+    os.makedirs(t_dir, exist_ok=True)
+    with open(os.path.join(t_dir, "final-1.mp4"), "wb") as f:
+        f.write(b"\x00" * 2048)
+
+    # Tarefa com material não auditado (provider='stock' genérico sem proveniência comprovada)
+    script_payload = {
+        "script": "Roteiro narrativo qualquer...",
+        "material_sources": [
+            {
+                "provider": "stock",
+                "asset_id": "clip-unknown-01",
+                "duration": 50.0,
+            }
+        ],
+        "params": {
+            "video_subject": "Tema com Direitos Desconhecidos",
+            "bgm_type": "none",
+            "actual_duration": 50.0,
+            "profile_id": "default",
+        },
+    }
+    with open(os.path.join(t_dir, "script.json"), "w", encoding="utf-8") as f:
+        json.dump(script_payload, f)
+
+    safety_gate.save_safety_assessment({
+        "task_id": tid,
+        "preset": "youtube_shorts_original",
+        "safety_status": const.SAFETY_STATUS_PASS,
+        "safety_reasons": [],
+        "actual_duration": 50.0,
+        "topic": "Tema com Direitos Desconhecidos",
+        "hook_text": "Atenção a este detalhe",
+        "checked_at": "2026-10-15T12:00:00Z",
+    }, db_path=db)
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO content_quality_scores (
+                task_id, topic, niche, preset, hook_text, quality_score, quality_label, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (tid, "Tema com Direitos Desconhecidos", "Curiosidades", "youtube_shorts_original", "Atenção a este detalhe", 66.0, "REVIEW", "2026-10-15T12:05:00Z"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?);",
+            (tid, "default", "2026-10-15T12:00:00Z"),
+        )
+
+    client = TestClient(app)
+
+    # 1. Deve aparecer em 'pending' como pendente de validação
+    resp = client.get("/api/v2/review/tasks?filter=pending")
+    assert resp.status_code == 200
+    pending_tasks = resp.json()["data"]["tasks"]
+
+    found = next((t for t in pending_tasks if t["task_id"] == tid), None)
+    assert found is not None, "Vídeo com Copyright UNKNOWN deve aparecer na fila de revisão como pendente de validação"
+    assert found["copyright_status"] == "UNKNOWN"
+    assert found["is_actionable"] is False
+
+    # 2. Tentativa de aprovação deve ser bloqueada fail-closed
+    appr_resp = client.post(
+        f"/api/v2/review/tasks/{tid}/approve",
+        json={"confirm": "APPROVE_FOR_STOCK", "note": "Tentando aprovar sem copyright comprovado"},
+    )
+    assert appr_resp.status_code == 400
+    assert "Copyright Gate não aprovado" in appr_resp.text
+
+    # 3. Garante que NÃO foi aprovado no banco nem entrou no Ready Stock
+    with sqlite3.connect(db) as conn:
+        row = conn.execute("SELECT * FROM operator_video_reviews WHERE task_id = ?;", (tid,)).fetchone()
+        assert row is None
+
+    stock = autonomous_production.get_autonomous_ready_stock(task_base_dir=tasks_dir, db_path=db)
+    assert all(item["task_id"] != tid for item in stock["youtube_ready"])
+
+
+

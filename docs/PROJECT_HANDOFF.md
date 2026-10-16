@@ -16,20 +16,20 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `QG-V2.2 — CENTRAL DE REVISÃO VISUAL NA WEB UI V2 (HOTFIX DE PERFORMANCE E CONTAGEM)`
+- **CURRENT_FOCUS:** `QG-V2.2B — CORREÇÃO COPYRIGHT UNKNOWN E REDUÇÃO DE LATÊNCIA DA CENTRAL DE REVISÃO`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_PERFORMANCE_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2B_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `0a00baa77b8b635051dff2090e32c468f5d2e69a` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `fd73dfd3225552b4e292cd87be846308bada7781` (hotfix de performance e contagem QG-V2.2 validado localmente)
+- **CURRENT_MAIN_SHA:** `881da1a6c068676e054649d4c5e33fa3925a5a7b` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `881da1a6c068676e054649d4c5e33fa3925a5a7b` (origin/main)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `QG-V2.2 REVIEW CENTER PERFORMANCE HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `QG-V2.2B LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `PRODUCTION_DEPLOYED (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip instalado no PC Forte, Task Scheduler porta 8080 ativa, Streamlit 8501 preservado)`
-- **QG_V2_STATUS:** `QG-V2.2 COMPLETO + HOTFIX DE PERFORMANCE E CONTAGEM VALIDADO (Fast listing com eliminação de SHA-256 de MP4 em listagem, cache QG-V2, contagem precisa de decisões humanas em approved_list excluindo auto-pass, React.memo e desacoplamento de selectedTaskId no frontend, 10 testes direcionados PASS, build Vite 6.03s PASS)`
+- **QG_V2_STATUS:** `QG-V2.2B COMPLETO & VALIDADO (Recuperação de fila para vídeos sem asset_provenance, status UNKNOWN exibido como pendente de validação com is_actionable=False, revalidação profunda fast_listing=False na aprovação, reutilização de conexão SQLite única por GET e latência warm 0.29s)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).
@@ -2313,6 +2313,32 @@ Entregas V16.4.1A:
     - `test_7_duplicate_and_published_protection` (PASS)
     - `test_8_primary_secondary_governance_and_safe_bridge` (PASS)
     - `test_9_auto_pass_video_bypasses_review_center_completely` (PASS - regressão obrigatória de fluxo normal)
+
+---
+
+## V16.33 — QG-V2.2B: Hotfix Copyright UNKNOWN e Redução de Latência da Central de Revisão
+
+- **Data:** `16/10/2026`
+- **Status:** `DEV_VALIDATED (3/3 testes direcionados PASS | Warm latency 0.29s)`
+- **Objetivo:**
+  Corrigir os dois gargalos operacionais identificados em produção:
+  1. A retenção excessiva em `Copyright UNKNOWN` de tarefas históricas que não continham a chave pré-calculada `asset_provenance` em `script.json`.
+  2. A latência residual de ~3.4s por requisição GET `/api/v2/review/tasks?filter=pending` causada pela abertura e fechamento repetido de dezenas de conexões SQLite e revalidações redundantes.
+- **Implementações Técnicas:**
+  1. *Recuperação da Fila de Revisão:*
+     - Em `inspect_single_held_task`: quando `asset_provenance` estiver ausente em `script.json`, extrai `material_sources` (ou reconstrói a partir de `scene_materials`) e reaproveita `params` via `copyright_gate.build_asset_provenance`, respeitando integralmente seu contrato real em memória sem I/O pesado.
+     - Avaliação fail-closed estrita: não declara `PASS` por ausência de BGM ou presunção genérica de stock. Apenas clipes de provedores autorizados (`pexels`, `pixabay`, `coverr`, `google_flow`) com arquivo local comprovado e BGM segura recebem `PASS`.
+     - Evidência insuficiente: mantém `cp_status = "UNKNOWN"`, mas permite que o vídeo apareça na fila `pending` como **pendente de validação**, com `is_actionable = False` (bloqueando aprovação inadvertida).
+     - No momento da aprovação (`apply_human_review_decision`): força obrigatoriamente `fast_listing=False`, executando a verificação completa e fail-closed de Copyright, Safety e MP4 antes de qualquer liberação para o Ready Stock.
+  2. *Otimização de Performance e Latência:*
+     - Em `inspect_all_held_tasks`: executa inicializações DDL (`init_review_db`, `safety_gate.init_safety_db`, `profile_manager.init_profile_db`) uma única vez antes da varredura, e reutiliza uma única conexão SQLite (`conn`) compartilhada entre todas as tarefas inspecionadas, eliminando mais de 100 conexões abertas/fechadas por consulta.
+     - Tarefas já comprovadamente publicadas ou agendadas têm bypass de recálculo no modo `fast_listing`.
+     - Latência da API reduzida: cold latency 1.89s, warm latency 0.29s (mais de 10x de ganho de velocidade em relação aos 3.4s anteriores).
+- **Validação de Testes:**
+  - `test_10_fast_listing_with_representative_history_and_accurate_counts` (PASS): histórico com 22 tarefas, contagens sem inflação (pending=3, approved=2, discarded=1), latência < 1.0s.
+  - `test_11_historical_video_without_asset_provenance_reconstructed` (PASS): vídeo histórico sem `asset_provenance` tem proveniência reconstruída, recebe `copyright_status="PASS"` e aparece em `pending` com `is_actionable=True`.
+  - `test_12_approval_blocked_when_copyright_unknown` (PASS): vídeo com Copyright `UNKNOWN` é listado como pendente de validação (`is_actionable=False`) e tentativa de aprovação bloqueia com HTTP 400 (`Bloqueio: Copyright Gate não aprovado`).
+
 
 
 

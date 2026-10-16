@@ -576,13 +576,18 @@ def test_9_auto_pass_video_bypasses_review_center_completely(env):
     # No fluxo normal do loop autônomo, tarefas aprovadas salvam a plataforma planejada
     scheduler.save_task_platforms(tid, ["youtube"], db_path=env["db"])
 
-    # 2. Verifica que a Central de Revisão NÃO possui esse vídeo na fila de pendentes
+    # 2. Verifica que a Central de Revisão NÃO possui esse vídeo na fila de pendentes nem de aprovados
     client = TestClient(app)
     review_resp = client.get("/api/v2/review/tasks?filter=pending")
     assert review_resp.status_code == 200
     review_data = review_resp.json()["data"]
     assert review_data["counts"]["pending"] == 0
+    assert review_data["counts"]["approved"] == 0
     assert not any(t["task_id"] == tid for t in review_data["tasks"])
+
+    appr_resp = client.get("/api/v2/review/tasks?filter=approved")
+    assert appr_resp.status_code == 200
+    assert len(appr_resp.json()["data"]["tasks"]) == 0
 
     # 3. Verifica que a tabela operator_video_reviews NÃO contém nenhuma decisão manual
     with sqlite3.connect(env["db"]) as conn:
@@ -597,4 +602,122 @@ def test_9_auto_pass_video_bypasses_review_center_completely(env):
     assert stock["ready_count"] == 1
     assert stock["youtube_ready"][0]["task_id"] == tid
     assert stock["youtube_ready"][0]["quality_score"] >= 70.0
+
+
+def test_10_fast_listing_with_representative_history_and_accurate_counts(env):
+    """Cenário 10 (Hotfix Performance & Contagem): Histórico representativo com 22 tarefas
+
+    Valida:
+    - 10 vídeos auto-aprovados NÃO inflam 'counts.approved' (apenas Ready Stock).
+    - 3 vídeos retidos com MP4 íntegro aparecem em 'pending'.
+    - 2 vídeos aprovados por decisão humana aparecem em 'approved'.
+    - 1 vídeo descartado por decisão humana aparece em 'discarded'.
+    - Bloqueios (Safety, Copyright, MP4 ausente) nunca entram em 'pending'.
+    - Contagens exatas: pending=3, approved=2, discarded=1.
+    """
+    import time
+
+    # 1. 10 vídeos auto-aprovados (Ready Stock)
+    for i in range(10):
+        _create_task_fixture(
+            env,
+            task_id=f"task-autopass-{i}",
+            topic=f"Vídeo de Alta Qualidade {i}",
+            orig_score=82.0 + i,
+            orig_label="STRONG",
+        )
+        scheduler.save_task_platforms(f"task-autopass-{i}", ["youtube"], db_path=env["db"])
+
+    # 2. 3 vídeos pendentes para revisão humana
+    for i in range(3):
+        _create_task_fixture(
+            env,
+            task_id=f"task-pending-{i}",
+            topic=f"Vídeo Retido em Revisão {i}",
+            orig_score=62.0 + i,
+            orig_label="REVIEW",
+        )
+
+    # 3. 2 vídeos aprovados pelo operador
+    for i in range(2):
+        tid = f"task-human-approved-{i}"
+        _create_task_fixture(
+            env,
+            task_id=tid,
+            topic=f"Vídeo Aprovado por Humano {i}",
+            orig_score=65.0,
+            orig_label="REVIEW",
+        )
+        with sqlite3.connect(env["db"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO operator_video_reviews (
+                    task_id, decision, operator_id, note, original_score, recalculated_score,
+                    approved_below_threshold, created_at, updated_at
+                ) VALUES (?, 'APPROVED', 'operator-test', 'Curadoria visual aprovada', 65.0, 65.0, 1, '2026-10-16T10:00:00Z', '2026-10-16T10:00:00Z');
+                """,
+                (tid,),
+            )
+        scheduler.save_task_platforms(tid, ["youtube"], db_path=env["db"])
+
+    # 4. 1 vídeo descartado pelo operador
+    tid_disc = "task-human-discarded-0"
+    _create_task_fixture(
+        env,
+        task_id=tid_disc,
+        topic="Vídeo Descartado pelo Operador",
+        orig_score=50.0,
+        orig_label="WEAK",
+    )
+    with sqlite3.connect(env["db"]) as conn:
+        conn.execute(
+            """
+            INSERT INTO operator_video_reviews (
+                task_id, decision, operator_id, note, original_score, recalculated_score,
+                approved_below_threshold, created_at, updated_at
+            ) VALUES (?, 'DISCARDED', 'operator-test', 'Tema fraco', 50.0, 50.0, 0, '2026-10-16T10:00:00Z', '2026-10-16T10:00:00Z');
+            """,
+            (tid_disc,),
+        )
+
+    # 5. Tarefas inválidas / bloqueadas (2 safety, 2 copyright, 2 no-mp4)
+    for i in range(2):
+        _create_task_fixture(env, task_id=f"task-safety-blocked-{i}", topic="Inseguro", orig_score=60.0, orig_label="REVIEW", safety_status="FAIL")
+        _create_task_fixture(env, task_id=f"task-cp-blocked-{i}", topic="Copyright", orig_score=60.0, orig_label="REVIEW", copyright_status="BLOCK")
+        _create_task_fixture(env, task_id=f"task-no-mp4-{i}", topic="Sem MP4", orig_score=60.0, orig_label="REVIEW", mp4_bytes=0)
+
+    client = TestClient(app)
+
+    # Mede tempo de resposta da listagem
+    t0 = time.perf_counter()
+    resp = client.get("/api/v2/review/tasks?filter=pending")
+    elapsed = time.perf_counter() - t0
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+
+    # Valida contagens sem inflação dos 10 vídeos auto-aprovados
+    assert data["counts"]["pending"] == 3
+    assert data["counts"]["approved"] == 2
+    assert data["counts"]["discarded"] == 1
+    assert len(data["tasks"]) == 3
+    assert all(t["task_id"].startswith("task-pending-") for t in data["tasks"])
+
+    # Teste de listagem rápida deve responder em menos de 1 segundo
+    assert elapsed < 1.0
+
+    # Consulta filtro 'approved': exatamente os 2 vídeos com decisão humana
+    appr_resp = client.get("/api/v2/review/tasks?filter=approved")
+    assert appr_resp.status_code == 200
+    appr_data = appr_resp.json()["data"]
+    assert len(appr_data["tasks"]) == 2
+    assert {t["task_id"] for t in appr_data["tasks"]} == {"task-human-approved-0", "task-human-approved-1"}
+
+    # Consulta filtro 'discarded': exatamente o vídeo descartado
+    disc_resp = client.get("/api/v2/review/tasks?filter=discarded")
+    assert disc_resp.status_code == 200
+    disc_data = disc_resp.json()["data"]
+    assert len(disc_data["tasks"]) == 1
+    assert disc_data["tasks"][0]["task_id"] == "task-human-discarded-0"
+
 

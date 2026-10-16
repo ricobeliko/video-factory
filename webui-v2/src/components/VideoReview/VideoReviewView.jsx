@@ -13,7 +13,7 @@ import {
  * - "Aprovar para estoque" (mesmo se score < 70, via override editorial seguro)
  * - "Descartar" (registrado permanentemente sem apagar MP4)
  */
-export default function VideoReviewView() {
+function VideoReviewView() {
   const [filter, setFilter] = useState('pending'); // 'pending' | 'approved' | 'discarded'
   const [tasks, setTasks] = useState([]);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, discarded: 0, total_inspected: 0 });
@@ -40,9 +40,12 @@ export default function VideoReviewView() {
           setCounts(data.counts);
         }
         // Se a tarefa selecionada não estiver na lista ou for nula, seleciona a primeira
-        if (!selectedTaskId || !loadedTasks.some((t) => t.task_id === selectedTaskId)) {
-          setSelectedTaskId(loadedTasks.length > 0 ? loadedTasks[0].task_id : null);
-        }
+        setSelectedTaskId((prevId) => {
+          if (!prevId || !loadedTasks.some((t) => t.task_id === prevId)) {
+            return loadedTasks.length > 0 ? loadedTasks[0].task_id : null;
+          }
+          return prevId;
+        });
       }
     } catch (err) {
       console.error('Falha ao carregar fila de revisão:', err);
@@ -50,7 +53,7 @@ export default function VideoReviewView() {
     } finally {
       setIsLoading(false);
     }
-  }, [filter, selectedTaskId]);
+  }, [filter]);
 
   useEffect(() => {
     loadReviewQueue(filter);
@@ -754,3 +757,4 @@ export default function VideoReviewView() {
     </div>
   );
 }
+export default React.memo(VideoReviewView);

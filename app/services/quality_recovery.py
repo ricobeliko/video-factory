@@ -67,6 +67,14 @@ CLASS_DISCARDED = "DISCARDED"
 DECISION_APPROVED = "APPROVED"
 DECISION_DISCARDED = "DISCARDED"
 
+# Cache em memória para evitar reavaliação NLP redundante de tarefas em cada listagem GET
+_QG_V2_CACHE: Dict[str, Tuple[float, str, List[str]]] = {}
+
+
+def clear_qg_v2_cache() -> None:
+    """Limpa o cache em memória de recálculos QG-V2."""
+    _QG_V2_CACHE.clear()
+
 
 def init_review_db(db_path: Optional[str] = None) -> None:
     """Inicializa as tabelas de revisão humana e comandos operacionais no SQLite."""
@@ -160,6 +168,7 @@ def inspect_single_held_task(
     task_id: str,
     db_path: Optional[str] = None,
     task_base_dir: Optional[str] = None,
+    fast_listing: bool = False,
 ) -> Dict[str, Any]:
     """Inspeciona e classifica determinísticamente uma tarefa candidata sem aplicar mutações."""
     effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
@@ -225,18 +234,39 @@ def inspect_single_held_task(
 
         # Se não estiver explicitamente bloqueado no banco, valida proveniência / aprovação manual legada de forma fail-closed
         if cp_status != "BLOCK":
-            try:
-                cp_ok, _, _ = copyright_gate.evaluate_copyright_provenance_gate(
-                    task_id=clean_tid,
-                    task_base_dir=effective_task_dir,
-                    db_path=effective_db,
-                )
-                if not cp_ok:
+            if fast_listing:
+                # Otimização crítica: na listagem rápida, verifica aprovação prévia sem ler arquivos de vídeo gigantes para hash SHA-256
+                if cp_status == "UNKNOWN":
+                    has_manual_appr = False
+                    if _table_exists(conn, "operational_events"):
+                        row_appr = conn.execute(
+                            "SELECT 1 FROM operational_events WHERE task_id = ? AND event_type = ? LIMIT 1;",
+                            (clean_tid, copyright_gate.EVENT_TASK_COPYRIGHT_MANUAL_APPROVAL),
+                        ).fetchone()
+                        has_manual_appr = bool(row_appr)
+                    if has_manual_appr:
+                        cp_status = "PASS"
+                    else:
+                        prov = script_data.get("asset_provenance") if isinstance(script_data, dict) else None
+                        if prov and isinstance(prov, dict):
+                            bgm = prov.get("bgm") or {}
+                            bgm_ok = bgm.get("provenance_status") in ("SAFE_NO_BGM", "PROVENANCE_TRACKED", "CLEAN") or not bgm.get("enabled")
+                            cp_status = "PASS" if bgm_ok else "BLOCK"
+                        else:
+                            cp_status = "UNKNOWN"
+            else:
+                try:
+                    cp_ok, _, _ = copyright_gate.evaluate_copyright_provenance_gate(
+                        task_id=clean_tid,
+                        task_base_dir=effective_task_dir,
+                        db_path=effective_db,
+                    )
+                    if not cp_ok:
+                        cp_status = "BLOCK"
+                    else:
+                        cp_status = "PASS"
+                except Exception:
                     cp_status = "BLOCK"
-                else:
-                    cp_status = "PASS"
-            except Exception:
-                cp_status = "BLOCK"
 
         # 5. Consulta perfil associado
         profile_id = None
@@ -304,24 +334,36 @@ def inspect_single_held_task(
         orig_label = str(q_row["quality_label"] or "WEAK") if q_row else "WEAK"
 
         # 10. Recálculo no Quality Gate V2 com plataforma YouTube
-        qg_v2_eval = quality_score.evaluate_quality(
-            topic=topic,
-            niche=niche,
-            hook_text=hook_text,
-            script_text=script_text,
-            preset=preset,
-            narrative_structure=narrative_structure,
-            actual_duration=actual_duration,
-            task_id=clean_tid,
-            platform="youtube",
-            profile_id=profile_id,
-            persist=False,
-            db_path=effective_db,
-        )
+        v2_score = orig_score
+        v2_label = orig_label
+        reasons = []
 
-        v2_score = qg_v2_eval.get("quality_score", orig_score)
-        v2_label = qg_v2_eval.get("quality_label", orig_label)
-        reasons = qg_v2_eval.get("reasons", [])
+        if orig_score >= 70.0 and orig_label in ("GOOD", "STRONG"):
+            # Vídeo já aprovado com excelência no Quality Gate original; não recalcula nem gasta CPU/I/O
+            v2_score = orig_score
+            v2_label = orig_label
+            reasons = []
+        elif fast_listing and clean_tid in _QG_V2_CACHE:
+            v2_score, v2_label, reasons = _QG_V2_CACHE[clean_tid]
+        else:
+            qg_v2_eval = quality_score.evaluate_quality(
+                topic=topic,
+                niche=niche,
+                hook_text=hook_text,
+                script_text=script_text,
+                preset=preset,
+                narrative_structure=narrative_structure,
+                actual_duration=actual_duration,
+                task_id=clean_tid,
+                platform="youtube",
+                profile_id=profile_id,
+                persist=False,
+                db_path=effective_db,
+            )
+            v2_score = qg_v2_eval.get("quality_score", orig_score)
+            v2_label = qg_v2_eval.get("quality_label", orig_label)
+            reasons = qg_v2_eval.get("reasons", [])
+            _QG_V2_CACHE[clean_tid] = (v2_score, v2_label, reasons)
 
         # 11. Verifica se já está aprovado e no Ready Stock
         has_task_platform_yt = False
@@ -427,6 +469,7 @@ def inspect_all_held_tasks(
     db_path: Optional[str] = None,
     task_base_dir: Optional[str] = None,
     profile_id: Optional[str] = None,
+    fast_listing: bool = True,
 ) -> Dict[str, Any]:
     """Inspeciona todas as tarefas com registros no banco e classifica cada candidato."""
     effective_db, effective_task_dir = _resolve_paths(db_path, task_base_dir)
@@ -451,19 +494,25 @@ def inspect_all_held_tasks(
                 seen.add(clean)
                 task_ids.append(clean)
 
-        # 1. Coleta IDs de content_quality_scores
+        # 1. Coleta IDs de operator_video_reviews
+        if _table_exists(conn, "operator_video_reviews"):
+            rows = conn.execute("SELECT DISTINCT task_id FROM operator_video_reviews WHERE task_id IS NOT NULL;").fetchall()
+            for r in rows:
+                _add_tid(r["task_id"])
+
+        # 2. Coleta IDs de content_quality_scores
         if _table_exists(conn, "content_quality_scores"):
             rows = conn.execute("SELECT DISTINCT task_id FROM content_quality_scores WHERE task_id IS NOT NULL;").fetchall()
             for r in rows:
                 _add_tid(r["task_id"])
 
-        # 2. Coleta IDs de monetization_safety
+        # 3. Coleta IDs de monetization_safety
         if _table_exists(conn, "monetization_safety"):
             rows = conn.execute("SELECT DISTINCT task_id FROM monetization_safety WHERE task_id IS NOT NULL;").fetchall()
             for r in rows:
                 _add_tid(r["task_id"])
 
-        # 3. Coleta tarefas do disco que possuem final-1.mp4
+        # 4. Coleta tarefas do disco que possuem final-1.mp4
         if os.path.isdir(effective_task_dir):
             try:
                 for entry in os.listdir(effective_task_dir):
@@ -479,7 +528,12 @@ def inspect_all_held_tasks(
     clean_target_profile = str(profile_id or "").strip()
 
     for tid in task_ids:
-        cand = inspect_single_held_task(tid, db_path=effective_db, task_base_dir=effective_task_dir)
+        cand = inspect_single_held_task(
+            tid,
+            db_path=effective_db,
+            task_base_dir=effective_task_dir,
+            fast_listing=fast_listing,
+        )
         if clean_target_profile and cand.get("profile_id") != clean_target_profile:
             continue
         candidates.append(cand)
@@ -670,6 +724,7 @@ def get_review_queue(
         db_path=effective_db,
         task_base_dir=effective_task_dir,
         profile_id=profile_id,
+        fast_listing=True,
     )
     all_candidates = inspection.get("candidates", [])
 
@@ -684,9 +739,9 @@ def get_review_queue(
         # ou se já foi publicado, nunca aparece como candidato à aprovação pendente.
         if cls == CLASS_DISCARDED or (hr and hr.get("decision") == DECISION_DISCARDED):
             discarded_list.append(c)
-        elif cls == CLASS_ALREADY_STOCKED or (hr and hr.get("decision") == DECISION_APPROVED):
+        elif hr and hr.get("decision") == DECISION_APPROVED:
             approved_list.append(c)
-        elif cls in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW):
+        elif cls in (CLASS_ELIGIBLE, CLASS_NEEDS_REVIEW) and not (hr and hr.get("decision")):
             # Apenas tarefas com MP4 válido, Safety PASS, Copyright PASS e não publicadas
             if c.get("mp4_exists") and c.get("safety_status") == const.SAFETY_STATUS_PASS and c.get("copyright_status") == "PASS":
                 pending_list.append(c)

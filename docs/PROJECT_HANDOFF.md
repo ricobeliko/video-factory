@@ -16,20 +16,20 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `QG-V2.2 — CENTRAL DE REVISÃO VISUAL NA WEB UI V2 (COMPLEMENTO HUMANO EXCLUSIVO)`
+- **CURRENT_FOCUS:** `QG-V2.2 — CENTRAL DE REVISÃO VISUAL NA WEB UI V2 (HOTFIX DE PERFORMANCE E CONTAGEM)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_REVIEW_CENTER_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / QG_V2_2_PERFORMANCE_HOTFIX_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `4342b8d2af485f6b5c612bfd3fcc6f9b294e5bc3` (base QG-V2.2 CLI e Web UI V2 Review Center validados localmente)
+- **CURRENT_MAIN_SHA:** `0a00baa77b8b635051dff2090e32c468f5d2e69a` (origin/main)
+- **DEV_BRANCH_HEAD_SHA:** `fd73dfd3225552b4e292cd87be846308bada7781` (hotfix de performance e contagem QG-V2.2 validado localmente)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `QG-V2.2 REVIEW CENTER LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `QG-V2.2 REVIEW CENTER PERFORMANCE HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `PRODUCTION_DEPLOYED (Release Consolidada R10: pacote releases/webui-v2-dist-96b9c11.zip instalado no PC Forte, Task Scheduler porta 8080 ativa, Streamlit 8501 preservado)`
-- **QG_V2_STATUS:** `QG-V2.2 COMPLETO (Recuperação Segura CLI + Central de Revisão Humana na Web UI V2: player 9:16 seguro, aprovação editorial com override de score < 70, descarte persistente, ponte SECONDARY->PRIMARY via SQLite, 9 testes direcionados PASS, build Vite 11.35s PASS)`
+- **QG_V2_STATUS:** `QG-V2.2 COMPLETO + HOTFIX DE PERFORMANCE E CONTAGEM VALIDADO (Fast listing com eliminação de SHA-256 de MP4 em listagem, cache QG-V2, contagem precisa de decisões humanas em approved_list excluindo auto-pass, React.memo e desacoplamento de selectedTaskId no frontend, 10 testes direcionados PASS, build Vite 6.03s PASS)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
     - 4 tarefas legadas foram reavaliadas em produção após deploy do PR #96 com aprovação manual auditável de Copyright (`approve_legacy_task_copyright_op`, vinculada criptograficamente ao SHA-256 de `final-1.mp4`).

@@ -18,29 +18,52 @@ Na Fase R8, a Web UI V2 foi consolidada para operar em modo de produção integr
 
 ## 2. Pré-requisitos no PC Forte
 
-1. Repositório atualizado no commit da R8 (`git pull --ff-only origin main`).
-2. Ambiente virtual Python ativo com dependências sincronizadas (`.venv\Scripts\python.exe`).
-3. Node.js e npm instalados no PC Forte (apenas para compilação do bundle frontend).
-   - Se o Node.js não estiver disponível no PC Forte, o diretório `webui-v2/dist/` pode ser pré-compilado em ambiente DEV e transferido.
+1. **Repositório Atualizado:** Branch `main` sincronizada via avanço fast-forward (`git pull --ff-only origin main`).
+2. **Python:** Ambiente virtual `.venv` existente (`.venv\Scripts\python.exe`) com Python 3.11.x e dependências instaladas.
+3. **Node.js / npm:** **NÃO NECESSÁRIOS NO PC FORTE**. O frontend é compilado no ambiente DEV e transferido via pacote ZIP pré-validado (`releases/webui-v2-dist-c64e9bf.zip`).
+4. **Streamlit Ativo:** O serviço de produção `VideoFactory Production` (Streamlit na porta 8501) permanece em execução normal durante todo o processo.
 
 ---
 
-## 3. Procedimento de Build Frontend
+## 3. Procedimento de Instalação Sem Node.js (Pacote Pré-Compilado)
 
-No PC Forte, abra o PowerShell na raiz do projeto (`C:\Projetos\MoneyPrinterTurbo`):
+O pacote de distribuição oficial é gerado no ambiente DEV através de `scripts/package_webui_v2.ps1` e disponibilizado em `releases/`:
+- **Arquivo ZIP:** `releases/webui-v2-dist-c64e9bf.zip` (139.13 KB / 142.473 bytes)
+- **SHA-256:** `0db1af19c0a0abd54c8d5fc821110f3828609eb5e2fe15b9d785659c9b76d0d2`
+- **Conteúdo:** `dist/index.html`, `dist/assets/*.js`, `dist/assets/*.css`, `manifest.json`, `INSTALL.md`
+
+### 3.1 Procedimento no PC Forte (PowerShell):
 
 ```powershell
-Set-Location -Path "webui-v2"
-npm ci
-npm run build
-Set-Location -Path ".."
-```
+# 1. Atualizar o código backend via fast-forward (sem mexer na main)
+cd C:\Projetos\MoneyPrinterTurbo
+git pull --ff-only origin main
 
-**Verificação do Build:**
-Confirme que os seguintes artefatos foram gerados:
-- `webui-v2\dist\index.html`
-- `webui-v2\dist\assets\index-*.js`
-- `webui-v2\dist\assets\index-*.css`
+# 2. Copiar o arquivo webui-v2-dist-c64e9bf.zip para C:\Projetos\MoneyPrinterTurbo\webui-v2
+# Validar o checksum SHA-256 do pacote:
+$ExpectedHash = "0db1af19c0a0abd54c8d5fc821110f3828609eb5e2fe15b9d785659c9b76d0d2"
+$ActualHash = (Get-FileHash -Path ".\webui-v2\webui-v2-dist-c64e9bf.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ActualHash -ne $ExpectedHash) {
+    Write-Error "FALHA DE INTEGRIDADE: SHA-256 divergente do pacote!"
+    exit 1
+}
+Write-Host "Integridade do pacote verificada com sucesso (PASS)." -ForegroundColor Green
+
+# 3. Descompactar os artefatos compilados em webui-v2\dist
+$WebUiDist = "C:\Projetos\MoneyPrinterTurbo\webui-v2\dist"
+if (Test-Path $WebUiDist) {
+    Remove-Item -Path $WebUiDist -Recurse -Force
+}
+New-Item -ItemType Directory -Path $WebUiDist -Force | Out-Null
+
+Expand-Archive -Path ".\webui-v2\webui-v2-dist-c64e9bf.zip" -DestinationPath ".\webui-v2\temp_extract" -Force
+Copy-Item -Path ".\webui-v2\temp_extract\dist\*" -Destination $WebUiDist -Recurse -Force
+Remove-Item -Path ".\webui-v2\temp_extract" -Recurse -Force
+
+# 4. Validar os artefatos instalados
+Test-Path "$WebUiDist\index.html"
+Test-Path "$WebUiDist\assets"
+```
 
 ---
 

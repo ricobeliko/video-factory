@@ -121,34 +121,52 @@
     - Como a R8 é puramente aditiva (sem alteração de banco SQLite nem impacto no runtime do Streamlit), o rollback operacional consiste unicamente em parar o processo na porta 8080 (CTRL+C ou encerramento do PID registrado em `storage/logs/webui_v2/webui_v2_startup.log`). O Streamlit permanece 100% operacional.
     - Rollback de código, se necessário no futuro, deve ser feito via commit/revert em DEV e puxado via `git pull --ff-only origin main` no PC Forte.
   - **4. Deploy Source Availability:**
-    - Branch local `main` em DEV está 4 commits à frente de `origin/main` (`145cbca`, `8b752ce`, `cdd7a1b`, `427cff4`).
-    - Os commits da R8 **NÃO** estão disponíveis no remote de produção até que o operador humano autorize e execute o push.
+    - Branch `main` remota (`origin/main`) está 100% sincronizada com `c64e9bf9fa390794a53e50017c68f9e7456da4f0`.
+    - **Pacote de Distribuição Sem Node.js Gerado em DEV:**
+      - Arquivo: `releases/webui-v2-dist-c64e9bf.zip` (139.13 KB / 142.473 bytes)
+      - SHA-256: `0db1af19c0a0abd54c8d5fc821110f3828609eb5e2fe15b9d785659c9b76d0d2`
+      - Checksum: `releases/webui-v2-dist-c64e9bf.zip.sha256`
+      - Script gerador/validador: `scripts/package_webui_v2.ps1`
+      - Conteúdo: `dist/index.html`, `dist/assets/*.js`, `dist/assets/*.css`, `manifest.json`, `INSTALL.md`
 
-### Comandos Canônicos de Deploy (Separados por Ambiente):
+### Comandos Canônicos de Deploy Sem Node.js (PC Forte):
 
-#### Ambiente DEV (`D:\Projetos\MoneyPrinterTurbo`):
-Publicar os commits validados no repositório remoto (após autorização humana):
-```powershell
-git push origin main
-```
+Executar no PC Forte (`C:\Projetos\MoneyPrinterTurbo`) com o Streamlit em execução na porta 8501:
 
-#### Ambiente PRODUÇÃO / PC Forte (`C:\Projetos\MoneyPrinterTurbo`):
-Executar no PC Forte com o Streamlit em execução na porta 8501:
 ```powershell
 # 1. Puxar as atualizações da main de forma limpa (sem detached HEAD)
 cd C:\Projetos\MoneyPrinterTurbo
 git pull --ff-only origin main
 
-# 2. Compilar o frontend React/Vite
-cd webui-v2
-npm ci
-npm run build
-cd ..
+# 2. Copiar webui-v2-dist-c64e9bf.zip para C:\Projetos\MoneyPrinterTurbo\webui-v2
+# Validar o checksum SHA-256 do pacote:
+$ExpectedHash = "0db1af19c0a0abd54c8d5fc821110f3828609eb5e2fe15b9d785659c9b76d0d2"
+$ActualHash = (Get-FileHash -Path ".\webui-v2\webui-v2-dist-c64e9bf.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ActualHash -ne $ExpectedHash) {
+    Write-Error "FALHA DE INTEGRIDADE: SHA-256 divergente do pacote!"
+    exit 1
+}
+Write-Host "Integridade do pacote verificada com sucesso (PASS)." -ForegroundColor Green
 
-# 3. Iniciar a Web UI V2 na porta 8080 (em nova janela do PowerShell)
+# 3. Descompactar os artefatos compilados em webui-v2\dist (sem Node.js em produção)
+$WebUiDist = "C:\Projetos\MoneyPrinterTurbo\webui-v2\dist"
+if (Test-Path $WebUiDist) {
+    Remove-Item -Path $WebUiDist -Recurse -Force
+}
+New-Item -ItemType Directory -Path $WebUiDist -Force | Out-Null
+
+Expand-Archive -Path ".\webui-v2\webui-v2-dist-c64e9bf.zip" -DestinationPath ".\webui-v2\temp_extract" -Force
+Copy-Item -Path ".\webui-v2\temp_extract\dist\*" -Destination $WebUiDist -Recurse -Force
+Remove-Item -Path ".\webui-v2\temp_extract" -Recurse -Force
+
+# 4. Validar os artefatos instalados
+Test-Path "$WebUiDist\index.html"
+Test-Path "$WebUiDist\assets"
+
+# 5. Iniciar a Web UI V2 na porta 8080 (em nova janela do PowerShell)
 .\scripts\start_webui_v2.ps1
 
-# 4. Validar os endpoints de saúde
+# 6. Validar os endpoints de saúde
 Invoke-RestMethod -Uri "http://127.0.0.1:8080/health"
 Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/v2/health"
 ```

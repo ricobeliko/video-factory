@@ -18,7 +18,7 @@
 param(
     [string]$HostAddress = "0.0.0.0",
     [int]$Port = 8080,
-    [switch]$BuildIfMissing = $true
+    [switch]$BuildIfMissing
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,7 +77,8 @@ $DistIndex = Join-Path $WebUiDist "index.html"
 
 if (-not (Test-Path $DistIndex)) {
     Write-WebUiLog "AVISO: Build da Web UI V2 não encontrado em '$DistIndex'." -Level "WARN"
-    if ($BuildIfMissing) {
+    $HasNpm = (Get-Command npm -ErrorAction SilentlyContinue) -ne $null
+    if ($BuildIfMissing -and $HasNpm) {
         Write-WebUiLog "Executando build reproduzível do frontend (npm run build)..."
         $WebUiDir = Join-Path $ProjectRoot "webui-v2"
         Push-Location $WebUiDir
@@ -93,6 +94,8 @@ if (-not (Test-Path $DistIndex)) {
         } finally {
             Pop-Location
         }
+    } else {
+        Write-WebUiLog "Produção sem Node.js: para disponibilizar a Web UI V2 compilada, descompacte o pacote webui-v2-dist-*.zip em '$WebUiDist'." -Level "WARN"
     }
 } else {
     Write-WebUiLog "Build de produção verificado em '$DistIndex'." -Level "SUCCESS"

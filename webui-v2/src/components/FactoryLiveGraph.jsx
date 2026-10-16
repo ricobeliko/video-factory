@@ -59,6 +59,24 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       let isGap = false;
       let provider = null;
 
+      // Reusable evaluator distinguishing sequential stages (1..5) from factual gates (6..8)
+      const evaluateCompletedStage = (sDef, gates) => {
+        if (sDef.step <= 5) return 'SUCCESS';
+        if (sDef.code === 'SAFETY') {
+          const sSt = String(gates?.safety_status || '').toUpperCase();
+          return (sSt === 'APPROVED' || sSt === 'PASS' || sSt === 'GOOD') ? 'SUCCESS' : 'PENDING';
+        }
+        if (sDef.code === 'QUALITY') {
+          const qScore = gates?.quality_score;
+          return (typeof qScore === 'number' && qScore >= 70.0) ? 'SUCCESS' : 'PENDING';
+        }
+        if (sDef.code === 'COPYRIGHT') {
+          const cSt = String(gates?.copyright_status || '').toUpperCase();
+          return (cSt === 'PASS' || cSt === 'APPROVED') ? 'SUCCESS' : 'PENDING';
+        }
+        return 'SUCCESS';
+      };
+
       if (executionStatus === 'IDLE') {
         // When channel is in IDLE, NO task is actively traversing the pipeline.
         // Node 9 (READY_STOCK) reflects existing stock, but stages 1..8 and 10..12 are IDLE.
@@ -71,25 +89,10 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       } else if (executionStatus === 'RUNNING' || executionStatus === 'PROCESSING') {
         if (activeStep !== null) {
           if (stageDef.step < activeStep) {
-            // Steps 1..5: sequential generation stages that completed
-            if (stageDef.step <= 5) {
-              stageStatus = 'SUCCESS';
+            if (activeStep <= 5) {
+              stageStatus = stageDef.step <= 5 ? 'SUCCESS' : 'PENDING';
             } else {
-              // GATES (step 6=SAFETY, 7=QUALITY, 8=COPYRIGHT):
-              // Distinguish sequential advance from factual gate approval.
-              const gates = execution?.gates || {};
-              if (stageDef.code === 'SAFETY') {
-                const sSt = String(gates.safety_status || '').toUpperCase();
-                stageStatus = (sSt === 'APPROVED' || sSt === 'PASS' || sSt === 'GOOD') ? 'SUCCESS' : 'PENDING';
-              } else if (stageDef.code === 'QUALITY') {
-                const qScore = gates.quality_score;
-                stageStatus = (typeof qScore === 'number' && qScore >= 70.0) ? 'SUCCESS' : 'PENDING';
-              } else if (stageDef.code === 'COPYRIGHT') {
-                const cSt = String(gates.copyright_status || '').toUpperCase();
-                stageStatus = (cSt === 'PASS' || cSt === 'APPROVED') ? 'SUCCESS' : 'PENDING';
-              } else {
-                stageStatus = 'SUCCESS';
-              }
+              stageStatus = evaluateCompletedStage(stageDef, execution?.gates);
             }
           } else if (stageDef.step === activeStep) {
             stageStatus = 'RUNNING';
@@ -99,29 +102,12 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
             stageStatus = 'PENDING';
           }
         } else {
-          // If active stage is not reported, do NOT fabricate or guess. Keep pending.
           stageStatus = 'PENDING';
         }
       } else if (executionStatus === 'FAILED') {
         if (activeStep !== null) {
           if (stageDef.step < activeStep) {
-            if (stageDef.step <= 5) {
-              stageStatus = 'SUCCESS';
-            } else {
-              const gates = execution?.gates || {};
-              if (stageDef.code === 'SAFETY') {
-                const sSt = String(gates.safety_status || '').toUpperCase();
-                stageStatus = (sSt === 'APPROVED' || sSt === 'PASS' || sSt === 'GOOD') ? 'SUCCESS' : 'PENDING';
-              } else if (stageDef.code === 'QUALITY') {
-                const qScore = gates.quality_score;
-                stageStatus = (typeof qScore === 'number' && qScore >= 70.0) ? 'SUCCESS' : 'PENDING';
-              } else if (stageDef.code === 'COPYRIGHT') {
-                const cSt = String(gates.copyright_status || '').toUpperCase();
-                stageStatus = (cSt === 'PASS' || cSt === 'APPROVED') ? 'SUCCESS' : 'PENDING';
-              } else {
-                stageStatus = 'SUCCESS';
-              }
-            }
+            stageStatus = evaluateCompletedStage(stageDef, execution?.gates);
           } else if (stageDef.step === activeStep) {
             stageStatus = 'FAILED';
             progress = execution?.progress;
@@ -135,7 +121,7 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       } else if (executionStatus === 'RETRY' || executionStatus === 'RETRYING') {
         if (activeStep !== null) {
           if (stageDef.step < activeStep) {
-            stageStatus = 'SUCCESS';
+            stageStatus = evaluateCompletedStage(stageDef, execution?.gates);
           } else if (stageDef.step === activeStep) {
             stageStatus = 'RETRY';
             provider = execution?.provider;
@@ -146,9 +132,10 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
           stageStatus = 'RETRY';
         }
       } else if (executionStatus === 'WAITING') {
-        // Video finished generation and factually passed all gates; awaiting scheduling slot
-        if (stageDef.step <= 8) {
+        if (stageDef.step <= 5) {
           stageStatus = 'SUCCESS';
+        } else if (stageDef.step <= 8) {
+          stageStatus = evaluateCompletedStage(stageDef, execution?.gates);
         } else if (stageDef.step === 9) {
           stageStatus = 'WAITING';
           provider = 'Aguardando agendamento';
@@ -156,7 +143,11 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
           stageStatus = 'PENDING';
         }
       } else if (executionStatus === 'SCHEDULED') {
-        if (stageDef.step <= 9) {
+        if (stageDef.step <= 5) {
+          stageStatus = 'SUCCESS';
+        } else if (stageDef.step <= 8) {
+          stageStatus = evaluateCompletedStage(stageDef, execution?.gates);
+        } else if (stageDef.step === 9) {
           stageStatus = 'SUCCESS';
         } else if (stageDef.step === 10) {
           stageStatus = 'SCHEDULED';

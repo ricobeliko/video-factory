@@ -3158,10 +3158,10 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             try:
                 from app.services import webui_task
                 for aid in webui_task.get_active_task_ids():
-                    t_prof = profile_manager.get_task_profile_id(aid, db_path=db_path)
+                    t_obj = sm.state.get_task(aid) or {}
+                    t_prof = t_obj.get("profile_id")
                     if not t_prof:
-                        t_obj = sm.state.get_task(aid) or {}
-                        t_prof = t_obj.get("profile_id")
+                        t_prof = profile_manager.get_task_profile_id(aid, db_path=db_path)
                     is_match = (
                         (t_prof == pid)
                         if pid and pid not in (profile_manager.DEFAULT_PROFILE_ID, "default")
@@ -3323,11 +3323,21 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     }
                 elif t_state == const.TASK_STATE_COMPLETE:
                     status = "WAITING"
+                    safety_val = task.get("safety_status")
+                    if not safety_val:
+                        try:
+                            from app.services import safety_gate
+                            s_rec = safety_gate.get_safety_assessment(current_task_id)
+                            if s_rec:
+                                safety_val = s_rec.get("safety_status")
+                        except Exception:
+                            pass
+                    c_val = task.get("copyright_status") or task.get("copyright_provenance_gate")
                     gates_data = {
-                        "safety_status": task.get("safety_status") or "APPROVED",
+                        "safety_status": safety_val,
                         "quality_score": task.get("quality_score"),
-                        "copyright_status": task.get("copyright_status") or task.get("copyright_provenance_gate") or "PASS",
-                        "gate_status": task.get("gate_status") or "approved",
+                        "copyright_status": c_val,
+                        "gate_status": task.get("gate_status"),
                         "gate_reason": task.get("gate_reason"),
                     }
                     execution = {

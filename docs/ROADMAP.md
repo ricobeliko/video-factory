@@ -21,10 +21,10 @@
 - **DEV_BRANCH_HEAD_SHA** = `3040278b00c3087ebb9556d25c7cd8b3e2898156` (HEAD local em DEV com Live Pipeline e R9.1/R9.2)
 - **LAST_PRODUCTION_DEPLOY_SHA** = `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte)
 - **ACTIVE_BRANCH** = `main`
-- **NEXT_GATE** = `R9.3 E2E SMOKE & POLISH (DEV) -> R10 CONTROLLED PRODUCTION ROLLOUT`
+- **NEXT_GATE** = `R10 CONTROLLED PRODUCTION ROLLOUT PACKAGE (PROD)`
 - **R9_1_STATUS** = `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão de etapas no Live Graph desacoplada da verificação real dos 3 Gates [Safety, Quality, Copyright], estado IDLE com 0% falso)`
 - **R9_2_STATUS** = `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle de rastreamento dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
-- **R9_3_STATUS** = `DEV PENDING (E2E Validation & Polish em DEV com fixtures locais, sem consumo de créditos Flow nem geração pesada)`
+- **R9_3_STATUS** = `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS** = `PROD PENDING (Controlled Production Rollout Package no PC Forte via start_webui_v2.ps1 porta 8080, Streamlit mantido na 8501)`
 - **R8_STATUS** = `COMPLETED / DEV VALIDATED (Web UI V2 Production Consolidation: Same-Origin FastAPI serving webui-v2/dist via SPAStaticFiles on port 8080, health endpoints /health and /api/v2/health, production launcher scripts/start_webui_v2.ps1, migration runbook docs/WEB_UI_V2_MIGRATION_RUNBOOK.md, Streamlit fallback preserved on 8501, 42/42 targeted tests PASS)`
 - **R7_STATUS** = `COMPLETED / DEV VALIDATED (Per-Profile Settings, Growth Mode, Autonomous Mode, Quotas and Publishing Windows, 36/36 unit tests PASS)`

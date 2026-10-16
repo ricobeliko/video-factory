@@ -16,18 +16,18 @@
 
 - **LAST_UPDATED:** `16/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `R9.1 + R9.2 CONSOLIDAÇÃO DO LIVE PIPELINE E OPERAÇÃO MULTICANAL (DEV)`
+- **CURRENT_FOCUS:** `R10 PREPARAÇÃO DO PACOTE DE DEPLOY CONTROLADO DE PRODUÇÃO (PC FORTE)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / R9.1_R9.2_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / R9.3_HOMOLOGATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (HEAD local em DEV com Live Pipeline e R9.1/R9.2)
+- **DEV_BRANCH_HEAD_SHA:** `3040278b00c3087ebb9556d25c7cd8b3e2898156` (HEAD local em DEV com R9.1/R9.2/R9.3)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `c8b14446d008e28c2c006f3e9e140441d9678324` (deployado no PC Forte em 14/10/2026; TTS real confirmado funcionando com edge-tts 7.3.1)
-- **CURRENT_GATE:** `R9.3 E2E SMOKE & POLISH (DEV) -> R10 CONTROLLED PRODUCTION ROLLOUT`
+- **CURRENT_GATE:** `R10 CONTROLLED PRODUCTION ROLLOUT PACKAGE (PROD)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
-- **R9_3_STATUS:** `DEV PENDING (E2E Validation & Polish em DEV com fixtures locais, sem consumo de créditos Flow nem geração pesada)`
+- **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
 - **R10_STATUS:** `PROD PENDING (Controlled Production Rollout Package no PC Forte via start_webui_v2.ps1 porta 8080, Streamlit mantido na 8501)`
 - **LAST_REAL_PRODUCTION_VALIDATION:**
   - **Recuperação de Estoque Legado Flow Concluída (11/10/2026):**
@@ -2124,5 +2124,31 @@ Entregas V16.4.1A:
   - 17/17 testes PASS em `test/services/test_api_v2_readonly.py`.
   - 3/3 testes direcionados PASS em `test/services/test_task.py`.
   - Build Vite frontend: `npm run build` PASS (409 kB bundle, 128 kB gzip, zero erros).
+
+### V16.26 — R9.3: Homologação Integrada e Estabilidade da Web UI V2 (DEV)
+- **Status:** `DEV_HOMOLOGATED / COMMITTED_DEV` (16/10/2026)
+- **Base:** `48b48d9d3468075defdf59613ac99939e1898fd2` (HEAD local em DEV)
+- **Objetivo da Homologação:**
+  - Validação integrada dos 6 cenários críticos da missão (Cenários A..F) sem chamadas externas tarifadas, sem geração pesada e sem alteração em produção.
+- **Defeitos Identificados e Corrigidos na R9.3:**
+  1. *Precedência Incorreta de Profile na Descoberta de Tarefas Ativas:* Em `app/services/operator_console.py:get_live_execution_overview`, o loop de tarefas ativas chamava `profile_manager.get_task_profile_id(aid)` antes de checar `t_obj.get("profile_id")`. Como a função auxiliar recorre por padrão a `"default"` para tarefas ainda não persistidas em `task_profiles`, tarefas ativas de perfis secundários (ex: Canal B) eram mascaradas como pertencentes a `"default"`, fazendo o canal B aparecer incorretamente como `IDLE`. Corrigido priorizando `t_obj.get("profile_id")`.
+  2. *Defaults Sintéticos de Aprovação em Gates:* Em `operator_console.py`, tarefas em `TASK_STATE_COMPLETE` aplicavam `"APPROVED"` e `"PASS"` sintéticos quando os campos de `safety_status` ou `copyright_status` estavam nulos. Corrigido para reportar estritamente o veredito real gravado (ou consulta ao `safety_gate`), preservando integridade factual.
+  3. *Padronização do Código da Etapa 10:* Alinhado o código canônico de estágio para `SCHEDULER` em sincronia com `STAGE_DEFINITIONS` e contratos FastAPI.
+  4. *Consolidação da Avaliação de Gates no Grafo:* Refatorado `webui-v2/src/components/FactoryLiveGraph.jsx` com o helper `evaluateCompletedStage(sDef, gates)`, garantindo que etapas 6..8 permaneçam `PENDING` durante a esteira de geração (1..5) e só avancem com scores/vereditos factuais.
+- **Cenários Validados:**
+  - **Cenário A (Geração Sequencial):** TOPIC (5%) -> SCRIPT (10%) -> NARRATION (30%) -> VISUALS (40%) -> RENDER (50%). Nós ativos RUNNING com provedor factual e gates PENDING.
+  - **Cenário B (Dois Canais Simultâneos):** Canal A em VISUALS (Google Flow flow-b) e Canal B em RENDER (ffmpeg) simultâneos sem contaminação cruzada de dados, progresso ou tópicos.
+  - **Cenário C (Gates Factuais):** Quality Gate rejeitado (67.8 < 70) reporta falha no nó exato com score e motivo factual sem promoção indevida.
+  - **Cenário D (Google Flow Multi-Account):** Atribuição factual da conta `flow-b`; contas em `AUTH_FAILED` e com saldo insuficiente não são anunciadas indevidamente.
+  - **Cenário E (Ciclo de Publicação):** Suporte estrito a READY_STOCK, SCHEDULED, RETRYING (attempts > 0) e SUCCESS terminal.
+  - **Cenário F (Estados Especiais):** Canais IDLE exibem 0% de progresso concluído; erros com tags HTML/scripts são sanitizados universalmente via `sanitizeDisplayText`.
+- **Validação Local:**
+  - 6/6 testes de homologação integrados PASS em `test/services/test_webui_v2_r9_3_homologation.py`.
+  - 17/17 testes de contrato read-only PASS em `test/services/test_api_v2_readonly.py`.
+  - 4/4 testes de lógica e apresentação frontend PASS em `webui-v2/src/tests/r9_3_frontend_logic.test.js`.
+  - Build Vite frontend: `npm run build` PASS (408.87 kB JS, 70.86 kB CSS, 0 erros, tempo: 7.22s).
+- **Limitações Registradas:**
+  - Binários do browser headless Playwright não instalados no host Windows (conforme instrução, ferramentas pesadas não foram instaladas e a validação foi realizada via testes de componentes e contratos de API com fidelidade integral).
+
 
 

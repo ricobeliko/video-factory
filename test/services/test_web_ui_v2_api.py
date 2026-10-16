@@ -351,3 +351,97 @@ class TestWebUiV2Api(unittest.TestCase):
             self.assertEqual(resp.status_code, 500)
             self.assertNotIn("internal sqlite lock failure", resp.text)
             self.assertNotIn("Traceback", resp.text)
+
+    def test_growth_mode_route_exists_in_openapi_and_app(self):
+        """20. Rota PATCH /api/v2/channels/{profile_id}/growth-mode existe no OpenAPI."""
+        openapi_schema = asgi.app.openapi()
+        paths = openapi_schema.get("paths", {})
+        self.assertIn("/api/v2/channels/{profile_id}/growth-mode", paths)
+        self.assertIn("patch", paths["/api/v2/channels/{profile_id}/growth-mode"])
+
+    def test_growth_mode_auth_enforced(self):
+        """21. PATCH growth-mode sem autenticação ou com chave errada retorna 401."""
+        config.app["api_key"] = "test-secret-growth"
+        resp_miss = self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "scale"})
+        self.assertEqual(resp_miss.status_code, 401)
+        resp_wrong = self.client.patch(
+            "/api/v2/channels/default/growth-mode",
+            json={"growth_mode": "scale"},
+            headers={"x-api-key": "wrong"},
+        )
+        self.assertEqual(resp_wrong.status_code, 401)
+
+    def test_growth_mode_404_for_unknown_profile(self):
+        """22. PATCH growth-mode para perfil inexistente retorna 404."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+            resp = self.client.patch("/api/v2/channels/nonexistent-prof/growth-mode", json={"growth_mode": "scale"})
+            self.assertEqual(resp.status_code, 404)
+
+    def test_growth_mode_400_for_invalid_mode(self):
+        """23. PATCH growth-mode com valor inválido retorna 400."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+            resp = self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "turbo_ultra"})
+            self.assertEqual(resp.status_code, 400)
+
+    def test_growth_mode_403_for_secondary_instance(self):
+        """24. PATCH growth-mode em instância secundária retorna 403."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.update_profile", side_effect=PermissionError("Operação bloqueada: VIEW ONLY")):
+            resp = self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "scale"})
+            self.assertEqual(resp.status_code, 403)
+
+    def test_growth_mode_success_updates_database(self):
+        """25. PATCH growth-mode atualiza determinísticamente o banco canônico."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+            resp = self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "scale"})
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("growth_mode"), "scale")
+
+            prof = profile_manager.get_profile("default", db_path=self.db_path)
+            self.assertEqual(prof.get("growth_mode"), "scale")
+
+            # Retorna para warmup
+            resp2 = self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "warmup"})
+            self.assertEqual(resp2.status_code, 200)
+            prof2 = profile_manager.get_profile("default", db_path=self.db_path)
+            self.assertEqual(prof2.get("growth_mode"), "warmup")
+
+    def test_autonomous_route_exists_in_openapi_and_app(self):
+        """26. Rota PATCH /api/v2/channels/{profile_id}/autonomous existe no OpenAPI."""
+        openapi_schema = asgi.app.openapi()
+        paths = openapi_schema.get("paths", {})
+        self.assertIn("/api/v2/channels/{profile_id}/autonomous", paths)
+        self.assertIn("patch", paths["/api/v2/channels/{profile_id}/autonomous"])
+
+    def test_autonomous_mode_auth_enforced(self):
+        """27. PATCH autonomous sem autenticação ou com chave errada retorna 401."""
+        config.app["api_key"] = "test-secret-auto"
+        resp_miss = self.client.patch("/api/v2/channels/default/autonomous", json={"enabled": True})
+        self.assertEqual(resp_miss.status_code, 401)
+        resp_wrong = self.client.patch(
+            "/api/v2/channels/default/autonomous",
+            json={"enabled": True},
+            headers={"x-api-key": "wrong"},
+        )
+        self.assertEqual(resp_wrong.status_code, 401)
+
+    def test_autonomous_mode_toggle_updates_database(self):
+        """28. PATCH autonomous atualiza estado de produção autônoma do perfil."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
+            resp = self.client.patch("/api/v2/channels/default/autonomous", json={"enabled": False})
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("autonomous_enabled"), False)
+
+            resp2 = self.client.patch("/api/v2/channels/default/autonomous", json={"enabled": True})
+            self.assertEqual(resp2.status_code, 200)
+            data2 = resp2.json().get("data", {})
+            self.assertEqual(data2.get("autonomous_enabled"), True)
+

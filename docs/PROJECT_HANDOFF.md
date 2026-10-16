@@ -49,9 +49,8 @@
   - **Motivo:** Publicação já agendada para **11/10/2026 às 22:11** horário local (a menção anterior a 12/10 às 10:11 estava incorreta).
   - **Decisão Operacional Obrigatória:**
     1. Manter GTA VI em `SCALE` até a publicação das 22:11 ser confirmada em produção no YouTube via Post For Me;
-    2. **NÃO utilizar GTA VI no piloto autônomo** (`AUTONOMOUS_CYCLE_E2E_HOMOLOGATION`) enquanto essa exceção estiver ativa;
     3. Após a confirmação da publicação das 22:11, retornar o perfil imediatamente para `WARMUP`, salvo decisão operacional explícita diferente.
-- **CURRENT_GATE:** `R7 — PER-PROFILE CONTROLS & GROWTH MODE MIGRATION (DEV)` / `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
+- **CURRENT_GATE:** `R7 (Phase 1 Concluded / Phase 2 Profile Settings & Schedule Migration)` / `PRODUCTION DEPLOY & SETUP MULTI-ACCOUNT (PROD)`
 - **FLOW_MA1_STATUS:** `MERGED / READY_FOR_PRODUCTION_DEPLOY` (Pool multi-contas do Google Flow com perfis isolados, failover pré-dispatch, stickiness de tarefa e telemetria de créditos UI-verified + local-estimate)
 - **FLOW_UI_001_STATUS:** `DEV VALIDATED` (Telemetria do Google Flow Multi-Account Pool integrada ao Factory Live da Web UI V2; cards compactos, status semântico, saldos verified/estimated/unknown, polling compartilhado, zero mutação)
 - **FLOW_CREDIT_002_STATUS:** `DEV VALIDATED` (Extração factual do saldo real de créditos via menu do Google Flow no verify sem consumir créditos nem gerar vídeos)
@@ -84,7 +83,7 @@
     - **Causa Raiz:** A Channel Factory expõe "Voz Global da Fábrica" com a garantia de ser a voz TTS única para todos os canais da fábrica (`config.ui["voice_name"]`). Porém, o onboarding gravava uma cópia da voz no `settings_json` do perfil e `get_generation_profile_context()` avaliava `profile_voice or global_voice`, fazendo com que a voz congelada na criação do canal sobrescrevesse a Voz Global selecionada e salva pelo operador.
     - **Correção:** Em `profile_manager.get_generation_profile_context()`, a precedência foi corrigida para `global_voice or profile_voice or fallback_voice`, garantindo que a Voz Global selecionada e salva em `config.ui['voice_name']` seja soberana para todas as próximas gerações da fábrica, com fallback gracioso para o perfil apenas quando a global estiver vazia. Teste direcionado com duas vozes diferentes confirmou a alternância imediata. Tarefas e vídeos já gerados preservados intactos.
 - **CURRENT_PRIORITY:** `FLOW-MA1 HOMOLOGATION & AUTONOMOUS PILOT RESUMPTION (PROD)` / `R7 PER-PROFILE SETTINGS & CONTROLS (DEV)`
-- **WEB_UI_V2_STATUS:** `R6B COMPLETED / READY FOR R7 (DEV)`
+- **WEB_UI_V2_STATUS:** `R7 (Phase 1: Per-Profile Growth Mode & Autonomous Controls) COMPLETED / DEV VALIDATED`
 - **BLOCKERS:** `NONE` (em DEV); Onboarding humano de contas Flow pendente em PROD
 - **DEFERRED_ITEMS:**
   - `CFG-005 — YouTube-only destination using cross_platform preset`:
@@ -100,6 +99,7 @@
 - **R5B_LIVE_EXECUTION_CONTRACT_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), contrato read-only e causal para tela Factory Live (UI-005) com 2 novos endpoints GET (`/api/v2/executions/live` e `/api/v2/executions/{task_id}`), grafo de 12 estágios, zero inferência, UI-004 resolvido canonicamente, teste direcionado 15/15 PASS.
 - **R6A_WEB_UI_V2_FACTORY_LIVE_STATUS:** Concluído em DEV (`feat/web-ui-v2-read-api`), primeira interface desacoplada Web UI V2 em `webui-v2/` (React 18, Vite 6, `@xyflow/react` v12, Vanilla CSS) com tela Factory Live (cards de canal dinâmicos, grafo em lanes horizontais dos 12 estágios, trace causal e drawer de execução com terminal YouTube state, polling 3s, build PASS 112 kB gzip; zero alteração no backend ou Streamlit). NEXT_GATE de produção permanece estritamente `AUTONOMOUS_CYCLE_E2E_HOMOLOGATION` no PC Forte.
 - **R6B_OPERATIONAL_CONTROLS_STATUS:** `COMPLETED / DEV VALIDATED` — Controles operacionais e de despacho entregues: endpoints `GET /api/v2/channels`, `POST /api/v2/factory/pause`, `POST /api/v2/factory/resume`, `POST /api/v2/factory/run-cycle` com 19/19 testes unitários direcionados PASS em `test/services/test_web_ui_v2_api.py`; integração frontend completa em `webui-v2/` (`api.js`, `FactoryHeader.jsx` e `ExecutionDrawer.jsx`) com despacho global e por canal, diálogos de confirmação inline e feedback de erro/sucesso.
+- **R7_PHASE_1_STATUS:** `COMPLETED / DEV VALIDATED` — Migração dos controles canônicos de Growth Mode (`WARMUP` / `SCALE`) e Autonomia (`AUTO` / `MANUAL`) por perfil/canal. Endpoints backend canônicos: `PATCH /api/v2/channels/{profile_id}/growth-mode`, `PATCH /api/v2/channels/{profile_id}/autonomous` (com aliases `/profiles/{profile_id}` e `POST .../enable`, `.../disable`) respeitando estritamente a autoridade de produção (`require_primary_instance` 403), autenticação (401), validação de payload (400) e checagem de perfil (404). Suíte direcionada `test/services/test_web_ui_v2_api.py` expandida para 28 testes (100% PASS em 12.93s). Frontend `webui-v2/` integrado: `api.js` (`updateProfileGrowthMode`, `updateProfileAutonomousMode`), `ExecutionDrawer.jsx` (painel de controle operacional de Growth Mode e Autonomia com feedback inline) e `ChannelCard.jsx` (badges AUTO/MANUAL e GROWTH MODE interativos com jump direto ao drawer). Build Vite 6 100% PASS (dist limpo, zero erros).
 
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):

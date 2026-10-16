@@ -95,11 +95,25 @@ export default function ChannelCard({
           </div>
 
           <div className="channel-mode-badges">
-            <span className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'}`}>
+            <span
+              className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'} clickable-badge`}
+              title="Clique para gerenciar autonomia do canal"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onOpenDrawer) onOpenDrawer();
+              }}
+            >
               {isAutonomous ? 'AUTO' : 'MANUAL'}
             </span>
             {growth_mode && (
-              <span className="mini-badge growth">
+              <span
+                className="mini-badge growth clickable-badge"
+                title={`Growth Mode: ${growth_mode} (clique para alterar)`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onOpenDrawer) onOpenDrawer();
+                }}
+              >
                 {String(growth_mode).toUpperCase()}
               </span>
             )}

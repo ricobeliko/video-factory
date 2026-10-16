@@ -253,6 +253,140 @@ def get_profile_status(request: Request, profile_id: str):
     return utils.get_response(200, data)
 
 
+class UpdateGrowthModeRequest(BaseModel):
+    growth_mode: str
+
+
+class UpdateAutonomousRequest(BaseModel):
+    enabled: bool
+
+
+@router.patch(
+    "/channels/{profile_id}/growth-mode",
+    summary="Update channel Growth Mode (WARMUP / SCALE)",
+)
+@router.patch(
+    "/profiles/{profile_id}/growth-mode",
+    summary="Update profile Growth Mode (WARMUP / SCALE)",
+)
+def update_profile_growth_mode(
+    request: Request,
+    profile_id: str,
+    body: UpdateGrowthModeRequest,
+):
+    request_id = base.get_task_id(request)
+    profile = profile_manager.get_profile(profile_id)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+
+    try:
+        updated = profile_manager.update_profile(
+            profile_id=profile_id,
+            growth_mode=body.growth_mode,
+        )
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can change growth mode",
+        )
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Internal error updating growth mode",
+        )
+
+    clean_mode = updated.get("growth_mode", body.growth_mode)
+    return utils.get_response(
+        200,
+        {
+            "profile_id": profile_id,
+            "growth_mode": clean_mode,
+        },
+        message=f"Growth mode for profile '{profile_id}' updated to {clean_mode.upper()}",
+    )
+
+
+@router.patch(
+    "/channels/{profile_id}/autonomous",
+    summary="Enable or pause autonomous production for a channel",
+)
+@router.patch(
+    "/profiles/{profile_id}/autonomous",
+    summary="Enable or pause autonomous production for a profile",
+)
+def update_profile_autonomous_mode(
+    request: Request,
+    profile_id: str,
+    body: UpdateAutonomousRequest,
+):
+    request_id = base.get_task_id(request)
+    clean_p = str(profile_id or "").strip()
+    if clean_p != profile_manager.DEFAULT_PROFILE_ID and clean_p != "default":
+        profile = profile_manager.get_profile(clean_p)
+        if not profile:
+            raise HttpException(
+                task_id=request_id,
+                status_code=404,
+                message=f"Profile '{profile_id}' not found",
+            )
+
+    try:
+        operator_console.set_autonomous_mode_enabled_op(
+            enabled=body.enabled,
+            profile_id=clean_p,
+        )
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can change autonomous mode",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Internal error updating autonomous mode",
+        )
+
+    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p)
+    return utils.get_response(
+        200,
+        {
+            "profile_id": clean_p,
+            "autonomous_enabled": is_auto,
+        },
+        message=f"Autonomous mode for profile '{clean_p}' {'enabled' if is_auto else 'disabled'}",
+    )
+
+
+@router.post(
+    "/channels/{profile_id}/autonomous/enable",
+    summary="Enable autonomous production for a channel",
+)
+def enable_profile_autonomous(request: Request, profile_id: str):
+    return update_profile_autonomous_mode(request, profile_id, UpdateAutonomousRequest(enabled=True))
+
+
+@router.post(
+    "/channels/{profile_id}/autonomous/disable",
+    summary="Disable autonomous production for a channel",
+)
+def disable_profile_autonomous(request: Request, profile_id: str):
+    return update_profile_autonomous_mode(request, profile_id, UpdateAutonomousRequest(enabled=False))
+
+
 @router.get(
     "/scheduler/posts",
     summary="Get scheduler queue summary",

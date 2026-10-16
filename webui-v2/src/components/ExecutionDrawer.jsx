@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { getExecutionDetail, runFactoryCycle } from '../api';
+import { getExecutionDetail, runFactoryCycle, updateProfileGrowthMode, updateProfileAutonomousMode } from '../api';
 import { STAGE_BY_CODE } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
 
 /**
- * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5).
+ * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5 + R7).
  * Features:
  * - Active Agent Persona Card with avatar, bio, and operational role.
  * - Deep Causal Trace ("Quem chamou quem").
  * - Execution snapshot and chronological timeline.
  * - Terminal publication confirmation with direct YouTube link.
  * - Supervised channel run cycle trigger.
+ * - Per-profile Growth Mode (WARMUP / SCALE) and Autonomous Mode controls (R7).
  */
 export default function ExecutionDrawer({
   isOpen,
@@ -30,6 +31,59 @@ export default function ExecutionDrawer({
   const [confirmChannelCycle, setConfirmChannelCycle] = useState(false);
   const [channelActionMsg, setChannelActionMsg] = useState(null);
   const [channelActionError, setChannelActionError] = useState(null);
+
+  // Channel settings state (R7)
+  const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
+  const [settingsSuccessMsg, setSettingsSuccessMsg] = useState(null);
+  const [settingsErrorMsg, setSettingsErrorMsg] = useState(null);
+
+  const currentGrowthMode = (channelData?.growth_mode || 'warmup').toLowerCase();
+  const currentAutonomous = Boolean(channelData?.autonomous_enabled);
+
+  const handleToggleGrowthMode = async (targetMode) => {
+    if (isUpdatingSettings || targetMode === currentGrowthMode) return;
+    setIsUpdatingSettings(true);
+    setSettingsSuccessMsg(null);
+    setSettingsErrorMsg(null);
+
+    try {
+      await updateProfileGrowthMode(channelData?.profile_id, targetMode);
+      setSettingsSuccessMsg(`Growth Mode alterado para ${targetMode.toUpperCase()}`);
+      if (onRefresh) await onRefresh();
+      setTimeout(() => setSettingsSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error('Falha ao atualizar Growth Mode:', err);
+      let msg = err.message || 'Falha ao atualizar Growth Mode';
+      if (err.status === 403) msg = 'Bloqueado: somente nó primário pode alterar Growth Mode.';
+      setSettingsErrorMsg(msg);
+      setTimeout(() => setSettingsErrorMsg(null), 5000);
+    } finally {
+      setIsUpdatingSettings(false);
+    }
+  };
+
+  const handleToggleAutonomous = async () => {
+    if (isUpdatingSettings) return;
+    const targetState = !currentAutonomous;
+    setIsUpdatingSettings(true);
+    setSettingsSuccessMsg(null);
+    setSettingsErrorMsg(null);
+
+    try {
+      await updateProfileAutonomousMode(channelData?.profile_id, targetState);
+      setSettingsSuccessMsg(`Autonomia ${targetState ? 'ativada (AUTO)' : 'pausada (MANUAL)'}`);
+      if (onRefresh) await onRefresh();
+      setTimeout(() => setSettingsSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error('Falha ao atualizar modo autônomo:', err);
+      let msg = err.message || 'Falha ao atualizar autonomia';
+      if (err.status === 403) msg = 'Bloqueado: somente nó primário pode alterar autonomia.';
+      setSettingsErrorMsg(msg);
+      setTimeout(() => setSettingsErrorMsg(null), 5000);
+    } finally {
+      setIsUpdatingSettings(false);
+    }
+  };
 
   const isChannelRunning = channelData?.execution?.status === 'RUNNING';
   const isFactoryPaused = Boolean(isPaused);
@@ -218,6 +272,73 @@ export default function ExecutionDrawer({
               {persona.bio || 'Módulo operacional integrado à esteira de produção autônoma.'}
             </div>
           </div>
+
+          {/* Operational Settings Section (R7) */}
+          {channelData && (
+            <div className="drawer-section drawer-settings-section">
+              <span className="section-label">Configurações Operacionais (R7)</span>
+              
+              <div className="drawer-settings-grid">
+                {/* 1. Growth Mode Selector */}
+                <div className="drawer-setting-item">
+                  <div className="drawer-setting-header">
+                    <span className="drawer-setting-title">Growth Mode:</span>
+                    <span className="drawer-setting-desc">Teto de produção e slots do canal</span>
+                  </div>
+                  <div className="drawer-growth-selector">
+                    <button
+                      type="button"
+                      className={`growth-toggle-btn ${currentGrowthMode === 'warmup' ? 'active-warmup' : ''}`}
+                      onClick={() => handleToggleGrowthMode('warmup')}
+                      disabled={isUpdatingSettings}
+                      title="WARMUP: Modo aquecimento / 2 aprovações por 24h"
+                    >
+                      🌱 WARMUP
+                    </button>
+                    <button
+                      type="button"
+                      className={`growth-toggle-btn ${currentGrowthMode === 'scale' ? 'active-scale' : ''}`}
+                      onClick={() => handleToggleGrowthMode('scale')}
+                      disabled={isUpdatingSettings}
+                      title="SCALE: Modo escala / 5 aprovações por 24h"
+                    >
+                      🚀 SCALE
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Autonomous Mode Toggle */}
+                <div className="drawer-setting-item">
+                  <div className="drawer-setting-header">
+                    <span className="drawer-setting-title">Produção Autônoma:</span>
+                    <span className="drawer-setting-desc">Geração em background via Scheduler</span>
+                  </div>
+                  <div className="drawer-autonomous-selector">
+                    <button
+                      type="button"
+                      className={`autonomous-toggle-btn ${currentAutonomous ? 'active-auto' : 'active-manual'}`}
+                      onClick={handleToggleAutonomous}
+                      disabled={isUpdatingSettings}
+                      title={currentAutonomous ? 'Clique para pausar produção autônoma (MANUAL)' : 'Clique para ativar produção autônoma (AUTO)'}
+                    >
+                      {currentAutonomous ? '● AUTO (Ativo)' : '○ MANUAL (Pausado)'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {settingsSuccessMsg && (
+                <div className="drawer-settings-feedback success">
+                  ✓ {settingsSuccessMsg}
+                </div>
+              )}
+              {settingsErrorMsg && (
+                <div className="drawer-settings-feedback error">
+                  ⚠️ {settingsErrorMsg}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Publication Terminal Success Banner */}
           {isPublishedSuccess && (

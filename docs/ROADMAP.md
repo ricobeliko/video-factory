@@ -177,9 +177,9 @@ A existência de um item no checklist **NÃO significa que o código deve ser re
 - **CURRENT_BEHAVIOR:** Profile/channel growth_mode é o estado efetivamente utilizado operacionalmente.
 - **KNOWN_CANONICAL_SOURCE:** Profile growth_mode.
 - **CURRENT_RISK:** `LOW`
-- **PLANNED_ACTION:** Durante Web UI v2 / cleanup, eliminar a ambiguidade e manter apenas um caminho operacional claro para leitura e alteração.
-- **TARGET_PHASE:** `R4 / R8`
-- **STATUS:** `OPEN`
+- **PLANNED_ACTION:** Durante Web UI v2 / cleanup, eliminar a ambiguidade e manter apenas um caminho operacional claro para leitura e alteração. Backend canônico PATCH `/api/v2/channels/{profile_id}/growth-mode` e controle direto no Execution Drawer do Web UI V2 entregues na R7 Phase 1.
+- **TARGET_PHASE:** `R4 / R7 / R8`
+- **STATUS:** `DEV_MIGRATED_V2`
 
 #### UI-002
 - **ID:** `UI-002`
@@ -188,9 +188,9 @@ A existência de um item no checklist **NÃO significa que o código deve ser re
 - **CURRENT_BEHAVIOR:** Há mais de um caminho visual para um conceito operacional único.
 - **KNOWN_CANONICAL_SOURCE:** Profile growth_mode / channel configuration.
 - **CURRENT_RISK:** `LOW`
-- **PLANNED_ACTION:** Mapear todos os controles existentes. Definir um único serviço backend canônico. Migrar os consumidores. Remover controles duplicados somente depois da validação.
+- **PLANNED_ACTION:** Mapear todos os controles existentes. Definir um único serviço backend canônico (`profile_manager.update_profile`). Migrar os consumidores. Endpoint canônico e controle por perfil no Web UI V2 entregues na R7 Phase 1.
 - **TARGET_PHASE:** `R4 / R7 / R8`
-- **STATUS:** `OPEN`
+- **STATUS:** `DEV_MIGRATED_V2`
 
 #### UI-003
 - **ID:** `UI-003`

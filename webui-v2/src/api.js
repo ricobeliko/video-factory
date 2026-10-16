@@ -113,3 +113,26 @@ export async function runFactoryCycle(options = {}) {
     body: JSON.stringify(body),
   });
 }
+
+export async function updateProfileGrowthMode(profileId, growthMode) {
+  if (!profileId) throw new Error('profileId é obrigatório');
+  return fetchJson(`/api/v2/channels/${encodeURIComponent(profileId)}/growth-mode`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ growth_mode: growthMode }),
+  });
+}
+
+export async function updateProfileAutonomousMode(profileId, enabled) {
+  if (!profileId) throw new Error('profileId é obrigatório');
+  return fetchJson(`/api/v2/channels/${encodeURIComponent(profileId)}/autonomous`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ enabled: Boolean(enabled) }),
+  });
+}
+

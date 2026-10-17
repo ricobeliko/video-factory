@@ -113,14 +113,14 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada; Fase Q2 Geração Automática Concluída e Validada com 2 Nichos; Fase Q3 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Automatização de Imagens e Assets Concluída e Homologada; Fase Q4 Próxima)
 
 ---
 
 ## Track: Quiz Engine (Quiz de Escolhas Impossíveis & Formatos Virais) — Fases Q0 a Q5
 
 ### Visão Geral
-Criação e industrialização do novo formato viral **Quiz de Escolhas Impossíveis** e **Quizzes Factuais/Educativos**, operando a custo incremental R$ 0,00 através do reaproveitamento integral da pilha de renderização nativa (FFmpeg, Pillow, Edge TTS, Post for Me, LLM Gemini existente).
+Criação e industrialização do novo formato viral **Quiz de Escolhas Impossíveis** e **Quizzes Factuais/Educativos**, operando a custo incremental R$ 0,00 através do reaproveitamento integral da pilha de renderização nativa (FFmpeg, Pillow, Edge TTS, Post for Me, LLM Gemini existente, Pexels e Pixabay).
 
 ### Fases do Roadmap Quiz Engine (Q0–Q5)
 
@@ -135,22 +135,28 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
   - Template canônico versionado em `resource/quiz_templates/quiz_template_escolhas_impossiveis.json`.
   - Gate de aprovação concluído com sucesso (commit local `132ae83`, vídeo MP4 64.36s, thumbnail JPG 1080x1920, 3 testes direcionados PASS em `test/services/test_quiz_engine.py`).
 
-- **Fase Q2 — Geração e Estruturação de Conteúdo por Nicho:** `COMPLETED / DEV VALIDATED`
+- **Fase Q2 — Geração e Estruturação de Conteúdo por Nicho:** `COMPLETED / COMMITTED`
   - Gerador de conteúdo automatizado implementado em `app/services/quiz_generator.py` e CLI `scripts/generate_quiz_content.py`.
   - Diferenciação clara entre quizzes subjetivos (`subjective`: escolhas impossíveis / dilemas morais sem resposta certa) e quizzes factuais (`factual`: conhecimentos/trivia com resposta cientificamente comprovada, gabarito `correct_option` e `fact_explanation`).
+  - Governança factual estrita: autodeclaração do LLM não concede `verified: True`. Requer evidência factual comprovada externamente; caso contrário, bloqueado para publicação até validação independente.
   - Deduplicação contra histórico persistente via similaridade léxica de Jaccard e normalização (`storage/quiz_history/generated_questions.json`).
   - Deduplicação de imagens Pexels via `asset_id` e hashes SHA-256 (`storage/quiz_history/used_images.json`).
   - Ganchos de retenção dinâmicos contextualizados com o clímax da última pergunta.
   - Encerramentos flexíveis e configuráveis por canal (`engagement_cta`, `score_challenge`, `quiz_choice_religious`).
   - Validação completa com 2 exemplos gerados e compatíveis 100% com o QuizConfig: `quiz_escolhas_impossiveis_gerado.json` e `quiz_conhecimentos_animais_factual.json`.
-  - 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (17.05s).
+  - 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (commit `b4745ca`).
 
-- **Fase Q3 — Asset Ingestion & Image Pipeline Automation:** `PLANNED (NEXT GATE)`
-  - Pipeline de download e caching inteligente de imagens (Pexels / Pixabay) vinculado ao perfil do canal.
-  - Validação automatizada de aspect ratio, resolução e contraste das imagens antes da renderização.
-  - Fallback gracioso com gradientes temáticos caso o provedor de imagens falhe.
+- **Fase Q3 — Asset Ingestion & Image Pipeline Automation:** `COMPLETED / DEV VALIDATED`
+  - Gerenciador de ativos implementado em `app/services/quiz_assets.py` (`QuizAssetManager`) e CLI `scripts/resolve_quiz_assets.py`.
+  - Reutilização integral dos serviços existentes de material (`material.get_api_key`, `material.has_material_api_keys`, rotação e detecção passiva de Pexels e Pixabay).
+  - Deduplicação rigorosa contra histórico (`storage/quiz_history/used_images.json`) e intra-tarefa (0 imagens duplicadas por vídeo).
+  - Preparação automatizada em resolução ideal para o renderizador (1200x1066) via aspect-fill proporcional e center crop (LANCZOS).
+  - Registro completo de proveniência por imagem: `asset_id`, `provider`, `source_url`, `creator_name`, `creator_url`, `license`, `content_hash` e resolução.
+  - Fallback visual estilizado de alta fidelidade com gradientes temáticos e tipografia BeVietnamPro quando não há retorno novo de stock.
+  - 4 testes unitários direcionados PASS em `test/services/test_quiz_assets.py` (5.39s).
+  - **Gate Integrado Q3 Homologado:** Q2 gerou dilemas -> Q3 baixou e preparou 12 imagens únicas com proveniência -> Q1 renderizou MP4 vertical (60.60s) e thumbnail independente (1080x1920) em 183.25s sem qualquer alteração nos canais ou serviços de produção.
 
-- **Fase Q4 — Integração à Video Factory & Channel Factory:** `PLANNED`
+- **Fase Q4 — Integração à Video Factory & Channel Factory:** `PLANNED (NEXT GATE)`
   - Onboarding do novo tipo de vídeo ("Quiz") no `profile_manager` e criação de canal dedicado.
   - Integração da renderização ao ciclo de execução de tarefas (`task.py`), gerando artefatos canônicos (`final-1.mp4`, thumbnail independente).
   - Adaptação dos Quality Gate e Safety Gate para avaliar as métricas específicas de retenção e conformidade do Quiz.

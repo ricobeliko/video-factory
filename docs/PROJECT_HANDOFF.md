@@ -88,8 +88,8 @@
     - **Sintoma:** Geração completa do canal *Dose Diária de GTA VI* funcionou e foi aprovada, mas a voz utilizada no vídeo não correspondeu à voz selecionada e salva pelo operador no painel Channel Factory.
     - **Causa Raiz:** A Channel Factory expõe "Voz Global da Fábrica" com a garantia de ser a voz TTS única para todos os canais da fábrica (`config.ui["voice_name"]`). Porém, o onboarding gravava uma cópia da voz no `settings_json` do perfil e `get_generation_profile_context()` avaliava `profile_voice or global_voice`, fazendo com que a voz congelada na criação do canal sobrescrevesse a Voz Global selecionada e salva pelo operador.
     - **Correção:** Em `profile_manager.get_generation_profile_context()`, a precedência foi corrigida para `global_voice or profile_voice or fallback_voice`, garantindo que a Voz Global selecionada e salva em `config.ui['voice_name']` seja soberana para todas as próximas gerações da fábrica, com fallback gracioso para o perfil apenas quando a global estiver vazia. Teste direcionado com duas vozes diferentes confirmou a alternância imediata. Tarefas e vídeos já gerados preservados intactos.
-- **CURRENT_PRIORITY:** `WEB_UI_V2 CONTROLLED FIRST DEPLOY (PROD)` / `FLOW-MA1 ONBOARDING (PROD)` / `QUIZ_ENGINE_PHASE_Q1_COMPLETED`
-- **QUIZ_ENGINE_STATUS:** `DEV VALIDATED / GATE Q1 PASS` (Quiz Engine reutilizável configurado por JSON em `scripts/poc_quiz_render.py`, template `quiz_template_escolhas_impossiveis.json`, Thumbnail 9:16 independente 1080x1920, gancho de retenção no 1º contador, duração 64.36s, 3 testes unitários PASS, 0 dependências novas, 0 arquivos de produção modificados; próximo passo: Fase Q2 sob autorização humana)
+- **CURRENT_PRIORITY:** `WEB_UI_V2 CONTROLLED FIRST DEPLOY (PROD)` / `FLOW-MA1 ONBOARDING (PROD)` / `QUIZ_ENGINE_PHASE_Q2_COMPLETED`
+- **QUIZ_ENGINE_STATUS:** `DEV VALIDATED / GATE Q2 PASS` (Quiz Engine Q1 commitada `132ae83`; Geração Automática Q2 implementada via `app/services/quiz_generator.py` e CLI `scripts/generate_quiz_content.py`, suporte a formatos subjetivo e factual com checagem estrita de evidências, deduplicação persistente contra repetições e seleção de imagens, 2 templates gerados e validados, 4 testes direcionados PASS; próximo passo seguro: Fase Q3 sob autorização humana)
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**
@@ -196,15 +196,29 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - POC V1: Validação do formato split-screen 9:16 com badges de alternância.
   - POC V2: Ritmo acelerado (+12% rate no Edge TTS), duração de 63.1s (>60s), encerramento religioso em formato de quiz engajador.
   - POC V3: Thumbnail independente vertical 9:16 (1080x1920) de alto contraste e legibilidade, e substituição do áudio da 1ª contagem regressiva por gancho falado ("Mas atenção... a última escolha vai te surpreender!") mantendo visual 3..2..1. Aprovada formalmente pelo operador.
-- **Fase Q1 (Quiz Engine Reutilizável & Desacoplado via JSON):** `COMPLETED / DEV VALIDATED`
+- **Fase Q1 (Quiz Engine Reutilizável & Desacoplado via JSON):** `COMPLETED / COMMITTED`
+  - **Commit Canônico:** `132ae83` (`feat(quiz-engine): complete Phase Q1 reusable quiz engine and canonical json template`).
   - **Arquitetura:** `QuizConfig` e `QuizEngine` implementados em `scripts/poc_quiz_render.py` com CLI (`--config`).
-  - **Template Canônico:** `storage/poc_quiz/quiz_template_escolhas_impossiveis.json`.
+  - **Template Canônico Versionado:** `resource/quiz_templates/quiz_template_escolhas_impossiveis.json`.
   - **10 Parâmetros Suportados:** Nicho/Título, Perguntas/Alternativas, Imagens das alternativas, Paletas de Cores/Temas, Voz e Velocidade TTS, Gancho de Retenção, Contagem Regressiva e badges visuais, Encerramento de Canal, Duração Alvo (62–66s) e Caminhos de Saída de Vídeo e Thumbnail.
-  - **Validação de Testes:** 3 testes unitários direcionados PASS em `test/services/test_quiz_engine.py` (3.54s).
+  - **Validação de Testes:** 3 testes unitários direcionados PASS em `test/services/test_quiz_engine.py` (2.88s).
   - **Gate de Renderização:** Execução única via JSON concluída com sucesso (Vídeo MP4 64.36s, Thumbnail JPG 1080x1920, áudio sincronizado, 0 dependências novas, 0 arquivos de produção modificados).
-- **Próximos Passos (Fases Q2–Q5):**
-  - **Fase Q2 (Próximo Passo):** Geração e Estruturação de Conteúdo por Nicho (Prompt engineering para dilemas virais e validação de schema JSON). **Aguardando aprovação humana explícita antes de iniciar.**
-  - **Fase Q3:** Automação do pipeline de imagens (Pexels / Pixabay).
+- **Fase Q2 (Geração e Estruturação de Conteúdo por Nicho):** `COMPLETED / DEV VALIDATED`
+  - **Serviço Implementado:** `app/services/quiz_generator.py` (`QuizContentGenerator`) e CLI `scripts/generate_quiz_content.py`.
+  - **Formatos Suportados:**
+    - `subjective`: Dilemas psicológicos de escolhas impossíveis ("O que você prefere?"), sem resposta certa, alta polarização e debate nos comentários.
+    - `factual`: Conhecimentos gerais, curiosidades científicas e animais com respostas comprovadas, validação de evidência, gabarito estrito (`correct_option`: 'A'|'B') e `fact_explanation`.
+  - **Prevenção de Duplicatas:** Histórico persistente em `storage/quiz_history/generated_questions.json` com normalização de texto e cálculo de similaridade léxica de Jaccard (descarte automático se similaridade >= 0.55).
+  - **Deduplicação de Imagens:** Histórico de imagens usadas em `storage/quiz_history/used_images.json` rastreando `asset_id` e hashes de conteúdo para evitar repetição da mesma imagem no mesmo nicho.
+  - **Gancho de Retenção Dinâmico:** Gerado automaticamente referenciando o clímax ou tópico da última pergunta (ex: "Mas atenção... a última pergunta sobre o beija-flor vai te surpreender!").
+  - **Encerramento Flexível por Canal:** Suporte a `engagement_cta`, `score_challenge` e `quiz_choice_religious`, sem impor encerramento religioso globalmente.
+  - **Validação com 2 Exemplos Estruturados:**
+    - `resource/quiz_templates/quiz_escolhas_impossiveis_gerado.json` (subjetivo, 6 perguntas, hook contextualizado).
+    - `resource/quiz_templates/quiz_conhecimentos_animais_factual.json` (factual, 6 perguntas com checagem científica 6/6, gabarito e explicação).
+    - Ambos 100% compatíveis e aceitos pelo `QuizConfig` da engine.
+  - **Suíte de Testes:** 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (17.05s).
+- **Próximos Passos (Fases Q3–Q5):**
+  - **Fase Q3 (Próximo Passo):** Asset Ingestion & Image Pipeline Automation (Download automatizado, cache inteligente e validação de aspect ratio Pexels/Pixabay). **Aguardando aprovação humana explícita antes de iniciar.**
   - **Fase Q4:** Integração no Channel Factory / task.py / Quality Gate.
   - **Fase Q5:** Agendamento, Autonomia e Publicação via Post for Me com upload da thumbnail independente.
 

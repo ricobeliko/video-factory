@@ -1,0 +1,354 @@
+{
+  "niche": "curiosidades_animais",
+  "quiz_title": "TESTE SEUS CONHECIMENTOS",
+  "output_video_path": "storage/poc_quiz/quiz_curiosidades_animais.mp4",
+  "output_thumbnail_path": "storage/poc_quiz/quiz_curiosidades_animais_thumb.jpg",
+  "temp_dir": "storage/poc_quiz/temp_curiosidades_animais",
+  "images_dir": "storage/poc_quiz/images_v2",
+  "min_target_duration_sec": 60.0,
+  "target_duration_range": [
+    62.0,
+    66.0
+  ],
+  "video_settings": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font_path": "resource/fonts/BeVietnamPro-Bold.ttf",
+    "bgm_path": "resource/songs/output000.mp3",
+    "bgm_volume": 0.14
+  },
+  "voice_settings": {
+    "voice_name": "pt-BR-AntonioNeural",
+    "voice_rate": "+12%"
+  },
+  "countdown_settings": {
+    "default_sec": 2.6,
+    "closing_sec": 3.2,
+    "badges": [
+      "3",
+      "2",
+      "1"
+    ],
+    "colors": {
+      "badge_ou_bg": [
+        255,
+        214,
+        0
+      ],
+      "badge_ou_text": [
+        0,
+        0,
+        0
+      ],
+      "badge_3_bg": [
+        255,
+        75,
+        75
+      ],
+      "badge_2_bg": [
+        255,
+        170,
+        0
+      ],
+      "badge_1_bg": [
+        45,
+        210,
+        60
+      ],
+      "badge_countdown_text": [
+        255,
+        255,
+        255
+      ]
+    }
+  },
+  "retention_hook": {
+    "enabled": true,
+    "question_id": "q1",
+    "narration": "Mas atenção... a última pergunta sobre o beija-flor vai te surpreender!",
+    "min_countdown_sec": 3.85
+  },
+  "theme_palettes": {
+    "red": {
+      "card_fill": [
+        140,
+        12,
+        24,
+        230
+      ],
+      "card_outline": [
+        255,
+        65,
+        75,
+        255
+      ],
+      "tag_fill": [
+        230,
+        25,
+        38,
+        255
+      ],
+      "tag_outline": [
+        255,
+        255,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "blue": {
+      "card_fill": [
+        12,
+        45,
+        125,
+        230
+      ],
+      "card_outline": [
+        55,
+        140,
+        255,
+        255
+      ],
+      "tag_fill": [
+        20,
+        95,
+        230,
+        255
+      ],
+      "tag_outline": [
+        255,
+        255,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "gold_red": {
+      "card_fill": [
+        150,
+        15,
+        25,
+        235
+      ],
+      "card_outline": [
+        255,
+        215,
+        0,
+        255
+      ],
+      "tag_fill": [
+        220,
+        30,
+        40,
+        255
+      ],
+      "tag_outline": [
+        255,
+        215,
+        0,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "blue_neutral": {
+      "card_fill": [
+        20,
+        35,
+        75,
+        235
+      ],
+      "card_outline": [
+        90,
+        150,
+        230,
+        255
+      ],
+      "tag_fill": [
+        30,
+        70,
+        150,
+        255
+      ],
+      "tag_outline": [
+        200,
+        220,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    }
+  },
+  "thumbnail_settings": {
+    "banner_text": "TESTE SEUS CONHECIMENTOS",
+    "top_option": {
+      "tag": "OPÇÃO A",
+      "title": "O Polvo",
+      "image_name": "q1_top.jpg"
+    },
+    "bottom_option": {
+      "tag": "OPÇÃO B",
+      "title": "O Tubarão",
+      "image_name": "q1_bot.jpg"
+    }
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "header": "PRIMEIRA PERGUNTA:",
+      "narration": "Qual animal tem três corações?",
+      "top": {
+        "title": "O Polvo",
+        "tag": "OPÇÃO A",
+        "image_query": "close up of a live octopus underwater cinematic lighting",
+        "image_name": "q1_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "O Tubarão",
+        "tag": "OPÇÃO B",
+        "image_query": "great white shark swimming in deep blue ocean",
+        "image_name": "q1_bot.jpg",
+        "theme": "blue"
+      },
+      "correct_option": "A",
+      "fact_explanation": "Polvos possuem três corações: dois bombeiam sangue para as brânquias e um para o resto do corpo.",
+      "verified": true,
+      "countdown_sec": 2.6,
+      "is_hook": true,
+      "hook_narration": "Mas atenção... a última pergunta sobre o beija-flor vai te surpreender!"
+    },
+    {
+      "id": "q2",
+      "header": "SEGUNDA PERGUNTA:",
+      "narration": "Qual animal dorme em pé?",
+      "top": {
+        "title": "O Cavalo",
+        "tag": "OPÇÃO A",
+        "image_query": "majestic horse standing in a grassy meadow at sunset",
+        "image_name": "q2_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "O Gato",
+        "tag": "OPÇÃO B",
+        "image_query": "cute domestic cat sleeping peacefully indoors",
+        "image_name": "q2_bot.jpg",
+        "theme": "blue"
+      },
+      "correct_option": "A",
+      "fact_explanation": "Cavalos travam os tendões das pernas para dormir em pé sem gastar energia muscular.",
+      "verified": true,
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q3",
+      "header": "TERCEIRA PERGUNTA:",
+      "narration": "Qual animal possui o sangue azul?",
+      "top": {
+        "title": "A Lula",
+        "tag": "OPÇÃO A",
+        "image_query": "giant squid swimming in dark deep ocean waters",
+        "image_name": "q3_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "A Onça",
+        "tag": "OPÇÃO B",
+        "image_query": "jaguar resting on a tree branch in the jungle",
+        "image_name": "q3_bot.jpg",
+        "theme": "blue"
+      },
+      "correct_option": "A",
+      "fact_explanation": "Lulas e outros moluscos possuem hemocianina, uma proteína rica em cobre que deixa o sangue azul.",
+      "verified": true,
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q4",
+      "header": "QUARTA PERGUNTA:",
+      "narration": "Qual animal tem impressões digitais parecidas com humanos?",
+      "top": {
+        "title": "O Coala",
+        "tag": "OPÇÃO A",
+        "image_query": "cute koala clinging to a eucalyptus tree branch",
+        "image_name": "q4_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "O Canguru",
+        "tag": "OPÇÃO B",
+        "image_query": "kangaroo standing in the Australian outback at sunrise",
+        "image_name": "q4_bot.jpg",
+        "theme": "blue"
+      },
+      "correct_option": "A",
+      "fact_explanation": "As impressões digitais dos coalas são tão parecidas com as humanas que podem confundir perícias criminais.",
+      "verified": true,
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q5",
+      "header": "QUINTA PERGUNTA:",
+      "narration": "Qual animal consegue respirar pela pele?",
+      "top": {
+        "title": "A Sapo",
+        "tag": "OPÇÃO A",
+        "image_query": "green frog sitting on a wet leaf macro photography",
+        "image_name": "q5_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "A Cobra",
+        "tag": "OPÇÃO B",
+        "image_query": "snake slithering through forest ground close up",
+        "image_name": "q5_bot.jpg",
+        "theme": "blue"
+      },
+      "correct_option": "A",
+      "fact_explanation": "Anfíbios como sapos e rãs absorvem oxigênio diretamente através da pele úmida.",
+      "verified": true,
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q6",
+      "header": "DESAFIO FINAL:",
+      "narration": "Qual ave consegue voar para trás?",
+      "top": {
+        "title": "O Beija-flor",
+        "tag": "OPÇÃO A",
+        "image_query": "hummingbird hovering in mid air near vibrant flowers",
+        "image_name": "q6_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "O Pardal",
+        "tag": "OPÇÃO B",
+        "image_query": "small sparrow perched on a wooden fence",
+        "image_name": "q6_bot.jpg",
+        "theme": "blue"
+      },
+      "correct_option": "A",
+      "fact_explanation": "O beija-flor é a única ave capaz de voar para frente, para trás e para os lados.",
+      "verified": true,
+      "countdown_sec": 3.2,
+      "is_closing_choice": true
+    }
+  ]
+}

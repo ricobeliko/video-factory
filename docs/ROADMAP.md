@@ -113,14 +113,14 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída e Homologada; Fase Q1 Quiz Engine Reutilizável Concluída e Validada via JSON; Fase Q2 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada; Fase Q2 Geração Automática Concluída e Validada com 2 Nichos; Fase Q3 Próxima)
 
 ---
 
 ## Track: Quiz Engine (Quiz de Escolhas Impossíveis & Formatos Virais) — Fases Q0 a Q5
 
 ### Visão Geral
-Criação e industrialização do novo formato viral **Quiz de Escolhas Impossíveis**, operando a custo incremental R$ 0,00 através do reaproveitamento integral da pilha de renderização nativa (FFmpeg, Pillow, Edge TTS, Post for Me).
+Criação e industrialização do novo formato viral **Quiz de Escolhas Impossíveis** e **Quizzes Factuais/Educativos**, operando a custo incremental R$ 0,00 através do reaproveitamento integral da pilha de renderização nativa (FFmpeg, Pillow, Edge TTS, Post for Me, LLM Gemini existente).
 
 ### Fases do Roadmap Quiz Engine (Q0–Q5)
 
@@ -129,18 +129,23 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
   - V2: Ajuste de ritmo para 1.15x (+12% rate), duração estendida para >60s (63s), encerramento religioso em formato de quiz com engajamento.
   - V3: Thumbnail independente em formato vertical 9:16 (1080x1920) de altíssimo contraste (sem adulterar a abertura do vídeo) e substituição do tique-taque da 1ª contagem regressiva por gancho de retenção falado via Edge TTS ("Mas atenção... a última escolha vai te surpreender!") mantendo o contador visual 3..2..1. Aprovada pelo operador.
 
-- **Fase Q1 — Quiz Engine Reutilizável (Configuração JSON & Desacoplamento):** `COMPLETED / DEV VALIDATED`
+- **Fase Q1 — Quiz Engine Reutilizável (Configuração JSON & Desacoplamento):** `COMPLETED / COMMITTED`
   - Desacoplamento completo do script de renderização para uma engine modular orientada a configuração JSON (`QuizConfig` e `QuizEngine` em `scripts/poc_quiz_render.py`).
   - Suporte a 10 parâmetros configuráveis mínimos: Nicho/Título, Perguntas/Alternativas, Imagens (Pexels HD ou locais), Paletas de Cores/Temas, Voz e Velocidade TTS, Gancho de Retenção, Contagem Regressiva e badges visuais, Encerramento de Canal, Duração Alvo (62–66s) e Caminhos de Saída.
-  - Template canônico inicial: `storage/poc_quiz/quiz_template_escolhas_impossiveis.json`.
-  - Gate de aprovação concluído com sucesso (vídeo MP4 64.36s, thumbnail JPG 1080x1920, 3 testes direcionados PASS em `test/services/test_quiz_engine.py`, 0 dependências novas, 0 arquivos de produção modificados).
+  - Template canônico versionado em `resource/quiz_templates/quiz_template_escolhas_impossiveis.json`.
+  - Gate de aprovação concluído com sucesso (commit local `132ae83`, vídeo MP4 64.36s, thumbnail JPG 1080x1920, 3 testes direcionados PASS em `test/services/test_quiz_engine.py`).
 
-- **Fase Q2 — Geração e Estruturação de Conteúdo por Nicho:** `PLANNED (NEXT GATE)`
-  - Desenvolvimento de gerador de roteiros de quiz via LLM / Content Strategy.
-  - Engenharia de prompts para geração de dilemas psicológicos de alta retenção com validação estrita do JSON da Fase Q1.
-  - Regras de contraste, copywriting e ganchos personalizados por nicho (curiosidades, histórico, gamer, bíblico).
+- **Fase Q2 — Geração e Estruturação de Conteúdo por Nicho:** `COMPLETED / DEV VALIDATED`
+  - Gerador de conteúdo automatizado implementado em `app/services/quiz_generator.py` e CLI `scripts/generate_quiz_content.py`.
+  - Diferenciação clara entre quizzes subjetivos (`subjective`: escolhas impossíveis / dilemas morais sem resposta certa) e quizzes factuais (`factual`: conhecimentos/trivia com resposta cientificamente comprovada, gabarito `correct_option` e `fact_explanation`).
+  - Deduplicação contra histórico persistente via similaridade léxica de Jaccard e normalização (`storage/quiz_history/generated_questions.json`).
+  - Deduplicação de imagens Pexels via `asset_id` e hashes SHA-256 (`storage/quiz_history/used_images.json`).
+  - Ganchos de retenção dinâmicos contextualizados com o clímax da última pergunta.
+  - Encerramentos flexíveis e configuráveis por canal (`engagement_cta`, `score_challenge`, `quiz_choice_religious`).
+  - Validação completa com 2 exemplos gerados e compatíveis 100% com o QuizConfig: `quiz_escolhas_impossiveis_gerado.json` e `quiz_conhecimentos_animais_factual.json`.
+  - 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (17.05s).
 
-- **Fase Q3 — Asset Ingestion & Image Pipeline Automation:** `PLANNED`
+- **Fase Q3 — Asset Ingestion & Image Pipeline Automation:** `PLANNED (NEXT GATE)`
   - Pipeline de download e caching inteligente de imagens (Pexels / Pixabay) vinculado ao perfil do canal.
   - Validação automatizada de aspect ratio, resolução e contraste das imagens antes da renderização.
   - Fallback gracioso com gradientes temáticos caso o provedor de imagens falhe.

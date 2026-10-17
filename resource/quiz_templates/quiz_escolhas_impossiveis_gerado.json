@@ -1,0 +1,336 @@
+{
+  "niche": "curiosidades_dilemas",
+  "quiz_title": "QUAL VOCÊ ESCOLHERIA?",
+  "output_video_path": "storage/poc_quiz/quiz_curiosidades_dilemas.mp4",
+  "output_thumbnail_path": "storage/poc_quiz/quiz_curiosidades_dilemas_thumb.jpg",
+  "temp_dir": "storage/poc_quiz/temp_curiosidades_dilemas",
+  "images_dir": "storage/poc_quiz/images_v2",
+  "min_target_duration_sec": 60.0,
+  "target_duration_range": [
+    62.0,
+    66.0
+  ],
+  "video_settings": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font_path": "resource/fonts/BeVietnamPro-Bold.ttf",
+    "bgm_path": "resource/songs/output000.mp3",
+    "bgm_volume": 0.14
+  },
+  "voice_settings": {
+    "voice_name": "pt-BR-AntonioNeural",
+    "voice_rate": "+12%"
+  },
+  "countdown_settings": {
+    "default_sec": 2.6,
+    "closing_sec": 3.2,
+    "badges": [
+      "3",
+      "2",
+      "1"
+    ],
+    "colors": {
+      "badge_ou_bg": [
+        255,
+        214,
+        0
+      ],
+      "badge_ou_text": [
+        0,
+        0,
+        0
+      ],
+      "badge_3_bg": [
+        255,
+        75,
+        75
+      ],
+      "badge_2_bg": [
+        255,
+        170,
+        0
+      ],
+      "badge_1_bg": [
+        45,
+        210,
+        60
+      ],
+      "badge_countdown_text": [
+        255,
+        255,
+        255
+      ]
+    }
+  },
+  "retention_hook": {
+    "enabled": true,
+    "question_id": "q1",
+    "narration": "Mas atenção... a última escolha vai te surpreender!",
+    "min_countdown_sec": 3.85
+  },
+  "theme_palettes": {
+    "red": {
+      "card_fill": [
+        140,
+        12,
+        24,
+        230
+      ],
+      "card_outline": [
+        255,
+        65,
+        75,
+        255
+      ],
+      "tag_fill": [
+        230,
+        25,
+        38,
+        255
+      ],
+      "tag_outline": [
+        255,
+        255,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "blue": {
+      "card_fill": [
+        12,
+        45,
+        125,
+        230
+      ],
+      "card_outline": [
+        55,
+        140,
+        255,
+        255
+      ],
+      "tag_fill": [
+        20,
+        95,
+        230,
+        255
+      ],
+      "tag_outline": [
+        255,
+        255,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "gold_red": {
+      "card_fill": [
+        150,
+        15,
+        25,
+        235
+      ],
+      "card_outline": [
+        255,
+        215,
+        0,
+        255
+      ],
+      "tag_fill": [
+        220,
+        30,
+        40,
+        255
+      ],
+      "tag_outline": [
+        255,
+        215,
+        0,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "blue_neutral": {
+      "card_fill": [
+        20,
+        35,
+        75,
+        235
+      ],
+      "card_outline": [
+        90,
+        150,
+        230,
+        255
+      ],
+      "tag_fill": [
+        30,
+        70,
+        150,
+        255
+      ],
+      "tag_outline": [
+        200,
+        220,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    }
+  },
+  "thumbnail_settings": {
+    "banner_text": "QUAL VOCÊ ESCOLHERIA?",
+    "top_option": {
+      "tag": "OPÇÃO A",
+      "title": "NUNCA MAIS USAR INTERNET",
+      "image_name": "q1_top.jpg"
+    },
+    "bottom_option": {
+      "tag": "OPÇÃO B",
+      "title": "NUNCA MAIS VIAJAR",
+      "image_name": "q1_bot.jpg"
+    }
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "header": "O QUE VOCÊ PREFERE?",
+      "narration": "O que você prefere? Nunca mais usar a internet ou nunca mais viajar?",
+      "top": {
+        "title": "NUNCA MAIS USAR INTERNET",
+        "tag": "OPÇÃO A",
+        "image_query": "no internet offline disconnection",
+        "image_name": "q1_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "NUNCA MAIS VIAJAR",
+        "tag": "OPÇÃO B",
+        "image_query": "stuck at home window airplane",
+        "image_name": "q1_bot.jpg",
+        "theme": "blue"
+      },
+      "countdown_sec": 2.6,
+      "is_hook": true,
+      "hook_narration": "Mas atenção... a última escolha vai te surpreender!"
+    },
+    {
+      "id": "q2",
+      "header": "O QUE VOCÊ PREFERE?",
+      "narration": "O que você prefere? Ler todos os pensamentos ou saber quando vai morrer?",
+      "top": {
+        "title": "LER TODOS OS PENSAMENTOS",
+        "tag": "OPÇÃO A",
+        "image_query": "mind reading psychology mystic",
+        "image_name": "q2_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "SABER DIA DA MORTE",
+        "tag": "OPÇÃO B",
+        "image_query": "hourglass time running out",
+        "image_name": "q2_bot.jpg",
+        "theme": "blue"
+      },
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q3",
+      "header": "O QUE VOCÊ PREFERE?",
+      "narration": "O que você prefere? Ter sempre frio ou ter sempre calor?",
+      "top": {
+        "title": "TER SEMPRE FRIO",
+        "tag": "OPÇÃO A",
+        "image_query": "freezing cold winter snow ice",
+        "image_name": "q3_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "TER SEMPRE CALOR",
+        "tag": "OPÇÃO B",
+        "image_query": "extreme heat desert sun",
+        "image_name": "q3_bot.jpg",
+        "theme": "blue"
+      },
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q4",
+      "header": "O QUE VOCÊ PREFERE?",
+      "narration": "O que você prefere? Comer apenas doces ou comer apenas salgados?",
+      "top": {
+        "title": "COMER APENAS DOCES",
+        "tag": "OPÇÃO A",
+        "image_query": "sweet candy dessert chocolate",
+        "image_name": "q4_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "COMER APENAS SALGADOS",
+        "tag": "OPÇÃO B",
+        "image_query": "fast food salty snacks burger",
+        "image_name": "q4_bot.jpg",
+        "theme": "blue"
+      },
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q5",
+      "header": "O QUE VOCÊ PREFERE?",
+      "narration": "O que você prefere? Voltar 10 anos no tempo ou ir 10 anos para o futuro?",
+      "top": {
+        "title": "VOLTAR 10 ANOS NO TEMPO",
+        "tag": "OPÇÃO A",
+        "image_query": "vintage retro past memories",
+        "image_name": "q5_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "IR 10 ANOS PARA O FUTURO",
+        "tag": "OPÇÃO B",
+        "image_query": "futuristic cyberpunk city neon",
+        "image_name": "q5_bot.jpg",
+        "theme": "blue"
+      },
+      "countdown_sec": 2.6
+    },
+    {
+      "id": "q6",
+      "header": "ÚLTIMA ESCOLHA:",
+      "narration": "O que você prefere? Ser totalmente invisível ou poder voar?",
+      "top": {
+        "title": "SER TOTALMENTE INVISÍVEL",
+        "tag": "OPÇÃO A",
+        "image_query": "invisible ghost transparent phantom",
+        "image_name": "q6_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "PODER VOAR LIVREMENTE",
+        "tag": "OPÇÃO B",
+        "image_query": "flying in the sky clouds freedom",
+        "image_name": "q6_bot.jpg",
+        "theme": "blue"
+      },
+      "countdown_sec": 3.2,
+      "is_closing_choice": true
+    }
+  ]
+}

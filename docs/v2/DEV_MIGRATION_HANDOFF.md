@@ -71,3 +71,72 @@ Ao iniciar o Antigravity no novo PC DEV:
 ## 5. Próxima Fase do Roadmap: V2.13
 
 A Fase V2.13 tem como objetivo provar que a V2 recebe e opera dados compatíveis com a fábrica atual, utilizando uma cópia do schema legado alimentada com dados sintéticos sanitizados (cenários A..F, Quiz, múltiplos destinos Post for Me e estados de estoque/publicação), com validação na interface e ensaio de rollback.
+
+---
+
+## 5. Checkpoint de Transferência para Novo Notebook (Noite de 18/10/2026)
+
+### 5.1 Estado do Checkpoint
+- **Branch Canônica V2:** `feat/video-factory-v2`
+- **Último Commit:** `2619d3d5e186e090d44fd8318dfed6fe07018777`
+- **Mensagem:** `feat(v2): V2.15B preparacao de cutover com diagnostico real do PC Forte e script sequencial`
+- **Repositório Remoto:** `https://github.com/ricobeliko/video-factory.git`
+
+### 5.2 Diagnóstico Factual do PC Forte (Produção Real)
+- **Branch:** `main` | **SHA:** `cf7d64767e13f94eb710809057dbcbc6efc19a27`
+- **Hotfix Local:** `app/services/autonomous_production.py` (linha `rejected_struct = None`) e `.bak_20261018_110834`.
+- **Banco de Dados Real:** `C:\Projetos\MoneyPrinterTurbo\storage\video_factory.db` (~8.65 MB).
+- **Processos Ativos:**
+  - Porta 8080 (PID 9280): `python.exe -m uvicorn app.asgi:app` (via Scheduled Task `VideoFactory WebUI V2`).
+  - Porta 8501 (PID 13056): `python.exe scripts/production_entrypoint.py` (via Scheduled Task `VideoFactory Production` - detém `PRIMARY`).
+- **Espaço Livre em C:** ~335 GB.
+- **Produção:** Rigorosamente intacta e sem alterações nesta fase.
+
+### 5.3 Arquivos Relevantes da V2.15B Versionados no GitHub
+- `scripts/v2_cutover.ps1` (Script sequencial de 6 gates com rollback integrado).
+- `scripts/v2_pre_cutover_audit.ps1` (Auditoria passiva 100% somente-leitura adaptada ao banco real e diff do hotfix).
+- `docs/v2/V215B_CUTOVER_EXECUTION.md` (Manual detalhado de cutover e rollback).
+- `docs/v2/PRODUCTION_CUTOVER_PLAN.md` e `docs/v2/ROLLBACK_PLAN.md` (Planos canônicos atualizados).
+- `test/services/test_v2_cutover_mock.py` (Suíte direcionada de testes unitários dos gates de cutover - 4/4 PASS).
+
+### 5.4 Roteiro Rápido de Retomada no Novo Notebook
+1. **Inspecionar ambiente:** Escolha um diretório de trabalho adequado (ex: `C:\Projetos` ou `D:\Projetos` ou seu workspace de preferência).
+2. **Validar ferramentas:**
+   ```powershell
+   git --version; python --version; node --version; ffmpeg -version
+   ```
+3. **Clonar e checkout da branch V2:**
+   ```powershell
+   git clone https://github.com/ricobeliko/video-factory.git
+   cd video-factory
+   git checkout feat/video-factory-v2
+   git log -1 --oneline
+   # Confirmar SHA: 2619d3d ou superior
+   ```
+4. **Criar venv e instalar dependências Python:**
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
+5. **Frontend (opcional se dist já estiver versionado):**
+   ```powershell
+   cd webui-v2
+   npm ci
+   cd ..
+   ```
+6. **Reconstruir SQLite sintético de desenvolvimento:**
+   ```powershell
+   python scripts/init_v2_synthetic_db.py
+   ```
+7. **Executar smoke tests direcionados:**
+   ```powershell
+   .\.venv\Scripts\pytest.exe test/services/test_v2_cutover_mock.py
+   .\.venv\Scripts\pytest.exe test/services/test_v2_13_migration_rehearsal.py
+   ```
+8. **Iniciar a V2 em localhost:**
+   ```powershell
+   python main.py
+   # Acessar: http://localhost:8080
+   ```
+9. **Próxima Ação:** Revisão humana do plano de cutover e posterior execução assistida no PC Forte.

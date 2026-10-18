@@ -167,3 +167,12 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   4. **Rollback Automatizado Integrado:** Parâmetro `-Rollback` em `v2_cutover.ps1` permitindo restauração completa em 10-12 minutos sem perda de dados.
   5. **Guia Operacional Detalhado:** Registrado em `docs/v2/V215B_CUTOVER_EXECUTION.md`.
   6. **Próximo Gate:** Revisão humana do plano e autorização prévia para o operador no PC Forte.
+
+---
+
+## 10. Checkpoint de Transferência Git (18/10/2026)
+- **Status:** CHECKPOINT_SYNCHRONIZED (Aguardando Retomada no Novo Notebook)
+- **Branch Remota:** `origin/feat/video-factory-v2`
+- **Último Commit:** `2619d3d5e186e090d44fd8318dfed6fe07018777`
+- **Instruções Detalhadas de Setup:** Ver `docs/v2/DEV_MIGRATION_HANDOFF.md` (Seção 5).
+- **Produção Real (PC Forte):** Inalterada, segura e com Streamlit e Uvicorn operando normalmente.

@@ -1091,7 +1091,153 @@ class TestChannelFactory(unittest.TestCase):
                 channel_factory.render_channel_factory(is_primary=True, db_path=self.db_path)
                 mock_get_voice.assert_called()
 
+    def test_q5c1_persistent_quiz_format_onboarding(self):
+        """Q5-C1.1: Onboarding de canal com formato Quiz e sem destino social obrigatório."""
+        res = profile_manager.onboard_channel_workspace(
+            name="Quiz Fatos Dev",
+            niche="curiosidades",
+            topic_brief="Dilemas impossíveis sobre ciência e história",
+            video_format="quiz_dilemma",
+            closing_type="engagement_cta",
+            num_questions=8,
+            require_destination=False,
+            db_path=self.db_path,
+        )
+        self.assertTrue(res["ok"])
+        pid = res["profile_id"]
+
+        settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        self.assertEqual(settings.editorial.video_format, "quiz_dilemma")
+        self.assertEqual(settings.editorial.closing_type, "engagement_cta")
+        self.assertEqual(settings.editorial.num_questions, 8)
+
+        # Destino sem conta externa deve nascer desabilitado
+        channels = profile_manager.list_channels(profile_id=pid, db_path=self.db_path)
+        self.assertEqual(len(channels), 1)
+        self.assertEqual(channels[0]["is_enabled"], 0)
+        self.assertIsNone(channels[0]["external_account_id"])
+
+    def test_q5c1_persistent_format_reopen_and_edit(self):
+        """Q5-C1.2: Reabertura e edição mantendo e atualizando o formato persistido."""
+        res = profile_manager.onboard_channel_workspace(
+            name="Canal Custom",
+            niche="geral",
+            video_format="quiz_dilemma",
+            closing_type="score_challenge",
+            num_questions=6,
+            require_destination=False,
+            db_path=self.db_path,
+        )
+        pid = res["profile_id"]
+
+        # Reabre
+        settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        self.assertEqual(settings.editorial.video_format, "quiz_dilemma")
+        self.assertEqual(settings.editorial.closing_type, "score_challenge")
+        self.assertEqual(settings.editorial.num_questions, 6)
+
+        # Edita
+        settings.editorial.closing_type = "quiz_choice_religious"
+        settings.editorial.num_questions = 10
+        profile_manager.update_profile_settings(pid, settings, db_path=self.db_path)
+
+        # Confirma persistência
+        reloaded = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        self.assertEqual(reloaded.editorial.video_format, "quiz_dilemma")
+        self.assertEqual(reloaded.editorial.closing_type, "quiz_choice_religious")
+        self.assertEqual(reloaded.editorial.num_questions, 10)
+
+    def test_q5c1_autonomous_production_inherits_format(self):
+        """Q5-C1.3: Produção autônoma herda formato, fechamento e questões salvos no perfil."""
+        res = profile_manager.onboard_channel_workspace(
+            name="Canal Auto Quiz",
+            niche="filosofia",
+            video_format="quiz_dilemma",
+            closing_type="engagement_cta",
+            num_questions=8,
+            require_destination=False,
+            db_path=self.db_path,
+        )
+        pid = res["profile_id"]
+
+        params = autonomous_production.build_autonomous_video_params(
+            topic="Dilemas de Filosofia",
+            profile_id=pid,
+            db_path=self.db_path,
+        )
+        self.assertEqual(params.narrative_structure, "quiz_dilemma")
+        self.assertEqual(params.closing_type, "engagement_cta")
+        self.assertEqual(params.num_questions, 8)
+
+    def test_q5c1_two_profiles_format_separation(self):
+        """Q5-C1.4: Separação estrita entre canais de formatos diferentes."""
+        res_quiz = profile_manager.onboard_channel_workspace(
+            name="Canal Quiz",
+            niche="quiz_niche",
+            video_format="quiz_dilemma",
+            require_destination=False,
+            db_path=self.db_path,
+        )
+        res_trad = profile_manager.onboard_channel_workspace(
+            name="Canal Tradicional",
+            niche="noticias",
+            video_format="traditional",
+            require_destination=False,
+            db_path=self.db_path,
+        )
+
+        params_quiz = autonomous_production.build_autonomous_video_params(
+            topic="Quiz de Sexta",
+            profile_id=res_quiz["profile_id"],
+            db_path=self.db_path,
+        )
+        params_trad = autonomous_production.build_autonomous_video_params(
+            topic="Notícias de Hoje",
+            profile_id=res_trad["profile_id"],
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(params_quiz.narrative_structure, "quiz_dilemma")
+        self.assertNotEqual(params_trad.narrative_structure, "quiz_dilemma")
+
+    def test_q5c1_no_social_destination_blocks_publish_not_generation(self):
+        """Q5-C1.5: Ausência de destino social permite geração de estoque mas impede publicação."""
+        res = profile_manager.onboard_channel_workspace(
+            name="Estoque Sem Publicar",
+            niche="geral",
+            video_format="quiz_dilemma",
+            require_destination=False,
+            db_path=self.db_path,
+        )
+        pid = res["profile_id"]
+
+        # Geração de parâmetros permitida para acúmulo de estoque
+        params = autonomous_production.build_autonomous_video_params(
+            topic="Estoque Teste",
+            profile_id=pid,
+            db_path=self.db_path,
+        )
+        self.assertEqual(params.narrative_structure, "quiz_dilemma")
+
+        # Canal bloqueado para publicação no banco
+        channels = profile_manager.list_channels(profile_id=pid, db_path=self.db_path)
+        self.assertEqual(channels[0]["is_enabled"], 0)
+        self.assertIsNone(channels[0]["external_account_id"])
+
+    def test_q5c1_traditional_pipeline_preserved(self):
+        """Q5-C1.6: Compatibilidade retroativa - canal legado mantém comportamento tradicional."""
+        prof = profile_manager.create_profile(
+            name="Legado 1.0",
+            niche="curiosidades",
+            db_path=self.db_path,
+        )
+        pid = prof["id"]
+        # Contexto sem video_format salvo deve retornar 'traditional'
+        ctx = profile_manager.get_generation_profile_context(profile_id=pid, db_path=self.db_path)
+        self.assertEqual(ctx.get("video_format"), "traditional")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

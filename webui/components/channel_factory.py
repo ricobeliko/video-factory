@@ -13,6 +13,20 @@ import streamlit as st
 from app.config import config
 from app.services import autonomous_production, operator_console, post_for_me, profile_manager
 
+VIDEO_FORMAT_CHOICES = ["traditional", "quiz_dilemma"]
+VIDEO_FORMAT_LABELS = {
+    "traditional": "🎬 Vídeo Padrão / Narrativa Tradicional",
+    "quiz_dilemma": "❓ Quiz / Escolhas Impossíveis",
+}
+
+CLOSING_TYPE_CHOICES = ["auto", "engagement_cta", "score_challenge", "quiz_choice_religious"]
+CLOSING_TYPE_LABELS = {
+    "auto": "Auto (CTA neutro para gerais; religioso se nicho de fé)",
+    "engagement_cta": "Engajamento Geral (Seguir perfil / Apoiar canal)",
+    "score_challenge": "Desafio de Pontuação (Quantas você acertou?)",
+    "quiz_choice_religious": "Engajamento Religioso (Curtir & Comentar: Jesus te ama)",
+}
+
 
 def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> Dict[str, Any]:
     """Coleta informações operacionais consolidadas para o card do canal."""
@@ -32,6 +46,8 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
     except Exception:
         ready_stock = 0
 
+    video_format = getattr(settings.editorial, "video_format", None) or getattr(settings.editorial, "content_style", None) or "traditional"
+
     return {
         "profile": p,
         "settings": settings,
@@ -39,6 +55,7 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
         "autonomous_enabled": is_auto_enabled,
         "target_stock": target_stock,
         "ready_stock": ready_stock,
+        "video_format": video_format,
     }
 
 
@@ -59,41 +76,81 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         st.warning("⚠️ Nenhuma conta YouTube conectada encontrada no Post for Me. Conecte uma conta antes de cadastrar um canal operacional.")
 
     with st.form("new_channel_onboarding_form"):
-        # 1. Identidade
-        st.markdown("##### 1. Identidade do Canal")
+        # 1. Identidade e Formato do Canal
+        st.markdown("##### 1. Identidade e Formato do Canal")
         c_name, c_niche = st.columns(2)
         with c_name:
             name_val = st.text_input("Nome do Canal *", placeholder="Ex: GTA Daily DEV", key="cf_new_ch_name")
         with c_niche:
             niche_val = st.text_input("Nicho *", placeholder="Ex: games", key="cf_new_ch_niche")
 
-        c_topic, c_lang = st.columns([2, 1])
-        with c_topic:
-            topic_brief_val = st.text_area(
-                "Tema / Descrição Editorial *",
-                placeholder="Ex: GTA VI: novidades, notícias oficiais, análises e teorias",
-                key="cf_new_ch_topic",
-                height=68,
+        c_format, c_lang = st.columns([2, 1])
+        with c_format:
+            sel_format = st.selectbox(
+                "Formato de Vídeo *",
+                options=VIDEO_FORMAT_CHOICES,
+                format_func=lambda f: VIDEO_FORMAT_LABELS.get(f, f),
+                key="cf_new_ch_format",
+                help="Define o formato permanente deste canal. Quiz utiliza a Quiz Engine Q0-R homologada.",
             )
         with c_lang:
             st.selectbox("Idioma", options=["pt-BR"], index=0, key="cf_new_ch_lang", disabled=True)
 
-        # 2. Publicação (Post for Me / YouTube) - Fail-Closed
+        topic_brief_val = st.text_area(
+            "Tema / Descrição Editorial *",
+            placeholder="Ex: GTA VI: novidades, notícias oficiais, análises e teorias",
+            key="cf_new_ch_topic",
+            height=68,
+        )
+
+        quiz_closing = "auto"
+        quiz_num_q = 8
+        if sel_format == "quiz_dilemma":
+            st.markdown("###### ⚙️ Configurações do Quiz Engine")
+            c_qc, c_qn = st.columns(2)
+            with c_qc:
+                quiz_closing = st.selectbox(
+                    "Tipo de Encerramento",
+                    options=CLOSING_TYPE_CHOICES,
+                    format_func=lambda c: CLOSING_TYPE_LABELS.get(c, c),
+                    key="cf_new_ch_quiz_closing",
+                    help="Define o gancho final. Canais gerais nunca recebem CTA religioso em 'Auto'.",
+                )
+            with c_qn:
+                quiz_num_q = st.number_input(
+                    "Quantidade de Dilemas por Vídeo",
+                    min_value=4,
+                    max_value=12,
+                    value=8,
+                    step=1,
+                    key="cf_new_ch_quiz_num_q",
+                    help="Padrão homologado Q0-R: 8 dilemas (duração ~65-75s).",
+                )
+
+        # 2. Publicação e Destino
         st.markdown("##### 2. Publicação e Destino")
-        st.caption("MVP: YouTube via Post for Me (conta conectada obrigatória)")
+        st.caption("Destino YouTube via Post for Me (vínculo explícito)")
 
         ext_account_id = None
+        require_destination = False
         if accounts:
-            acc_labels = [f"{acc['display_name']} ({acc['external_account_id']})" for acc in accounts]
-            sel_idx = st.selectbox(
+            acc_choices = ["none"] + [acc["external_account_id"] for acc in accounts]
+            acc_labels = {
+                "none": "🚫 Sem destino vinculado (Apenas gerar estoque / Publicação desativada)",
+                **{acc["external_account_id"]: f"▶️ {acc['display_name']} ({acc['external_account_id']})" for acc in accounts}
+            }
+            sel_acc = st.selectbox(
                 "Conta YouTube Conectada *",
-                options=range(len(accounts)),
-                format_func=lambda i: acc_labels[i],
+                options=acc_choices,
+                format_func=lambda k: acc_labels.get(k, k),
                 key="cf_new_ch_yt_acc_sel",
+                help="Selecione explicitamente a conta social vinculada a este canal.",
             )
-            ext_account_id = accounts[sel_idx]["external_account_id"]
+            if sel_acc != "none":
+                ext_account_id = sel_acc
+                require_destination = True
         else:
-            st.error("Nenhuma conta YouTube disponível. Conexão obrigatória no Post for Me para habilitar o destino.")
+            st.info("ℹ️ Nenhuma conta YouTube conectada no Post for Me. O canal será criado apenas para geração de estoque (publicação desativada).")
 
         # 3. Produção & Visual
         st.markdown("##### 3. Produção & Visual")
@@ -157,8 +214,8 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                 st.error("Apenas o nó PRIMARY pode cadastrar canais.")
                 return
 
-            if not accounts or not ext_account_id:
-                st.error("Onboarding fail-closed: uma conta YouTube conectada é obrigatória para criar o canal.")
+            if require_destination and (not ext_account_id or not ext_account_id.startswith("UC")):
+                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{ext_account_id}').")
                 return
 
             clean_name = str(name_val or "").strip()
@@ -174,12 +231,13 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
             if not clean_topic:
                 st.error("Informe o Tema / Linha Editorial.")
                 return
-            if not ext_account_id or not ext_account_id.startswith("UC"):
-                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{ext_account_id}').")
-                return
 
             settings_obj = profile_manager.ChannelWorkspaceSettings()
             settings_obj.editorial.topic_brief = clean_topic
+            settings_obj.editorial.video_format = sel_format
+            settings_obj.editorial.content_style = sel_format
+            settings_obj.editorial.closing_type = quiz_closing if sel_format == "quiz_dilemma" else None
+            settings_obj.editorial.num_questions = int(quiz_num_q) if sel_format == "quiz_dilemma" else None
             settings_obj.voice.voice_name = global_voice
             settings_obj.visual.visual_director_enabled = bool(vd_enabled)
             settings_obj.visual.flow_enabled = bool(flow_enabled)
@@ -201,6 +259,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                     external_account_id=ext_account_id,
                     settings=settings_obj,
                     autonomous_enabled=autonomous_start,
+                    require_destination=require_destination,
                     db_path=db_path,
                 )
                 new_p = res.get("profile", {})
@@ -391,7 +450,9 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
 
             with col_id:
                 st.markdown(f"#### {p.get('name')}")
-                st.markdown(f"🏷️ **Nicho:** `{p.get('niche') or 'Geral'}` | 🌐 **Idioma:** `{p.get('language') or 'pt-BR'}`")
+                v_format = card.get("video_format") or "traditional"
+                format_badge = VIDEO_FORMAT_LABELS.get(v_format, v_format)
+                st.markdown(f"🏷️ **Nicho:** `{p.get('niche') or 'Geral'}` | 🎬 **Formato:** `{format_badge}`")
                 brief = settings.editorial.topic_brief or "Sem descrição editorial configurada."
                 st.caption(f"📝 {brief[:120]}{'...' if len(brief) > 120 else ''}")
 
@@ -430,6 +491,49 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                     m_name = st.text_input("Nome", value=p.get("name") or "", key=f"m_name_{p_id}", disabled=not is_primary)
                 with c_m_niche:
                     m_niche = st.text_input("Nicho", value=p.get("niche") or "", key=f"m_niche_{p_id}", disabled=not is_primary)
+
+                # Formato de Vídeo e Configurações Editoriais
+                cur_v_format = getattr(settings.editorial, "video_format", None) or "traditional"
+                cur_f_idx = VIDEO_FORMAT_CHOICES.index(cur_v_format) if cur_v_format in VIDEO_FORMAT_CHOICES else 0
+                c_m_fmt, c_m_close = st.columns(2)
+                with c_m_fmt:
+                    m_video_format = st.selectbox(
+                        "Formato de Vídeo",
+                        options=VIDEO_FORMAT_CHOICES,
+                        index=cur_f_idx,
+                        format_func=lambda f: VIDEO_FORMAT_LABELS.get(f, f),
+                        key=f"m_fmt_{p_id}",
+                        disabled=not is_primary,
+                    )
+
+                cur_closing = getattr(settings.editorial, "closing_type", None) or "auto"
+                cur_num_q = int(getattr(settings.editorial, "num_questions", None) or 8)
+
+                if m_video_format == "quiz_dilemma":
+                    with c_m_close:
+                        cur_c_idx = CLOSING_TYPE_CHOICES.index(cur_closing) if cur_closing in CLOSING_TYPE_CHOICES else 0
+                        m_closing_type = st.selectbox(
+                            "Tipo de Encerramento (Quiz)",
+                            options=CLOSING_TYPE_CHOICES,
+                            index=cur_c_idx,
+                            format_func=lambda c: CLOSING_TYPE_LABELS.get(c, c),
+                            key=f"m_close_{p_id}",
+                            disabled=not is_primary,
+                        )
+                    m_num_questions = st.number_input(
+                        "Quantidade de Dilemas por Vídeo",
+                        min_value=4,
+                        max_value=12,
+                        value=cur_num_q,
+                        step=1,
+                        key=f"m_num_q_{p_id}",
+                        disabled=not is_primary,
+                    )
+                else:
+                    with c_m_close:
+                        st.caption("ℹ️ Formato padrão utiliza narrativa tradicional linear.")
+                    m_closing_type = None
+                    m_num_questions = None
 
                 m_brief = st.text_area("Tema / Linha Editorial", value=settings.editorial.topic_brief or "", key=f"m_brief_{p_id}", disabled=not is_primary)
 
@@ -501,6 +605,9 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         profile_manager.update_profile(p_id, name=clean_m_name, niche=clean_m_niche, db_path=db_path)
                         updated_settings = settings.model_copy(deep=True)
                         updated_settings.editorial.topic_brief = str(m_brief or "").strip()
+                        updated_settings.editorial.video_format = str(m_video_format)
+                        updated_settings.editorial.closing_type = str(m_closing_type) if m_video_format == "quiz_dilemma" and m_closing_type else None
+                        updated_settings.editorial.num_questions = int(m_num_questions) if m_video_format == "quiz_dilemma" and m_num_questions else None
                         updated_settings.voice.voice_name = settings.voice.voice_name or global_voice
                         updated_settings.visual.visual_director_enabled = bool(m_vd)
                         updated_settings.visual.flow_enabled = bool(m_flow)

@@ -227,12 +227,20 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - Bloqueio factual estrito: quizzes factuais sem fontes independentes verificadas são retidos e bloqueados em `factual_gate` (sem promoção a READY_STOCK).
   - Promoção garantida a `READY_STOCK` com gravação atômica de `final-1.mp4`, `thumbnail.jpg`, `script.json` e proveniência.
   - Preservação total do fluxo tradicional para canais convencionais.
-- **Fase Q5 (Agendamento, Autonomia e Publicação):** `IN PROGRESS (Q5-A, Q5-B1 & Q5-B2A.1 COMPLETED)`
+- **Fase Q5 (Agendamento, Autonomia e Publicação):** `IN PROGRESS (Q5-A, Q5-B1, Q5-B2A.1 & Q5-C1 COMPLETED)`
   - **Q5-A (Auditoria de Agendamento e Publicação):** Mapeamento do isolamento do Scheduler (`auto_publish_enabled=0`, `dry_run=1`), contrato de upload Post for Me e tripla proteção de idempotência.
   - **Q5-B1 (Homologação Real em DEV):** `COMPLETED / DEV VALIDATED` (Execução real de 1 ciclo sem mocks gerando tarefa `homolog_q5b1_1792285986`; vídeo `final-1.mp4` 76.09s, thumbnail e script.json; Quality Gates aprovados; promoção a READY_STOCK com isolamento de publicação 100% comprovado; pipeline tradicional preservado).
   - **Q5-B2A (Preflight de Produção & Verificação de Isolamento):** `COMPLETED` (Auditoria e resolução técnica: comprovado que o worker daemon do Scheduler nunca adota tarefas órfãs; Safe Updater verificado com parâmetro `-TargetRef`; isolamento de publicação e rollback atômico validados).
   - **Q5-B2A.1 (Exposição do Quiz Engine na Web UI):** `COMPLETED` (`STRUCTURE_QUIZ_DILEMMA` adicionado a `const.NARRATIVE_STRUCTURES`, rótulo `"Quiz / Escolhas Impossíveis"` adicionado em `webui/Main.py`, propagação e roteamento validados por testes direcionados).
-  - **Q5-B2B (Próximo Passo):** Push controlado para `origin/main`, deploy seguro via `update_production.ps1` no PC Forte e geração de 1 tarefa manual sem publicação para homologação final. **Aguardando aprovação humana explícita antes de iniciar.**
+  - **Q5-C1 (Formato Persistente na Channel Factory):** `COMPLETED / DEV VALIDATED`
+    - Formato de vídeo ("Quiz / Escolhas Impossíveis" / `quiz_dilemma` e "Vídeo Padrão" / `traditional`) exposto diretamente na criação e edição de canais da Channel Factory (`webui/components/channel_factory.py`).
+    - Configurações do Quiz (tipo de encerramento e quantidade de dilemas) persistidas tipadas no `settings_json` do canal (`settings.editorial.video_format`, `closing_type`, `num_questions`) sem migrações de banco.
+    - Propagação integral para a produção autônoma (`build_autonomous_video_params()` e `run_autonomous_cycle()`), com desvio inteligente de rotação quando o formato do canal é fixo.
+    - Proteção editorial contra CTAs religiosos automáticos: canais de temas gerais usam `engagement_cta` (neutro de retenção); encerramentos religiosos restritos a canais de fé ou configuração explícita.
+    - Vínculo inequívoco de destino social via Post for Me: suporte a criação de canal para geração de estoque sem conta conectada, mantendo publicação desativada (`is_enabled=0`).
+    - Compatibilidade retroativa integral preservada para canais convencionais já existentes.
+    - Validação de 6 testes direcionados PASS em `test/services/test_channel_factory.py`.
+  - **Q5-B2B / Próximo Passo:** Push controlado para `origin/main` e deploy seguro via `update_production.ps1` no PC Forte. **Aguardando autorização humana explícita.**
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.

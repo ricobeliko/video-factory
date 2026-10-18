@@ -186,7 +186,7 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Preservação integral do fluxo de tarefas tradicionais sem qualquer regressão.
     - Suíte de testes direcionados da integração: 5/5 testes PASS em `test/services/test_quiz_integration.py`.
 
-- **Fase Q5 — Agendamento, Autonomia e Publicação:** `IN PROGRESS (Q5-A, Q5-B1 & Q5-B2A.1 COMPLETED)`
+- **Fase Q5 — Agendamento, Autonomia e Publicação:** `IN PROGRESS (Q5-A, Q5-B1, Q5-B2A.1 & Q5-C1 COMPLETED)`
   - **Q5-A (Auditoria de Agendamento e Publicação):** Mapeamento do isolamento do Scheduler (`auto_publish_enabled=0`, `dry_run=1`), contrato de upload Post for Me e tripla proteção de idempotência.
   - **Q5-B1 (Homologação Real em DEV):** `COMPLETED / DEV VALIDATED`
     - Execução de 1 ciclo real de geração via `task.start()` sem mocks (`homolog_q5b1_1792285986`).
@@ -205,7 +205,15 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Adicionado rótulo visual `"Quiz / Escolhas Impossíveis"` ao seletor de Estrutura Narrativa em `webui/Main.py`.
     - Especificação formal registrada em `safety_gate.NARRATIVE_STRUCTURE_SPECS`.
     - Propagação direta confirmada para `VideoParams.narrative_structure` e despacho verificado para `_run_quiz_pipeline` sem afetar o fluxo tradicional (testes PASS).
-  - **Q5-B2B (Próximo Passo):** Push controlado para `origin/main`, deploy seguro via `update_production.ps1` no PC Forte e geração de 1 tarefa manual sem publicação para homologação final. **Aguardando aprovação humana explícita antes de iniciar.**
+  - **Q5-C1 (Formato Persistente na Channel Factory):** `COMPLETED / DEV VALIDATED`
+    - Exposição do seletor "Formato de Vídeo" no formulário de criação e edição da Channel Factory (`webui/components/channel_factory.py`).
+    - Persistência tipada e retrocompatível no `settings_json` do perfil (`settings.editorial.video_format`, `closing_type`, `num_questions`) sem migrações de banco.
+    - Propagação automática para o pipeline autônomo (`build_autonomous_video_params()` e `run_autonomous_cycle()`), garantindo que canais com formato fixo usem a Quiz Engine diretamente.
+    - Proteção editorial contra CTAs religiosos automáticos: canais de temas gerais usam `engagement_cta` (seguir/reter neutro); encerramentos religiosos restritos a nichos de fé ou quando expressamente selecionados.
+    - Vínculo inequívoco de destino social via Post for Me: canais criados para acúmulo de estoque sem conta vinculada geram normalmente com publicação desativada (`is_enabled=0`).
+    - Compatibilidade retroativa integral preservada para canais tradicionais existentes.
+    - 6 testes direcionados PASS em `test/services/test_channel_factory.py`.
+  - **Q5-B2B / Próximo Passo:** Push controlado para `origin/main` e deploy seguro via `update_production.ps1` no PC Forte. **Aguardando autorização humana explícita.**
 
 ---
 

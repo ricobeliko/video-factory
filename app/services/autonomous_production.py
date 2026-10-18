@@ -1619,6 +1619,16 @@ def build_autonomous_video_params(
     region = "BR"
     preset = ctx.get("default_preset") or const.DEFAULT_MONETIZATION_PRESET
 
+    # Formato e Estrutura Narrativa com herança do perfil (Fase Q5-C1)
+    profile_format = ctx.get("video_format") or ctx.get("content_style")
+    resolved_narrative_structure = narrative_structure
+    if not resolved_narrative_structure or resolved_narrative_structure == "auto":
+        if profile_format and profile_format not in ("traditional", "standard", ""):
+            resolved_narrative_structure = profile_format
+
+    resolved_closing_type = ctx.get("closing_type") or None
+    resolved_num_questions = ctx.get("num_questions") or None
+
     # 2. Fonte de Vídeo (video_source)
     # Precedência: Profile -> config.app["video_source"] -> "pexels"
     raw_source = ctx.get("video_source") or config.app.get("video_source", "pexels")
@@ -1782,7 +1792,9 @@ def build_autonomous_video_params(
         niche=niche,
         region=region,
         monetization_preset=preset,
-        narrative_structure=narrative_structure,
+        narrative_structure=resolved_narrative_structure,
+        closing_type=resolved_closing_type,
+        num_questions=resolved_num_questions,
         topic_brief=ctx.get("topic_brief") or None,
         profile_id=assigned_profile_id,
         video_source=video_source,
@@ -2677,19 +2689,25 @@ def _run_autonomous_cycle(
     yt_channel_id = target_channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
 
     # Recomenda estrutura narrativa diversificada evitando repetições (isolada por perfil e canal)
-    last_struct = get_channel_last_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
-    rejected_struct = get_channel_rejected_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
+    # Mas se o canal tiver formato fixo configurado (ex: quiz_dilemma), honra estritamente o formato (Fase Q5-C1)
+    prof_ctx = profile_manager.get_generation_profile_context(profile_id=target_profile_id, db_path=db_path)
+    fixed_format = prof_ctx.get("video_format") or prof_ctx.get("content_style")
+    if fixed_format and fixed_format not in ("traditional", "standard", "auto", ""):
+        rec_struct = fixed_format
+    else:
+        last_struct = get_channel_last_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
+        rejected_struct = get_channel_rejected_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
 
-    rec_struct, _ = content_strategy.recommend_narrative_structure(
-        topic=chosen_topic,
-        niche=probe_params.niche,
-        last_used_structure=rejected_struct or last_struct,
-    )
-    if rejected_struct and rec_struct == rejected_struct:
-        for alt_st in const.NARRATIVE_STRUCTURES:
-            if alt_st != rejected_struct:
-                rec_struct = alt_st
-                break
+        rec_struct, _ = content_strategy.recommend_narrative_structure(
+            topic=chosen_topic,
+            niche=probe_params.niche,
+            last_used_structure=rejected_struct or last_struct,
+        )
+        if rejected_struct and rec_struct == rejected_struct:
+            for alt_st in const.NARRATIVE_STRUCTURES:
+                if alt_st != rejected_struct:
+                    rec_struct = alt_st
+                    break
 
     set_channel_last_narrative_structure(target_profile_id, yt_channel_id, rec_struct, db_path=db_path)
     if rejected_struct:
@@ -2819,6 +2837,9 @@ def _run_autonomous_cycle(
         rec_struct = baseline_struct
         closed_loop_decision_recorded = False
         closed_loop_meta = None
+
+    if fixed_format and fixed_format not in ("traditional", "standard", "auto", ""):
+        rec_struct = fixed_format
 
     set_channel_last_narrative_structure(target_profile_id, yt_channel_id, rec_struct, db_path=db_path)
     params = build_autonomous_video_params(

@@ -185,6 +185,8 @@ class VideoParams(BaseModel):
     niche: Optional[str] = None
     region: Optional[str] = None
     topic_brief: Optional[str] = None
+    closing_type: Optional[str] = None
+    num_questions: Optional[int] = None
     # Channel Factory / Flow Integration (Fase V1.5E-E)
     visual_director_enabled: bool = False
     visual_style_brief: str = ""

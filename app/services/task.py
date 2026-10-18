@@ -2719,7 +2719,15 @@ def _run_quiz_pipeline(
     narrative_structure = getattr(params, "narrative_structure", "") or ""
     format_type = "factual" if "factual" in narrative_structure else "subjective"
     niche = getattr(params, "niche", None) or getattr(params, "video_subject", None) or "dilemas"
-    closing_type = getattr(params, "closing_type", None) or ("score_challenge" if format_type == "factual" else "quiz_choice_religious")
+    closing_type = getattr(params, "closing_type", None)
+    if not closing_type or closing_type == "auto":
+        niche_clean = str(niche).lower()
+        if any(w in niche_clean for w in ("religi", "bibli", "jesus", "deus", "fe", "evangel")):
+            closing_type = "quiz_choice_religious"
+        elif format_type == "factual":
+            closing_type = "score_challenge"
+        else:
+            closing_type = "engagement_cta"
     num_questions = getattr(params, "num_questions", None) or (6 if format_type == "factual" else 8)
 
     task_dir = utils.task_dir(task_id)

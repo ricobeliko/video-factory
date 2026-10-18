@@ -44,6 +44,9 @@ DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6
 class EditorialSettings(BaseModel):
     topic_brief: Optional[str] = None
     content_style: Optional[str] = None
+    video_format: Optional[str] = None
+    closing_type: Optional[str] = None
+    num_questions: Optional[int] = None
 
 
 class VoiceSettings(BaseModel):
@@ -1123,14 +1126,18 @@ def onboard_channel_workspace(
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
     platform: str = "youtube",
+    require_destination: bool = True,
+    video_format: Optional[str] = None,
+    closing_type: Optional[str] = None,
+    num_questions: Optional[int] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Onboarding atômico de novo workspace/canal.
 
     Executa em UMA ÚNICA transação SQLite:
-    1. Validações preliminares antes da transação (fail-closed: external_account_id obrigatório para YouTube).
+    1. Validações preliminares antes da transação (external_account_id para YouTube quando destino exigido).
     2. INSERT em content_profiles com settings_json tipado.
-    3. INSERT em publishing_channels com external_account_id.
+    3. INSERT em publishing_channels com external_account_id e status de ativação de publicação.
     4. Inicialização de autopilot_settings (autonomous_mode_enabled=False por padrão seguro).
     5. Se qualquer etapa falhar, ROLLBACK completo é executado sem deixar profile órfão.
     """
@@ -1151,14 +1158,25 @@ def onboard_channel_workspace(
     clean_reg = "BR"
 
     clean_ext_id = None
+    ch_is_enabled = 1
     if clean_plat == "youtube":
-        if not external_account_id or not str(external_account_id).strip().startswith("UC"):
-            raise ValueError(
-                "Onboarding de canal YouTube exige conta conectada com external_account_id válido iniciando com 'UC'."
-            )
-        clean_ext_id = str(external_account_id).strip()
+        if require_destination:
+            if not external_account_id or not str(external_account_id).strip().startswith("UC"):
+                raise ValueError(
+                    "Onboarding de canal YouTube exige conta conectada com external_account_id válido iniciando com 'UC'."
+                )
+            clean_ext_id = str(external_account_id).strip()
+            ch_is_enabled = 1
+        else:
+            if external_account_id and str(external_account_id).strip().startswith("UC"):
+                clean_ext_id = str(external_account_id).strip()
+                ch_is_enabled = 1
+            else:
+                clean_ext_id = None
+                ch_is_enabled = 0
     else:
         clean_ext_id = str(external_account_id).strip() if external_account_id else None
+        ch_is_enabled = 1 if clean_ext_id else 0
 
     clean_ch_display = str(channel_display_name or f"{clean_name} ({clean_plat.capitalize()})").strip()
 
@@ -1182,6 +1200,13 @@ def onboard_channel_workspace(
 
     if topic_brief:
         settings_model.editorial.topic_brief = str(topic_brief).strip()
+
+    if video_format:
+        settings_model.editorial.video_format = str(video_format).strip()
+    if closing_type:
+        settings_model.editorial.closing_type = str(closing_type).strip()
+    if num_questions is not None:
+        settings_model.editorial.num_questions = int(num_questions)
 
     if settings_model.visual.flow_scene_count is None:
         settings_model.visual.flow_scene_count = DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
@@ -1232,7 +1257,7 @@ def onboard_channel_workspace(
                 clean_ch_display,
                 None,
                 clean_ext_id,
-                1,
+                ch_is_enabled,
                 now_iso,
                 now_iso,
             ),
@@ -1267,6 +1292,8 @@ def onboard_channel_workspace(
         ch_row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (new_cid,)).fetchone()
 
     return {
+        "ok": True,
+        "profile_id": new_pid,
         "profile": dict(p_row),
         "channel": _normalize_channel_dict(dict(ch_row)),
         "settings": settings_model,
@@ -1349,9 +1376,11 @@ def get_generation_profile_context(
         "region": fallback_region,
         "default_preset": profile.get("default_preset") or fallback_preset,
         "growth_mode": profile.get("growth_mode") or fallback_growth,
-        # Settings incorporados com precedência: Profile Settings -> Global Config -> Safe Default
         "topic_brief": settings.editorial.topic_brief or "",
         "content_style": settings.editorial.content_style or "",
+        "video_format": settings.editorial.video_format or settings.editorial.content_style or "traditional",
+        "closing_type": settings.editorial.closing_type or "",
+        "num_questions": settings.editorial.num_questions or 8,
         "voice_name": voice_name,
         "voice_rate": voice_rate,
         "voice_volume": voice_volume,

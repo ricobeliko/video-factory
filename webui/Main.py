@@ -5276,15 +5276,25 @@ def _render_script_settings(panel, params):
                     const.STRUCTURE_SHORT_STORY: "História Curta",
                     const.STRUCTURE_QUIZ_DILEMMA: "Quiz / Escolhas Impossíveis",
                 }
+                prof_struct_default = manual_prof_ctx.get("video_format") or "auto"
+                if prof_struct_default not in struct_choices:
+                    prof_struct_default = "auto"
                 chosen_struct = stable_selectbox(
                     tr("Narrative Structure"),
                     options=struct_choices,
-                    default_value="auto",
+                    default_value=_saved_ui_choice(
+                        "narrative_structure",
+                        struct_choices,
+                        prof_struct_default,
+                    ),
                     key="narrative_structure_select",
                     format_func=lambda v: struct_labels.get(v, v),
                     help=tr("Variação de estrutura narrativa para retenção e originalidade"),
                 )
                 params.narrative_structure = None if chosen_struct == "auto" else chosen_struct
+                if chosen_struct == const.STRUCTURE_QUIZ_DILEMMA:
+                    params.closing_type = manual_prof_ctx.get("closing_type")
+                    params.num_questions = manual_prof_ctx.get("num_questions")
 
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。

@@ -241,6 +241,16 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
     - Compatibilidade retroativa integral preservada para canais convencionais já existentes.
     - Validação de 6 testes direcionados PASS em `test/services/test_channel_factory.py`.
   - **Q5-B2B / Próximo Passo:** Push controlado para `origin/main` e deploy seguro via `update_production.ps1` no PC Forte. **Aguardando autorização humana explícita.**
+- **Fase P0 (Protótipo Isolado Quiz Perguntas e Respostas — Folha de Papel):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - Renderização completa de 1 vídeo MP4 vertical (1080x1920) e thumbnail 9:16 independente concluídas com sucesso em `storage/poc_quiz_papel/`.
+  - Formato inspirado em folha de prova/questionário com enunciado em destaque, 4 alternativas (A, B, C, D) e revelação visual com destaque em verde esmeralda, marcação de caneta e chime harmônico procedural.
+  - Motor dedicado: `scripts/poc_quiz_paper_render.py` (`PaperQuizEngine`), reutilizando Edge TTS (pt-BR-AntonioNeural), Pillow, FFmpeg (`zoompan` suave) e síntese de áudio procedural em PCM.
+  - Template versionado: `resource/quiz_templates/quiz_template_perguntas_respostas_papel.json`.
+  - Conteúdo 100% factual com 6 questões auditadas (NASA, Smithsonian, National Geographic, RSC, UNESCO, Gray's Anatomy/NIH).
+  - Vídeo final: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (121.96s, 6.44 MB, 1080x1920, 30fps).
+  - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
+  - 4 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+  - Isolamento total de produção: zero alterações em canais, Scheduler, Post for Me ou banco de dados. Padrão Q0-R 100% preservado.
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.

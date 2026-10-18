@@ -1,0 +1,993 @@
+"""
+scripts/poc_quiz_paper_render.py
+================================
+VIDEO FACTORY — FASE P0: PROTÓTIPO QUIZ PERGUNTAS E RESPOSTAS (FOLHA DE PAPEL)
+Ambiente: DEV — D:\\Projetos\\MoneyPrinterTurbo
+
+Protótipo isolado para renderização de vídeos verticais no formato
+"Quiz — Perguntas e Respostas" com estética de folha de prova/questionário impresso.
+
+Requisitos atendidos:
+- Formato vertical 1080x1920 a 30fps.
+- Estética de folha de papel com margem, pauta suave e cabeçalho de exame.
+- Pergunta em destaque de alto contraste e legibilidade mobile.
+- 4 alternativas (A, B, C, D) por pergunta.
+- Revelação imediata e clara da alternativa correta com marcação e badge.
+- Efeito sonoro de acerto (chime harmônico procedural) sincronizado à revelação.
+- Movimento sutil de câmera (Ken Burns via zoompan) evitando imagem estática.
+- Janela de expectativa (~2s) e revelação (~1.2s) sem contagem regressiva repetitiva.
+- Narração fluida e natural via Edge TTS (pt-BR).
+- Duração total > 60 segundos com conteúdo 100% factual e fontes auditáveis.
+- Geração de MP4 final, Thumbnail 9:16 independente e metadados JSON.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import math
+import os
+import struct
+import subprocess
+import sys
+import time
+import wave
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from loguru import logger
+from PIL import Image, ImageDraw, ImageFont
+
+from app.utils import utils
+from app.services.media_quality import probe_media
+
+
+# =============================================================================
+# Configuração do Protótipo (PaperQuizConfig)
+# =============================================================================
+
+@dataclass
+class PaperQuizConfig:
+    quiz_type: str = "multiple_choice_paper"
+    niche: str = "conhecimentos_gerais"
+    quiz_title: str = "QUIZ CONHECIMENTOS GERAIS"
+    output_video_path: str = "storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4"
+    output_thumbnail_path: str = "storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg"
+    temp_dir: str = "storage/poc_quiz_papel/temp"
+    min_target_duration_sec: float = 60.0
+    target_duration_range: Tuple[float, float] = (65.0, 75.0)
+
+    sheet_header: Dict[str, Any] = field(default_factory=lambda: {
+        "title": "AVALIAÇÃO DE CONHECIMENTOS",
+        "subtitle": "TESTE DE RACIOCÍNIO & FATOS REAIS",
+        "exam_code": "PROVA N° 101 - TURBO QUIZ",
+    })
+
+    video_settings: Dict[str, Any] = field(default_factory=lambda: {
+        "width": 1080,
+        "height": 1920,
+        "fps": 30,
+        "font_bold": "resource/fonts/BeVietnamPro-Bold.ttf",
+        "font_medium": "resource/fonts/BeVietnamPro-Medium.ttf",
+        "bgm_path": "resource/songs/output000.mp3",
+        "bgm_volume": 0.12,
+    })
+
+    voice_settings: Dict[str, Any] = field(default_factory=lambda: {
+        "voice_name": "pt-BR-AntonioNeural",
+        "voice_rate": "+10%",
+    })
+
+    timing_settings: Dict[str, Any] = field(default_factory=lambda: {
+        "expectation_sec": 2.0,
+        "reveal_sec": 1.2,
+    })
+
+    intro_hook: Dict[str, Any] = field(default_factory=lambda: {
+        "enabled": True,
+        "narration": "Desafio de conhecimentos gerais! Será que você consegue acertar todas as perguntas? Vamos para a questão número um!",
+    })
+
+    outro_challenge: Dict[str, Any] = field(default_factory=lambda: {
+        "enabled": True,
+        "narration": "E aí, quantas você conseguiu acertar? Deixe sua pontuação nos comentários e siga para mais desafios diários!",
+    })
+
+    questions: List[Dict[str, Any]] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> PaperQuizConfig:
+        cfg = cls()
+        for k, v in data.items():
+            if hasattr(cfg, k):
+                if k == "target_duration_range" and isinstance(v, list):
+                    setattr(cfg, k, tuple(v))
+                else:
+                    setattr(cfg, k, v)
+        cfg.output_video_path = _resolve_path(cfg.output_video_path)
+        cfg.output_thumbnail_path = _resolve_path(cfg.output_thumbnail_path)
+        cfg.temp_dir = _resolve_path(cfg.temp_dir)
+        cfg.video_settings["font_bold"] = _resolve_path(cfg.video_settings.get("font_bold", ""))
+        cfg.video_settings["font_medium"] = _resolve_path(cfg.video_settings.get("font_medium", ""))
+        cfg.video_settings["bgm_path"] = _resolve_path(cfg.video_settings.get("bgm_path", ""))
+        return cfg
+
+    @classmethod
+    def from_json(cls, json_path: str | Path) -> PaperQuizConfig:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(data)
+
+
+def _resolve_path(p: str) -> str:
+    if not p:
+        return ""
+    if os.path.isabs(p):
+        return p
+    return os.path.abspath(os.path.join(ROOT_DIR, p))
+
+
+# =============================================================================
+# Motor de Renderização de Quiz em Folha de Papel (PaperQuizEngine)
+# =============================================================================
+
+class PaperQuizEngine:
+    """Motor dedicado para renderização de Quizzes no formato Folha de Papel / Questionário."""
+
+    def __init__(self, config: PaperQuizConfig):
+        self.config = config
+        self.ffmpeg_bin = utils.get_ffmpeg_binary()
+        os.makedirs(os.path.dirname(self.config.output_video_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.config.output_thumbnail_path), exist_ok=True)
+        os.makedirs(self.config.temp_dir, exist_ok=True)
+
+        self.font_bold_path = self.config.video_settings["font_bold"]
+        self.font_med_path = self.config.video_settings["font_medium"]
+
+    def _get_font(self, size: int, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        font_file = self.font_bold_path if bold else self.font_med_path
+        if font_file and os.path.exists(font_file):
+            try:
+                return ImageFont.truetype(font_file, size)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    # -------------------------------------------------------------------------
+    # 1. Desenho da Folha de Papel Base
+    # -------------------------------------------------------------------------
+    def _draw_paper_sheet(self) -> Image.Image:
+        """Cria o fundo com estética realista e limpa de folha de exame sobre prancheta."""
+        w = self.config.video_settings["width"]
+        h = self.config.video_settings["height"]
+
+        # 1. Fundo da prancheta / mesa de suporte
+        img = Image.new("RGBA", (w, h), (18, 24, 38, 255))  # Deep navy/slate
+        draw = ImageDraw.Draw(img)
+
+        # 2. Sombra da folha de papel
+        sheet_x1, sheet_y1 = 44, 44
+        sheet_x2, sheet_y2 = w - 44, h - 44
+        radius = 28
+
+        for offset in range(6, 0, -1):
+            alpha = int(24 * (1.0 - offset / 7.0))
+            draw.rounded_rectangle(
+                [sheet_x1 + offset, sheet_y1 + offset, sheet_x2 + offset, sheet_y2 + offset],
+                radius=radius,
+                fill=(0, 0, 0, alpha),
+            )
+
+        # 3. Folha de papel principal (marfim caloroso / off-white suave)
+        paper_color = (252, 251, 247, 255)
+        draw.rounded_rectangle(
+            [sheet_x1, sheet_y1, sheet_x2, sheet_y2],
+            radius=radius,
+            fill=paper_color,
+            outline=(220, 218, 208, 255),
+            width=2,
+        )
+
+        # 4. Linhas pautadas discretas
+        line_color = (235, 237, 230, 160)
+        start_y = 360
+        while start_y < sheet_y2 - 60:
+            draw.line([(sheet_x1 + 30, start_y), (sheet_x2 - 30, start_y)], fill=line_color, width=1)
+            start_y += 44
+
+        # 5. Margem vermelha suave à esquerda
+        margin_x = sheet_x1 + 86
+        draw.line([(margin_x, sheet_y1 + 40), (margin_x, sheet_y2 - 40)], fill=(245, 192, 192, 180), width=2)
+
+        # 6. Furos de fichário estilizados
+        holes_y = [sheet_y1 + 180, (sheet_y1 + sheet_y2) // 2, sheet_y2 - 180]
+        hole_x = sheet_x1 + 42
+        for hy in holes_y:
+            # Sombra interna do furo
+            draw.ellipse([hole_x - 14, hy - 14, hole_x + 14, hy + 14], fill=(215, 215, 210, 255), outline=(195, 195, 190, 255), width=2)
+            draw.ellipse([hole_x - 11, hy - 11, hole_x + 11, hy + 11], fill=(18, 24, 38, 255))
+
+        # 7. Cabeçalho oficial de exame / prova
+        hdr = self.config.sheet_header
+        f_title = self._get_font(32, bold=True)
+        f_sub = self._get_font(20, bold=False)
+        f_code = self._get_font(18, bold=True)
+
+        header_x = sheet_x1 + 120
+        draw.text((header_x, sheet_y1 + 48), hdr.get("title", "AVALIAÇÃO DE CONHECIMENTOS"), font=f_title, fill=(20, 30, 50, 255))
+        draw.text((header_x, sheet_y1 + 92), hdr.get("subtitle", "TESTE DE RACIOCÍNIO & FATOS REAIS"), font=f_sub, fill=(90, 100, 120, 255))
+
+        # Badge do código da prova no topo direito
+        code_text = hdr.get("exam_code", "PROVA TURBO 101")
+        draw.rounded_rectangle([sheet_x2 - 290, sheet_y1 + 52, sheet_x2 - 40, sheet_y1 + 94], radius=10, fill=(240, 243, 248, 255), outline=(200, 210, 225, 255), width=1)
+        draw.text((sheet_x2 - 275, sheet_y1 + 62), code_text, font=f_code, fill=(40, 60, 95, 255))
+
+        # Linha de preenchimento do estudante
+        f_std = self._get_font(20, bold=False)
+        std_y = sheet_y1 + 138
+        draw.text((header_x, std_y), "CANDIDATO: ____________________________", font=f_std, fill=(100, 110, 130, 255))
+        draw.text((sheet_x2 - 250, std_y), "NOTA: [  / 06 ]", font=f_std, fill=(100, 110, 130, 255))
+
+        # Linha divisória dupla
+        draw.line([(sheet_x1 + 110, std_y + 38), (sheet_x2 - 40, std_y + 38)], fill=(40, 60, 90, 255), width=2)
+        draw.line([(sheet_x1 + 110, std_y + 42), (sheet_x2 - 40, std_y + 42)], fill=(180, 190, 205, 255), width=1)
+
+        return img
+
+    # -------------------------------------------------------------------------
+    # 2. Renderização de Cenário de Pergunta (Normal e Revelado)
+    # -------------------------------------------------------------------------
+    def render_question_frame(self, item: Dict[str, Any], revealed: bool = False) -> Image.Image:
+        """Desenha a tela completa da questão com o estado de revelação correspondente."""
+        base_img = self._draw_paper_sheet()
+        draw = ImageDraw.Draw(base_img)
+
+        w = self.config.video_settings["width"]
+        margin_left = 160
+        box_width = w - margin_left - 84
+        box_right = margin_left + box_width
+
+        # 1. Faixa da Questão: Categoria & Número
+        curr_y = 265
+        cat_text = str(item.get("category", "GERAL")).upper()
+        num_val = item.get("number", 1)
+        num_str = item.get("number_str") or f"QUESTÃO {num_val:02d} DE {len(self.config.questions):02d}"
+
+        # Pill badge de categoria
+        f_cat = self._get_font(20, bold=True)
+        cat_w = draw.textlength(cat_text, font=f_cat) + 36
+        draw.rounded_rectangle([margin_left, curr_y, margin_left + cat_w, curr_y + 38], radius=8, fill=(30, 58, 138, 255))
+        draw.text((margin_left + 18, curr_y + 8), cat_text, font=f_cat, fill=(255, 255, 255, 255))
+
+        # Número da questão à direita
+        f_num = self._get_font(24, bold=True)
+        num_w = draw.textlength(num_str, font=f_num)
+        draw.text((box_right - num_w, curr_y + 6), num_str, font=f_num, fill=(15, 23, 42, 255))
+
+        curr_y += 62
+
+        # 2. Caixa da Pergunta (Statement Box)
+        q_text = item.get("question", "")
+        f_q = self._get_font(42, bold=True)
+
+        # Word wrap da pergunta para caber perfeitamente
+        wrapped_q_lines = self._wrap_text(q_text, f_q, box_width - 60)
+        line_height = 56
+        q_box_h = max(160, len(wrapped_q_lines) * line_height + 56)
+
+        draw.rounded_rectangle(
+            [margin_left, curr_y, box_right, curr_y + q_box_h],
+            radius=18,
+            fill=(255, 255, 255, 255),
+            outline=(190, 202, 220, 255),
+            width=2,
+        )
+
+        # Barra lateral azul na caixa da pergunta
+        draw.rounded_rectangle(
+            [margin_left, curr_y, margin_left + 12, curr_y + q_box_h],
+            radius=4,
+            fill=(37, 99, 235, 255),
+        )
+
+        ty = curr_y + 28
+        for line in wrapped_q_lines:
+            draw.text((margin_left + 34, ty), line, font=f_q, fill=(15, 23, 42, 255))
+            ty += line_height
+
+        curr_y += q_box_h + 40
+
+        # 3. Caixa de Dica de Tempo / Status
+        f_timer = self._get_font(22, bold=True)
+        if revealed:
+            timer_bg = (209, 250, 229, 255)
+            timer_outline = (16, 185, 129, 255)
+            timer_text = "✓ RESPOSTA CORRETA REVELADA!"
+            timer_text_color = (6, 95, 70, 255)
+        else:
+            timer_bg = (254, 243, 199, 255)
+            timer_outline = (245, 158, 11, 255)
+            timer_text = "⏱️ PENSE RÁPIDO... QUAL É A SUA RESPOSTA?"
+            timer_text_color = (146, 64, 14, 255)
+
+        draw.rounded_rectangle([margin_left, curr_y, box_right, curr_y + 54], radius=12, fill=timer_bg, outline=timer_outline, width=2)
+        tw = draw.textlength(timer_text, font=f_timer)
+        draw.text((margin_left + (box_width - tw) / 2, curr_y + 14), timer_text, font=f_timer, fill=timer_text_color)
+
+        curr_y += 84
+
+        # 4. Alternativas (A, B, C, D)
+        options = item.get("options", [])
+        correct_letter = str(item.get("correct_option", "A")).upper()
+        f_opt = self._get_font(34, bold=True)
+        f_letter = self._get_font(34, bold=True)
+        opt_card_h = 138
+        gap = 26
+
+        for opt in options:
+            letter = str(opt.get("letter", "")).upper()
+            text = opt.get("text", "")
+            is_correct = (letter == correct_letter)
+
+            card_y1 = curr_y
+            card_y2 = curr_y + opt_card_h
+
+            if revealed:
+                if is_correct:
+                    c_bg = (236, 253, 245, 255)       # Mint verde claro
+                    c_border = (5, 150, 105, 255)      # Emerald vibrante
+                    c_bwidth = 4
+                    c_circle = (5, 150, 105, 255)
+                    c_text = (6, 78, 59, 255)
+                else:
+                    c_bg = (248, 250, 252, 230)       # Muted
+                    c_border = (226, 232, 240, 255)
+                    c_bwidth = 1
+                    c_circle = (148, 163, 184, 255)
+                    c_text = (148, 163, 184, 255)
+            else:
+                c_bg = (255, 255, 255, 255)           # Branco puro
+                c_border = (203, 213, 225, 255)       # Slate suave
+                c_bwidth = 2
+                c_circle = (30, 41, 59, 255)          # Navy dark
+                c_text = (15, 23, 42, 255)
+
+            # Card de fundo
+            draw.rounded_rectangle([margin_left, card_y1, box_right, card_y2], radius=16, fill=c_bg, outline=c_border, width=c_bwidth)
+
+            # Círculo da letra da alternativa
+            circle_x = margin_left + 64
+            circle_y = card_y1 + (opt_card_h // 2)
+            cr = 30
+            draw.ellipse([circle_x - cr, circle_y - cr, circle_x + cr, circle_y + cr], fill=c_circle)
+
+            # Letra centralizada
+            lw = draw.textlength(letter, font=f_letter)
+            draw.text((circle_x - lw / 2, circle_y - 20), letter, font=f_letter, fill=(255, 255, 255, 255))
+
+            # Se for a correta revelada, desenha uma marcação circular de caneta/marcador ao redor
+            if revealed and is_correct:
+                draw.ellipse([circle_x - cr - 6, circle_y - cr - 6, circle_x + cr + 6, circle_y + cr + 6], outline=(16, 185, 129, 255), width=3)
+                draw.ellipse([circle_x - cr - 9, circle_y - cr - 9, circle_x + cr + 9, circle_y + cr + 9], outline=(5, 150, 105, 160), width=2)
+
+            # Texto da alternativa
+            draw.text((circle_x + 52, card_y1 + 48), text, font=f_opt, fill=c_text)
+
+            # Se revelada e correta, adiciona carimbo de acerto "✓ CORRETA"
+            if revealed and is_correct:
+                f_chk = self._get_font(22, bold=True)
+                chk_text = "✓ CORRETA"
+                chkw = draw.textlength(chk_text, font=f_chk) + 32
+                chk_x = box_right - chkw - 24
+                chk_y = card_y1 + 44
+                draw.rounded_rectangle([chk_x, chk_y, chk_x + chkw, chk_y + 48], radius=10, fill=(16, 185, 129, 255))
+                draw.text((chk_x + 16, chk_y + 11), chk_text, font=f_chk, fill=(255, 255, 255, 255))
+
+            curr_y += opt_card_h + gap
+
+        # 5. Explicação e Fonte Factual no Rodapé da Prova
+        if revealed and item.get("explanation"):
+            f_exp = self._get_font(20, bold=False)
+            f_src = self._get_font(18, bold=True)
+            exp_text = f"💡 Fato: {item['explanation']}"
+            src_text = f"📚 Fonte Factual: {item.get('source', 'Enciclopédia & Fontes Oficiais')}"
+
+            draw.text((margin_left, curr_y + 16), exp_text, font=f_exp, fill=(55, 65, 81, 255))
+            draw.text((margin_left, curr_y + 50), src_text, font=f_src, fill=(100, 116, 139, 255))
+
+        return base_img
+
+    # -------------------------------------------------------------------------
+    # 3. Telas Especiais: Abertura (Intro) e Encerramento (Outro)
+    # -------------------------------------------------------------------------
+    def render_intro_frame(self) -> Image.Image:
+        """Renderiza a folha de capa do quiz com título e chamada instigante."""
+        img = self._draw_paper_sheet()
+        draw = ImageDraw.Draw(img)
+
+        w = self.config.video_settings["width"]
+        f_big = self._get_font(52, bold=True)
+        f_sub = self._get_font(28, bold=False)
+        f_pill = self._get_font(26, bold=True)
+
+        center_y = 560
+        draw.rounded_rectangle([200, center_y - 20, w - 200, center_y + 48], radius=14, fill=(37, 99, 235, 255))
+        pill_txt = "★ TESTE DE CONHECIMENTOS GERAIS ★"
+        pw = draw.textlength(pill_txt, font=f_pill)
+        draw.text(((w - pw) / 2, center_y - 4), pill_txt, font=f_pill, fill=(255, 255, 255, 255))
+
+        center_y += 110
+        title_lines = ["SERÁ QUE VOCÊ", "CONSEGUE GABARITAR", "ESTE QUESTIONÁRIO?"]
+        for line in title_lines:
+            lw = draw.textlength(line, font=f_big)
+            draw.text(((w - lw) / 2, center_y), line, font=f_big, fill=(15, 23, 42, 255))
+            center_y += 72
+
+        center_y += 40
+        sub_lines = [
+            "6 Perguntas Selecionadas de Ciência, História e Natureza.",
+            "Você terá 2 segundos para pensar após cada pergunta.",
+            "Atenção: a última questão quase ninguém acerta!"
+        ]
+        for s in sub_lines:
+            sw = draw.textlength(s, font=f_sub)
+            draw.text(((w - sw) / 2, center_y), s, font=f_sub, fill=(71, 85, 105, 255))
+            center_y += 48
+
+        # Selo de exame oficial
+        stamp_y = center_y + 120
+        draw.rounded_rectangle([w // 2 - 220, stamp_y, w // 2 + 220, stamp_y + 80], radius=16, fill=(241, 245, 249, 255), outline=(203, 213, 225, 255), width=2)
+        f_stamp = self._get_font(24, bold=True)
+        st_txt = "📝 PROVA PRONTA • COMEÇANDO..."
+        stw = draw.textlength(st_txt, font=f_stamp)
+        draw.text(((w - stw) / 2, stamp_y + 24), st_txt, font=f_stamp, fill=(30, 41, 59, 255))
+
+        return img
+
+    def render_outro_frame(self) -> Image.Image:
+        """Renderiza a folha de notas e encerramento do desafio."""
+        img = self._draw_paper_sheet()
+        draw = ImageDraw.Draw(img)
+
+        w = self.config.video_settings["width"]
+        f_big = self._get_font(48, bold=True)
+        f_sub = self._get_font(30, bold=False)
+        f_badge = self._get_font(24, bold=True)
+
+        center_y = 520
+        badge_txt = "RESULTADO FINAL"
+        bw = draw.textlength(badge_txt, font=f_badge) + 40
+        draw.rounded_rectangle([(w - bw) / 2, center_y, (w + bw) / 2, center_y + 44], radius=10, fill=(5, 150, 105, 255))
+        draw.text(((w - bw) / 2 + 20, center_y + 8), badge_txt, font=f_badge, fill=(255, 255, 255, 255))
+
+        center_y += 90
+        t1 = "E AÍ, QUAL FOI A SUA NOTA?"
+        tw1 = draw.textlength(t1, font=f_big)
+        draw.text(((w - tw1) / 2, center_y), t1, font=f_big, fill=(15, 23, 42, 255))
+
+        center_y += 76
+        t2 = "QUANTAS QUESTÕES VOCÊ ACERTOU?"
+        tw2 = draw.textlength(t2, font=f_sub)
+        draw.text(((w - tw2) / 2, center_y), t2, font=f_sub, fill=(71, 85, 105, 255))
+
+        center_y += 90
+        score_cards = [
+            ("6 / 6", "Gênio Supremo! Gabaritou!"),
+            ("4 a 5", "Muito bom! Quase perfeito!"),
+            ("1 a 3", "Valeu a tentativa! Treine mais!"),
+        ]
+        f_sc = self._get_font(26, bold=True)
+        f_desc = self._get_font(24, bold=False)
+        for sc, desc in score_cards:
+            draw.rounded_rectangle([180, center_y, w - 180, center_y + 70], radius=12, fill=(255, 255, 255, 255), outline=(203, 213, 225, 255), width=2)
+            draw.text((210, center_y + 18), sc, font=f_sc, fill=(37, 99, 235, 255))
+            draw.text((340, center_y + 20), desc, font=f_desc, fill=(30, 41, 59, 255))
+            center_y += 94
+
+        center_y += 50
+        cta_text = "👇 DEIXE SUA PONTUAÇÃO NOS COMENTÁRIOS! 👇"
+        f_cta = self._get_font(26, bold=True)
+        ctaw = draw.textlength(cta_text, font=f_cta)
+        draw.text(((w - ctaw) / 2, center_y), cta_text, font=f_cta, fill=(220, 38, 38, 255))
+
+        return img
+
+    # -------------------------------------------------------------------------
+    # 4. Geração de Thumbnail Independente (9:16)
+    # -------------------------------------------------------------------------
+    def generate_thumbnail(self) -> str:
+        """Gera uma thumbnail independente vertical 1080x1920 de alto contraste."""
+        img = self._draw_paper_sheet()
+        draw = ImageDraw.Draw(img)
+        w = self.config.video_settings["width"]
+
+        # Banner impactante no topo
+        draw.rounded_rectangle([120, 320, w - 120, 420], radius=16, fill=(220, 38, 38, 255))
+        f_top = self._get_font(36, bold=True)
+        t_top = "TESTE DE CONHECIMENTOS GERAIS"
+        tw = draw.textlength(t_top, font=f_top)
+        draw.text(((w - tw) / 2, 348), t_top, font=f_top, fill=(255, 255, 255, 255))
+
+        # Pergunta clássica intrigante em destaque
+        f_q = self._get_font(52, bold=True)
+        q_lines = ["QUANTOS CORAÇÕES", "TEM UM POLVO?"]
+        qy = 500
+        for ql in q_lines:
+            qw = draw.textlength(ql, font=f_q)
+            draw.text(((w - qw) / 2, qy), ql, font=f_q, fill=(15, 23, 42, 255))
+            qy += 74
+
+        # 4 cards de alternativas para preview visual
+        opts = [
+            ("A", "1 CORAÇÃO"),
+            ("B", "2 CORAÇÕES"),
+            ("C", "3 CORAÇÕES"),
+            ("D", "4 CORAÇÕES"),
+        ]
+        f_opt = self._get_font(36, bold=True)
+        f_let = self._get_font(34, bold=True)
+        card_y = 740
+
+        for letter, text in opts:
+            draw.rounded_rectangle([160, card_y, w - 160, card_y + 110], radius=16, fill=(255, 255, 255, 255), outline=(203, 213, 225, 255), width=2)
+            draw.ellipse([210, card_y + 25, 270, card_y + 85], fill=(30, 41, 59, 255))
+            lw = draw.textlength(letter, font=f_let)
+            draw.text((240 - lw / 2, card_y + 36), letter, font=f_let, fill=(255, 255, 255, 255))
+            draw.text((310, card_y + 34), text, font=f_opt, fill=(15, 23, 42, 255))
+            card_y += 136
+
+        # Sticker chamativo "99% ERRAM A ÚLTIMA!"
+        draw.rounded_rectangle([140, card_y + 40, w - 140, card_y + 140], radius=18, fill=(254, 240, 138, 255), outline=(234, 179, 8, 255), width=3)
+        f_stk = self._get_font(38, bold=True)
+        stk_txt = "🔥 DUVIDO VOCÊ ACERTAR TODAS!"
+        stkw = draw.textlength(stk_txt, font=f_stk)
+        draw.text(((w - stkw) / 2, card_y + 66), stk_txt, font=f_stk, fill=(133, 77, 14, 255))
+
+        out_thumb = self.config.output_thumbnail_path
+        img.convert("RGB").save(out_thumb, "JPEG", quality=95)
+        logger.info(f"[THUMBNAIL] Gerada com sucesso: {out_thumb}")
+        return out_thumb
+
+    # -------------------------------------------------------------------------
+    # 5. Efeito Sonoro Procedural de Acerto (Chime Harmônico)
+    # -------------------------------------------------------------------------
+    def generate_correct_ding_sfx(self) -> str:
+        """Sintetiza proceduralmente um som de sino/ding de acerto límpido e agradável."""
+        out_wav = os.path.join(self.config.temp_dir, "sfx_correct_ding.wav")
+        if os.path.exists(out_wav) and os.path.getsize(out_wav) > 500:
+            return out_wav
+
+        sample_rate = 44100
+        duration = 0.55  # 550ms
+        num_samples = int(sample_rate * duration)
+
+        # Tríade harmônica límpida (C6: 1046.5Hz, E6: 1318.5Hz, G6: 1567.9Hz)
+        freqs = [1046.5, 1318.5, 1567.9]
+        weights = [0.55, 0.35, 0.20]
+
+        samples: List[int] = []
+        for n in range(num_samples):
+            t = n / sample_rate
+            # Ataque ultra rápido de 4ms
+            attack = min(1.0, t / 0.004)
+            # Decaimento suave exponencial
+            decay = math.exp(-t * 6.5)
+            envelope = attack * decay
+
+            val = 0.0
+            for freq, weight in zip(freqs, weights):
+                val += weight * math.sin(2.0 * math.pi * freq * t)
+
+            sample_int = int(val * envelope * 28000)
+            sample_int = max(-32768, min(32767, sample_int))
+            samples.append(sample_int)
+
+        with wave.open(out_wav, "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            raw_data = struct.pack(f"<{len(samples)}h", *samples)
+            wf.writeframes(raw_data)
+
+        logger.info(f"[SFX] Chime de acerto sintetizado com sucesso: {out_wav}")
+        return out_wav
+
+    # -------------------------------------------------------------------------
+    # 6. Síntese de Voz Edge TTS
+    # -------------------------------------------------------------------------
+    async def synthesize_voice(self, text: str, output_path: str) -> float:
+        """Gera áudio natural pt-BR via Edge TTS e retorna a duração factual."""
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            probe = probe_media(output_path)
+            dur = float(probe.get("format_duration", 0.0) or 0.0)
+            if dur > 0.1:
+                return dur
+
+        import edge_tts
+        v_name = self.config.voice_settings.get("voice_name", "pt-BR-AntonioNeural")
+        v_rate = self.config.voice_settings.get("voice_rate", "+10%")
+
+        comm = edge_tts.Communicate(text=text, voice=v_name, rate=v_rate)
+        await comm.save(output_path)
+
+        probe = probe_media(output_path)
+        dur = float(probe.get("format_duration", 0.0) or 0.0)
+        return dur
+
+    # -------------------------------------------------------------------------
+    # 7. Mixagem de Áudio de Cada Segmento
+    # -------------------------------------------------------------------------
+    def mix_scene_audio(
+        self,
+        narration_path: str,
+        output_audio_path: str,
+        total_duration: float,
+        sfx_path: Optional[str] = None,
+        sfx_start_time: float = 0.0,
+    ) -> bool:
+        """Combina narração com SFX de revelação no ponto exato da revelação."""
+        if sfx_path and os.path.exists(sfx_path):
+            delay_ms = int(max(0.0, sfx_start_time) * 1000)
+            filter_complex = (
+                f"[0:a]volume=1.0[voice];"
+                f"[1:a]volume=0.90,adelay={delay_ms}|{delay_ms}[sfx];"
+                f"[voice][sfx]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]"
+            )
+            cmd = [
+                self.ffmpeg_bin, "-y",
+                "-i", os.path.abspath(narration_path),
+                "-i", os.path.abspath(sfx_path),
+                "-filter_complex", filter_complex,
+                "-map", "[aout]",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+                "-t", f"{total_duration:.3f}",
+                os.path.abspath(output_audio_path),
+            ]
+        else:
+            cmd = [
+                self.ffmpeg_bin, "-y",
+                "-i", os.path.abspath(narration_path),
+                "-af", f"apad=whole_dur={total_duration:.3f}",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+                "-t", f"{total_duration:.3f}",
+                os.path.abspath(output_audio_path),
+            ]
+
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        return res.returncode == 0 and os.path.exists(output_audio_path)
+
+    # -------------------------------------------------------------------------
+    # 8. Renderização de Vídeo de Cada Segmento (FFmpeg com Ken Burns sutil)
+    # -------------------------------------------------------------------------
+    def render_question_video_scene(
+        self,
+        scene_id: str,
+        img_unrevealed: str,
+        img_revealed: str,
+        audio_path: str,
+        duration: float,
+        t_reveal_start: float,
+    ) -> str:
+        """Gera o vídeo do segmento da questão com transição suave da revelação e leve zoompan."""
+        fps = self.config.video_settings.get("fps", 30)
+        total_frames = int(duration * fps) + 2
+        output_scene_mp4 = os.path.join(self.config.temp_dir, f"scene_{scene_id}.mp4")
+
+        # Ken Burns sutil sobre a folha de papel: leve zoom lento de 1.00 para 1.025
+        # Com overlay da folha revelada entrando no timestamp exato t_reveal_start
+        filter_complex = (
+            f"[0:v]zoompan=z='min(zoom+0.0004,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[base_motion];"
+            f"[1:v]zoompan=z='min(zoom+0.0004,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[rev_motion];"
+            f"[base_motion][rev_motion]overlay=0:0:enable='gte(t,{t_reveal_start:.2f})'[vfinal]"
+        )
+
+        cmd = [
+            self.ffmpeg_bin, "-y",
+            "-loop", "1", "-i", os.path.abspath(img_unrevealed),
+            "-loop", "1", "-i", os.path.abspath(img_revealed),
+            "-i", os.path.abspath(audio_path),
+            "-filter_complex", filter_complex,
+            "-map", "[vfinal]",
+            "-map", "2:a",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+            "-t", f"{duration:.3f}",
+            output_scene_mp4,
+        ]
+
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.error(f"[RENDER] Falha na renderização de {scene_id}: {res.stderr[-500:]}")
+            raise RuntimeError(f"FFmpeg falhou ao renderizar {scene_id}")
+
+        return output_scene_mp4
+
+    def render_static_scene(self, scene_id: str, img_path: str, audio_path: str, duration: float) -> str:
+        """Renderiza uma cena com imagem estática suave e leve movimento Ken Burns."""
+        fps = self.config.video_settings.get("fps", 30)
+        total_frames = int(duration * fps) + 2
+        output_mp4 = os.path.join(self.config.temp_dir, f"scene_{scene_id}.mp4")
+
+        filter_complex = (
+            f"[0:v]zoompan=z='min(zoom+0.0004,1.02)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[vfinal]"
+        )
+
+        cmd = [
+            self.ffmpeg_bin, "-y",
+            "-loop", "1", "-i", os.path.abspath(img_path),
+            "-i", os.path.abspath(audio_path),
+            "-filter_complex", filter_complex,
+            "-map", "[vfinal]",
+            "-map", "1:a",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+            "-t", f"{duration:.3f}",
+            output_mp4,
+        ]
+
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.error(f"[RENDER] Falha na renderização estática de {scene_id}: {res.stderr[-500:]}")
+            raise RuntimeError(f"FFmpeg falhou ao renderizar estático {scene_id}")
+
+        return output_mp4
+
+    # -------------------------------------------------------------------------
+    # 9. Concatenação e Mixagem da Trilha BGM
+    # -------------------------------------------------------------------------
+    def concat_and_mix_bgm(self, scene_files: List[str]) -> bool:
+        """Concatena todas as cenas e mixa com a trilha de fundo, aplicando faststart."""
+        concat_txt = os.path.join(self.config.temp_dir, "concat_list.txt")
+        with open(concat_txt, "w", encoding="utf-8") as f:
+            for sf in scene_files:
+                clean_path = os.path.abspath(sf).replace("\\", "/")
+                f.write(f"file '{clean_path}'\n")
+
+        staged_concat = os.path.join(self.config.temp_dir, "staged_concat.mp4")
+        cmd_concat = [
+            self.ffmpeg_bin, "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", os.path.abspath(concat_txt),
+            "-c", "copy",
+            staged_concat,
+        ]
+        res_c = subprocess.run(cmd_concat, capture_output=True, text=True)
+        if res_c.returncode != 0 or not os.path.exists(staged_concat):
+            logger.error(f"[CONCAT] Erro na concatenação: {res_c.stderr[-400:]}")
+            return False
+
+        probe = probe_media(staged_concat)
+        total_dur = float(probe.get("format_duration", 0.0) or 68.0)
+
+        bgm_path = self.config.video_settings.get("bgm_path", "")
+        bgm_vol = float(self.config.video_settings.get("bgm_volume", 0.12))
+        fade_start = max(0.0, total_dur - 3.0)
+
+        filter_complex = (
+            f"[0:a]volume=1.0[voice];"
+            f"[1:a]volume={bgm_vol:.2f},afade=t=out:st={fade_start:.2f}:d=3[music];"
+            f"[voice][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.98[aout]"
+        )
+
+        out_mp4 = self.config.output_video_path
+        cmd_final = [
+            self.ffmpeg_bin, "-y",
+            "-i", os.path.abspath(staged_concat),
+            "-stream_loop", "-1",
+            "-i", os.path.abspath(bgm_path),
+            "-filter_complex", filter_complex,
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{total_dur:.3f}",
+            "-movflags", "+faststart",
+            os.path.abspath(out_mp4),
+        ]
+
+        res_f = subprocess.run(cmd_final, capture_output=True, text=True)
+        return res_f.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1000
+
+    # -------------------------------------------------------------------------
+    # 10. Pipeline Completo de Renderização
+    # -------------------------------------------------------------------------
+    async def render_async(self) -> Dict[str, Any]:
+        """Executa a renderização completa do protótipo e grava os metadados."""
+        t_start = time.perf_counter()
+        logger.info(f"=== INICIANDO RENDERIZAÇÃO: QUIZ FOLHA DE PAPEL ({self.config.quiz_title}) ===")
+
+        # 1. Gerar Thumbnail
+        self.generate_thumbnail()
+
+        # 2. Gerar SFX de Acerto
+        sfx_ding = self.generate_correct_ding_sfx()
+
+        scene_files: List[str] = []
+        timing_records: List[Dict[str, Any]] = []
+
+        # 3. Renderizar Cena de Abertura (Intro Hook)
+        intro_cfg = self.config.intro_hook
+        if intro_cfg.get("enabled", True):
+            intro_img = os.path.join(self.config.temp_dir, "frame_intro.png")
+            self.render_intro_frame().save(intro_img, "PNG")
+
+            intro_audio = os.path.join(self.config.temp_dir, "narration_intro.mp3")
+            dur_intro = await self.synthesize_voice(intro_cfg["narration"], intro_audio)
+            dur_intro_tot = dur_intro + 0.35  # Leve respiro
+
+            intro_scene_audio = os.path.join(self.config.temp_dir, "audio_intro.mp4")
+            self.mix_scene_audio(intro_audio, intro_scene_audio, dur_intro_tot)
+
+            intro_mp4 = self.render_static_scene("intro", intro_img, intro_scene_audio, dur_intro_tot)
+            scene_files.append(intro_mp4)
+            timing_records.append({"scene": "intro", "duration": dur_intro_tot})
+
+        # 4. Renderizar Cada Pergunta (Questões 1 a N)
+        exp_sec = float(self.config.timing_settings.get("expectation_sec", 2.0))
+        rev_sec = float(self.config.timing_settings.get("reveal_sec", 1.2))
+
+        for idx, item in enumerate(self.config.questions):
+            scene_id = item["id"]
+            logger.info(f"Processando questão {scene_id} ({idx + 1}/{len(self.config.questions)})...")
+
+            # Imagens da questão (Não revelada e Revelada)
+            img_unrev = os.path.join(self.config.temp_dir, f"frame_{scene_id}_unrevealed.png")
+            img_rev = os.path.join(self.config.temp_dir, f"frame_{scene_id}_revealed.png")
+
+            self.render_question_frame(item, revealed=False).save(img_unrev, "PNG")
+            self.render_question_frame(item, revealed=True).save(img_rev, "PNG")
+
+            # Síntese da Narração da Questão
+            audio_narr = os.path.join(self.config.temp_dir, f"narration_{scene_id}.mp3")
+            dur_narr = await self.synthesize_voice(item["narration"], audio_narr)
+
+            # Pacing: Narração + Expectativa (2s) + Revelação (1.2s)
+            t_reveal_start = dur_narr + exp_sec
+            tot_dur = t_reveal_start + rev_sec
+
+            audio_scene = os.path.join(self.config.temp_dir, f"audio_{scene_id}.mp4")
+            self.mix_scene_audio(
+                narration_path=audio_narr,
+                output_audio_path=audio_scene,
+                total_duration=tot_dur,
+                sfx_path=sfx_ding,
+                sfx_start_time=t_reveal_start,
+            )
+
+            q_mp4 = self.render_question_video_scene(
+                scene_id=scene_id,
+                img_unrevealed=img_unrev,
+                img_revealed=img_rev,
+                audio_path=audio_scene,
+                duration=tot_dur,
+                t_reveal_start=t_reveal_start,
+            )
+            scene_files.append(q_mp4)
+            timing_records.append({
+                "scene": scene_id,
+                "narration_sec": dur_narr,
+                "expectation_sec": exp_sec,
+                "reveal_sec": rev_sec,
+                "total_duration": tot_dur,
+            })
+
+        # 5. Renderizar Cena de Encerramento (Outro Challenge)
+        outro_cfg = self.config.outro_challenge
+        if outro_cfg.get("enabled", True):
+            outro_img = os.path.join(self.config.temp_dir, "frame_outro.png")
+            self.render_outro_frame().save(outro_img, "PNG")
+
+            outro_audio = os.path.join(self.config.temp_dir, "narration_outro.mp3")
+            dur_outro = await self.synthesize_voice(outro_cfg["narration"], outro_audio)
+            dur_outro_tot = dur_outro + 0.6  # Fade out agradável
+
+            outro_scene_audio = os.path.join(self.config.temp_dir, "audio_outro.mp4")
+            self.mix_scene_audio(outro_audio, outro_scene_audio, dur_outro_tot)
+
+            outro_mp4 = self.render_static_scene("outro", outro_img, outro_scene_audio, dur_outro_tot)
+            scene_files.append(outro_mp4)
+            timing_records.append({"scene": "outro", "duration": dur_outro_tot})
+
+        # 6. Concatenação e Mixagem Final
+        logger.info(f"Concatenando {len(scene_files)} segmentos com trilha ambiente...")
+        ok_concat = self.concat_and_mix_bgm(scene_files)
+        if not ok_concat:
+            raise RuntimeError("Falha na concatenação e mixagem final do vídeo.")
+
+        t_elapsed = time.perf_counter() - t_start
+        probe = probe_media(self.config.output_video_path)
+        final_dur = float(probe.get("format_duration", 0.0) or 0.0)
+
+        # 7. Gravação de Metadados JSON no Diretório do Protótipo
+        meta_path = os.path.join(os.path.dirname(self.config.output_video_path), "metadata.json")
+        metadata = {
+            "format": "quiz_paper_prototype",
+            "prototype_code": "P0",
+            "quiz_title": self.config.quiz_title,
+            "niche": self.config.niche,
+            "video_path": self.config.output_video_path,
+            "thumbnail_path": self.config.output_thumbnail_path,
+            "num_questions": len(self.config.questions),
+            "video_duration_sec": final_dur,
+            "render_time_sec": round(t_elapsed, 2),
+            "meets_min_target_duration": final_dur >= self.config.min_target_duration_sec,
+            "factual_sources": [
+                {"id": q["id"], "question": q["question"], "answer": q["correct_option"], "source": q.get("source")}
+                for q in self.config.questions
+            ],
+            "timings": timing_records,
+            "video_stream": probe.get("video_stream", {}),
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"=== PROTÓTIPO P0 CONCLUÍDO COM SUCESSO! Duração: {final_dur:.2f}s | Tempo de Render: {t_elapsed:.2f}s ===")
+        return metadata
+
+    def render(self) -> Dict[str, Any]:
+        """Wrapper síncrono para render_async."""
+        return asyncio.run(self.render_async())
+
+    def _wrap_text(self, text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int) -> List[str]:
+        """Divide o texto em linhas de largura máxima garantida."""
+        dummy_img = Image.new("RGBA", (1, 1))
+        d = ImageDraw.Draw(dummy_img)
+
+        words = text.split()
+        lines: List[str] = []
+        cur_line = ""
+
+        for word in words:
+            candidate = f"{cur_line} {word}".strip() if cur_line else word
+            if d.textlength(candidate, font=font) <= max_width:
+                cur_line = candidate
+            else:
+                if cur_line:
+                    lines.append(cur_line)
+                cur_line = word
+        if cur_line:
+            lines.append(cur_line)
+
+        return lines
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description="Renderiza protótipo de Quiz no formato Folha de Papel (P0)")
+    parser.add_argument(
+        "--config",
+        default="resource/quiz_templates/quiz_template_perguntas_respostas_papel.json",
+        help="Caminho do arquivo de configuração JSON",
+    )
+    args = parser.parse_args()
+
+    cfg_path = _resolve_path(args.config)
+    if not os.path.exists(cfg_path):
+        logger.error(f"Configuração não encontrada: {cfg_path}")
+        sys.exit(1)
+
+    config = PaperQuizConfig.from_json(cfg_path)
+    engine = PaperQuizEngine(config)
+    meta = engine.render()
+
+    print("\n" + "=" * 60)
+    print("RELATÓRIO DO PROTÓTIPO P0:")
+    print(f"Vídeo MP4:   {meta['video_path']}")
+    print(f"Thumbnail:   {meta['thumbnail_path']}")
+    print(f"Duração:     {meta['video_duration_sec']:.2f}s (Min > 60s: {meta['meets_min_target_duration']})")
+    print(f"Questões:    {meta['num_questions']}")
+    print(f"Tempo total: {meta['render_time_sec']:.2f}s")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

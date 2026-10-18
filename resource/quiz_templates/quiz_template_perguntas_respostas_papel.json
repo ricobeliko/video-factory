@@ -1,0 +1,139 @@
+{
+  "quiz_type": "multiple_choice_paper",
+  "niche": "conhecimentos_gerais",
+  "quiz_title": "QUIZ CONHECIMENTOS GERAIS",
+  "sheet_header": {
+    "title": "AVALIAÇÃO DE CONHECIMENTOS",
+    "subtitle": "TESTE DE RACIOCÍNIO & FATOS REAIS",
+    "exam_code": "PROVA N° 101 - TURBO QUIZ"
+  },
+  "output_video_path": "storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4",
+  "output_thumbnail_path": "storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg",
+  "temp_dir": "storage/poc_quiz_papel/temp",
+  "min_target_duration_sec": 60.0,
+  "target_duration_range": [65.0, 75.0],
+  "video_settings": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font_bold": "resource/fonts/BeVietnamPro-Bold.ttf",
+    "font_medium": "resource/fonts/BeVietnamPro-Medium.ttf",
+    "bgm_path": "resource/songs/output000.mp3",
+    "bgm_volume": 0.12
+  },
+  "voice_settings": {
+    "voice_name": "pt-BR-AntonioNeural",
+    "voice_rate": "+10%"
+  },
+  "timing_settings": {
+    "expectation_sec": 2.0,
+    "reveal_sec": 1.2
+  },
+  "intro_hook": {
+    "enabled": true,
+    "narration": "Desafio de conhecimentos gerais! Será que você consegue acertar todas as perguntas? Vamos para a questão número um!"
+  },
+  "outro_challenge": {
+    "enabled": true,
+    "narration": "E aí, quantas você conseguiu acertar? Deixe sua pontuação nos comentários e siga para mais desafios diários!"
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "number": 1,
+      "category": "ASTRONOMIA",
+      "question": "Qual é o maior planeta do nosso Sistema Solar?",
+      "options": [
+        {"letter": "A", "text": "Marte"},
+        {"letter": "B", "text": "Júpiter"},
+        {"letter": "C", "text": "Saturno"},
+        {"letter": "D", "text": "Vênus"}
+      ],
+      "correct_option": "B",
+      "narration": "Primeira questão: Qual é o maior planeta do nosso Sistema Solar? Letra A: Marte. Letra B: Júpiter. Letra C: Saturno. Ou Letra D: Vênus.",
+      "explanation": "Júpiter tem duas vezes e meia a massa de todos os outros planetas combinados.",
+      "source": "NASA Solar System Exploration (science.nasa.gov/jupiter)"
+    },
+    {
+      "id": "q2",
+      "number": 2,
+      "category": "BIOLOGIA MARINHA",
+      "question": "Quantos corações tem um polvo?",
+      "options": [
+        {"letter": "A", "text": "1 coração"},
+        {"letter": "B", "text": "2 corações"},
+        {"letter": "C", "text": "3 corações"},
+        {"letter": "D", "text": "4 corações"}
+      ],
+      "correct_option": "C",
+      "narration": "Segunda questão: Quantos corações tem um polvo? Letra A: um coração. Letra B: dois corações. Letra C: três corações. Ou Letra D: quatro corações.",
+      "explanation": "Dois corações bombeiam sangue para as brânquias e o terceiro bombeia para o corpo.",
+      "source": "Smithsonian Magazine & National Geographic (Cephalopod Physiology)"
+    },
+    {
+      "id": "q3",
+      "number": 3,
+      "category": "ZOOLOGIA",
+      "question": "Qual é o animal terrestre mais rápido do planeta?",
+      "options": [
+        {"letter": "A", "text": "Leão"},
+        {"letter": "B", "text": "Guepardo"},
+        {"letter": "C", "text": "Antílope"},
+        {"letter": "D", "text": "Cavalo"}
+      ],
+      "correct_option": "B",
+      "narration": "Terceira questão: Qual é o animal terrestre mais rápido do planeta? Letra A: Leão. Letra B: Guepardo. Letra C: Antílope. Ou Letra D: Cavalo.",
+      "explanation": "O guepardo pode atingir velocidades entre 100 e 120 quilômetros por hora.",
+      "source": "National Geographic Animals (Acinonyx jubatus facts)"
+    },
+    {
+      "id": "q4",
+      "number": 4,
+      "category": "QUÍMICA & COSMO",
+      "question": "Qual é o elemento químico mais abundante no Universo?",
+      "options": [
+        {"letter": "A", "text": "Oxigênio"},
+        {"letter": "B", "text": "Carbono"},
+        {"letter": "C", "text": "Hidrogênio"},
+        {"letter": "D", "text": "Hélio"}
+      ],
+      "correct_option": "C",
+      "narration": "Quarta questão: Qual é o elemento químico mais abundante no Universo? Letra A: Oxigênio. Letra B: Carbono. Letra C: Hidrogênio. Ou Letra D: Hélio.",
+      "explanation": "O hidrogênio representa aproximadamente 75% de toda a massa bariônica universal.",
+      "source": "Royal Society of Chemistry & NASA Astrophysics"
+    },
+    {
+      "id": "q5",
+      "number": 5,
+      "category": "GEOGRAFIA & HISTÓRIA",
+      "question": "Em qual país está localizada a famosa Grande Muralha?",
+      "options": [
+        {"letter": "A", "text": "Japão"},
+        {"letter": "B", "text": "China"},
+        {"letter": "C", "text": "Índia"},
+        {"letter": "D", "text": "Mongólia"}
+      ],
+      "correct_option": "B",
+      "narration": "Quinta questão: Em qual país está localizada a famosa Grande Muralha? Letra A: Japão. Letra B: China. Letra C: Índia. Ou Letra D: Mongólia.",
+      "explanation": "A Grande Muralha da China é uma imensa fortificação histórica com mais de 21 mil km.",
+      "source": "UNESCO World Heritage Centre (whc.unesco.org/en/list/438)"
+    },
+    {
+      "id": "q6",
+      "number": 6,
+      "number_str": "DESAFIO FINAL",
+      "category": "ANATOMIA HUMANA",
+      "question": "Quantos ossos possui o corpo de um ser humano adulto?",
+      "options": [
+        {"letter": "A", "text": "186 ossos"},
+        {"letter": "B", "text": "206 ossos"},
+        {"letter": "C", "text": "248 ossos"},
+        {"letter": "D", "text": "300 ossos"}
+      ],
+      "correct_option": "B",
+      "narration": "Última questão para fechar o teste: Quantos ossos possui o corpo de um ser humano adulto? Letra A: 186. Letra B: 206. Letra C: 248. Ou Letra D: 300 ossos.",
+      "explanation": "Um adulto possui 206 ossos, após a fusão de vários ossos presentes no nascimento.",
+      "source": "Gray's Anatomy & National Institutes of Health (NIH)"
+    }
+  ]
+}

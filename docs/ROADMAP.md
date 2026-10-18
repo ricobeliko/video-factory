@@ -212,8 +212,26 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Proteção editorial contra CTAs religiosos automáticos: canais de temas gerais usam `engagement_cta` (seguir/reter neutro); encerramentos religiosos restritos a nichos de fé ou quando expressamente selecionados.
     - Vínculo inequívoco de destino social via Post for Me: canais criados para acúmulo de estoque sem conta vinculada geram normalmente com publicação desativada (`is_enabled=0`).
     - Compatibilidade retroativa integral preservada para canais tradicionais existentes.
-    - 6 testes direcionados PASS em `test/services/test_channel_factory.py`.
   - **Q5-B2B / Próximo Passo:** Push controlado para `origin/main` e deploy seguro via `update_production.ps1` no PC Forte. **Aguardando autorização humana explícita.**
+
+- **Fase P0 — Protótipo Isolado Quiz Perguntas e Respostas (Folha de Papel):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - **Status:** Renderização completa de 1 vídeo MP4 vertical (1080x1920) e thumbnail 9:16 independente concluídas com sucesso.
+  - **Objetivo:** Segundo formato de vídeo independente do nicho inspirado em folha de prova/questionário impresso com perguntas, 4 alternativas (A, B, C, D) e revelação visual com chime harmônico.
+  - **Motor Dedicado:** `scripts/poc_quiz_paper_render.py` (`PaperQuizConfig` e `PaperQuizEngine`), reutilizando Edge TTS, Pillow, FFmpeg com `zoompan` para movimento sutil de câmera e síntese de áudio procedural em PCM.
+  - **Template Canônico:** `resource/quiz_templates/quiz_template_perguntas_respostas_papel.json` e cópia em `storage/poc_quiz_papel/quiz_papel_conhecimentos_gerais.json`.
+  - **Artefatos Gerados:**
+    - Vídeo final: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (121.96s, 6.44 MB, 1080x1920, 30fps).
+    - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
+    - Metadados de renderização: `storage/poc_quiz_papel/metadata.json`.
+  - **Conteúdo Factual Auditado (6 Questões):**
+    1. Maior planeta do Sistema Solar: Júpiter (Fonte: NASA Solar System Exploration)
+    2. Quantidade de corações do polvo: 3 corações (Fonte: Smithsonian Magazine / National Geographic)
+    3. Animal terrestre mais veloz: Guepardo (Fonte: National Geographic Animals)
+    4. Elemento químico mais abundante no Universo: Hidrogênio (Fonte: Royal Society of Chemistry / NASA)
+    5. Localização da Grande Muralha: China (Fonte: UNESCO World Heritage Centre)
+    6. Quantidade de ossos do corpo humano adulto: 206 ossos (Fonte: Gray's Anatomy / NIH)
+  - **Validação:** 4 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py` (3.77s) + inspeção ffprobe confirmando conformidade de codec, bitrate, fps e duração.
+  - **Isolamento Total:** Zero alterações em canais de produção, banco de dados, Scheduler ou Post for Me. Formato Q0-R 100% preservado.
 
 ---
 

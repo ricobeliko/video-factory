@@ -50,6 +50,7 @@
 
 ## Status Consolidado por Componente
 
+- **POST_FOR_ME_MULTI_PROJECT_STATUS** = DEV VALIDATED (Suporte multiprojeto Post for Me: descoberta unificada nos projetos 'farme videos LABEL' [POST_FOR_ME_API_KEY] e 'tiktok' [POST_FOR_ME_TIKTOK_API_KEY / POST_FOR_ME_QUICKSTART_API_KEY]; migração aditiva da coluna project_id em publishing_channels; roteamento determinístico de cliente por canal para descoberta, upload, criação, polling, retentativas e reconciliação; sanitização contra vazamento de segredos; compatibilidade com canais legados preservada; 8/8 testes direcionados PASS)
 - **FLOW-MA1 Multi-Account Provider Pool** = MERGED / READY_FOR_PRODUCTION_DEPLOY (Pool de contas com user_data_dir isolado, login humano inicial via Edge nativo, zero senhas persistidas, stickiness da task, failover seguro pré-dispatch, telemetria de créditos FLOW_UI_VERIFIED / LOCAL_ESTIMATE / UNKNOWN, CLI operacional em `flow_account_pool.py`, Flow estritamente single-flight)
 - **FLOW-UI-001 Multi-Account Credit Telemetry in UI** = DEV VALIDATED (Telemetria visual das contas Flow integrada ao Factory Live via snapshot compartilhado de executions/live)
 - **FLOW-CREDIT-002 Real Credit Balance Extraction** = DEV VALIDATED (Extração factual do saldo real de créditos no verify sem consumir créditos nem gerar vídeos)

@@ -1725,7 +1725,13 @@ def _run_cross_post(
                             err_messages.append(f"TikTok: {err_msg}")
                         else:
                             tt_chan = tt_ch_list[0]["id"]
-                            tt_res = post_for_me.post_for_me_quickstart_client.publish_tiktok_video(
+                            tt_client = post_for_me.get_client_for_channel(
+                                channel_id=tt_chan,
+                                platform="tiktok",
+                                profile_id=effective_pid,
+                                db_path=db_path,
+                            )
+                            tt_res = tt_client.publish_tiktok_video(
                                 video_path=video_path,
                                 caption=post_title,
                                 task_id=task_id,
@@ -2057,13 +2063,15 @@ def publish_task(
     if check_set:
         if "youtube" in check_set:
             if yt_provider == youtube_publisher.PROVIDER_POST_FOR_ME:
-                if not post_for_me.post_for_me_client.is_configured():
-                    return False, "Post for Me is not configured (missing POST_FOR_ME_API_KEY)"
+                c_yt = post_for_me.get_client_for_channel(channel_id=channel_id, platform="youtube", db_path=db_path)
+                if not c_yt.is_configured():
+                    return False, f"Post for Me is not configured (missing API Key for project '{c_yt.project_id}')"
             else:
                 needs_upload_post = True
         if "tiktok" in check_set:
-            if not post_for_me.post_for_me_quickstart_client.is_configured():
-                return False, "Post for Me Quickstart is not configured (missing POST_FOR_ME_QUICKSTART_API_KEY)"
+            c_tt = post_for_me.get_client_for_channel(channel_id=channel_id, platform="tiktok", db_path=db_path)
+            if not c_tt.is_configured():
+                return False, f"Post for Me is not configured (missing API Key for project '{c_tt.project_id}')"
         other_platforms = check_set - {"youtube", "tiktok"}
         if other_platforms:
             needs_upload_post = True
@@ -2506,7 +2514,13 @@ def publish_task(
                             }
                             err_messages.append(f"TikTok: {err_msg}")
                         else:
-                            tt_res = post_for_me.post_for_me_quickstart_client.publish_tiktok_video(
+                            tt_client = post_for_me.get_client_for_channel(
+                                channel_id=tt_chan,
+                                platform="tiktok",
+                                profile_id=task_profile_id,
+                                db_path=db_path,
+                            )
+                            tt_res = tt_client.publish_tiktok_video(
                                 video_path=video_path,
                                 caption=metadata.get("caption", post_title),
                                 task_id=task_id,

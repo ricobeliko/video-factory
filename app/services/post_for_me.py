@@ -28,8 +28,16 @@ from loguru import logger
 DEFAULT_BASE_URL = "https://api.postforme.dev/v1"
 ENV_API_KEY = "POST_FOR_ME_API_KEY"
 ENV_BASE_URL = "POST_FOR_ME_BASE_URL"
+ENV_TIKTOK_API_KEY = "POST_FOR_ME_TIKTOK_API_KEY"
+ENV_TIKTOK_BASE_URL = "POST_FOR_ME_TIKTOK_BASE_URL"
 ENV_QUICKSTART_API_KEY = "POST_FOR_ME_QUICKSTART_API_KEY"
 ENV_QUICKSTART_BASE_URL = "POST_FOR_ME_QUICKSTART_BASE_URL"
+
+# Identificadores canônicos de projetos Post for Me
+PROJECT_FARME_VIDEOS = "farme_videos"
+PROJECT_FARME_VIDEOS_NAME = "farme videos LABEL"
+PROJECT_TIKTOK = "tiktok"
+PROJECT_TIKTOK_NAME = "tiktok"
 
 # Canais canônicos homologados
 CHANNEL_DEFAULT_YOUTUBE = "channel-default-youtube"
@@ -206,60 +214,85 @@ def list_connected_publishing_accounts(
 ) -> List[Dict[str, Any]]:
     """Consulta e normaliza contas sociais conectadas no Post for Me para o onboarding de canais.
 
+    Quando client não é especificado, descobre contas em TODOS os projetos configurados
+    (ex: 'farme videos LABEL' e 'tiktok').
+
     Garantias de segurança e isolamento:
     - Retorna apenas contas conectadas (status == 'connected')
     - Valida identificador imutável (para YouTube, deve iniciar com 'UC')
     - NUNCA expõe tokens, bearer auth, api keys nem payload bruto da API
+    - Inclui identificação segura do projeto de origem (project_id e project_name)
     - Fail closed: retorna lista vazia em caso de ausência de conta ou erro de rede
     """
     clean_plat = str(platform or "youtube").lower().strip()
-    c = client or PostForMeClient()
-    if not c.is_configured():
-        logger.debug(f"[POST_FOR_ME] Client não configurado para listar contas de {clean_plat}.")
-        return []
+    if client is not None:
+        target_clients = [client] if client.is_configured() else []
+    else:
+        target_clients = get_configured_project_clients()
 
-    try:
-        raw_accounts = c.list_social_accounts(platform=clean_plat)
-    except Exception as exc:
-        logger.warning(f"[POST_FOR_ME] Falha ao consultar contas sociais conectadas: {sanitize_secrets(exc, c.api_key)}")
+    if not target_clients:
+        logger.debug(f"[POST_FOR_ME] Nenhum client configurado para listar contas de {clean_plat}.")
         return []
 
     normalized: List[Dict[str, Any]] = []
-    for acc in raw_accounts:
-        if not isinstance(acc, dict):
+    seen_keys = set()
+
+    for c in target_clients:
+        c_proj_id = getattr(c, "project_id", PROJECT_FARME_VIDEOS)
+        c_proj_name = getattr(c, "project_name", PROJECT_FARME_VIDEOS_NAME)
+        c_api_key = getattr(c, "api_key", None)
+        try:
+            raw_accounts = c.list_social_accounts(platform=clean_plat)
+        except Exception as exc:
+            logger.warning(
+                f"[POST_FOR_ME] Falha ao consultar contas sociais conectadas do projeto {c_proj_id}: "
+                f"{sanitize_secrets(exc, c_api_key)}"
+            )
             continue
 
-        p = str(acc.get("platform") or acc.get("provider") or "").lower().strip()
-        if p != clean_plat:
-            continue
+        for acc in raw_accounts:
+            if not isinstance(acc, dict):
+                continue
 
-        status = str(acc.get("status") or "").lower().strip()
-        if status != "connected":
-            continue
+            p = str(acc.get("platform") or acc.get("provider") or "").lower().strip()
+            if p != clean_plat:
+                continue
 
-        uid = str(
-            acc.get("user_id")
-            or acc.get("account_id")
-            or acc.get("channel_id")
-            or acc.get("external_id")
-            or ""
-        ).strip()
+            status = str(acc.get("status") or "").lower().strip()
+            if status != "connected":
+                continue
 
-        if not uid or uid.startswith(("spc_", "spt_", "spr_")):
-            continue
+            uid = str(
+                acc.get("user_id")
+                or acc.get("account_id")
+                or acc.get("channel_id")
+                or acc.get("external_id")
+                or ""
+            ).strip()
 
-        if clean_plat == "youtube" and not uid.startswith("UC"):
-            continue
+            if not uid or uid.startswith(("spc_", "spt_", "spr_")):
+                continue
 
-        disp_name = str(acc.get("display_name") or acc.get("name") or acc.get("title") or uid).strip()
-        username = str(acc.get("username") or acc.get("handle") or "").strip() or None
+            if clean_plat == "youtube" and not uid.startswith("UC"):
+                continue
 
-        normalized.append({
-            "external_account_id": uid,
-            "display_name": disp_name,
-            "username": username,
-            "platform": clean_plat,
-        })
+            disp_name = str(acc.get("display_name") or acc.get("name") or acc.get("title") or uid).strip()
+            username = str(acc.get("username") or acc.get("handle") or "").strip() or None
+
+            # Desambiguação multiprojeto por chave composta segura
+            dedup_key = (c_proj_id, uid)
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+
+            normalized.append({
+                "external_account_id": uid,
+                "display_name": disp_name,
+                "username": username,
+                "platform": clean_plat,
+                "project_id": c_proj_id,
+                "project_name": c_proj_name,
+            })
 
     return normalized
 
@@ -340,7 +373,7 @@ def sanitize_secrets(text: Any, api_key: Optional[str] = None) -> str:
     keys_to_redact = set()
     if api_key and len(str(api_key).strip()) > 3:
         keys_to_redact.add(str(api_key).strip())
-    for env_name in (ENV_API_KEY, ENV_QUICKSTART_API_KEY):
+    for env_name in (ENV_API_KEY, ENV_TIKTOK_API_KEY, ENV_QUICKSTART_API_KEY):
         val = os.environ.get(env_name, "").strip()
         if val and len(val) > 3:
             keys_to_redact.add(val)
@@ -821,18 +854,31 @@ class PostForMeClient:
         timeout: int = 30,
         env_api_key_name: str = ENV_API_KEY,
         env_base_url_name: str = ENV_BASE_URL,
+        fallback_env_api_key_name: Optional[str] = None,
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None,
     ):
         self._explicit_api_key = api_key
         self._explicit_base_url = base_url
         self._env_api_key_name = env_api_key_name
         self._env_base_url_name = env_base_url_name
+        self._fallback_env_api_key_name = fallback_env_api_key_name
+        self.project_id = project_id or (
+            PROJECT_TIKTOK if env_api_key_name in (ENV_TIKTOK_API_KEY, ENV_QUICKSTART_API_KEY) else PROJECT_FARME_VIDEOS
+        )
+        self.project_name = project_name or (
+            PROJECT_TIKTOK_NAME if self.project_id == PROJECT_TIKTOK else PROJECT_FARME_VIDEOS_NAME
+        )
         self._timeout = timeout
 
     @property
     def api_key(self) -> str:
         if self._explicit_api_key is not None:
             return str(self._explicit_api_key).strip()
-        return os.environ.get(self._env_api_key_name, "").strip()
+        val = os.environ.get(self._env_api_key_name, "").strip()
+        if not val and self._fallback_env_api_key_name:
+            val = os.environ.get(self._fallback_env_api_key_name, "").strip()
+        return val
 
     @property
     def _api_key(self) -> str:
@@ -2337,11 +2383,100 @@ class PostForMeClient:
             }
 
 
-# Instância global padrão do cliente White Label (YouTube)
-post_for_me_client = PostForMeClient(env_api_key_name=ENV_API_KEY, env_base_url_name=ENV_BASE_URL)
+# Instância global padrão do cliente White Label (YouTube - Projeto Principal 'farme videos LABEL')
+post_for_me_client = PostForMeClient(
+    env_api_key_name=ENV_API_KEY,
+    env_base_url_name=ENV_BASE_URL,
+    project_id=PROJECT_FARME_VIDEOS,
+    project_name=PROJECT_FARME_VIDEOS_NAME,
+)
 
-# Instância global padrão do cliente Quickstart (TikTok)
-post_for_me_quickstart_client = PostForMeClient(env_api_key_name=ENV_QUICKSTART_API_KEY, env_base_url_name=ENV_QUICKSTART_BASE_URL)
+# Instância global padrão do cliente TikTok (Projeto Secundário 'tiktok')
+# Suporta POST_FOR_ME_TIKTOK_API_KEY e POST_FOR_ME_QUICKSTART_API_KEY com fallback transparente
+post_for_me_tiktok_client = PostForMeClient(
+    env_api_key_name=ENV_TIKTOK_API_KEY,
+    env_base_url_name=ENV_BASE_URL,
+    fallback_env_api_key_name=ENV_QUICKSTART_API_KEY,
+    project_id=PROJECT_TIKTOK,
+    project_name=PROJECT_TIKTOK_NAME,
+)
+
+# Alias legado compatível
+post_for_me_quickstart_client = post_for_me_tiktok_client
+
+
+def get_configured_project_clients() -> List[PostForMeClient]:
+    """Retorna os clientes Post for Me configurados para descoberta e publicação multiprojeto."""
+    clients = []
+    if post_for_me_client.is_configured():
+        clients.append(post_for_me_client)
+    if post_for_me_tiktok_client.is_configured():
+        clients.append(post_for_me_tiktok_client)
+    return clients
+
+
+def get_client_for_channel(
+    channel_id: Optional[str] = None,
+    platform: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> PostForMeClient:
+    """Resolve o cliente Post for Me correto para um determinado canal, plataforma e perfil.
+
+    Ordem de resolução determinística:
+    1. publishing_channels.project_id via channel_id (se explicitamente salvo no vínculo)
+    2. publishing_channels.project_id via profile_id se canal único habilitado para a plataforma
+    3. Roteamento por plataforma:
+       - 'tiktok' -> post_for_me_tiktok_client
+       - 'youtube' -> post_for_me_client (farme videos LABEL)
+    4. Fallback fail-closed para post_for_me_client
+    """
+    clean_plat = str(platform or "").lower().strip()
+    c_clean = str(channel_id or "").strip()
+    p_clean = str(profile_id or "").strip()
+
+    # 1. Consulta por channel_id no SQLite
+    if c_clean:
+        try:
+            from app.services import profile_manager
+            ch = profile_manager.get_channel(c_clean, db_path=db_path)
+            if ch:
+                proj = str(ch.get("project_id") or "").strip().lower()
+                if proj == PROJECT_TIKTOK:
+                    return post_for_me_tiktok_client
+                if proj == PROJECT_FARME_VIDEOS:
+                    return post_for_me_client
+                ch_p = str(ch.get("platform") or "").lower().strip()
+                if ch_p == "tiktok":
+                    return post_for_me_tiktok_client
+                if ch_p == "youtube":
+                    return post_for_me_client
+        except Exception:
+            pass
+
+    # 2. Consulta por profile_id se canal único habilitado
+    if p_clean and clean_plat:
+        try:
+            from app.services import profile_manager
+            with profile_manager.get_connection(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT project_id, platform FROM publishing_channels WHERE profile_id = ? AND platform = ? AND is_enabled = 1;",
+                    (p_clean, clean_plat),
+                ).fetchall()
+                if len(rows) == 1:
+                    proj = str(rows[0]["project_id"] or "").strip().lower()
+                    if proj == PROJECT_TIKTOK:
+                        return post_for_me_tiktok_client
+                    if proj == PROJECT_FARME_VIDEOS:
+                        return post_for_me_client
+        except Exception:
+            pass
+
+    # 3. Roteamento por canal estático ou plataforma
+    if c_clean in TIKTOK_CHANNEL_MAP or c_clean == CHANNEL_DEFAULT_TIKTOK or clean_plat == "tiktok":
+        return post_for_me_tiktok_client
+
+    return post_for_me_client
 
 
 def publish_tiktok_video(
@@ -2406,7 +2541,9 @@ def reconcile_post_for_me_status(
         yt_prov = youtube_publisher.get_youtube_publish_provider(db_path=db_path)
         if yt_prov != youtube_publisher.PROVIDER_POST_FOR_ME:
             return {"status": "skipped", "reason": "not_post_for_me_provider"}
-        if not post_for_me_client.is_configured():
+        
+        client = get_client_for_channel(channel_id=channel_id, platform="youtube", profile_id=prof_id, db_path=db_path)
+        if not client.is_configured():
             return {"status": "skipped", "reason": "client_not_configured"}
 
         expected_yt_id = resolve_target_youtube_channel_id(channel_id=channel_id, profile_id=prof_id, db_path=db_path)
@@ -2414,32 +2551,31 @@ def reconcile_post_for_me_status(
             return {"status": "skipped", "reason": "channel_resolution_failed"}
 
         try:
-            account = post_for_me_client.resolve_youtube_account(expected_yt_id)
+            account = client.resolve_youtube_account(expected_yt_id)
             social_account_id = str(account.get("id"))
         except Exception as exc:
             return {"status": "skipped", "reason": f"account_resolution_failed: {exc}"}
 
         ext_channel_id = channel_id or ("channel-default-youtube" if expected_yt_id == CHANNEL_DEFAULT_YT_ID else "channel-historias-misterio-youtube")
         deterministic_external_id = f"video-factory:{task_id}:youtube:{ext_channel_id}"
-        client = post_for_me_client
 
     elif clean_plat == "tiktok":
-        if not post_for_me_quickstart_client.is_configured():
+        client = get_client_for_channel(channel_id=channel_id, platform="tiktok", profile_id=prof_id, db_path=db_path)
+        if not client.is_configured():
             return {"status": "skipped", "reason": "client_not_configured"}
 
-        expected_tt_id = resolve_target_tiktok_user_id(channel_id=channel_id, profile_id=prof_id)
+        expected_tt_id = resolve_target_tiktok_user_id(channel_id=channel_id, profile_id=prof_id, db_path=db_path)
         if not expected_tt_id:
             return {"status": "skipped", "reason": "channel_resolution_failed"}
 
         try:
-            account = post_for_me_quickstart_client.resolve_tiktok_account_for_user(expected_tt_id)
+            account = client.resolve_tiktok_account_for_user(expected_tt_id)
             social_account_id = str(account.get("id"))
         except Exception as exc:
             return {"status": "skipped", "reason": f"account_resolution_failed: {exc}"}
 
         ext_channel_id = channel_id or "channel-default-tiktok"
         deterministic_external_id = f"video-factory:{task_id}:tiktok:{ext_channel_id}"
-        client = post_for_me_quickstart_client
     else:
         return {"status": "skipped", "reason": "unsupported_platform"}
 

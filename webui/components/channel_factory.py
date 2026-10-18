@@ -147,39 +147,51 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         with c_dest_yt:
             st.markdown("###### ▶️ Destino YouTube")
             if yt_accounts:
-                yt_choices = ["none"] + [acc["external_account_id"] for acc in yt_accounts]
-                yt_labels = {
-                    "none": "🚫 Não vincular YouTube",
-                    **{acc["external_account_id"]: f"▶️ {acc['display_name']} ({acc['external_account_id']})" for acc in yt_accounts}
-                }
+                yt_acc_map = {}
+                yt_choices = ["none"]
+                yt_labels = {"none": "🚫 Não vincular YouTube"}
+                for acc in yt_accounts:
+                    k = f"{acc.get('project_id', '')}::{acc['external_account_id']}"
+                    yt_acc_map[k] = acc
+                    yt_choices.append(k)
+                    p_label = f" — [{acc.get('project_name') or acc.get('project_id')}]" if acc.get("project_name") or acc.get("project_id") else ""
+                    yt_labels[k] = f"▶️ {acc['display_name']} ({acc['external_account_id']}){p_label}"
+
                 sel_yt_acc = st.selectbox(
                     "Conta YouTube",
                     options=yt_choices,
                     format_func=lambda k: yt_labels.get(k, k),
                     key="cf_new_ch_yt_acc_sel",
-                    help="Selecione explicitamente a conta YouTube conectada no Post for Me.",
+                    help="Selecione explicitamente a conta YouTube conectada no Post for Me com seu respectivo projeto.",
                 )
             else:
                 sel_yt_acc = "none"
+                yt_acc_map = {}
                 st.caption("ℹ️ Nenhuma conta YouTube conectada no Post for Me.")
 
         with c_dest_tt:
             st.markdown("###### 🎵 Destino TikTok")
             if tt_accounts:
-                tt_choices = ["none"] + [acc["external_account_id"] for acc in tt_accounts]
-                tt_labels = {
-                    "none": "🚫 Não vincular TikTok",
-                    **{acc["external_account_id"]: f"🎵 {acc['display_name']} ({acc['external_account_id']})" for acc in tt_accounts}
-                }
+                tt_acc_map = {}
+                tt_choices = ["none"]
+                tt_labels = {"none": "🚫 Não vincular TikTok"}
+                for acc in tt_accounts:
+                    k = f"{acc.get('project_id', '')}::{acc['external_account_id']}"
+                    tt_acc_map[k] = acc
+                    tt_choices.append(k)
+                    p_label = f" — [{acc.get('project_name') or acc.get('project_id')}]" if acc.get("project_name") or acc.get("project_id") else ""
+                    tt_labels[k] = f"🎵 {acc['display_name']} ({acc['external_account_id']}){p_label}"
+
                 sel_tt_acc = st.selectbox(
                     "Conta TikTok",
                     options=tt_choices,
                     format_func=lambda k: tt_labels.get(k, k),
                     key="cf_new_ch_tt_acc_sel",
-                    help="Selecione explicitamente a conta TikTok conectada no Post for Me.",
+                    help="Selecione explicitamente a conta TikTok conectada no Post for Me com seu respectivo projeto.",
                 )
             else:
                 sel_tt_acc = "none"
+                tt_acc_map = {}
                 st.caption("ℹ️ Nenhuma conta TikTok conectada no Post for Me.")
 
         # 3. Produção & Visual
@@ -244,17 +256,47 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                 st.error("Apenas o nó PRIMARY pode cadastrar canais.")
                 return
 
-            if sel_yt_acc != "none" and not sel_yt_acc.startswith("UC"):
-                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{sel_yt_acc}').")
+            destinations = []
+            clean_yt_ext_id = None
+            if sel_yt_acc != "none":
+                acc = yt_acc_map.get(sel_yt_acc)
+                if acc:
+                    clean_yt_ext_id = acc["external_account_id"]
+                    destinations.append({
+                        "platform": "youtube",
+                        "external_account_id": clean_yt_ext_id,
+                        "project_id": acc.get("project_id"),
+                        "is_enabled": True,
+                    })
+                elif str(sel_yt_acc).startswith("UC"):
+                    clean_yt_ext_id = str(sel_yt_acc).strip()
+                    destinations.append({
+                        "platform": "youtube",
+                        "external_account_id": clean_yt_ext_id,
+                        "is_enabled": True,
+                    })
+
+            if clean_yt_ext_id and not clean_yt_ext_id.startswith("UC"):
+                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{clean_yt_ext_id}').")
                 return
 
-            destinations = []
-            if sel_yt_acc != "none":
-                destinations.append({"platform": "youtube", "external_account_id": sel_yt_acc, "is_enabled": True})
             if sel_tt_acc != "none":
-                destinations.append({"platform": "tiktok", "external_account_id": sel_tt_acc, "is_enabled": True})
+                acc = tt_acc_map.get(sel_tt_acc)
+                if acc:
+                    destinations.append({
+                        "platform": "tiktok",
+                        "external_account_id": acc["external_account_id"],
+                        "project_id": acc.get("project_id"),
+                        "is_enabled": True,
+                    })
+                else:
+                    destinations.append({
+                        "platform": "tiktok",
+                        "external_account_id": str(sel_tt_acc).strip(),
+                        "is_enabled": True,
+                    })
 
-            ext_account_id = sel_yt_acc if sel_yt_acc != "none" else None
+            ext_account_id = clean_yt_ext_id
             require_destination = bool(destinations)
 
             clean_name = str(name_val or "").strip()
@@ -509,10 +551,12 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 dest_parts = []
                 if yt and yt.get("is_enabled"):
                     acc_display = yt.get("external_account_id") or yt.get("display_name") or "Conectado"
-                    dest_parts.append(f"YouTube ({acc_display})")
+                    proj_disp = f" [{yt.get('project_id')}]" if yt.get("project_id") else ""
+                    dest_parts.append(f"YouTube ({acc_display}{proj_disp})")
                 if tiktok and tiktok.get("is_enabled"):
                     acc_display = tiktok.get("external_account_id") or tiktok.get("display_name") or "Conectado"
-                    dest_parts.append(f"TikTok ({acc_display})")
+                    proj_disp = f" [{tiktok.get('project_id')}]" if tiktok.get("project_id") else ""
+                    dest_parts.append(f"TikTok ({acc_display}{proj_disp})")
                 dest_label = " + ".join(dest_parts) if dest_parts else "Somente Estoque (Sem publicação)"
                 st.markdown(f"📡 **Destino:** `{dest_label}`")
 

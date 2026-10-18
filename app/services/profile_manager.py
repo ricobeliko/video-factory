@@ -175,6 +175,7 @@ def init_profile_db(db_path: Optional[str] = None) -> None:
                 display_name TEXT NOT NULL,
                 external_profile_name TEXT,
                 external_account_id TEXT,
+                project_id TEXT,
                 is_enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -191,6 +192,8 @@ def init_profile_db(db_path: Optional[str] = None) -> None:
         ch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(publishing_channels);").fetchall()}
         if "external_account_id" not in ch_cols:
             conn.execute("ALTER TABLE publishing_channels ADD COLUMN external_account_id TEXT;")
+        if "project_id" not in ch_cols:
+            conn.execute("ALTER TABLE publishing_channels ADD COLUMN project_id TEXT;")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_content_profiles_slug ON content_profiles(slug);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_content_profiles_active ON content_profiles(is_active);")
@@ -666,6 +669,7 @@ def create_channel(
     channel_id: Optional[str] = None,
     db_path: Optional[str] = None,
     channel_name: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cria um canal de publicação associado a um perfil."""
     from app.services import operator_console
@@ -685,14 +689,15 @@ def create_channel(
     cid = channel_id or f"channel-{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
     clean_ext_account = str(external_account_id).strip() if external_account_id else None
+    clean_project_id = str(project_id).strip() if project_id else None
 
     with get_connection(db_path) as conn:
         conn.execute(
             """
             INSERT INTO publishing_channels (
                 id, profile_id, platform, display_name, external_profile_name,
-                external_account_id, is_enabled, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                external_account_id, project_id, is_enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 cid,
@@ -701,6 +706,7 @@ def create_channel(
                 clean_display,
                 external_profile_name.strip() if external_profile_name else None,
                 clean_ext_account,
+                clean_project_id,
                 1 if is_enabled else 0,
                 now_iso,
                 now_iso,
@@ -716,6 +722,7 @@ def update_channel(
     external_profile_name: Optional[str] = None,
     external_account_id: Optional[str] = None,
     is_enabled: Optional[bool] = None,
+    project_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Atualiza atributos de um canal de publicação."""
@@ -744,6 +751,10 @@ def update_channel(
     if external_account_id is not None:
         updates.append("external_account_id = ?")
         params.append(external_account_id.strip() if external_account_id else None)
+
+    if project_id is not None:
+        updates.append("project_id = ?")
+        params.append(project_id.strip() if project_id else None)
 
     if is_enabled is not None:
         updates.append("is_enabled = ?")
@@ -1254,8 +1265,8 @@ def onboard_channel_workspace(
                     """
                     INSERT INTO publishing_channels (
                         id, profile_id, platform, display_name, external_profile_name,
-                        external_account_id, is_enabled, created_at, updated_at
-                    ) VALUES (?, ?, 'youtube', ?, NULL, NULL, 0, ?, ?);
+                        external_account_id, project_id, is_enabled, created_at, updated_at
+                    ) VALUES (?, ?, 'youtube', ?, NULL, NULL, NULL, 0, ?, ?);
                     """,
                     (fallback_cid, new_pid, f"{clean_name} (Somente Estoque)", now_iso, now_iso),
                 )
@@ -1264,6 +1275,7 @@ def onboard_channel_workspace(
                 for d in destinations:
                     d_plat = _validate_platform(d.get("platform", "youtube"))
                     d_ext_id = str(d.get("external_account_id") or "").strip() or None
+                    d_project_id = str(d.get("project_id") or "").strip() or None
                     d_is_en = 1 if d.get("is_enabled", True) and d_ext_id else 0
                     d_cid = d.get("channel_id") or f"channel-{uuid.uuid4().hex[:12]}"
                     d_display = str(d.get("display_name") or f"{clean_name} ({d_plat.capitalize()})").strip()
@@ -1275,8 +1287,8 @@ def onboard_channel_workspace(
                         """
                         INSERT INTO publishing_channels (
                             id, profile_id, platform, display_name, external_profile_name,
-                            external_account_id, is_enabled, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                            external_account_id, project_id, is_enabled, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                         """,
                         (
                             d_cid,
@@ -1285,6 +1297,7 @@ def onboard_channel_workspace(
                             d_display,
                             None,
                             d_ext_id,
+                            d_project_id,
                             d_is_en,
                             now_iso,
                             now_iso,
@@ -1296,8 +1309,8 @@ def onboard_channel_workspace(
                 """
                 INSERT INTO publishing_channels (
                     id, profile_id, platform, display_name, external_profile_name,
-                    external_account_id, is_enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    external_account_id, project_id, is_enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?);
                 """,
                 (
                     new_cid,

@@ -110,7 +110,12 @@ def publish_youtube_video(
 
     if provider == PROVIDER_POST_FOR_ME:
         effective_privacy = privacy_status or "public"
-        client = post_for_me.post_for_me_client
+        client = post_for_me.get_client_for_channel(
+            channel_id=channel_id,
+            platform="youtube",
+            profile_id=profile_id,
+            db_path=db_path,
+        )
         return client.publish_video(
             video_path=video_path,
             title=title,

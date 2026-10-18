@@ -153,3 +153,17 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   3. **Reconciliação Segura do Hotfix Local:** Procedimento documentado para lidar com o hotfix de `app/services/autonomous_production.py` (`rejected_struct = None`) e arquivo `.bak` no PC Forte via backup isolado e `git restore`, proibindo estritamente `git reset --hard` e `git clean`.
   4. **Segurança de Produção & Não-Concorrência:** Garantido que `MPT_ENVIRONMENT=PRODUCTION` não permita acesso fora da raiz, exija PRIMARY e autorização explícita para publicação, e impeça a execução simultânea do Streamlit e da V2 disputando workers.
   5. **Próximo Gate:** Operador executar auditoria passiva no PC Forte (`powershell.exe -ExecutionPolicy Bypass -File scripts\v2_pre_cutover_audit.ps1`).
+
+---
+
+## 9. Preparação de Cutover com Diagnóstico Real do PC Forte V2.15B (18/10/2026)
+
+- **Status:** CONCLUÍDO (CUTOVER_SCRIPT_READY = PASS)
+- **Ambiente:** Novo PC DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Descobertas e Implementações:**
+  1. **Diagnóstico Factual do PC Forte:** Incorporados dados reais de produção: SHA `cf7d64767e13f94eb710809057dbcbc6efc19a27` na `main`, banco real `storage/video_factory.db` (8.65 MB), processos ativos 8080 (Uvicorn) e 8501 (Streamlit PRIMARY).
+  2. **Auditoria Passiva Calibrada:** Atualizado `scripts/v2_pre_cutover_audit.ps1` para validar rigorosamente o diff do hotfix (`rejected_struct = None`), reconhecer o arquivo `.bak`, mapear o banco real `video_factory.db` e telemetria de credenciais sem vazamento.
+  3. **Script Único de Cutover (`scripts/v2_cutover.ps1`):** Automação em 6 gates sequenciais com preflight estrito, snapshot transacional do SQLite com hash SHA256, parada graciosa das portas 8501 e 8080, desativação da Scheduled Task legada, atualização Git não-destrutiva, migração idempotente e validação de saúde na porta 8080.
+  4. **Rollback Automatizado Integrado:** Parâmetro `-Rollback` em `v2_cutover.ps1` permitindo restauração completa em 10-12 minutos sem perda de dados.
+  5. **Guia Operacional Detalhado:** Registrado em `docs/v2/V215B_CUTOVER_EXECUTION.md`.
+  6. **Próximo Gate:** Revisão humana do plano e autorização prévia para o operador no PC Forte.

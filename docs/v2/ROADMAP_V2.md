@@ -130,3 +130,13 @@ ehearse_v2_migration.py.
   - Atualização dos planos de cutover e rollback (`PRODUCTION_CUTOVER_PLAN.md` e `ROLLBACK_PLAN.md`).
   - Estratégia de reconciliação do hotfix pontual de `autonomous_production.py` com preservação em backup isolado e sem comandos destrutivos.
   - Validação estrita de isolamento e bloqueio de publicação externa não autorizada.
+
+## Fase 15B — Preparação de Cutover com Diagnóstico Real do PC Forte (Concluída)
+- **Status:** CONCLUÍDO (Scripts de Cutover e Auditoria Homologados)
+- **Objetivo:** Preparar a substituição definitiva, segura e reversível do Streamlit pelo React/FastAPI baseando-se nos dados reais levantados no PC Forte.
+- **Entregas:**
+  - Script único de cutover sequencial com gates: `scripts/v2_cutover.ps1`.
+  - Auditoria passiva calibrada para o banco real `storage/video_factory.db`: `scripts/v2_pre_cutover_audit.ps1`.
+  - Manual de execução detalhado: `docs/v2/V215B_CUTOVER_EXECUTION.md`.
+  - Atualização dos planos de cutover e rollback para refletir processos 8080/8501, tarefas Windows e reconciliação do hotfix.
+  - Testes e validações de preflight, backup e idempotência aprovados.

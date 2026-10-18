@@ -1,5 +1,5 @@
 # Video Factory V2 — Plano de Migração e Cutover para Produção (PC Forte)
-**Documento Operacional V2.15A**
+**Documento Operacional V2.15B**
 **Data de Atualização:** 18/10/2026
 **Ambiente Alvo Futuro:** C:\Projetos\MoneyPrinterTurbo (PC Forte)
 **Ambiente Homologado:** C:\Projetos\MoneyPrinterTurbo-V2 (eat/video-factory-v2)
@@ -11,6 +11,15 @@
 > Este documento é o plano rigoroso e homologado a ser executado exclusivamente em janela de manutenção programada pelo operador humano no PC Forte.
 
 ---
+
+
+> [!NOTE]
+> **DIAGNÓSTICO REAL DO PC FORTE (V2.15B):**
+> - SHA da Produção: `cf7d64767e13f94eb710809057dbcbc6efc19a27` na branch `main`.
+> - Banco Real: `storage/video_factory.db` (~8.65 MB).
+> - Hotfix auditado: `app/services/autonomous_production.py` (1 linha: `rejected_struct = None`) e `.bak_20261018_110834`.
+> - Processos ativos: Streamlit 8501 (PID 13056) e Uvicorn 8080 (PID 9280).
+> - Script Oficial de Execução Única: `scripts/v2_cutover.ps1`.
 
 ## 0. Pré-Requisito Mandatório: Auditoria Passiva Aprovada
 

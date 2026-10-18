@@ -1,5 +1,5 @@
 # Video Factory V2 — Plano de Rollback e Recuperação
-**Documento Operacional V2.15A**
+**Documento Operacional V2.15B**
 **Data de Atualização:** 18/10/2026
 **Ambiente Alvo:** C:\Projetos\MoneyPrinterTurbo (PC Forte)
 
@@ -62,3 +62,11 @@ O procedimento de rollback deve ser acionado caso ocorra algum dos seguintes eve
    Invoke-WebRequest -Uri "http://127.0.0.1:8501/_stcore/health" -UseBasicParsing
    `
    Confirmar: Streamlit online na 8501 com status 200 e integridade SQLite ok.
+
+
+### Procedimento Automatizado de Rollback V2.15B
+Em caso de falha durante ou após a janela de cutover, execute o parâmetro `-Rollback` no script oficial:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File C:\Projetos\v2_cutover.ps1 -RepoPath C:\Projetos\MoneyPrinterTurbo -Rollback -BackupDirToRestore "C:\Projetos\MoneyPrinterTurbo\storage\backups\cutover_<TIMESTAMP>"
+```
+Isso garante a recomposição exata do SHA `cf7d64767e13f94eb710809057dbcbc6efc19a27`, restaura o banco de dados e reativa o Streamlit na porta 8501.

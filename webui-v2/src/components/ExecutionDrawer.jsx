@@ -191,8 +191,8 @@ export default function ExecutionDrawer({
       console.error('Falha ao disparar ciclo do canal:', err);
       let msg = err.message || 'Falha ao processar disparo';
       if (err.status === 409) {
-        if (msg.toLowerCase().includes('already in progress') || msg.toLowerCase().includes('em andamento')) {
-          msg = 'Ciclo de produção já em andamento.';
+        if (msg.toLowerCase().includes('already in progress')) {
+          msg = 'Ciclo de produção já em andamento em segundo plano.';
         } else if (msg.toLowerCase().includes('paused') || msg.toLowerCase().includes('pausada')) {
           msg = 'Fábrica pausada — retome antes de disparar.';
         }

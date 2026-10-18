@@ -43,7 +43,26 @@
   - `UI_FOUNDATION_READY`: Atingido.
   - `CHANNEL_WORKSPACE_READY`: Atingido.
   - `FORMAT_AWARE_UI_READY`: Atingido.
-- **Próxima Fase:** FASE V2.6 — MIGRAÇÃO DAS DEMAIS FUNCIONALIDADES & MATRIZ DE PARIDADE.
+
+## [18/10/2026 - 04:20] FASES V2.6, V2.7 e V2.8 CONCLUÍDAS — PARIDADE, PERFORMANCE E HOMOLOGAÇÃO
+- **Atividades:**
+  - Elaborada a Matriz de Paridade Funcional (`docs/v2/FUNCTIONAL_PARITY.md`): 13/13 recursos mapeados e migrados (100% de paridade).
+  - Implementado cache com TTL de 60s em `check_ffmpeg_ready` (`app/utils/utils.py`) eliminando spawns redundantes de subprocessos no Windows.
+  - Executados testes de benchmark de performance (`test/test_v2_performance.py`):
+    - Listagem de canais (steady-state): **26.52ms** (meta < 1000ms: PASS)
+    - Status consolidado do sistema (steady-state): **270.52ms** (meta < 1000ms: PASS)
+    - Telemetria de execução live: **32.96ms** (meta < 500ms: PASS)
+    - Resultado: 3/3 testes aprovados.
+  - Elaborados os planos de transição e contingência:
+    - `docs/v2/PRODUCTION_CUTOVER_PLAN.md`: Roteiro passo a passo para futura substituição no PC Forte sem downtime de renderizações.
+    - `docs/v2/ROLLBACK_PLAN.md`: Plano de reversão segura em menos de 5 minutos com restauração de snapshot SQLite.
+    - `docs/v2/PROJECT_HANDOFF_V2.md`: Guia de inicialização local e entrega ao operador.
+- **Checkpoint Gates:**
+  - `FUNCTIONAL_PARITY_PASS`: Atingido.
+  - `PERFORMANCE_PASS`: Atingido.
+  - `V2_DEV_HOMOLOGATED`: Atingido.
+- **Status Final da Missão:** MISSÃO AUTÔNOMA CONCLUÍDA COM SUCESSO.
+
 
 
 

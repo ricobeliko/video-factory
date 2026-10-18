@@ -18,9 +18,10 @@
 | **V2.3** | Design System Moderno, Navegação e Layout Base | `UI_FOUNDATION_READY` | **CONCLUÍDO** |
 | **V2.4** | Canal como Centro da Aplicação (Channel Workspace) | `CHANNEL_WORKSPACE_READY` | **CONCLUÍDO** |
 | **V2.5** | Formulários Inteligentes por Formato (Tradicional/Quiz) | `FORMAT_AWARE_UI_READY` | **CONCLUÍDO** |
-| **V2.6** | Migração das Demais Funcionalidades & Matriz de Paridade | `FUNCTIONAL_PARITY_PASS` | **EM ANDAMENTO** |
-| **V2.7** | Otimização de Desempenho e Tempos de Resposta | `PERFORMANCE_PASS` | PENDENTE |
-| **V2.8** | Homologação Integrada, Testes de Migração e Cutover Plan | `V2_DEV_HOMOLOGATED` | PENDENTE |
+| **V2.6** | Migração das Demais Funcionalidades & Matriz de Paridade | `FUNCTIONAL_PARITY_PASS` | **CONCLUÍDO (13/13 100%)** |
+| **V2.7** | Otimização de Desempenho e Tempos de Resposta | `PERFORMANCE_PASS` | **CONCLUÍDO (3/3 PASS)** |
+| **V2.8** | Homologação Integrada, Testes de Migração e Cutover Plan | `V2_DEV_HOMOLOGATED` | **CONCLUÍDO** |
+
 
 ---
 

@@ -7,6 +7,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 import threading
+import time
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -211,6 +212,12 @@ def check_ffmpeg_ready(timeout: int = 10) -> bool:
     并不会在真正使用时自动补下载一个可用的二进制，因此检测失败必须让
     需要 FFmpeg 的阶段直接终止，而不是继续跑到视频合成才失败。
     """
+    global _FFMPEG_CHECK_CACHE
+    now = time.time()
+    if "_FFMPEG_CHECK_CACHE" in globals() and _FFMPEG_CHECK_CACHE.get("result") is True:
+        if now - _FFMPEG_CHECK_CACHE.get("ts", 0) < 60:
+            return True
+
     ffmpeg_bin = get_ffmpeg_binary()
     try:
         completed = subprocess.run(
@@ -238,6 +245,7 @@ def check_ffmpeg_ready(timeout: int = 10) -> bool:
         )
         return False
 
+    _FFMPEG_CHECK_CACHE = {"result": True, "ts": now}
     logger.info(f"ffmpeg check passed, using: {ffmpeg_bin}")
     return True
 

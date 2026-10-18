@@ -27,7 +27,8 @@ class TestV2IsolationGuard(unittest.TestCase):
     def test_allows_v2_database_path(self):
         v2_db = isolation_guard.get_v2_db_path()
         self.assertIn("video_factory_v2.db", v2_db)
-        self.assertNotIn(r"c:\projetos", v2_db.lower())
+        self.assertIn("moneyprinterturbo-v2", v2_db.lower())
+        self.assertNotIn(r"c:\projetos\moneyprinterturbo\storage", v2_db.lower())
 
     def test_external_publication_blocked_by_default(self):
         self.assertFalse(isolation_guard.is_external_publication_allowed())

@@ -25,7 +25,8 @@
 | **V2.10** | Redesign Visual e Arquitetura de Interface SaaS Minimalista Dark | `SAAS_REDESIGN_READY` | **CONCLUÍDO** |
 | **V2.11** | Paleta Shadcn Admin Zinc & Microinterações CSS Nativas | `SHADCN_ZINC_READY` | **CONCLUÍDO** |
 | **V2.12** | Homologação Multicanal Sintética & Ajustes Operacionais do Workspace | `MULTICHANNEL_SYNTHETIC_HOMOLOGATED` | **CONCLUÍDO (43/43 PASS)** |
-| **V2.13** | Ensaio de Migração e Compatibilidade de Dados | `MIGRATION_REHEARSAL_PASS` | **PRÓXIMA FASE (NOVO PC DEV)** |
+| **V2.13** | Ensaio de Migração e Compatibilidade de Dados | MIGRATION_REHEARSAL_PASS | **CONCLUÍDO (4/4 PASS)** |
+| **V2.14** | Janela de Cutover e Homologação Final | FINAL_CUTOVER_READY | **PRÓXIMA FASE** |
 
 
 ---
@@ -97,5 +98,11 @@ Para viabilizar a avaliação completa das 7 abas do Workspace de Canais sem exp
   - **Procedimento Determinístico de Banco Sintético:** criação de `scripts/init_v2_synthetic_db.py`, permitindo a inicialização instantânea do banco `storage/video_factory.db` em novos ambientes DEV sem dependência de produção.
   - **Testes e Build:** 43/43 testes direcionados PASS em `test_web_ui_v2_api.py` e build de produção Vite concluído em 8.98s (< 150 kB gzip).
 
-## Fase 13 — Ensaio de Migração e Compatibilidade de Dados (Próxima Fase no Novo PC DEV)
+## Fase 13 — Ensaio de Migração e Compatibilidade de Dados (Concluída)
+- **Status:** CONCLUÍDO (4/4 PASS em 	est_v2_13_migration_rehearsal.py)
 - **Objetivo:** Comprovar no novo computador de desenvolvimento que a V2 recebe e opera dados compatíveis com a fábrica atual sem qualquer risco para a produção.
+- **Entregas:**
+  - Script determinístico de ensaio: scripts/rehearse_v2_migration.py.
+  - Mapeamento completo entre schemas legados e contratos tipados V2 (ChannelWorkspaceSettings).
+  - Suíte de validação: 	est/services/test_v2_13_migration_rehearsal.py cobrindo schema legado, migração aditiva, integridade SQLite, idempotência e rollback sintético.
+  - Relatório canônico detalhado em docs/v2/MIGRATION_REHEARSAL_REPORT.md.

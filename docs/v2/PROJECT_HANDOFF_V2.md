@@ -110,3 +110,19 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   - `test_web_ui_v2_api.py`: 43/43 PASS (39.06s).
   - Build Vite de produção: Concluído em 8.98s, bundle gzip 144.98 kB.
 - **Próximo Gate:** `NOTEBOOK_TRANSFER_READY` -> Migração para o Novo PC DEV -> Execução da Fase V2.13 (Ensaio de Migração e Compatibilidade de Dados).
+
+
+---
+
+## 6. Ensaio de Migração e Compatibilidade de Dados V2.13 (18/10/2026)
+
+- **Status:** CONCLUÍDO COM SUCESSO (PASS)
+- **Ambiente:** Novo PC DEV (DESKTOP-MU3HR6J) em C:\Projetos\MoneyPrinterTurbo-V2
+- **Implementações e Resultados:**
+  1. **Compatibilidade de Schemas:** Schema legado mapeado e adaptado aditivamente para inclusão de settings_json em content_profiles, e external_account_id/project_id em publishing_channels.
+  2. **Ensaio em Cópia Isolada:** Executado via scripts/rehearse_v2_migration.py sobre storage/video_factory_migration_isolated.db.
+  3. **Vínculos Multiprojeto e Canais:** 3 canais e 5 destinos de publicação validados sem inconsistências.
+  4. **Idempotência e Integridade:** Integridade SQLite confirmada (ok) e reexecução da migração aprovada com zero duplicações.
+  5. **Rollback Sintético:** Restauração a partir do backup pré-migração aprovada sem desvios de schema.
+  6. **Testes:** 4/4 testes direcionados PASS em 	est_v2_13_migration_rehearsal.py.
+- **Próximo Gate Seguro:** FINAL_CUTOVER_READY / V2.14.

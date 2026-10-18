@@ -39,7 +39,8 @@ def validate_path_isolation(target_path: Optional[str], purpose: str = "generic"
     norm = os.path.normpath(os.path.abspath(target_path)).lower()
 
     for forbidden in FORBIDDEN_PATHS:
-        if norm.startswith(forbidden) or norm == forbidden:
+        forbidden_norm = os.path.normpath(forbidden).lower()
+        if norm == forbidden_norm or norm.startswith(forbidden_norm + os.sep):
             msg = (
                 f"[ISOLATION_GUARD_CRITICAL] Tentativa de acesso bloqueada para {purpose}: '{target_path}'. "
                 f"O caminho viola a regra de isolamento da Video Factory V2 contra Produção/DEV Original."

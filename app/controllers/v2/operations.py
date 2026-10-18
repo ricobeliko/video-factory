@@ -382,6 +382,9 @@ class UpdateScheduleRequest(BaseModel):
 
 
 class UpdateProfileSettingsRequest(BaseModel):
+    name: Optional[str] = Field(None, description="Nome do canal/perfil")
+    niche: Optional[str] = Field(None, description="Nicho editorial")
+    voice_name: Optional[str] = Field(None, description="Voz do narrador para o canal")
     growth_mode: Optional[str] = Field(None, description="Modo de crescimento (warmup | scale)")
     autonomous_enabled: Optional[bool] = Field(None, description="Status de autonomia operacional")
     quotas: Optional[UpdateQuotasRequest] = Field(None, description="Configurações de quotas e limites")
@@ -589,11 +592,24 @@ def update_channel_settings(
         )
 
     try:
-        if payload.growth_mode is not None:
-            clean_mode = str(payload.growth_mode).strip().lower()
-            if clean_mode not in ("warmup", "scale"):
+        if payload.name is not None or payload.niche is not None or payload.growth_mode is not None:
+            clean_mode = str(payload.growth_mode).strip().lower() if payload.growth_mode is not None else None
+            if clean_mode is not None and clean_mode not in ("warmup", "scale"):
                 raise ValueError("growth_mode must be 'warmup' or 'scale'")
-            profile_manager.update_profile(clean_p, growth_mode=clean_mode)
+            profile_manager.update_profile(
+                clean_p,
+                name=payload.name,
+                niche=payload.niche,
+                growth_mode=clean_mode
+            )
+
+        if payload.voice_name is not None:
+            ws_settings = profile_manager.get_profile_settings(clean_p)
+            ws_dict = ws_settings.model_dump()
+            if "voice" not in ws_dict or not isinstance(ws_dict["voice"], dict):
+                ws_dict["voice"] = {}
+            ws_dict["voice"]["voice_name"] = payload.voice_name
+            profile_manager.update_profile_settings(clean_p, ws_dict)
 
         if payload.autonomous_enabled is not None:
             operator_console.set_autonomous_mode_enabled_op(payload.autonomous_enabled, profile_id=clean_p)

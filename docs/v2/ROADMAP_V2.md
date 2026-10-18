@@ -22,6 +22,10 @@
 | **V2.7** | Otimização de Desempenho e Tempos de Resposta | `PERFORMANCE_PASS` | **CONCLUÍDO (3/3 PASS)** |
 | **V2.8** | Homologação Integrada, Testes de Migração e Cutover Plan | `V2_DEV_HOMOLOGATED` | **CONCLUÍDO** |
 | **V2.9** | Integração do Hotfix Autônomo (`busy` contract, órfãs, `rejected_struct`) | `HOTFIX_INTEGRATED` | **CONCLUÍDO (4/4 PASS)** |
+| **V2.10** | Redesign Visual e Arquitetura de Interface SaaS Minimalista Dark | `SAAS_REDESIGN_READY` | **CONCLUÍDO** |
+| **V2.11** | Paleta Shadcn Admin Zinc & Microinterações CSS Nativas | `SHADCN_ZINC_READY` | **CONCLUÍDO** |
+| **V2.12** | Homologação Multicanal Sintética & Ajustes Operacionais do Workspace | `MULTICHANNEL_SYNTHETIC_HOMOLOGATED` | **CONCLUÍDO (43/43 PASS)** |
+| **V2.13** | Ensaio de Migração e Compatibilidade de Dados | `MIGRATION_REHEARSAL_PASS` | **PRÓXIMA FASE (NOVO PC DEV)** |
 
 
 ---
@@ -80,3 +84,18 @@ Para viabilizar a avaliação completa das 7 abas do Workspace de Canais sem exp
    - Estoque Alvo: 3 vídeos | Estoque Inicial Simulado: 1 vídeo em revisão
    - Voz Padrão: pt-BR-AntonioNeural
    - Autonomia: Manual (Operador aciona renderizações pontuais)
+
+## Fase 12 — Homologação Multicanal Sintética & Ajustes Operacionais do Workspace (Concluída)
+- **Status:** CONCLUÍDO (Homologado em DEV_V2 pelo Operador)
+- **Objetivo:** Validação integral das 7 abas do Workspace de Canais com dataset sintético multicanal, sem expor dados reais de produção.
+- **Entregas e Implementações:**
+  - **Dataset Sintético Homologado:** 3 perfis/canais sintéticos criados e validados (`Curiosidades do Mundo`, `Quiz Bíblico Sagrado`, `Mistérios no Papel`) cobrindo integralmente os formatos Tradicional, Quiz Q0-R e Quiz Papel P1.3, com 5 canais de publicação vinculados (YouTube e TikTok simulados).
+  - **Extensão da API de Canais (`/api/v2/channels/{id}/settings`):** suporte bidirecional para atualização de `name`, `niche`, `voice_name`, `growth_mode`, `quotas` e `autonomous_enabled`.
+  - **Decoupling de Polling no Frontend:** chamadas paralelas assíncronas não-bloqueantes no `App.jsx`, reduzindo o tempo de renderização inicial da lista de canais para ~50ms sem aguardar telemetrias mais lentas.
+  - **Workspace Detalhado do Canal:** `ChannelDetailView` refinado com edição reativa de Estoque Alvo e Teto 24h, alternância de autonomia operacional, listagem factual de itens prontos no buffer de estoque e console de auditoria de logs.
+  - **Filtro e Busca Inteligente:** `ChannelListView` com busca insensível a maiúsculas/minúsculas e filtro por formato resiliente a metadados legados ou aninhados em `editorial`.
+  - **Procedimento Determinístico de Banco Sintético:** criação de `scripts/init_v2_synthetic_db.py`, permitindo a inicialização instantânea do banco `storage/video_factory.db` em novos ambientes DEV sem dependência de produção.
+  - **Testes e Build:** 43/43 testes direcionados PASS em `test_web_ui_v2_api.py` e build de produção Vite concluído em 8.98s (< 150 kB gzip).
+
+## Fase 13 — Ensaio de Migração e Compatibilidade de Dados (Próxima Fase no Novo PC DEV)
+- **Objetivo:** Comprovar no novo computador de desenvolvimento que a V2 recebe e opera dados compatíveis com a fábrica atual sem qualquer risco para a produção.

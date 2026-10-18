@@ -90,3 +90,23 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
 - **Referência:** `satnaing/shadcn-admin`.
 - **Microinterações:** Elevações no hover (`translateY(-1.5px)`), scale nos botões (`:active { transform: scale(0.98) }`), modais com fade-in e backdrop blur, anel de foco acessível.
 - **Preparação Multicanal:** Plano estruturado com 3 canais sintéticos (Curiosidades do Mundo, Quiz Bíblico Sagrado e Mistérios no Papel) registrado em `docs/v2/ROADMAP_V2.md`.
+
+## 5. Homologação Multicanal Sintética V2.12 (18/10/2026)
+
+- **Status:** CONCLUÍDO E APROVADO PELO OPERADOR
+- **Branch:** `feat/video-factory-v2`
+- **Ambiente:** DEV_V2 isolado (`D:\Projetos\MoneyPrinterTurbo-V2`)
+- **Implementações Concluídas:**
+  1. **Dataset Sintético:** 3 canais representativos configurados no SQLite sintético isolado:
+     - `dev_test_curiosidades` (Tradicional, YouTube + TikTok, metas: 4 estoque / 4 max gen 24h, voz Antonio)
+     - `dev_test_quiz_biblico` (Quiz Q0-R, YouTube, metas: 5 estoque / 5 max gen 24h, voz Francisca)
+     - `dev_test_misterios_papel` (Quiz Papel P1.3, YouTube + TikTok, metas: 3 estoque / 3 max gen 24h, voz Antonio)
+  2. **API de Atualização de Canais (`operations.py`):** Suporte completo para edição de `name`, `niche`, `voice_name`, `growth_mode`, `quotas` e `autonomous_enabled`.
+  3. **Performance de Interface (`App.jsx`):** Polling desacoplado em tarefas paralelas assíncronas não-bloqueantes. Tempo de resposta da listagem de canais: ~50ms.
+  4. **Workspace Detalhado (`ChannelDetailView.jsx`):** Edição de metas com persistência reativa, alternância de autonomia operacional, listagem de vídeos em estoque e logs de auditoria.
+  5. **Filtro Resiliente (`ChannelListView.jsx`):** Busca e filtro por formato compatíveis com formatos aninhados em `editorial`.
+  6. **Reconstituição Determinística do Banco:** Script `scripts/init_v2_synthetic_db.py` para restauração determinística com zero dados de produção.
+- **Validação de Testes:**
+  - `test_web_ui_v2_api.py`: 43/43 PASS (39.06s).
+  - Build Vite de produção: Concluído em 8.98s, bundle gzip 144.98 kB.
+- **Próximo Gate:** `NOTEBOOK_TRANSFER_READY` -> Migração para o Novo PC DEV -> Execução da Fase V2.13 (Ensaio de Migração e Compatibilidade de Dados).

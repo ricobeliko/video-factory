@@ -58,39 +58,40 @@ export default function App() {
   }, []);
 
   // Polling unificado dos dados da fábrica
-  const pollData = async () => {
+  // Polling reativo e não-bloqueante dos dados da fábrica
+  const pollData = () => {
     try {
-      const [liveRes, statusRes, channelsRes, reviewRes] = await Promise.all([
-        getLiveExecutions().catch(() => null),
-        getSystemStatus().catch(() => null),
-        getChannelsOverview().catch(() => null),
-        getReviewTasks('pending').catch(() => null),
-      ]);
-
-      if (liveRes) {
-        setLiveExecutions(liveRes);
-        if (Array.isArray(liveRes.channels)) {
-          setChannels(liveRes.channels);
-        }
-        if (liveRes.flow_pool) {
-          setFlowPool(liveRes.flow_pool);
-        }
-      }
-
-      if (statusRes) {
-        setSystemStatus(statusRes);
-      }
-
-      if (channelsRes && Array.isArray(channelsRes.channels)) {
-        setChannelsDetailed(channelsRes.channels);
-        if (!liveRes || !Array.isArray(liveRes.channels) || liveRes.channels.length === 0) {
+      // 1. Canais e Workspaces (prioridade máxima, resposta em ~50ms)
+      getChannelsOverview().then((channelsRes) => {
+        if (channelsRes && Array.isArray(channelsRes.channels)) {
+          setChannelsDetailed(channelsRes.channels);
           setChannels(channelsRes.channels);
         }
-      }
+      }).catch(() => null);
 
-      if (reviewRes && Array.isArray(reviewRes.tasks)) {
-        setUnreviewedCount(reviewRes.tasks.length);
-      }
+      // 2. Status do Sistema
+      getSystemStatus().then((statusRes) => {
+        if (statusRes) {
+          setSystemStatus(statusRes);
+        }
+      }).catch(() => null);
+
+      // 3. Tarefas de Revisão
+      getReviewTasks('pending').then((reviewRes) => {
+        if (reviewRes && Array.isArray(reviewRes.tasks)) {
+          setUnreviewedCount(reviewRes.tasks.length);
+        }
+      }).catch(() => null);
+
+      // 4. Execuções em Tempo Real e Pool Flow
+      getLiveExecutions().then((liveRes) => {
+        if (liveRes) {
+          setLiveExecutions(liveRes);
+          if (liveRes.flow_pool) {
+            setFlowPool(liveRes.flow_pool);
+          }
+        }
+      }).catch(() => null);
 
       setIsApiOnline(true);
       setLastUpdated(new Date());

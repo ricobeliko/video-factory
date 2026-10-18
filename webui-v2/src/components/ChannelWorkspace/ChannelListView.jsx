@@ -11,14 +11,15 @@ export default function ChannelListView({
   const [formatFilter, setFormatFilter] = useState('all');
 
   const filteredChannels = channels.filter((ch) => {
-    const matchesSearch =
-      ch.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      ch.niche?.toLowerCase().includes(searchTerm.toLowerCase());
+    const term = (searchTerm || '').trim().toLowerCase();
+    const nameStr = (ch.name || ch.profile_name || ch.channel_name || '').toLowerCase();
+    const nicheStr = (ch.niche || '').toLowerCase();
+    const matchesSearch = !term || nameStr.includes(term) || nicheStr.includes(term);
 
-    const chFormat = ch.settings?.video_format || 'traditional';
+    const chFormat = ch.settings?.editorial?.video_format || ch.settings?.video_format || 'traditional';
     const matchesFormat = formatFilter === 'all' || chFormat === formatFilter;
 
-    return matchesSearch && matchesFormat;
+    return Boolean(matchesSearch && matchesFormat);
   });
 
   const handleToggleAuto = async (e, ch) => {
@@ -107,7 +108,7 @@ export default function ChannelListView({
         ) : (
           filteredChannels.map((ch) => {
             const chId = ch.channel_id || ch.profile_id;
-            const badge = formatBadge(ch.settings?.video_format || 'traditional');
+            const badge = formatBadge(ch.settings?.editorial?.video_format || ch.settings?.video_format || 'traditional');
             const readyStock = ch.ready_stock || 0;
             const targetStock = ch.target_stock || 3;
             const stockPct = Math.min(100, (readyStock / targetStock) * 100);

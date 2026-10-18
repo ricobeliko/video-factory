@@ -221,6 +221,110 @@ def get_channels_overview(request: Request):
     return utils.get_response(200, {"channels": channels_data, "total": len(channels_data)})
 
 
+class CreateChannelRequest(BaseModel):
+    name: str = Field(..., description="Nome do canal")
+    niche: Optional[str] = Field(None, description="Nicho editorial (ex: Curiosidades, Finanças, Quiz)")
+    format_type: str = Field(default="traditional", description="traditional | quiz_dilemma | quiz_paper")
+    language: str = Field(default="pt-BR", description="Idioma principal")
+    target_stock: int = Field(default=3, ge=1, le=10, description="Meta de vídeos no estoque")
+    autonomous_enabled: bool = Field(default=False, description="Habilitar produção autônoma")
+    voice_name: Optional[str] = Field(None, description="Voz do narrador para o canal")
+
+
+@router.post(
+    "/channels",
+    summary="Create a new channel and operational profile (V2 Channel Workspace)",
+)
+def create_channel(request: Request, body: CreateChannelRequest):
+    request_id = base.get_task_id(request)
+    try:
+        operator_console.require_primary_instance()
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can create channels ({exc})",
+        )
+
+    try:
+        profile = profile_manager.create_profile(
+            name=body.name,
+            niche=body.niche,
+            language=body.language,
+        )
+        pid = profile["id"]
+
+        # Atualiza configurações adicionais do canal
+        if body.voice_name:
+            ws_settings = profile_manager.get_profile_settings(pid)
+            ws_dict = ws_settings.model_dump()
+            if "voice" not in ws_dict or not isinstance(ws_dict["voice"], dict):
+                ws_dict["voice"] = {}
+            ws_dict["voice"]["voice_name"] = body.voice_name
+            ws_dict["video_format"] = body.format_type
+            profile_manager.update_profile_settings(pid, ws_dict)
+
+        # Configura quota inicial
+        profile_manager.update_profile_quotas(pid, {"target_ready_stock": body.target_stock})
+
+        # Configura autonomia
+        if body.autonomous_enabled:
+            operator_console.set_autonomous_mode_enabled_op(True, profile_id=pid)
+
+    except ValueError as exc:
+        raise HttpException(task_id=request_id, status_code=400, message=str(exc))
+    except Exception as exc:
+        raise HttpException(task_id=request_id, status_code=500, message=f"Internal error creating channel: {exc}")
+
+    return utils.get_response(201, {"channel_id": pid, "profile": profile}, message="Channel created successfully")
+
+
+@router.get(
+    "/templates",
+    summary="List certified video formats and their immutable constraints (Format-Aware V2)",
+)
+def list_video_templates(request: Request):
+    templates = [
+        {
+            "id": "traditional",
+            "title": "Vídeo Tradicional (Pexels / LLM)",
+            "description": "Montagem dinâmica com clipes Pexels/Pixabay, roteiro fluido e legendas animadas.",
+            "locked_fields": [],
+            "locked_values": {},
+            "available_fields": ["topic", "duration", "voice", "orientation", "aspect_ratio", "video_source"],
+        },
+        {
+            "id": "quiz_dilemma",
+            "title": "Quiz Q0-R — Escolhas Impossíveis",
+            "description": "Template homologado com tela dividida (50/50), contagem regressiva e porcentagem visual de votos.",
+            "locked_fields": ["orientation", "aspect_ratio", "resolution", "split_screen"],
+            "locked_values": {
+                "orientation": "portrait",
+                "aspect_ratio": "9:16",
+                "resolution": "1080x1920",
+                "split_screen": "50/50",
+            },
+            "available_fields": ["topic", "dilemma_options", "voice"],
+        },
+        {
+            "id": "quiz_paper",
+            "title": "Quiz de Papel P1.3 — Perguntas & Respostas",
+            "description": "Template homologado em papel rústico com perguntas, 4 alternativas em bloco único e timer circular.",
+            "locked_fields": ["duration", "orientation", "aspect_ratio", "resolution", "timer_style", "reveal_animation"],
+            "locked_values": {
+                "duration": "60-65 segundos",
+                "orientation": "portrait",
+                "aspect_ratio": "9:16",
+                "resolution": "1080x1920",
+                "timer_style": "circular_pie",
+                "reveal_animation": "box_reveal",
+            },
+            "available_fields": ["niche", "topic", "question_count", "voice"],
+        },
+    ]
+    return utils.get_response(200, {"templates": templates, "total": len(templates)})
+
+
 @router.get(
     "/profiles/{profile_id}/status",
     summary="Get status snapshot for a single profile",

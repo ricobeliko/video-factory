@@ -20,5 +20,16 @@
   - Mapeamento de controles conflitantes entre formatos (Tradicional vs Quiz Q0-R vs Quiz Paper P1.3).
   - Criados os documentos: `docs/v2/FUNCTIONAL_INVENTORY.md`, `docs/v2/CONFIGURATION_AUDIT.md`, `docs/v2/DUPLICATION_MAP.md`.
 - **Checkpoint Gate:** `AUDIT_COMPLETE` atingido com sucesso.
-- **Próxima Fase:** FASE V2.2 — ARQUITETURA E CONTRATOS.
+
+## [18/10/2026 - 04:12] FASE V2.2 CONCLUÍDA — ARQUITETURA E CONTRATOS
+- **Atividades:**
+  - Definida a arquitetura desacoplada em camadas: Frontend React 18 SPA + API REST FastAPI + Serviços Python existentes + Persistência SQLite isolada.
+  - Criados os contratos formais de API REST para sistema, canais, estoque, revisão, templates e telemetria.
+  - Estabelecida a fonte única de verdade (Single Source of Truth) com precedência estrita: Template Fixo > Canal > Global.
+  - Adicionados endpoints `POST /channels` (criação de canal e perfil) e `GET /templates` (metadados e bloqueios por formato) em `app/controllers/v2/operations.py`.
+  - Validada a importação e integridade do router FastAPI V2 (30 rotas operacionais ativas).
+  - Criados os documentos: `docs/v2/ARCHITECTURE.md`, `docs/v2/API_CONTRACTS.md`, `docs/v2/SOURCE_OF_TRUTH.md`.
+- **Checkpoint Gate:** `ARCHITECTURE_READY` atingido com sucesso.
+- **Próxima Fase:** FASE V2.3 — DESIGN SYSTEM E NAVEGAÇÃO.
+
 

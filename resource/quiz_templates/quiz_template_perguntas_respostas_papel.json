@@ -11,7 +11,7 @@
   "output_thumbnail_path": "storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg",
   "temp_dir": "storage/poc_quiz_papel/temp",
   "min_target_duration_sec": 60.0,
-  "target_duration_range": [65.0, 75.0],
+  "target_duration_range": [62.0, 72.0],
   "video_settings": {
     "width": 1080,
     "height": 1920,
@@ -23,19 +23,19 @@
   },
   "voice_settings": {
     "voice_name": "pt-BR-AntonioNeural",
-    "voice_rate": "+10%"
+    "voice_rate": "+20%"
   },
   "timing_settings": {
-    "expectation_sec": 2.0,
-    "reveal_sec": 1.2
+    "expectation_sec": 2.5,
+    "reveal_sec": 1.0
   },
   "intro_hook": {
     "enabled": true,
-    "narration": "Desafio de conhecimentos gerais! Será que você consegue acertar todas as perguntas? Vamos para a questão número um!"
+    "narration": "Desafio de conhecimentos gerais! Quantas você acerta?"
   },
   "outro_challenge": {
     "enabled": true,
-    "narration": "E aí, quantas você conseguiu acertar? Deixe sua pontuação nos comentários e siga para mais desafios diários!"
+    "narration": "E aí, qual foi a sua nota? Comente quantas você acertou!"
   },
   "questions": [
     {
@@ -50,8 +50,8 @@
         {"letter": "D", "text": "Vênus"}
       ],
       "correct_option": "B",
-      "narration": "Primeira questão: Qual é o maior planeta do nosso Sistema Solar? Letra A: Marte. Letra B: Júpiter. Letra C: Saturno. Ou Letra D: Vênus.",
-      "explanation": "Júpiter tem duas vezes e meia a massa de todos os outros planetas combinados.",
+      "narration": "Qual é o maior planeta do nosso Sistema Solar?",
+      "explanation": "Júpiter tem duas vezes e meia a massa de todos os outros planetas juntos.",
       "source": "NASA Solar System Exploration (science.nasa.gov/jupiter)"
     },
     {
@@ -66,8 +66,8 @@
         {"letter": "D", "text": "4 corações"}
       ],
       "correct_option": "C",
-      "narration": "Segunda questão: Quantos corações tem um polvo? Letra A: um coração. Letra B: dois corações. Letra C: três corações. Ou Letra D: quatro corações.",
-      "explanation": "Dois corações bombeiam sangue para as brânquias e o terceiro bombeia para o corpo.",
+      "narration": "Quantos corações tem um polvo?",
+      "explanation": "Dois corações bombeiam para as brânquias e o terceiro para o resto do corpo.",
       "source": "Smithsonian Magazine & National Geographic (Cephalopod Physiology)"
     },
     {
@@ -82,9 +82,9 @@
         {"letter": "D", "text": "Cavalo"}
       ],
       "correct_option": "B",
-      "narration": "Terceira questão: Qual é o animal terrestre mais rápido do planeta? Letra A: Leão. Letra B: Guepardo. Letra C: Antílope. Ou Letra D: Cavalo.",
-      "explanation": "O guepardo pode atingir velocidades entre 100 e 120 quilômetros por hora.",
-      "source": "National Geographic Animals (Acinonyx jubatus facts)"
+      "narration": "Qual é o animal terrestre mais rápido do planeta?",
+      "explanation": "O guepardo atinge velocidades de até 120 quilômetros por hora em arrancadas curtas.",
+      "source": "National Geographic Animals (Acinonyx jubatus)"
     },
     {
       "id": "q4",
@@ -98,8 +98,8 @@
         {"letter": "D", "text": "Hélio"}
       ],
       "correct_option": "C",
-      "narration": "Quarta questão: Qual é o elemento químico mais abundante no Universo? Letra A: Oxigênio. Letra B: Carbono. Letra C: Hidrogênio. Ou Letra D: Hélio.",
-      "explanation": "O hidrogênio representa aproximadamente 75% de toda a massa bariônica universal.",
+      "narration": "Qual é o elemento químico mais abundante no Universo?",
+      "explanation": "O hidrogênio compõe aproximadamente 75% de toda a matéria bariônica cósmica.",
       "source": "Royal Society of Chemistry & NASA Astrophysics"
     },
     {
@@ -114,14 +114,13 @@
         {"letter": "D", "text": "Mongólia"}
       ],
       "correct_option": "B",
-      "narration": "Quinta questão: Em qual país está localizada a famosa Grande Muralha? Letra A: Japão. Letra B: China. Letra C: Índia. Ou Letra D: Mongólia.",
-      "explanation": "A Grande Muralha da China é uma imensa fortificação histórica com mais de 21 mil km.",
+      "narration": "Em qual país está localizada a famosa Grande Muralha?",
+      "explanation": "A Grande Muralha da China é uma fortificação histórica com mais de 21 mil quilômetros.",
       "source": "UNESCO World Heritage Centre (whc.unesco.org/en/list/438)"
     },
     {
       "id": "q6",
       "number": 6,
-      "number_str": "DESAFIO FINAL",
       "category": "ANATOMIA HUMANA",
       "question": "Quantos ossos possui o corpo de um ser humano adulto?",
       "options": [
@@ -131,9 +130,74 @@
         {"letter": "D", "text": "300 ossos"}
       ],
       "correct_option": "B",
-      "narration": "Última questão para fechar o teste: Quantos ossos possui o corpo de um ser humano adulto? Letra A: 186. Letra B: 206. Letra C: 248. Ou Letra D: 300 ossos.",
-      "explanation": "Um adulto possui 206 ossos, após a fusão de vários ossos presentes no nascimento.",
+      "narration": "Quantos ossos possui o corpo de um ser humano adulto?",
+      "explanation": "O esqueleto adulto é formado por 206 ossos, após fusões naturais do crescimento.",
       "source": "Gray's Anatomy & National Institutes of Health (NIH)"
+    },
+    {
+      "id": "q7",
+      "number": 7,
+      "category": "HISTÓRIA DA ARTE",
+      "question": "Quem pintou a célebre obra Monalisa?",
+      "options": [
+        {"letter": "A", "text": "Michelangelo"},
+        {"letter": "B", "text": "Leonardo da Vinci"},
+        {"letter": "C", "text": "Vincent van Gogh"},
+        {"letter": "D", "text": "Pablo Picasso"}
+      ],
+      "correct_option": "B",
+      "narration": "Quem pintou a célebre obra Monalisa?",
+      "explanation": "A obra foi pintada por Leonardo da Vinci no início do século dezesseis.",
+      "source": "Musée du Louvre (louvre.fr/mona-lisa)"
+    },
+    {
+      "id": "q8",
+      "number": 8,
+      "category": "GEOGRAFIA FÍSICA",
+      "question": "Qual é o maior oceano da Terra em extensão?",
+      "options": [
+        {"letter": "A", "text": "Oceano Atlântico"},
+        {"letter": "B", "text": "Oceano Índico"},
+        {"letter": "C", "text": "Oceano Pacífico"},
+        {"letter": "D", "text": "Oceano Ártico"}
+      ],
+      "correct_option": "C",
+      "narration": "Qual é o maior oceano da Terra em extensão?",
+      "explanation": "O Oceano Pacífico cobre mais de 30% da superfície do globo terrestre.",
+      "source": "National Oceanic and Atmospheric Administration (NOAA)"
+    },
+    {
+      "id": "q9",
+      "number": 9,
+      "category": "BOTÂNICA & NATUREZA",
+      "question": "Qual é o tipo de árvore mais alta do mundo?",
+      "options": [
+        {"letter": "A", "text": "Baobá"},
+        {"letter": "B", "text": "Eucalipto"},
+        {"letter": "C", "text": "Carvalho"},
+        {"letter": "D", "text": "Sequóia-gigante"}
+      ],
+      "correct_option": "D",
+      "narration": "Qual é o tipo de árvore mais alta do mundo?",
+      "explanation": "A sequóia da Califórnia Hyperion passa dos 115 metros de altura.",
+      "source": "National Park Service & Guinness World Records"
+    },
+    {
+      "id": "q10",
+      "number": 10,
+      "number_str": "DESAFIO FINAL",
+      "category": "FÍSICA & ÓPTICA",
+      "question": "Qual é a velocidade aproximada da luz no vácuo?",
+      "options": [
+        {"letter": "A", "text": "150 mil km/s"},
+        {"letter": "B", "text": "300 mil km/s"},
+        {"letter": "C", "text": "500 mil km/s"},
+        {"letter": "D", "text": "1 milhão km/s"}
+      ],
+      "correct_option": "B",
+      "narration": "Qual é a velocidade aproximada da luz no vácuo?",
+      "explanation": "A luz no vácuo viaja a exatamente 299 mil 792 quilômetros por segundo.",
+      "source": "NIST & Bureau International des Poids et Mesures (BIPM)"
     }
   ]
 }

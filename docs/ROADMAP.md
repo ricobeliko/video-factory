@@ -214,24 +214,31 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Compatibilidade retroativa integral preservada para canais tradicionais existentes.
   - **Q5-B2B / Próximo Passo:** Push controlado para `origin/main` e deploy seguro via `update_production.ps1` no PC Forte. **Aguardando autorização humana explícita.**
 
-- **Fase P0 — Protótipo Isolado Quiz Perguntas e Respostas (Folha de Papel):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - **Status:** Renderização completa de 1 vídeo MP4 vertical (1080x1920) e thumbnail 9:16 independente concluídas com sucesso.
-  - **Objetivo:** Segundo formato de vídeo independente do nicho inspirado em folha de prova/questionário impresso com perguntas, 4 alternativas (A, B, C, D) e revelação visual com chime harmônico.
-  - **Motor Dedicado:** `scripts/poc_quiz_paper_render.py` (`PaperQuizConfig` e `PaperQuizEngine`), reutilizando Edge TTS, Pillow, FFmpeg com `zoompan` para movimento sutil de câmera e síntese de áudio procedural em PCM.
-  - **Template Canônico:** `resource/quiz_templates/quiz_template_perguntas_respostas_papel.json` e cópia em `storage/poc_quiz_papel/quiz_papel_conhecimentos_gerais.json`.
+- **Fase P0 — Protótipo Isolado Quiz Perguntas e Respostas (Folha de Papel):** `COMPLETED / COMMITTED (272dbee)`
+  - Renderização inicial de vídeo vertical em folha de prova/questionário com 6 questões factuais. Estética visual aprovada pelo operador; ritmo apontado para aceleração em P1.
+
+- **Fase P1 — Refinamento de Ritmo do Quiz de Papel:** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - **Status:** Renderização única completa P1 e validação por testes unitários e FFprobe concluídas com sucesso.
+  - **Objetivo:** Ritmo rápido, dinâmico e envolvente preservando a estética de folha de papel aprovada na P0.
+  - **Narração:**
+    - Somente a pergunta é narrada (eliminada a narração de alternativas A/B/C/D e anúncio de números das questões).
+    - Velocidade de voz aumentada para +20% (`pt-BR-AntonioNeural`), mantendo clareza e ritmo ágil.
+    - Gancho inicial direto ("Desafio de conhecimentos gerais! Quantas você acerta?") e encerramento dinâmico de engajamento ("E aí, qual foi a sua nota? Comente quantas você acertou!").
+  - **Sequência Audiovisual por Questão (3 Etapas):**
+    1. Pergunta em foco isolada narrada na folha (2.3s a 3.4s).
+    2. Alternativas surgem juntas imediatamente após o término da narração.
+    3. Janela de raciocínio de 2.5s com leve movimento contínuo Ken Burns (`zoompan`).
+    4. Revelação da correta com círculo de caneta verde, badge "✓ CORRETA" e chime harmônico procedural por 1.0s.
+    5. Corte direto para a questão seguinte (sem telas intermediárias ou contadores regressivos).
+  - **Duração e Escala:**
+    - 10 questões factuais auditadas (NASA, Smithsonian, NatGeo, RSC, UNESCO, Gray's Anatomy/NIH, Louvre, NOAA, NPS, BIPM/NIST).
+    - Duração total: 74.79s (>60s atingido naturalmente através de densidade de conteúdo, sem pausas artificiais).
   - **Artefatos Gerados:**
-    - Vídeo final: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (121.96s, 6.44 MB, 1080x1920, 30fps).
+    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (74.79s, 5.45 MB, 1080x1920, 30fps, AVC/H.264 + AAC).
     - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
-    - Metadados de renderização: `storage/poc_quiz_papel/metadata.json`.
-  - **Conteúdo Factual Auditado (6 Questões):**
-    1. Maior planeta do Sistema Solar: Júpiter (Fonte: NASA Solar System Exploration)
-    2. Quantidade de corações do polvo: 3 corações (Fonte: Smithsonian Magazine / National Geographic)
-    3. Animal terrestre mais veloz: Guepardo (Fonte: National Geographic Animals)
-    4. Elemento químico mais abundante no Universo: Hidrogênio (Fonte: Royal Society of Chemistry / NASA)
-    5. Localização da Grande Muralha: China (Fonte: UNESCO World Heritage Centre)
-    6. Quantidade de ossos do corpo humano adulto: 206 ossos (Fonte: Gray's Anatomy / NIH)
-  - **Validação:** 4 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py` (3.77s) + inspeção ffprobe confirmando conformidade de codec, bitrate, fps e duração.
-  - **Isolamento Total:** Zero alterações em canais de produção, banco de dados, Scheduler ou Post for Me. Formato Q0-R 100% preservado.
+    - Metadados: `storage/poc_quiz_papel/metadata.json` (timing exato registrado por segmento).
+  - **Validação:** 6 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py` (validação de narração sem alternativas, sequência temporal estrita, anti-revelação antecipada, síntese de chime e thumbnail). Inspeção técnica FFprobe aprovada.
+  - **Isolamento Total:** Zero impacto no Quiz Q0-R, Channel Factory, Scheduler, Post for Me ou banco de dados. Zero novas dependências externas.
 
 ---
 

@@ -210,12 +210,9 @@ def run_migration_rehearsal(source_db: str, target_db: str, backup_db: str):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         
-        # Enriquecer canais de publicação com project_id e external_account_id
-        cur.execute("""
-            UPDATE publishing_channels 
-            SET external_account_id = 'acc_mig_' || id, project_id = 'proj_pfm_' || profile_id
-            WHERE external_account_id IS NULL;
-        """)
+        # Preservar dados legados reais: NUNCA inventar IDs de projeto ou contas.
+        # Canais sem project_id permanecem NULL, respeitando compatibilidade existente
+        # e exigindo reconciliação explícita se houver destinos ambíguos.
         
         # Mapear perfis para suas configurações tipadas no formato JSON canônico
         profiles = cur.execute("SELECT * FROM content_profiles").fetchall()
@@ -259,10 +256,10 @@ def run_migration_rehearsal(source_db: str, target_db: str, backup_db: str):
         assert st.voice.voice_name in ('pt-BR-AntonioNeural', 'pt-BR-FranciscaNeural'), f'Voz inválida: {st.voice.voice_name}'
         assert st.automation.target_ready_stock > 0, f'Target stock inválido: {st.automation.target_ready_stock}'
 
-    # Verificar vínculos multiprojeto em publishing_channels
+        # Verificar canais e preservação de vínculos multiprojeto reais
     for ch in channels_after:
-        assert ch.get('external_account_id'), f'Canal {ch.get("id")} sem external_account_id'
-        assert ch.get('project_id'), f'Canal {ch.get("id")} sem project_id'
+        # Canais legados preservam project_id como None (zero invenção de IDs arbitrários)
+        assert ch.get('project_id') is None, f"Canal legado {ch.get('id')} não deveria ter project_id inventado"
 
     # 6. Validação de Integridade SQLite
     with sqlite3.connect(target_db) as conn:

@@ -70,8 +70,8 @@ class TestV213MigrationRehearsal(unittest.TestCase):
         channels = profile_manager.list_channels(db_path=self.target_db)
         self.assertEqual(len(channels), 5)
         for ch in channels:
-            self.assertTrue(ch.get("external_account_id"))
-            self.assertTrue(ch.get("project_id"))
+            # Nunca inventar IDs de projeto para canais legados sem vínculo prévio
+            self.assertIsNone(ch.get("project_id"), "Canais legados devem preservar project_id como None")
 
     def test_scheduled_posts_and_tasks_preserved(self):
         rehearse_v2_migration.run_migration_rehearsal(

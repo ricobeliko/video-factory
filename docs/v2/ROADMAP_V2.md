@@ -26,7 +26,8 @@
 | **V2.11** | Paleta Shadcn Admin Zinc & Microinterações CSS Nativas | `SHADCN_ZINC_READY` | **CONCLUÍDO** |
 | **V2.12** | Homologação Multicanal Sintética & Ajustes Operacionais do Workspace | `MULTICHANNEL_SYNTHETIC_HOMOLOGATED` | **CONCLUÍDO (43/43 PASS)** |
 | **V2.13** | Ensaio de Migração e Compatibilidade de Dados | MIGRATION_REHEARSAL_PASS | **CONCLUÍDO (4/4 PASS)** |
-| **V2.14** | Janela de Cutover e Homologação Final | FINAL_CUTOVER_READY | **PRÓXIMA FASE** |
+| **V2.14** | Homologação Final e Readiness de Cutover | FINAL_CUTOVER_READY | **CONCLUÍDO (PASS)** |
+| **V2.15** | Janela de Cutover Programada no PC Forte | PRODUCTION_CUTOVER_EXECUTED | **PRÓXIMA FASE (OPERAÇÃO HUMANA)** |
 
 
 ---
@@ -106,3 +107,15 @@ Para viabilizar a avaliação completa das 7 abas do Workspace de Canais sem exp
   - Mapeamento completo entre schemas legados e contratos tipados V2 (ChannelWorkspaceSettings).
   - Suíte de validação: 	est/services/test_v2_13_migration_rehearsal.py cobrindo schema legado, migração aditiva, integridade SQLite, idempotência e rollback sintético.
   - Relatório canônico detalhado em docs/v2/MIGRATION_REHEARSAL_REPORT.md.
+
+
+## Fase 14 — Homologação Final e Readiness de Cutover (Concluída)
+- **Status:** CONCLUÍDO (Auditoria e Readiness Aprovados: CUTOVER_READY = YES)
+- **Objetivo:** Preparar a Video Factory V2 para a substituição futura do Streamlit, realizando auditoria final de paridade, segurança, dados e operação.
+- **Entregas:**
+  - Matriz de Paridade Real com 14/14 operações homologadas em docs/v2/FUNCTIONAL_PARITY.md.
+  - Atualização do Guarda de Isolamento (isolation_guard.py) com suporte seguro a MPT_ENVIRONMENT=PRODUCTION no PC Forte.
+  - Ensaio de migração de dados estrito sem IDs de projeto inventados e com proteção contra destinos ambíguos em 
+ehearse_v2_migration.py.
+  - Refinamento do RTO medido e procedimento de avaliação de divergências em PRODUCTION_CUTOVER_PLAN.md e ROLLBACK_PLAN.md.
+  - Relatório Canônico Mestre de Readiness registrado em docs/v2/V214_CUTOVER_READINESS.md.

@@ -17,7 +17,7 @@ import unittest
 import wave
 from PIL import Image
 
-from scripts.poc_quiz_paper_render import PaperQuizConfig, PaperQuizEngine
+from scripts.poc_quiz_paper_render import PaperQuizConfig, PaperQuizEngine, DurationGateError
 
 
 class TestQuizPaperPrototype(unittest.TestCase):
@@ -55,7 +55,7 @@ class TestQuizPaperPrototype(unittest.TestCase):
             self.assertTrue(bool(source and len(source.strip()) > 5), f"Questão {q['id']} deve conter fonte factual auditável")
 
     def test_question_and_options_visible_together_from_first_frame(self):
-        """P1.1: Pergunta e as 4 alternativas devem estar visíveis desde o primeiro frame."""
+        """P1.1/P1.2: Pergunta e as 4 alternativas devem estar visíveis desde o primeiro frame."""
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         engine = PaperQuizEngine(config)
@@ -75,7 +75,7 @@ class TestQuizPaperPrototype(unittest.TestCase):
             self.assertFalse(has_emerald_border, f"Questão {q['id']}: resposta correta revelada prematuramente no frame inicial!")
 
     def test_narration_contains_only_question_statement(self):
-        """P1.1: Narração contém estritamente o enunciado da pergunta (sem alternativas nem números)."""
+        """P1.1/P1.2: Narração contém estritamente o enunciado da pergunta (sem alternativas nem números)."""
         config = PaperQuizConfig.from_json(self.template_path)
         voice_rate = config.voice_settings.get("voice_rate")
         self.assertEqual(voice_rate, "+20%", f"Taxa de voz esperada de +20%, obtido: {voice_rate}")
@@ -92,20 +92,20 @@ class TestQuizPaperPrototype(unittest.TestCase):
 
             self.assertEqual(narr, q["question"].strip())
 
-    def test_p1_1_thinking_window_ticks_sfx_and_timing(self):
-        """P1.1: Valida janela de 4 segundos com tique-taque sintetizado durante a espera (não durante a voz)."""
+    def test_p1_2_thinking_window_6s_and_ticks_sfx(self):
+        """P1.2: Valida janela de 6 segundos de expectativa com tique-taques discretos a cada segundo."""
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         engine = PaperQuizEngine(config)
 
-        exp_sec = float(config.timing_settings.get("expectation_sec", 4.0))
+        exp_sec = float(config.timing_settings.get("expectation_sec", 6.0))
         rev_sec = float(config.timing_settings.get("reveal_sec", 1.0))
 
-        # 1. Janela de expectativa deve ser exatamente 4.0 segundos
-        self.assertAlmostEqual(exp_sec, 4.0, places=2, msg="Janela de expectativa deve ser exatamente 4.0 segundos")
+        # 1. Janela de expectativa deve ser exatamente 6.0 segundos
+        self.assertAlmostEqual(exp_sec, 6.0, places=2, msg="Janela de expectativa deve ser exatamente 6.0 segundos")
         self.assertAlmostEqual(rev_sec, 1.0, places=2, msg="Janela de revelação da resposta deve ser 1.0 segundo")
 
-        # 2. Síntese do áudio procedural de tique-taques
+        # 2. Síntese do áudio procedural de tique-taques (6s)
         ticks_wav = engine.generate_thinking_ticks_sfx(duration=exp_sec)
         self.assertTrue(os.path.exists(ticks_wav))
 
@@ -113,22 +113,85 @@ class TestQuizPaperPrototype(unittest.TestCase):
             self.assertEqual(wf.getnchannels(), 1)
             self.assertEqual(wf.getframerate(), 44100)
             dur_ticks = wf.getnframes() / float(wf.getframerate())
-            self.assertAlmostEqual(dur_ticks, 4.0, places=2, msg="Arquivo de tique-taque deve ter 4 segundos de duração")
+            self.assertAlmostEqual(dur_ticks, 6.0, places=2, msg="Arquivo de tique-taque deve ter 6 segundos de duração")
 
-        # 3. Timing da mixagem: tique-taques ocorrem após a voz, não durante ela
-        dur_narr = 2.65
-        t_thinking_start = dur_narr
-        t_reveal_start = t_thinking_start + exp_sec
-        tot_dur = t_reveal_start + rev_sec
+    def test_p1_2_duration_calculation_per_question(self):
+        """P1.2: Valida cálculo de duração da cena por questão: narração + 6s espera + 1s revelação."""
+        config = PaperQuizConfig.from_json(self.template_path)
+        exp_sec = 6.0
+        rev_sec = 1.0
 
-        # Tique-taques iniciam estritamente após a voz
-        self.assertEqual(t_thinking_start, dur_narr)
-        # Janela de raciocínio é de exatamente 4 segundos
-        self.assertAlmostEqual(t_reveal_start - t_thinking_start, 4.0, places=5)
-        # Revelação da resposta inicia somente após o término dos 4 segundos de espera
-        self.assertAlmostEqual(tot_dur - t_reveal_start, 1.0, places=5)
-        # Ordem temporal estrita
-        self.assertTrue(0 < dur_narr == t_thinking_start < t_reveal_start < tot_dur)
+        sample_narration_durations = [2.5, 3.2, 4.0]
+        for dur_narr in sample_narration_durations:
+            expected_scene_duration = dur_narr + exp_sec + rev_sec
+            t_thinking_start = dur_narr
+            t_reveal_start = t_thinking_start + exp_sec
+            t_scene_end = t_reveal_start + rev_sec
+
+            self.assertAlmostEqual(t_thinking_start, dur_narr, places=5)
+            self.assertAlmostEqual(t_reveal_start - t_thinking_start, 6.0, places=5)
+            self.assertAlmostEqual(t_scene_end - t_reveal_start, 1.0, places=5)
+            self.assertAlmostEqual(t_scene_end, expected_scene_duration, places=5)
+
+    def test_p1_2_dynamic_selection_of_questions(self):
+        """P1.2: Seleciona dinamicamente a quantidade de perguntas para caber na faixa [60.0, 65.0]s."""
+        import asyncio
+        config = PaperQuizConfig.from_json(self.template_path)
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        # Simula 10 questões candidatas
+        candidate_questions = [
+            {"id": i, "question": f"Pergunta {i}?", "narration": f"Pergunta {i}?", "options": [], "correct_option": "A"}
+            for i in range(1, 11)
+        ]
+        # Baseline intro=4.7s + 0.25 = 4.95s, outro=5.4s + 0.60 = 6.00s => dur_baseline = 10.95s
+        # Perguntas: narração=3.3s + 6.0s (espera) + 1.0s (revelação) = 10.3s por pergunta.
+        # Com 5 perguntas: 10.95 + 5 * 10.3 = 62.45s (cabe perfeitamente em [60.0, 65.0]s, quase no ponto médio 62.5s)
+        # Com 4 perguntas: 10.95 + 4 * 10.3 = 52.15s (< 60s)
+        # Com 6 perguntas: 10.95 + 6 * 10.3 = 72.75s (> 65s)
+        async def mock_synthesize(text, output_path):
+            if "intro" in output_path:
+                return 4.7
+            elif "outro" in output_path:
+                return 5.4
+            return 3.3
+
+        engine.synthesize_voice = mock_synthesize
+
+        selected, est_dur = asyncio.run(
+            engine.select_questions_for_target_duration(
+                candidate_questions, target_min=60.0, target_max=65.0, expectation_sec=6.0, reveal_sec=1.0
+            )
+        )
+        self.assertEqual(len(selected), 5, f"Esperado 5 questões para atingir a faixa [60, 65]s, obteve {len(selected)}")
+        self.assertTrue(60.0 <= est_dur <= 65.0, f"Duração estimada {est_dur} fora da faixa [60, 65]s")
+        for idx, q in enumerate(selected, 1):
+            self.assertEqual(q["number"], idx)
+
+    def test_p1_2_duration_gate_blocking(self):
+        """P1.2: Bloqueia homologação e levanta DurationGateError se nenhuma combinação atingir a faixa."""
+        import asyncio
+        config = PaperQuizConfig.from_json(self.template_path)
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        # Cenário onde as perguntas são tão poucas que o vídeo mal chega a 30s
+        few_questions = [
+            {"id": 1, "question": "P1?", "narration": "P1?", "options": [], "correct_option": "A"}
+        ]
+        async def mock_synth(text, output_path):
+            return 2.0
+
+        engine.synthesize_voice = mock_synth
+
+        with self.assertRaises(DurationGateError) as cm:
+            asyncio.run(
+                engine.select_questions_for_target_duration(
+                    few_questions, target_min=60.0, target_max=65.0
+                )
+            )
+        self.assertIn("Nenhuma seleção de perguntas", str(cm.exception))
 
     def test_answer_revealed_only_after_waiting_window(self):
         """P1.1: A resposta correta deve ser revelada somente após o término da janela de espera."""

@@ -48,6 +48,11 @@ from app.utils import utils
 from app.services.media_quality import probe_media
 
 
+class DurationGateError(RuntimeError):
+    """Lançada quando a duração estimada ou final do vídeo viola a faixa obrigatória."""
+    pass
+
+
 # =============================================================================
 # Configuração do Protótipo (PaperQuizConfig)
 # =============================================================================
@@ -61,7 +66,8 @@ class PaperQuizConfig:
     output_thumbnail_path: str = "storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg"
     temp_dir: str = "storage/poc_quiz_papel/temp"
     min_target_duration_sec: float = 60.0
-    target_duration_range: Tuple[float, float] = (65.0, 75.0)
+    max_target_duration_sec: float = 65.0
+    target_duration_range: Tuple[float, float] = (60.0, 65.0)
 
     sheet_header: Dict[str, Any] = field(default_factory=lambda: {
         "title": "AVALIAÇÃO DE CONHECIMENTOS",
@@ -81,11 +87,11 @@ class PaperQuizConfig:
 
     voice_settings: Dict[str, Any] = field(default_factory=lambda: {
         "voice_name": "pt-BR-AntonioNeural",
-        "voice_rate": "+10%",
+        "voice_rate": "+20%",
     })
 
     timing_settings: Dict[str, Any] = field(default_factory=lambda: {
-        "expectation_sec": 4.0,
+        "expectation_sec": 6.0,
         "reveal_sec": 1.0,
     })
 
@@ -232,7 +238,7 @@ class PaperQuizEngine:
         f_std = self._get_font(20, bold=False)
         std_y = sheet_y1 + 138
         draw.text((header_x, std_y), "CANDIDATO: ____________________________", font=f_std, fill=(100, 110, 130, 255))
-        draw.text((sheet_x2 - 250, std_y), "NOTA: [  / 06 ]", font=f_std, fill=(100, 110, 130, 255))
+        draw.text((sheet_x2 - 250, std_y), f"NOTA: [  / {len(self.config.questions):02d} ]", font=f_std, fill=(100, 110, 130, 255))
 
         # Linha divisória dupla
         draw.line([(sheet_x1 + 110, std_y + 38), (sheet_x2 - 40, std_y + 38)], fill=(40, 60, 90, 255), width=2)
@@ -498,10 +504,14 @@ class PaperQuizEngine:
         draw.text(((w - tw2) / 2, center_y), t2, font=f_sub, fill=(71, 85, 105, 255))
 
         center_y += 90
+        nq = len(self.config.questions)
+        top_range = f"{max(1, nq - 1)} a {nq}" if nq > 4 else f"{nq} / {nq}"
+        mid_range = f"{max(1, nq - 2)} a {max(1, nq - 1)}" if nq > 4 else f"{max(1, nq - 1)}"
+        low_range = f"1 a {max(1, nq - 3)}" if nq > 4 else "1 ou menos"
         score_cards = [
-            ("6 / 6", "Gênio Supremo! Gabaritou!"),
-            ("4 a 5", "Muito bom! Quase perfeito!"),
-            ("1 a 3", "Valeu a tentativa! Treine mais!"),
+            (f"{nq} / {nq}", "Gênio Supremo! Gabaritou!"),
+            (mid_range, "Muito bom! Quase perfeito!"),
+            (low_range, "Valeu a tentativa! Treine mais!"),
         ]
         f_sc = self._get_font(26, bold=True)
         f_desc = self._get_font(24, bold=False)
@@ -619,9 +629,9 @@ class PaperQuizEngine:
         logger.info(f"[SFX] Chime de acerto sintetizado com sucesso: {out_wav}")
         return out_wav
 
-    def generate_thinking_ticks_sfx(self, duration: float = 4.0) -> str:
+    def generate_thinking_ticks_sfx(self, duration: float = 6.0) -> str:
         """Sintetiza proceduralmente tique-taques curtos, ritmados e discretos (~1 por segundo)."""
-        out_wav = os.path.join(self.config.temp_dir, "sfx_thinking_ticks.wav")
+        out_wav = os.path.join(self.config.temp_dir, f"sfx_thinking_ticks_{int(duration)}s.wav")
         if os.path.exists(out_wav) and os.path.getsize(out_wav) > 1000:
             return out_wav
 
@@ -629,10 +639,9 @@ class PaperQuizEngine:
         total_samples = int(sample_rate * duration)
         samples = [0] * total_samples
 
-        # 4 tiques distribuídos uniformemente na janela de 4 segundos:
-        # a cada 1.0s (t = 0.5s, 1.5s, 2.5s, 3.5s)
-        # Cada tique tem ~25ms de duração, discreto e suave
-        tick_offsets = [0.5, 1.5, 2.5, 3.5]
+        # Tiques distribuídos uniformemente a cada 1.0s (t = 0.5s, 1.5s, 2.5s, 3.5s, 4.5s, 5.5s para 6s)
+        num_ticks = int(duration)
+        tick_offsets = [0.5 + i * 1.0 for i in range(num_ticks) if (0.5 + i * 1.0) < duration]
         tick_duration = 0.025
         tick_samples_len = int(sample_rate * tick_duration)
 
@@ -656,7 +665,7 @@ class PaperQuizEngine:
             raw_data = struct.pack(f"<{len(samples)}h", *samples)
             wf.writeframes(raw_data)
 
-        logger.info(f"[SFX] Tique-taque de expectativa sintetizado com sucesso: {out_wav}")
+        logger.info(f"[SFX] Tique-taque de expectativa ({duration:.1f}s) sintetizado com sucesso: {out_wav}")
         return out_wav
 
     # -------------------------------------------------------------------------
@@ -882,26 +891,113 @@ class PaperQuizEngine:
         return res_f.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1000
 
     # -------------------------------------------------------------------------
-    # 10. Pipeline Completo de Renderização
+    # 10. Seleção Dinâmica da Quantidade de Perguntas & Duration Gate
+    # -------------------------------------------------------------------------
+    async def select_questions_for_target_duration(
+        self,
+        candidate_questions: List[Dict[str, Any]],
+        target_min: float = 60.0,
+        target_max: float = 65.0,
+        expectation_sec: float = 6.0,
+        reveal_sec: float = 1.0,
+    ) -> Tuple[List[Dict[str, Any]], float]:
+        """Seleciona dinamicamente a quantidade de perguntas para situar a duração final
+        estritamente entre target_min e target_max (60s a 65s), usando áudios reais de narração,
+        sem cortes de fala e sem silêncio artificial.
+        """
+        import itertools
+
+        # 1. Duração baseline (abertura + encerramento)
+        dur_baseline = 0.0
+        intro_cfg = self.config.intro_hook
+        if intro_cfg.get("enabled", True):
+            intro_audio = os.path.join(self.config.temp_dir, "narration_intro.mp3")
+            dur_intro = await self.synthesize_voice(intro_cfg["narration"], intro_audio)
+            dur_baseline += (dur_intro + 0.25)
+
+        outro_cfg = self.config.outro_challenge
+        if outro_cfg.get("enabled", True):
+            outro_audio = os.path.join(self.config.temp_dir, "narration_outro.mp3")
+            dur_outro = await self.synthesize_voice(outro_cfg["narration"], outro_audio)
+            dur_baseline += (dur_outro + 0.60)
+
+        # 2. Medir duração exata da narração de cada pergunta candidata
+        candidates_with_dur: List[Tuple[Dict[str, Any], float]] = []
+        for q in candidate_questions:
+            q_audio = os.path.join(self.config.temp_dir, f"narration_{q['id']}.mp3")
+            dur_narr = await self.synthesize_voice(q["narration"], q_audio)
+            scene_dur = dur_narr + expectation_sec + reveal_sec
+            candidates_with_dur.append((q, scene_dur))
+
+        # 3. Busca de combinação ótima que caiba estritamente em [target_min, target_max]
+        midpoint = (target_min + target_max) / 2.0
+        valid_selections: List[Tuple[float, List[Dict[str, Any]], float]] = []
+
+        for k in range(1, len(candidates_with_dur) + 1):
+            for comb in itertools.combinations(candidates_with_dur, k):
+                total_comb_dur = dur_baseline + sum(item[1] for item in comb)
+                if target_min <= total_comb_dur <= target_max:
+                    diff_to_mid = abs(total_comb_dur - midpoint)
+                    valid_selections.append((diff_to_mid, [item[0] for item in comb], total_comb_dur))
+
+        if not valid_selections:
+            raise DurationGateError(
+                f"[DURATION GATE ERROR] Nenhuma seleção de perguntas atinge a faixa obrigatória de "
+                f"[{target_min:.1f}s, {target_max:.1f}s]. Baseline: {dur_baseline:.2f}s."
+            )
+
+        # Ordena pela menor distância ao ponto médio (62.5s) para margem de segurança contra variações de muxing
+        valid_selections.sort(key=lambda x: x[0])
+        best_diff, best_questions, best_dur = valid_selections[0]
+
+        # Re-indexa os números das perguntas selecionadas
+        formatted_questions: List[Dict[str, Any]] = []
+        for idx, q in enumerate(best_questions, start=1):
+            q_copy = dict(q)
+            q_copy["number"] = idx
+            q_copy["number_str"] = f"QUESTÃO {idx:02d} DE {len(best_questions):02d}"
+            formatted_questions.append(q_copy)
+
+        logger.info(
+            f"[DYNAMIC SELECTION] Selecionadas {len(formatted_questions)} perguntas de {len(candidate_questions)} candidatas. "
+            f"Duração estimada: {best_dur:.2f}s (Faixa Alvo: [{target_min:.1f}s, {target_max:.1f}s])"
+        )
+        return formatted_questions, best_dur
+
+    # -------------------------------------------------------------------------
+    # 11. Pipeline Completo de Renderização (P1.2)
     # -------------------------------------------------------------------------
     async def render_async(self) -> Dict[str, Any]:
-        """Executa a renderização completa do protótipo P1.1 e grava os metadados."""
+        """Executa a renderização completa do protótipo P1.2 e valida o Duration Gate."""
         t_start = time.perf_counter()
-        logger.info(f"=== INICIANDO RENDERIZAÇÃO P1.1: QUIZ FOLHA DE PAPEL ({self.config.quiz_title}) ===")
+        logger.info(f"=== INICIANDO RENDERIZAÇÃO P1.2: QUIZ FOLHA DE PAPEL ({self.config.quiz_title}) ===")
 
-        # 1. Gerar Thumbnail
+        exp_sec = float(self.config.timing_settings.get("expectation_sec", 6.0))
+        rev_sec = float(self.config.timing_settings.get("reveal_sec", 1.0))
+        t_min = float(self.config.min_target_duration_sec)
+        t_max = float(getattr(self.config, "max_target_duration_sec", 65.0))
+
+        # 1. Seleção Dinâmica da Quantidade de Perguntas baseada na duração real da narração
+        selected_q, est_dur = await self.select_questions_for_target_duration(
+            candidate_questions=self.config.questions,
+            target_min=t_min,
+            target_max=t_max,
+            expectation_sec=exp_sec,
+            reveal_sec=rev_sec,
+        )
+        self.config.questions = selected_q
+
+        # 2. Gerar Thumbnail
         self.generate_thumbnail()
 
-        # 2. Gerar SFX de Acerto e Tique-taques da Janela de Expectativa
-        exp_sec = float(self.config.timing_settings.get("expectation_sec", 4.0))
-        rev_sec = float(self.config.timing_settings.get("reveal_sec", 1.0))
+        # 3. Gerar SFX de Acerto e Tique-taques da Janela de Expectativa (6.0s)
         sfx_ding = self.generate_correct_ding_sfx()
         sfx_ticks = self.generate_thinking_ticks_sfx(duration=exp_sec)
 
         scene_files: List[str] = []
         timing_records: List[Dict[str, Any]] = []
 
-        # 3. Renderizar Cena de Abertura (Intro Hook - Direta e Dinâmica)
+        # 4. Renderizar Cena de Abertura (Intro Hook - Direta e Dinâmica)
         intro_cfg = self.config.intro_hook
         if intro_cfg.get("enabled", True):
             intro_img = os.path.join(self.config.temp_dir, "frame_intro.png")
@@ -918,12 +1014,12 @@ class PaperQuizEngine:
             scene_files.append(intro_mp4)
             timing_records.append({"scene": "intro", "duration": round(dur_intro_tot, 3)})
 
-        # 4. Renderizar Cada Pergunta (Questões 1 a N) com Sequência P1.1
+        # 5. Renderizar Perguntas Selecionadas Dinamicamente
         for idx, item in enumerate(self.config.questions):
             scene_id = item["id"]
             logger.info(f"Processando questão {scene_id} ({idx + 1}/{len(self.config.questions)})...")
 
-            # Em P1.1: Pergunta e as 4 alternativas visíveis desde o início da cena (frame 0)
+            # Pergunta e as 4 alternativas visíveis desde o início da cena (frame 0)
             img_options = os.path.join(self.config.temp_dir, f"frame_{scene_id}_options.png")
             img_rev = os.path.join(self.config.temp_dir, f"frame_{scene_id}_revealed.png")
 
@@ -934,9 +1030,9 @@ class PaperQuizEngine:
             audio_narr = os.path.join(self.config.temp_dir, f"narration_{scene_id}.mp3")
             dur_narr = await self.synthesize_voice(item["narration"], audio_narr)
 
-            # Sequência Temporal P1.1:
+            # Sequência Temporal P1.2:
             # 0.0 -> dur_narr: Pergunta narrada com alternativas já presentes na folha
-            # dur_narr -> t_reveal_start: Janela de raciocínio de exatamente 4.0s com tique-taques rítmicos
+            # dur_narr -> t_reveal_start: Janela de raciocínio de exatamente 6.0s com tique-taques rítmicos
             # t_reveal_start -> tot_dur: Resposta correta revelada por ~1.0s com chime de acerto
             t_thinking_start = dur_narr
             t_reveal_start = t_thinking_start + exp_sec
@@ -972,7 +1068,7 @@ class PaperQuizEngine:
                 "total_duration": round(tot_dur, 3),
             })
 
-        # 5. Renderizar Cena de Encerramento (Outro Challenge)
+        # 6. Renderizar Cena de Encerramento (Outro Challenge)
         outro_cfg = self.config.outro_challenge
         if outro_cfg.get("enabled", True):
             outro_img = os.path.join(self.config.temp_dir, "frame_outro.png")
@@ -989,7 +1085,7 @@ class PaperQuizEngine:
             scene_files.append(outro_mp4)
             timing_records.append({"scene": "outro", "duration": dur_outro_tot})
 
-        # 6. Concatenação e Mixagem Final
+        # 7. Concatenação e Mixagem Final
         logger.info(f"Concatenando {len(scene_files)} segmentos com trilha ambiente...")
         ok_concat = self.concat_and_mix_bgm(scene_files)
         if not ok_concat:
@@ -999,11 +1095,19 @@ class PaperQuizEngine:
         probe = probe_media(self.config.output_video_path)
         final_dur = float(probe.get("format_duration", 0.0) or 0.0)
 
-        # 7. Gravação de Metadados JSON no Diretório do Protótipo
+        # 8. Verificação Rigorosa do Duration Gate [target_min, target_max]
+        gate_passed = (t_min <= final_dur <= t_max)
+        if not gate_passed:
+            raise DurationGateError(
+                f"[DURATION GATE VIOLATION] Duração final {final_dur:.2f}s está fora da faixa obrigatória "
+                f"[{t_min:.1f}s, {t_max:.1f}s]!"
+            )
+
+        # 9. Gravação de Metadados JSON no Diretório do Protótipo
         meta_path = os.path.join(os.path.dirname(self.config.output_video_path), "metadata.json")
         metadata = {
             "format": "quiz_paper_prototype",
-            "prototype_code": "P1.1",
+            "prototype_code": "P1.2",
             "quiz_title": self.config.quiz_title,
             "niche": self.config.niche,
             "video_path": self.config.output_video_path,
@@ -1012,6 +1116,13 @@ class PaperQuizEngine:
             "video_duration_sec": final_dur,
             "render_time_sec": round(t_elapsed, 2),
             "meets_min_target_duration": final_dur >= self.config.min_target_duration_sec,
+            "duration_gate": {
+                "target_min_sec": t_min,
+                "target_max_sec": t_max,
+                "passed": gate_passed,
+                "margin_min_sec": round(final_dur - t_min, 3),
+                "margin_max_sec": round(t_max - final_dur, 3),
+            },
             "factual_sources": [
                 {"id": q["id"], "question": q["question"], "answer": q["correct_option"], "source": q.get("source")}
                 for q in self.config.questions
@@ -1022,7 +1133,10 @@ class PaperQuizEngine:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-        logger.info(f"=== PROTÓTIPO P1 CONCLUÍDO COM SUCESSO! Duração: {final_dur:.2f}s | Tempo de Render: {t_elapsed:.2f}s ===")
+        logger.info(
+            f"=== PROTÓTIPO P1.2 CONCLUÍDO COM SUCESSO! Duração: {final_dur:.2f}s (Faixa: [{t_min}s, {t_max}s]) "
+            f"| Perguntas: {len(self.config.questions)} | Tempo de Render: {t_elapsed:.2f}s ==="
+        )
         return metadata
 
     def render(self) -> Dict[str, Any]:

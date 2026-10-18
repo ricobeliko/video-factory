@@ -220,25 +220,33 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
 - **Fase P1 — Refinamento de Ritmo do Quiz de Papel:** `COMPLETED / COMMITTED (eff0017)`
   - Aceleração da narração (apenas perguntas, sem ler alternativas nem números de questão, voz a +20%), escalonamento para 10 questões factuais. Estética visual aprovada pelo operador.
 
-- **Fase P1.1 — Quiz de Papel com Expectativa Sonora:** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - **Status:** Renderização única completa P1.1 e validação por 7 testes unitários e FFprobe concluídas com sucesso.
-  - **Objetivo:** Apresentação simultânea de pergunta e alternativas desde o primeiro frame, aliada a uma janela de expectativa sonora ritmada com tique-taques discretos.
-  - **Sequência Audiovisual Implementada:**
-    1. Pergunta e as 4 alternativas visíveis simultaneamente desde o primeiro frame da cena (`t=0`), com movimento Ken Burns sutil contínuo.
-    2. Narração somente do enunciado da pergunta (sem alternativas nem números).
-    3. Ao término da voz, início de janela de raciocínio de exatamente 4.0 segundos (`expectation_sec: 4.0`).
-    4. Durante esses 4 segundos, reprodução de tique-taques curtos, ritmados e discretos (4 tiques espaçados a cada 1.0s, sintetizados proceduralmente em PCM via `wave/struct`), sem cobrir a voz nem o chime.
-    5. Ao término dos 4 segundos, revelação da resposta correta com círculo de caneta verde, badge esmeralda e chime harmônico por ~1.0 segundo.
-    6. Corte imediato para a próxima pergunta, sem telas intermediárias ou contadores numéricos.
-  - **Duração e Escala:**
-    - 10 questões factuais auditadas (NASA, Smithsonian, NatGeo, RSC, UNESCO, Gray's Anatomy/NIH, Louvre, NOAA, NPS, BIPM/NIST).
-    - Duração total: 89.79s (acima de 60s, ritmo natural sem pausas artificiais).
+- **Fase P1.1 — Quiz de Papel com Expectativa Sonora:** `COMPLETED / COMMITTED (4cc386e)`
+  - Introdução da janela sonora com tique-taques discretos a cada segundo e apresentação simultânea de pergunta e alternativas.
+
+- **Fase P1.2 — Quiz de Papel com Duração Controlada (60–65s):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - **Status:** Renderização única completa P1.2, 10 testes unitários direcionados PASS e validação FFprobe concluídos com sucesso.
+  - **Objetivo:** Refinamento do Quiz de Papel para produzir vídeos com duração rigorosamente controlada entre 60.0s e 65.0s, oferecendo 6 segundos para o público escolher cada resposta.
+  - **Preservação Visual e Editorial:**
+    - Estética visual de folha de papel, caneta esferográfica e marcadores preservada integralmente.
+    - Pergunta e 4 alternativas visíveis desde o início da cena (`t=0`).
+    - Narração exclusivamente do enunciado da pergunta com Edge TTS +20%.
+    - Resposta revelada por ~1.0s com círculo de caneta verde, badge esmeralda e chime harmônico procedural.
+  - **Duração e Seleção Dinâmica:**
+    - Seleção dinâmica inteligente (`select_questions_for_target_duration`) baseada na duração real do áudio de narração TTS de cada questão candidata, intro e encerramento.
+    - Fórmula de cena: `dur_narr + 6.0s (espera) + 1.0s (revelação)`.
+    - Selecionadas 5 perguntas factuais de 10 candidatas (q3, q4, q5, q6, q10), re-indexadas de 1 a 5 com nota máxima reescalonada ("NOTA: [ / 05 ]").
+    - Duração final obtida: **61.25s** (margem de segurança perfeita dentro da faixa [60.0, 65.0]s).
+  - **Duration Gate:**
+    - Bloqueio determinístico via `DurationGateError` se a duração final ou seleção ficar fora de `[60.0, 65.0]s`.
+    - Telemetria de gate registrada em `storage/poc_quiz_papel/metadata.json` (`passed: true`, `margin_min_sec: 1.252`, `margin_max_sec: 3.748`).
+  - **Expectativa Sonora:**
+    - Janela de raciocínio de 6.0s (`expectation_sec: 6.0`) com 6 tique-taques discretos sintetizados proceduralmente (`[0.5, 1.5, 2.5, 3.5, 4.5, 5.5]s`).
   - **Artefatos Gerados:**
-    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (89.79s, 7.41 MB, 1080x1920, 30fps, AVC High + AAC).
+    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.25s, 4.85 MB, 1080x1920 a 30fps, AVC High + AAC).
     - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
-    - Metadados: `storage/poc_quiz_papel/metadata.json` (timing exato registrado por segmento).
-  - **Validação:** 7 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`. Inspeção FFprobe aprovada.
-  - **Isolamento Total:** Zero alterações em canais de produção, banco de dados, Scheduler ou Post for Me. Formato Q0-R 100% preservado. Zero novas dependências.
+    - Metadados: `storage/poc_quiz_papel/metadata.json`.
+  - **Validação de Testes:** 10 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+  - **Isolamento Total:** Zero alterações em canais de produção, banco de dados, Channel Factory, Scheduler ou Post for Me. Formato Q0-R 100% preservado e inalterado. Zero novas dependências.
 
 ---
 

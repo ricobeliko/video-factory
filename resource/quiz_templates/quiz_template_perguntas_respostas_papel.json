@@ -11,7 +11,8 @@
   "output_thumbnail_path": "storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg",
   "temp_dir": "storage/poc_quiz_papel/temp",
   "min_target_duration_sec": 60.0,
-  "target_duration_range": [62.0, 72.0],
+  "max_target_duration_sec": 65.0,
+  "target_duration_range": [60.0, 65.0],
   "video_settings": {
     "width": 1080,
     "height": 1920,
@@ -26,7 +27,7 @@
     "voice_rate": "+20%"
   },
   "timing_settings": {
-    "expectation_sec": 4.0,
+    "expectation_sec": 6.0,
     "reveal_sec": 1.0
   },
   "intro_hook": {

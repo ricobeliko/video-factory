@@ -245,20 +245,26 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - Renderização inicial de vídeo vertical em folha de prova/questionário com 6 questões factuais. Estética visual aprovada; ritmo encaminhado para aceleração em P1.
 - **Fase P1 (Refinamento de Ritmo do Quiz de Papel):** `COMPLETED / COMMITTED (eff0017)`
   - Aceleração da narração (apenas perguntas, sem ler alternativas nem números de questão, voz a +20%), escalonamento para 10 questões factuais. Estética visual aprovada pelo operador.
-- **Fase P1.1 (Quiz de Papel com Expectativa Sonora):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - Renderização única completa P1.1 e validação por 7 testes unitários e FFprobe concluídas em `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4`.
-  - Sequência audiovisual ajustada conforme especificação:
-    1. Pergunta e 4 alternativas visíveis simultaneamente desde o primeiro frame (`t=0`), com movimento Ken Burns sutil contínuo.
-    2. Narração somente do enunciado da pergunta (sem alternativas nem números).
-    3. Ao término da narração, início de janela de raciocínio de exatamente 4.0 segundos (`expectation_sec: 4.0`).
-    4. Durante esses 4 segundos, reprodução de tique-taques curtos, ritmados e discretos (4 tiques uniformes a cada 1.0s, sintetizados proceduralmente em PCM via `wave/struct`), sem cobrir a voz nem o chime.
-    5. Ao término dos 4 segundos, revelação da resposta correta com círculo de caneta verde, badge esmeralda e chime harmônico procedural por ~1.0 segundo.
-    6. Corte seco imediato para a próxima pergunta, sem telas intermediárias ou contadores numéricos.
-  - Escala: 10 questões factuais auditadas, atingindo 89.79s de duração (>60s) por densidade de conteúdo, sem pausas artificiais.
-  - Vídeo final: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (89.79s, 7.41 MB, 1080x1920, 30fps).
-  - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
-  - 7 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
-  - Isolamento total de produção: zero impacto no Quiz Q0-R, Channel Factory, Scheduler, Post for Me ou banco de dados. Zero novas dependências.
+- **Fase P1.1 (Quiz de Papel com Expectativa Sonora):** `COMPLETED / COMMITTED (4cc386e)`
+  - Introdução da janela sonora com tique-taques discretos a cada segundo e apresentação simultânea de pergunta e alternativas.
+
+- **Fase P1.2 (Quiz de Papel com Duração Controlada — 60 a 65s):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - Renderização única completa P1.2, 10 testes unitários direcionados PASS e validação FFprobe concluídos em `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4`.
+  - Controle de Duração e Seleção Dinâmica:
+    - Algoritmo `select_questions_for_target_duration` seleciona dinamicamente o número exato de perguntas calculando as durações reais do áudio de narração TTS (+20%), a janela de expectativa de 6.0s e a revelação de 1.0s, somados a abertura e encerramento.
+    - 5 perguntas selecionadas de 10 candidatas (IDs: q3, q4, q5, q6, q10), re-indexadas de 1 a 5 com cartão de pontuação atualizado para "NOTA: [ / 05 ]".
+    - Duração final alcançada: **61.25s** (dentro do intervalo obrigatório `[60.0s, 65.0s]`).
+  - Duration Gate:
+    - Bloqueio determinístico via `DurationGateError` levantado pelo renderizador caso a duração final ou combinação fique fora do intervalo `[60.0, 65.0]s`.
+    - Telemetria de conformidade registrada em `storage/poc_quiz_papel/metadata.json` (`passed: true`, `target_min_sec: 60.0`, `target_max_sec: 65.0`, `margin_min_sec: 1.252`, `margin_max_sec: 3.748`).
+  - Expectativa Sonora de 6 Segundos:
+    - Janela ampliada para 6.0s com 6 tique-taques uniformes sintetizados proceduralmente a cada 1.0s (`[0.5, 1.5, 2.5, 3.5, 4.5, 5.5]s`), conferindo tempo confortável para escolha do público.
+  - Artefatos Gerados:
+    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.25s, 4.85 MB, 1080x1920, 30fps).
+    - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
+    - Metadados: `storage/poc_quiz_papel/metadata.json`.
+  - Validação de Testes: 10 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+  - Isolamento Total: Formato Q0-R permanece congelado e inalterado. Zero novas dependências. Zero alterações em Channel Factory, Scheduler, Post for Me ou produção.
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.

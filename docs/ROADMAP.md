@@ -113,7 +113,7 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída `594e57c`; Fase Q5-B1 Homologada em DEV; Fase Q5-B2 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída `594e57c`; Fase Q5-B1 Homologada em DEV; Fase P1.3 Homologada pelo Operador `fe2d7cb`; Fase P2 Auditoria Concluída; Fase P3 Próxima)
 
 ---
 
@@ -226,28 +226,38 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
 - **Fase P1.2 — Quiz de Papel com Duração Controlada (60–65s):** `COMPLETED / COMMITTED (ae74458)`
   - Controle de duração com seleção dinâmica de perguntas e bloqueio via DurationGateError.
 
-- **Fase P1.3 — Timer Circular e Encerramento para Comentários:** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - **Status:** Renderização única completa P1.3, 13 testes unitários direcionados PASS e validação rigorosa FFprobe concluídos com sucesso.
-  - **Objetivo:** Refinamentos de retenção e engajamento no Quiz de Papel:
-    1. Indicador circular animado preenchendo progressivamente no sentido horário de 0% a 100% durante os 6 segundos de expectativa, sincronizado com os 6 tique-taques e removido imediatamente na revelação da resposta.
-    2. Tela final de encerramento mantida por exatamente 6.0 segundos completos, com chamada clara: "Quantas você acertou? Comente sua pontuação!", nota adaptada ao número real de questões e música ambiente com sutil Ken Burns para incentivar a abertura dos comentários.
-  - **Timer Circular Progressivo:**
-    - Sintetizado proceduralmente via Pillow em 180 frames transparentes RGBA (30fps x 6.0s), com track suave e arco em azul caneta esferográfica real (`(37, 99, 235)`).
-    - Posicionado de forma limpa e desobstruída no card de status da folha, sem cobrir o enunciado nem as 4 alternativas.
-    - Sincronização temporal exata: inicia em `t_thinking_start`, preenche 360° em 6.0s e desaparece em `t_reveal_start` quando a resposta é revelada em verde.
-  - **Encerramento de 6 Segundos:**
-    - Narração curta no início ("Quantas você acertou? Comente sua pontuação!").
-    - Retenção estendida da tela de notas ("NOTA: [ / 05 ]", cards de pontuação e CTA) pelos 6 segundos completos, permitindo leitura confortável e estímulo ao comentário.
-  - **Duração e Duration Gate:**
-    - Baseline atualizada considerando abertura (4.74s) + encerramento (6.0s) = 10.74s.
-    - Seleção dinâmica (`select_questions_for_target_duration`) escolheu 5 perguntas factuais (q3, q4, q5, q6, q10), atingindo **61.85s** (distância de apenas 0.65s do ponto médio ideal de 62.5s, dentro da faixa [60.0s, 65.0s]).
-    - Duration Gate determinístico `DurationGateError` ativo e validado.
-  - **Artefatos Gerados:**
-    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.85s, 4.94 MB, 1080x1920 a 30fps, H.264 + AAC 44.1kHz).
-    - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
-    - Metadados: `storage/poc_quiz_papel/metadata.json`.
-  - **Validação de Testes:** 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
-  - **Isolamento de Produção:** Formato Q0-R 100% inalterado. Zero dependências novas. Zero alterações em Channel Factory, Scheduler, Post for Me ou produção.
+- **Fase P1.3 — Timer Circular e Encerramento para Comentários:** `HOMOLOGADA / FROZEN VISUAL STANDARD (fe2d7cb)`
+  - **Status:** OFICIALMENTE HOMOLOGADA PELO OPERADOR como padrão visual e rítmico canônico do Quiz de Papel.
+  - **Vídeo de Referência Oficial:** `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (MP4 1080x1920, 61.85s, 4.94 MB, 1855 frames a 30fps).
+  - **Template Canônico Versionado:** `resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`.
+  - **Regras Visuais, Ritmo e Retenção Congeladas:**
+    1. **Estética Visual:** Folha de papel / questionário sobre prancheta escura, tipografia institucional BeVietnamPro e cabeçalho com número de prova.
+    2. **Visibilidade Simultânea:** Pergunta e as quatro alternativas visíveis desde o primeiro frame (0.0s).
+    3. **Narração Ágil:** Narração exclusiva do enunciado da pergunta com Edge TTS (pt-BR-AntonioNeural a +20%), sem ler alternativas nem números de questão.
+    4. **Timer Circular Progressivo:** Indicador circular animado proceduralmente em 180 frames RGBA (30fps x 6.0s), preenchendo no sentido horário de 0% a 100% durante os 6 segundos de resposta no card de status da folha.
+    5. **Expectativa Sonora Rítmica:** Seis tique-taques discretos sincronizados aos 6 segundos do timer.
+    6. **Revelação e Chime:** Resposta correta revelada por aproximadamente 1.0s com círculo de caneta verde, badge de destaque e chime de acerto sintetizado proceduralmente (timer circular removido instantaneamente).
+    7. **Encerramento para Comentários:** Tela final de notas e desafio retida por exatamente 6.0 segundos completos com sutil Ken Burns e música ambiente ("Quantas você acertou? Comente sua pontuação!").
+    8. **Controle de Duração:** Seleção dinâmica com DurationGateError obrigatório garantindo tempo final estritamente entre 60.0s e 65.0s (resultado real: 61.85s).
+    9. **Thumbnail Independente:** Resolução vertical 1080x1920 (`storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg`).
+  - **Validação:** 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+
+- **Fase P2 — Homologação do Quiz de Papel + Auditoria de Integração:** `COMPLETED / COMMITTED`
+  - **Congelamento P1.3:** Padrão P1.3 registrado como homologado e template canônico versionado em `resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`.
+  - **Auditoria YouTube + TikTok:**
+    - Schema de `publishing_channels` já suporta N canais por perfil e múltiplas plataformas (`platform` = 'youtube', 'tiktok').
+    - O Scheduler (`scheduler.py`) já processa separadamente ambas as plataformas em loops dedicados e o índice de idempotência (`idx_active_schedule_v2` em `task_id, COALESCE(channel_id, ''), platform`) permite agendamentos concomitantes em ambas as redes para o mesmo vídeo.
+    - O Post for Me já possui client capaz de listar contas de ambas as plataformas (`list_connected_publishing_accounts`).
+    - Menor caminho para seleção explícita: expor checkboxes/dropdowns de contas para YouTube e TikTok na Channel Factory (`webui/components/channel_factory.py`) e atualizar `resolve_target_tiktok_user_id` em `post_for_me.py` para consultar dinamicamente a tabela `publishing_channels` (como já ocorre para YouTube).
+  - **Auditoria Google Flow nos Formatos Quiz:**
+    - Em `app/services/task.py`, a função `_run_pipeline` intercepta a tarefa logo no início via `if narrative_structure.startswith("quiz"): return _run_quiz_pipeline(...)`.
+    - Esse desvio precede toda a geração de roteiro tradicional e o planejamento de cenas, contornando 100% o Google Flow mesmo que ativado globalmente no perfil.
+    - O pipeline de quiz opera estritamente com imagens estáticas (Pexels, Pixabay ou Canvas estilizado), FFmpeg e Edge TTS, consumindo zero créditos Flow.
+    - Menor correção necessária: nenhuma (já isolado por design tanto para `quiz_dilemma` quanto para o futuro `quiz_paper`).
+  - **Auditoria de Integração do Quiz de Papel:**
+    - Mapeado fluxo: Channel Factory (`format = "quiz_paper"`) -> VideoParams (`narrative_structure = "quiz_paper"`) -> TaskManager (`_run_quiz_pipeline`) -> `QuizContentGenerator` factual com 4 opções e fontes -> `factual_gate` bloqueando perguntas não verificadas -> `PaperQuizEngine` -> Quality Gates (Safety, Duração 60-65s, Mídia) -> READY_STOCK.
+    - Ambos os formatos Q0-R e Quiz de Papel coexistem de forma complementar e independente.
+  - **Status de Deploy:** `NOT_EXECUTED` (trabalho mantido em DEV; aguardando autorização humana antes da implementação P3).
 
 ---
 

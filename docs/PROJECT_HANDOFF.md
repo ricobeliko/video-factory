@@ -251,24 +251,36 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
 - **Fase P1.2 (Quiz de Papel com Duração Controlada — 60 a 65s):** `COMPLETED / COMMITTED (ae74458)`
   - Controle de duração com seleção dinâmica de perguntas e bloqueio via DurationGateError.
 
-- **Fase P1.3 (Timer Circular e Encerramento para Comentários):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - Renderização única completa P1.3, 13 testes unitários direcionados PASS e validação FFprobe concluídos em `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4`.
-  - Timer Circular Progressivo:
-    - Indicador circular animado sintetizado proceduralmente em 180 frames transparentes RGBA (30fps x 6.0s), preenchendo no sentido horário de 0% a 100% durante os 6 segundos de resposta.
-    - Sincronizado aos 6 tique-taques sonoros e posicionado de forma limpa no card de status da folha sem cobrir o enunciado nem as 4 alternativas.
-    - Removido imediatamente na revelação da resposta, quando surge o círculo verde e o chime.
-  - Encerramento de 6 Segundos para Comentários:
-    - Tela final mantida por exatamente 6.0 segundos completos com sutil Ken Burns e trilha ambiente.
-    - Chamada clara: "Quantas você acertou? Comente sua pontuação!", nota adaptada ao número real de questões ("NOTA: [ / 05 ]") e cards de pontuação para incentivar o engajamento.
-  - Controle de Duração e Seleção Dinâmica:
-    - Seleção dinâmica (`select_questions_for_target_duration`) escolheu 5 perguntas factuais (q3, q4, q5, q6, q10), atingindo **61.85s** (apenas 0.65s do ponto médio 62.5s, dentro do intervalo obrigatório `[60.0s, 65.0s]`).
-    - Duration Gate determinístico `DurationGateError` ativo e validado.
-  - Artefatos Gerados:
-    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.85s, 4.94 MB, 1080x1920 a 30fps).
-    - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
-    - Metadados: `storage/poc_quiz_papel/metadata.json`.
-  - Validação de Testes: 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
-  - Isolamento Total: Formato Q0-R permanece congelado e inalterado. Zero novas dependências. Zero alterações em Channel Factory, Scheduler, Post for Me ou produção.
+- **Fase P1.3 (Timer Circular e Encerramento para Comentários):** `HOMOLOGADA / FROZEN VISUAL STANDARD (fe2d7cb)`
+  - Renderização única completa P1.3 aprovada oficialmente pelo operador.
+  - Vídeo de Referência Oficial: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.85s, 4.94 MB, 1080x1920 a 30fps).
+  - Thumbnail Independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
+  - Template Canônico Versionado: `resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`.
+  - Padrão Congelado:
+    1. Pergunta e 4 opções visíveis desde o início (frame 0.0s).
+    2. Narração exclusiva do enunciado com Edge TTS (+20%).
+    3. Timer circular progressivo de 6s em arco azul 360° no card de status da folha.
+    4. 6 tique-taques sonoros discretos e ritmados.
+    5. Revelação com círculo verde, badge e chime por ~1s (timer removido).
+    6. Encerramento mantido por 6.0s completos para comentários ("Quantas você acertou? Comente sua pontuação!").
+    7. Duração final entre 60.0s e 65.0s (real: 61.85s).
+  - Validação: 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+  - Isolamento Total: Formato Q0-R permanece congelado e inalterado.
+
+- **Fase P2 (Homologação do Quiz de Papel + Auditoria de Integração):** `COMPLETED / COMMITTED`
+  - **Padrão P1.3 Congelado:** Homologação registrada e template canônico salvo em `resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`.
+  - **Auditoria YouTube + TikTok:**
+    - `publishing_channels` já possui modelagem multi-canal por perfil (sem restrição UNIQUE em profile_id).
+    - `scheduler.py` itera individualmente por plataforma (`for platform in ("tiktok", "youtube"):`) e o índice `idx_active_schedule_v2` em `(task_id, COALESCE(channel_id, ''), platform)` permite agendamentos concomitantes em ambas as redes para a mesma tarefa.
+    - Menor caminho para seleção explícita: expor checkboxes/dropdowns de contas para YouTube e TikTok na Channel Factory (`webui/components/channel_factory.py`) e atualizar `resolve_target_tiktok_user_id` em `post_for_me.py` para consultar dinamicamente a tabela `publishing_channels` no SQLite (exatamente como `resolve_target_youtube_channel_id` já faz).
+  - **Auditoria Google Flow nos Formatos Quiz:**
+    - Em `app/services/task.py`, a verificação `if narrative_structure.startswith("quiz"): return _run_quiz_pipeline(...)` precede todo o pipeline linear, garantindo bypass absoluto do Google Flow tanto para `quiz_dilemma` quanto para o futuro `quiz_paper`.
+    - Quiz opera estritamente com imagens estáticas, FFmpeg e Edge TTS sem chamadas de rede ao Flow e sem consumo de créditos.
+    - Zero correções necessárias no backend para garantir o bypass do Flow.
+  - **Auditoria de Integração do Quiz de Papel:**
+    - Mapeada rota completa: Channel Factory (`format = "quiz_paper"`) -> VideoParams (`narrative_structure = "quiz_paper"`) -> TaskManager (`_run_quiz_pipeline`) -> `QuizContentGenerator` factual com 4 opções e fontes -> `factual_gate` bloqueando perguntas não verificadas -> `PaperQuizEngine` -> Quality Gates (Safety, Duração 60-65s, Mídia) -> READY_STOCK.
+    - Ambos os formatos Q0-R e Quiz de Papel coexistem de forma independente e configurável por canal.
+  - **Deploy Status:** `NOT_EXECUTED` (trabalho mantido em DEV; aguardando autorização humana antes da implementação P3).
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.

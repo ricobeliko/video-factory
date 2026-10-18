@@ -1,0 +1,205 @@
+{
+  "quiz_type": "multiple_choice_paper",
+  "niche": "conhecimentos_gerais",
+  "quiz_title": "QUIZ CONHECIMENTOS GERAIS",
+  "sheet_header": {
+    "title": "AVALIAÇÃO DE CONHECIMENTOS",
+    "subtitle": "TESTE DE RACIOCÍNIO & FATOS REAIS",
+    "exam_code": "PROVA N° 101 - TURBO QUIZ"
+  },
+  "output_video_path": "storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4",
+  "output_thumbnail_path": "storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg",
+  "temp_dir": "storage/poc_quiz_papel/temp",
+  "min_target_duration_sec": 60.0,
+  "max_target_duration_sec": 65.0,
+  "target_duration_range": [60.0, 65.0],
+  "video_settings": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font_bold": "resource/fonts/BeVietnamPro-Bold.ttf",
+    "font_medium": "resource/fonts/BeVietnamPro-Medium.ttf",
+    "bgm_path": "resource/songs/output000.mp3",
+    "bgm_volume": 0.12
+  },
+  "voice_settings": {
+    "voice_name": "pt-BR-AntonioNeural",
+    "voice_rate": "+20%"
+  },
+  "timing_settings": {
+    "expectation_sec": 6.0,
+    "reveal_sec": 1.0
+  },
+  "intro_hook": {
+    "enabled": true,
+    "narration": "Desafio de conhecimentos gerais! Quantas você acerta?"
+  },
+  "outro_challenge": {
+    "enabled": true,
+    "duration_sec": 6.0,
+    "narration": "Quantas você acertou? Comente sua pontuação!"
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "number": 1,
+      "category": "ASTRONOMIA",
+      "question": "Qual é o maior planeta do nosso Sistema Solar?",
+      "options": [
+        {"letter": "A", "text": "Marte"},
+        {"letter": "B", "text": "Júpiter"},
+        {"letter": "C", "text": "Saturno"},
+        {"letter": "D", "text": "Vênus"}
+      ],
+      "correct_option": "B",
+      "narration": "Qual é o maior planeta do nosso Sistema Solar?",
+      "explanation": "Júpiter tem duas vezes e meia a massa de todos os outros planetas juntos.",
+      "source": "NASA Solar System Exploration (science.nasa.gov/jupiter)"
+    },
+    {
+      "id": "q2",
+      "number": 2,
+      "category": "BIOLOGIA MARINHA",
+      "question": "Quantos corações tem um polvo?",
+      "options": [
+        {"letter": "A", "text": "1 coração"},
+        {"letter": "B", "text": "2 corações"},
+        {"letter": "C", "text": "3 corações"},
+        {"letter": "D", "text": "4 corações"}
+      ],
+      "correct_option": "C",
+      "narration": "Quantos corações tem um polvo?",
+      "explanation": "Dois corações bombeiam para as brânquias e o terceiro para o resto do corpo.",
+      "source": "Smithsonian Magazine & National Geographic (Cephalopod Physiology)"
+    },
+    {
+      "id": "q3",
+      "number": 3,
+      "category": "ZOOLOGIA",
+      "question": "Qual é o animal terrestre mais rápido do planeta?",
+      "options": [
+        {"letter": "A", "text": "Leão"},
+        {"letter": "B", "text": "Guepardo"},
+        {"letter": "C", "text": "Antílope"},
+        {"letter": "D", "text": "Cavalo"}
+      ],
+      "correct_option": "B",
+      "narration": "Qual é o animal terrestre mais rápido do planeta?",
+      "explanation": "O guepardo atinge velocidades de até 120 quilômetros por hora em arrancadas curtas.",
+      "source": "National Geographic Animals (Acinonyx jubatus)"
+    },
+    {
+      "id": "q4",
+      "number": 4,
+      "category": "QUÍMICA & COSMO",
+      "question": "Qual é o elemento químico mais abundante no Universo?",
+      "options": [
+        {"letter": "A", "text": "Oxigênio"},
+        {"letter": "B", "text": "Carbono"},
+        {"letter": "C", "text": "Hidrogênio"},
+        {"letter": "D", "text": "Hélio"}
+      ],
+      "correct_option": "C",
+      "narration": "Qual é o elemento químico mais abundante no Universo?",
+      "explanation": "O hidrogênio compõe aproximadamente 75% de toda a matéria bariônica cósmica.",
+      "source": "Royal Society of Chemistry & NASA Astrophysics"
+    },
+    {
+      "id": "q5",
+      "number": 5,
+      "category": "GEOGRAFIA & HISTÓRIA",
+      "question": "Em qual país está localizada a famosa Grande Muralha?",
+      "options": [
+        {"letter": "A", "text": "Japão"},
+        {"letter": "B", "text": "China"},
+        {"letter": "C", "text": "Índia"},
+        {"letter": "D", "text": "Mongólia"}
+      ],
+      "correct_option": "B",
+      "narration": "Em qual país está localizada a famosa Grande Muralha?",
+      "explanation": "A Grande Muralha da China é uma fortificação histórica com mais de 21 mil quilômetros.",
+      "source": "UNESCO World Heritage Centre (whc.unesco.org/en/list/438)"
+    },
+    {
+      "id": "q6",
+      "number": 6,
+      "category": "ANATOMIA HUMANA",
+      "question": "Quantos ossos possui o corpo de um ser humano adulto?",
+      "options": [
+        {"letter": "A", "text": "186 ossos"},
+        {"letter": "B", "text": "206 ossos"},
+        {"letter": "C", "text": "248 ossos"},
+        {"letter": "D", "text": "300 ossos"}
+      ],
+      "correct_option": "B",
+      "narration": "Quantos ossos possui o corpo de um ser humano adulto?",
+      "explanation": "O esqueleto adulto é formado por 206 ossos, após fusões naturais do crescimento.",
+      "source": "Gray's Anatomy & National Institutes of Health (NIH)"
+    },
+    {
+      "id": "q7",
+      "number": 7,
+      "category": "HISTÓRIA DA ARTE",
+      "question": "Quem pintou a célebre obra Monalisa?",
+      "options": [
+        {"letter": "A", "text": "Michelangelo"},
+        {"letter": "B", "text": "Leonardo da Vinci"},
+        {"letter": "C", "text": "Vincent van Gogh"},
+        {"letter": "D", "text": "Pablo Picasso"}
+      ],
+      "correct_option": "B",
+      "narration": "Quem pintou a célebre obra Monalisa?",
+      "explanation": "A obra foi pintada por Leonardo da Vinci no início do século dezesseis.",
+      "source": "Musée du Louvre (louvre.fr/mona-lisa)"
+    },
+    {
+      "id": "q8",
+      "number": 8,
+      "category": "GEOGRAFIA FÍSICA",
+      "question": "Qual é o maior oceano da Terra em extensão?",
+      "options": [
+        {"letter": "A", "text": "Oceano Atlântico"},
+        {"letter": "B", "text": "Oceano Índico"},
+        {"letter": "C", "text": "Oceano Pacífico"},
+        {"letter": "D", "text": "Oceano Ártico"}
+      ],
+      "correct_option": "C",
+      "narration": "Qual é o maior oceano da Terra em extensão?",
+      "explanation": "O Oceano Pacífico cobre mais de 30% da superfície do globo terrestre.",
+      "source": "National Oceanic and Atmospheric Administration (NOAA)"
+    },
+    {
+      "id": "q9",
+      "number": 9,
+      "category": "BOTÂNICA & NATUREZA",
+      "question": "Qual é o tipo de árvore mais alta do mundo?",
+      "options": [
+        {"letter": "A", "text": "Baobá"},
+        {"letter": "B", "text": "Eucalipto"},
+        {"letter": "C", "text": "Carvalho"},
+        {"letter": "D", "text": "Sequóia-gigante"}
+      ],
+      "correct_option": "D",
+      "narration": "Qual é o tipo de árvore mais alta do mundo?",
+      "explanation": "A sequóia da Califórnia Hyperion passa dos 115 metros de altura.",
+      "source": "National Park Service & Guinness World Records"
+    },
+    {
+      "id": "q10",
+      "number": 10,
+      "number_str": "DESAFIO FINAL",
+      "category": "FÍSICA & ÓPTICA",
+      "question": "Qual é a velocidade aproximada da luz no vácuo?",
+      "options": [
+        {"letter": "A", "text": "150 mil km/s"},
+        {"letter": "B", "text": "300 mil km/s"},
+        {"letter": "C", "text": "500 mil km/s"},
+        {"letter": "D", "text": "1 milhão km/s"}
+      ],
+      "correct_option": "B",
+      "narration": "Qual é a velocidade aproximada da luz no vácuo?",
+      "explanation": "A luz no vácuo viaja a exatamente 299 mil 792 quilômetros por segundo.",
+      "source": "NIST & Bureau International des Poids et Mesures (BIPM)"
+    }
+  ]
+}

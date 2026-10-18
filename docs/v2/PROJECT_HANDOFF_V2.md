@@ -84,3 +84,9 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
 - **Telemetria Técnica e Diagnóstico:** Worker, Scheduler, Dry Run, Auto Publish e o Agent Ops Room estão consolidados em `Configurações > Diagnóstico & Telemetria` e no card compacto de Saúde do Sistema no Dashboard.
 - **Homologação:** Validado em 1920x1080 (Desktop), 1366x768 (Notebook) e 390x844 (Mobile) com Playwright/Edge.
 - **Performance:** Bundle JS comprimido de 143.39 kB (< 150 kB), tempo de carga ~2.1s, CLS zero.
+
+## Identidade Visual V2.11 (Shadcn Admin Zinc + Microinterações)
+- **Tema:** Zinc Dark Neutro (`#09090b` canvas, `#0c0c0e` cards, `#27272a` borders, `#fafafa` typography).
+- **Referência:** `satnaing/shadcn-admin`.
+- **Microinterações:** Elevações no hover (`translateY(-1.5px)`), scale nos botões (`:active { transform: scale(0.98) }`), modais com fade-in e backdrop blur, anel de foco acessível.
+- **Preparação Multicanal:** Plano estruturado com 3 canais sintéticos (Curiosidades do Mundo, Quiz Bíblico Sagrado e Mistérios no Papel) registrado em `docs/v2/ROADMAP_V2.md`.

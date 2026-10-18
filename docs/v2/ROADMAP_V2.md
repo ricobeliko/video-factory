@@ -45,3 +45,38 @@
   - Estoque & Revisão (Central de Curadoria Humana / Quality Gate) e Agendamentos integrados.
   - Design System padronizado (`--v2-` CSS variables), alta legibilidade e compatibilidade total em 1920x1080, 1366x768 e 390x844.
   - Documentação canônica em `UI_REDESIGN_REFERENCES.md`, `UI_DESIGN_SYSTEM.md` e `UI_REDESIGN_VALIDATION.md`.
+
+## Fase 11 — Paleta Shadcn Admin Zinc & Microinterações (Concluída)
+- **Status:** CONCLUÍDO (Homologado em DEV_V2)
+- **Objetivo:** Adequar a identidade visual da Video Factory V2 à estética autêntica do `satnaing/shadcn-admin`, eliminando o tom azul-escuro prévio em favor do Zinc Dark neutro e refinando microinterações CSS.
+- **Entregas:**
+  - Tokens de superfície Zinc-950 (`#09090b`), Zinc-900 (`#0c0c0e`), Zinc-800 (`#27272a`) e Zinc-50 (`#fafafa`).
+  - Botões com padrão Shadcn (primário branco de alto contraste, secundário outline e ações contextuais táteis).
+  - Elevação dinâmica em cards interativos com transição suave e sem layout shifts.
+  - Modais com animação de escala e fade, além de backdrop blur.
+  - Sidebar canônica com item ativo Zinc-800 e hover discreto.
+  - Suporte completo a `@media (prefers-reduced-motion: reduce)` e anel de foco acessível.
+
+## Plano de Homologação Multicanal Sintética (Fase Seguinte)
+Para viabilizar a avaliação completa das 7 abas do Workspace de Canais sem expor dados reais de produção:
+1. **Canal Sintético 1 — Curiosidades do Mundo:**
+   - Nicho: Ciência e Fatos Curiosos
+   - Formato: Tradicional (Montagem com clipes e narração)
+   - Plataformas Vinculadas: YouTube Shorts + TikTok
+   - Estoque Alvo: 4 vídeos | Estoque Inicial Simulado: 2 vídeos prontos
+   - Voz Padrão: pt-BR-AntonioNeural
+   - Autonomia: Ativa
+2. **Canal Sintético 2 — Quiz Bíblico Sagrado:**
+   - Nicho: Perguntas e Respostas Bíblicas
+   - Formato: Quiz Q0-R (Escolhas Impossíveis 50/50)
+   - Plataformas Vinculadas: YouTube Shorts
+   - Estoque Alvo: 5 vídeos | Estoque Inicial Simulado: 0 vídeos
+   - Voz Padrão: pt-BR-FranciscaNeural
+   - Autonomia: Ativa
+3. **Canal Sintético 3 — Mistérios no Papel:**
+   - Nicho: Enigmas & Investigação
+   - Formato: Quiz de Papel P1.3 (Estilo rústico, 4 alternativas em bloco)
+   - Plataformas Vinculadas: YouTube Shorts + Instagram Reels
+   - Estoque Alvo: 3 vídeos | Estoque Inicial Simulado: 1 vídeo em revisão
+   - Voz Padrão: pt-BR-AntonioNeural
+   - Autonomia: Manual (Operador aciona renderizações pontuais)

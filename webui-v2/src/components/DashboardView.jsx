@@ -1,15 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { getSchedulerPosts, runFactoryCycle } from '../api';
+import React, { useState, useEffect } from 'react';
+import { runFactoryCycle, getSchedulerPosts } from '../api';
 
 /**
- * DashboardView — Painel Operacional Principal (Redesign V2)
- * Inspirado nas diretrizes Tremor ("show the data, hide the chrome") e shadcn-admin.
- * Responde de imediato:
- * 1. A fábrica está funcionando?
- * 2. Quantos canais ativos?
- * 3. Quantos vídeos em produção?
- * 4. Quantos vídeos prontos em estoque?
- * 5. O que está agendado e se há algum problema?
+ * DashboardView — Visão Executiva e Painel de Controle (Shadcn Admin Zinc Style)
+ * Organização em 3 níveis:
+ * 1. Topo: 4 KPI Cards compactos com elevação no hover.
+ * 2. Centro: Grid 2 colunas (Meus Canais + Produção em Tempo Real).
+ * 3. Abaixo: Grid 2 colunas (Próximos Posts + Saúde do Sistema).
  */
 export default function DashboardView({
   channels = [],
@@ -20,29 +17,22 @@ export default function DashboardView({
   onNavigate,
   onRefresh,
 }) {
-  const [upcomingPosts, setUpcomingPosts] = useState([]);
-  const [loadingPosts, setLoadingPosts] = useState(false);
-  const [cycleMsg, setCycleMsg] = useState(null);
   const [isCycling, setIsCycling] = useState(false);
+  const [cycleMsg, setCycleMsg] = useState(null);
+  const [upcomingPosts, setUpcomingPosts] = useState([]);
 
+  // Carrega agendamentos para o card de próximos posts
   useEffect(() => {
     let mounted = true;
-    async function loadUpcoming() {
-      setLoadingPosts(true);
-      try {
-        const res = await getSchedulerPosts(5);
-        if (mounted && res && Array.isArray(res.upcoming_posts)) {
-          setUpcomingPosts(res.upcoming_posts);
+    getSchedulerPosts()
+      .then((data) => {
+        if (mounted && Array.isArray(data)) {
+          setUpcomingPosts(data.slice(0, 4));
         }
-      } catch (err) {
-        // Silencioso em caso de mock ou erro de rede
-      } finally {
-        if (mounted) setLoadingPosts(false);
-      }
-    }
-    loadUpcoming();
+      })
+      .catch(() => {});
     return () => { mounted = false; };
-  }, []);
+  }, [systemStatus]);
 
   const isPaused = Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED');
   const activeChannels = channels.length;
@@ -77,7 +67,7 @@ export default function DashboardView({
 
   return (
     <div className="v2-dashboard-container">
-      {/* 1. TOPO: 4 CARDS KPI (Estilo Tremor) */}
+      {/* 1. TOPO: 4 CARDS KPI (Estilo Shadcn Admin / Tremor) */}
       <section className="v2-kpi-grid">
         {/* KPI 1: Canais */}
         <div className="v2-kpi-card" onClick={() => onNavigate('channels')} style={{ cursor: 'pointer' }}>
@@ -85,9 +75,9 @@ export default function DashboardView({
             <span className="v2-kpi-title">CANAIS ATIVOS</span>
             <span className="v2-kpi-icon">📺</span>
           </div>
-          <div className="v2-kpi-metric">{activeChannels}</div>
-          <div className="v2-kpi-context">
-            <span className="v2-badge-pill subtle-blue">
+          <div className="v2-kpi-val">{activeChannels}</div>
+          <div className="v2-kpi-sub">
+            <span className="v2-kpi-trend-pill">
               {autonomousChannels} no modo autônomo
             </span>
           </div>
@@ -99,22 +89,22 @@ export default function DashboardView({
             <span className="v2-kpi-title">EM PRODUÇÃO</span>
             <span className="v2-kpi-icon">🎬</span>
           </div>
-          <div className="v2-kpi-metric">
+          <div className="v2-kpi-val">
             {activeTask ? (
-              <span style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span className="v2-pulse-dot active" /> 1 Ativo
+              <span className="v2-val-active">
+                <span className="v2-indicator-dot active" /> 1 Ativo
               </span>
             ) : (
-              <span style={{ color: '#94a3b8', fontSize: '20px' }}>Ocioso (Pronto)</span>
+              <span className="v2-val-idle">Ocioso (Pronto)</span>
             )}
           </div>
-          <div className="v2-kpi-context">
+          <div className="v2-kpi-sub">
             {activeTask ? (
-              <span className="v2-kpi-subtext">
+              <span className="v2-text-muted">
                 {activeTask.stage || 'Processando pipeline...'}
               </span>
             ) : (
-              <span className="v2-kpi-subtext">Aguardando próximo agendamento</span>
+              <span className="v2-text-muted">Aguardando próximo agendamento</span>
             )}
           </div>
         </div>
@@ -125,10 +115,10 @@ export default function DashboardView({
             <span className="v2-kpi-title">ESTOQUE PRONTO</span>
             <span className="v2-kpi-icon">📦</span>
           </div>
-          <div className="v2-kpi-metric">
-            {totalReadyStock} <span style={{ fontSize: '14px', color: '#64748b', fontWeight: 500 }}>/ {totalTargetStock} meta</span>
+          <div className="v2-kpi-val">
+            {totalReadyStock} <span className="v2-val-target">/ {totalTargetStock} meta</span>
           </div>
-          <div className="v2-kpi-context">
+          <div className="v2-kpi-sub">
             <div className="v2-progress-track">
               <div className="v2-progress-fill" style={{ width: `${stockProgress}%` }} />
             </div>
@@ -141,45 +131,45 @@ export default function DashboardView({
             <span className="v2-kpi-title">PRÓXIMO AGENDAMENTO</span>
             <span className="v2-kpi-icon">📅</span>
           </div>
-          <div className="v2-kpi-metric" style={{ fontSize: nextPost ? '18px' : '16px' }}>
+          <div className="v2-kpi-val v2-kpi-val-time">
             {nextPost ? (
               nextPost.scheduled_time || 'Hoje'
             ) : (
-              <span style={{ color: '#64748b' }}>Nenhum na fila</span>
+              <span className="v2-text-muted">Nenhum na fila</span>
             )}
           </div>
-          <div className="v2-kpi-context">
+          <div className="v2-kpi-sub">
             {nextPost ? (
-              <span className="v2-kpi-subtext" style={{ color: '#34d399' }}>
+              <span className="v2-text-success">
                 {nextPost.channel_name || nextPost.profile_name || 'YouTube'}
               </span>
             ) : (
-              <span className="v2-kpi-subtext">Fila de posts sincronizada</span>
+              <span className="v2-text-muted">Fila de posts sincronizada</span>
             )}
           </div>
         </div>
       </section>
 
-      {/* 2. CENTRO: GRID 2 COLUNAS (60% Meus Canais / 40% Atividade Recente) */}
+      {/* 2. CENTRO: GRID 2 COLUNAS (Meus Canais / Produção em Tempo Real) */}
       <div className="v2-dashboard-split">
         {/* Coluna Esquerda: Canais em Destaque */}
-        <div className="v2-dashboard-card v2-channels-summary-card">
-          <div className="v2-card-header">
-            <div>
-              <h3 className="v2-card-title">Meus Canais</h3>
-              <p className="v2-card-subtitle">Visão geral rápida de estoque e autonomia</p>
+        <div className="v2-card-section">
+          <div className="v2-section-header-row">
+            <div className="v2-section-title-box">
+              <h3 className="v2-section-title">Meus Canais</h3>
+              <p className="v2-section-desc">Visão geral rápida de estoque e autonomia</p>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 type="button"
-                className="v2-btn-secondary"
+                className="v2-btn-link-action"
                 onClick={() => onNavigate('channels')}
               >
                 Ver Todos
               </button>
               <button
                 type="button"
-                className="v2-btn-primary"
+                className="v2-btn-primary-action"
                 onClick={onOpenCreateModal}
               >
                 + Novo Canal
@@ -189,11 +179,11 @@ export default function DashboardView({
 
           <div className="v2-channels-summary-list">
             {channels.length === 0 ? (
-              <div className="v2-empty-state">
+              <div className="v2-empty-state-compact">
                 <span className="v2-empty-icon">📺</span>
-                <p className="v2-empty-title">Nenhum canal cadastrado</p>
-                <p className="v2-empty-desc">Crie seu primeiro canal para iniciar a produção automatizada.</p>
-                <button type="button" className="v2-btn-primary" onClick={onOpenCreateModal}>
+                <span className="v2-empty-title">Nenhum canal cadastrado</span>
+                <span className="v2-empty-desc">Crie seu primeiro canal para iniciar a produção automatizada.</span>
+                <button type="button" className="v2-btn-primary-action" onClick={onOpenCreateModal} style={{ marginTop: '8px' }}>
                   Criar Canal Agora
                 </button>
               </div>
@@ -218,26 +208,10 @@ export default function DashboardView({
                         </span>
                       </div>
                     </div>
-                    <div className="v2-channel-stock-gauge">
-                      <span className="v2-gauge-label">{ready}/{target} prontos</span>
-                      <div className="v2-mini-track">
-                        <div
-                          className="v2-mini-fill"
-                          style={{ width: `${Math.min(100, Math.round((ready / target) * 100))}%` }}
-                        />
-                      </div>
+                    <div className="v2-channel-stock-badge">
+                      <span className="v2-stock-numbers">{ready}/{target}</span>
+                      <span className="v2-stock-label">prontos</span>
                     </div>
-                    <button
-                      type="button"
-                      className="v2-btn-ghost"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenChannel(ch);
-                      }}
-                      title="Abrir Channel Workspace"
-                    >
-                      Abrir →
-                    </button>
                   </div>
                 );
               })
@@ -245,44 +219,41 @@ export default function DashboardView({
           </div>
         </div>
 
-        {/* Coluna Direita: Atividade de Produção & Despacho */}
-        <div className="v2-dashboard-card v2-activity-card">
-          <div className="v2-card-header">
-            <div>
-              <h3 className="v2-card-title">Produção em Tempo Real</h3>
-              <p className="v2-card-subtitle">Status do ciclo e pipeline ativo</p>
+        {/* Coluna Direita: Produção em Tempo Real */}
+        <div className="v2-card-section">
+          <div className="v2-section-header-row">
+            <div className="v2-section-title-box">
+              <h3 className="v2-section-title">Produção em Tempo Real</h3>
+              <p className="v2-section-desc">Status do ciclo e pipeline ativo</p>
             </div>
             <button
               type="button"
-              className="v2-btn-secondary"
+              className="v2-btn-link-action"
               onClick={() => onNavigate('production')}
             >
               Abrir Esteira →
             </button>
           </div>
 
-          <div className="v2-activity-content">
+          <div className="v2-live-production-content">
             {activeTask ? (
               <div className="v2-active-task-hero">
                 <div className="v2-task-badge-row">
-                  <span className="v2-badge-pulse">● Gerando Agora</span>
-                  <span className="v2-task-id">ID: {activeTask.task_id?.slice(0, 8)}...</span>
+                  <span className="v2-badge-pulse">● EM EXECUÇÃO</span>
+                  <span className="v2-task-id">{activeTask.task_id}</span>
                 </div>
-                <h4 className="v2-task-topic">{activeTask.topic || 'Renderizando vídeo selecionado...'}</h4>
+                <h4 className="v2-task-topic">{activeTask.topic || 'Renderização em Andamento'}</h4>
                 <div className="v2-task-stage-indicator">
-                  <span>Etapa: <strong>{activeTask.stage || 'Montagem de Cenas'}</strong></span>
-                  <span>{activeTask.progress || 45}%</span>
+                  <span>Etapa: <strong>{activeTask.stage || 'Iniciando'}</strong></span>
+                  <span>{activeTask.progress || 0}%</span>
                 </div>
-                <div className="v2-progress-track" style={{ height: '8px' }}>
-                  <div
-                    className="v2-progress-fill"
-                    style={{ width: `${activeTask.progress || 45}%`, backgroundColor: '#38bdf8' }}
-                  />
+                <div className="v2-progress-track">
+                  <div className="v2-progress-fill" style={{ width: `${activeTask.progress || 10}%` }} />
                 </div>
               </div>
             ) : (
               <div className="v2-idle-state-box">
-                <div className="v2-idle-icon">⚡</div>
+                <span className="v2-idle-icon">⚡</span>
                 <h4>Fábrica Ociosa & Pronta</h4>
                 <p>Nenhuma tarefa de renderização em andamento. Os canais em modo autônomo monitoram seu estoque.</p>
                 <button
@@ -304,18 +275,18 @@ export default function DashboardView({
         </div>
       </div>
 
-      {/* 3. INFERIOR: GRID 2 COLUNAS (50% Próximos Posts / 50% Saúde do Sistema) */}
+      {/* 3. ABAIXO: GRID 2 COLUNAS (Próximos Posts + Saúde do Sistema) */}
       <div className="v2-dashboard-bottom-grid">
         {/* Próximas Publicações */}
-        <div className="v2-dashboard-card">
-          <div className="v2-card-header">
-            <div>
-              <h3 className="v2-card-title">Próximos Posts Agendados</h3>
-              <p className="v2-card-subtitle">Fila gerenciada pelo Scheduler Worker</p>
+        <div className="v2-card-section">
+          <div className="v2-section-header-row">
+            <div className="v2-section-title-box">
+              <h3 className="v2-section-title">Próximos Posts Agendados</h3>
+              <p className="v2-section-desc">Fila gerenciada pelo Scheduler Worker</p>
             </div>
             <button
               type="button"
-              className="v2-btn-ghost"
+              className="v2-btn-link-action"
               onClick={() => onNavigate('schedules')}
             >
               Ver Todos →
@@ -324,38 +295,34 @@ export default function DashboardView({
 
           <div className="v2-upcoming-list">
             {upcomingPosts.length === 0 ? (
-              <p className="v2-empty-inline">
+              <div className="v2-text-muted" style={{ padding: '16px 0', fontSize: '13px' }}>
                 Nenhum vídeo agendado na fila. Os vídeos aprovados em estoque são agendados automaticamente nas janelas configuradas.
-              </p>
+              </div>
             ) : (
-              upcomingPosts.slice(0, 3).map((post, idx) => (
-                <div key={post.id || idx} className="v2-upcoming-row">
-                  <div className="v2-upcoming-time">
-                    <span className="v2-time-badge">{post.scheduled_time || 'Programado'}</span>
-                  </div>
+              upcomingPosts.map((post, idx) => (
+                <div key={post.post_id || idx} className="v2-upcoming-row">
+                  <span className="v2-time-badge">{post.scheduled_time || 'Programado'}</span>
                   <div className="v2-upcoming-info">
-                    <span className="v2-upcoming-title">{post.title || post.task_topic || 'Vídeo Homologado'}</span>
-                    <span className="v2-upcoming-chan">{post.channel_name || 'YouTube'}</span>
+                    <span className="v2-upcoming-title">{post.title || post.topic || 'Vídeo sem título'}</span>
+                    <span className="v2-upcoming-chan">{post.channel_name || post.profile_name || 'Canal'} • {post.platform || 'YouTube'}</span>
                   </div>
-                  <div className="v2-upcoming-status">
-                    <span className="v2-status-pill-subtle">Agendado</span>
-                  </div>
+                  <span className="v2-status-pill-subtle">Agendado</span>
                 </div>
               ))
             )}
           </div>
         </div>
 
-        {/* Saúde do Sistema & Diagnóstico */}
-        <div className="v2-dashboard-card">
-          <div className="v2-card-header">
-            <div>
-              <h3 className="v2-card-title">Saúde do Sistema</h3>
-              <p className="v2-card-subtitle">Estado operacional dos serviços de segundo plano</p>
+        {/* Saúde do Sistema (Compacta) */}
+        <div className="v2-card-section">
+          <div className="v2-section-header-row">
+            <div className="v2-section-title-box">
+              <h3 className="v2-section-title">Saúde do Sistema</h3>
+              <p className="v2-section-desc">Estado operacional dos serviços de segundo plano</p>
             </div>
             <button
               type="button"
-              className="v2-btn-ghost"
+              className="v2-btn-link-action"
               onClick={() => onNavigate('settings')}
             >
               Diagnóstico →
@@ -364,10 +331,10 @@ export default function DashboardView({
 
           <div className="v2-health-indicators-grid">
             <div className="v2-health-item">
-              <span className={`v2-indicator-dot ${isPaused ? 'inactive' : 'active'}`} />
+              <span className={`v2-indicator-dot ${!isPaused ? 'active' : 'warning'}`} />
               <div>
                 <div className="v2-health-name">Fábrica</div>
-                <div className="v2-health-val">{isPaused ? 'Pausada' : 'Online'}</div>
+                <div className="v2-health-val">{!isPaused ? 'Online' : 'Pausada'}</div>
               </div>
             </div>
 
@@ -388,10 +355,10 @@ export default function DashboardView({
             </div>
 
             <div className="v2-health-item">
-              <span className={`v2-indicator-dot ${systemStatus?.auto_publish_enabled ? 'active' : 'neutral'}`} />
+              <span className={`v2-indicator-dot ${systemStatus?.auto_publish ? 'active' : 'neutral'}`} />
               <div>
                 <div className="v2-health-name">Auto Publish</div>
-                <div className="v2-health-val">{systemStatus?.auto_publish_enabled ? 'Ativo' : 'Off'}</div>
+                <div className="v2-health-val">{systemStatus?.auto_publish ? 'Ativo' : 'Off'}</div>
               </div>
             </div>
           </div>

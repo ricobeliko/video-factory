@@ -217,28 +217,28 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
 - **Fase P0 — Protótipo Isolado Quiz Perguntas e Respostas (Folha de Papel):** `COMPLETED / COMMITTED (272dbee)`
   - Renderização inicial de vídeo vertical em folha de prova/questionário com 6 questões factuais. Estética visual aprovada pelo operador; ritmo apontado para aceleração em P1.
 
-- **Fase P1 — Refinamento de Ritmo do Quiz de Papel:** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - **Status:** Renderização única completa P1 e validação por testes unitários e FFprobe concluídas com sucesso.
-  - **Objetivo:** Ritmo rápido, dinâmico e envolvente preservando a estética de folha de papel aprovada na P0.
-  - **Narração:**
-    - Somente a pergunta é narrada (eliminada a narração de alternativas A/B/C/D e anúncio de números das questões).
-    - Velocidade de voz aumentada para +20% (`pt-BR-AntonioNeural`), mantendo clareza e ritmo ágil.
-    - Gancho inicial direto ("Desafio de conhecimentos gerais! Quantas você acerta?") e encerramento dinâmico de engajamento ("E aí, qual foi a sua nota? Comente quantas você acertou!").
-  - **Sequência Audiovisual por Questão (3 Etapas):**
-    1. Pergunta em foco isolada narrada na folha (2.3s a 3.4s).
-    2. Alternativas surgem juntas imediatamente após o término da narração.
-    3. Janela de raciocínio de 2.5s com leve movimento contínuo Ken Burns (`zoompan`).
-    4. Revelação da correta com círculo de caneta verde, badge "✓ CORRETA" e chime harmônico procedural por 1.0s.
-    5. Corte direto para a questão seguinte (sem telas intermediárias ou contadores regressivos).
+- **Fase P1 — Refinamento de Ritmo do Quiz de Papel:** `COMPLETED / COMMITTED (eff0017)`
+  - Aceleração da narração (apenas perguntas, sem ler alternativas nem números de questão, voz a +20%), escalonamento para 10 questões factuais. Estética visual aprovada pelo operador.
+
+- **Fase P1.1 — Quiz de Papel com Expectativa Sonora:** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - **Status:** Renderização única completa P1.1 e validação por 7 testes unitários e FFprobe concluídas com sucesso.
+  - **Objetivo:** Apresentação simultânea de pergunta e alternativas desde o primeiro frame, aliada a uma janela de expectativa sonora ritmada com tique-taques discretos.
+  - **Sequência Audiovisual Implementada:**
+    1. Pergunta e as 4 alternativas visíveis simultaneamente desde o primeiro frame da cena (`t=0`), com movimento Ken Burns sutil contínuo.
+    2. Narração somente do enunciado da pergunta (sem alternativas nem números).
+    3. Ao término da voz, início de janela de raciocínio de exatamente 4.0 segundos (`expectation_sec: 4.0`).
+    4. Durante esses 4 segundos, reprodução de tique-taques curtos, ritmados e discretos (4 tiques espaçados a cada 1.0s, sintetizados proceduralmente em PCM via `wave/struct`), sem cobrir a voz nem o chime.
+    5. Ao término dos 4 segundos, revelação da resposta correta com círculo de caneta verde, badge esmeralda e chime harmônico por ~1.0 segundo.
+    6. Corte imediato para a próxima pergunta, sem telas intermediárias ou contadores numéricos.
   - **Duração e Escala:**
     - 10 questões factuais auditadas (NASA, Smithsonian, NatGeo, RSC, UNESCO, Gray's Anatomy/NIH, Louvre, NOAA, NPS, BIPM/NIST).
-    - Duração total: 74.79s (>60s atingido naturalmente através de densidade de conteúdo, sem pausas artificiais).
+    - Duração total: 89.79s (acima de 60s, ritmo natural sem pausas artificiais).
   - **Artefatos Gerados:**
-    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (74.79s, 5.45 MB, 1080x1920, 30fps, AVC/H.264 + AAC).
+    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (89.79s, 7.41 MB, 1080x1920, 30fps, AVC High + AAC).
     - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
     - Metadados: `storage/poc_quiz_papel/metadata.json` (timing exato registrado por segmento).
-  - **Validação:** 6 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py` (validação de narração sem alternativas, sequência temporal estrita, anti-revelação antecipada, síntese de chime e thumbnail). Inspeção técnica FFprobe aprovada.
-  - **Isolamento Total:** Zero impacto no Quiz Q0-R, Channel Factory, Scheduler, Post for Me ou banco de dados. Zero novas dependências externas.
+  - **Validação:** 7 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`. Inspeção FFprobe aprovada.
+  - **Isolamento Total:** Zero alterações em canais de produção, banco de dados, Scheduler ou Post for Me. Formato Q0-R 100% preservado. Zero novas dependências.
 
 ---
 

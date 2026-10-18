@@ -54,90 +54,104 @@ class TestQuizPaperPrototype(unittest.TestCase):
             source = q.get("source")
             self.assertTrue(bool(source and len(source.strip()) > 5), f"Questão {q['id']} deve conter fonte factual auditável")
 
-    def test_narration_does_not_include_options_or_numbers(self):
-        """P1: Garante que a narração possui apenas a pergunta (sem alternativas ou números)."""
+    def test_question_and_options_visible_together_from_first_frame(self):
+        """P1.1: Pergunta e as 4 alternativas devem estar visíveis desde o primeiro frame."""
         config = PaperQuizConfig.from_json(self.template_path)
-        
-        # Velocidade da voz configurada para ritmo ágil (+20%)
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        for q in config.questions:
+            # O frame inicial da cena (t=0) é o frame de opções não revelado
+            img_initial = engine.render_question_frame(q, state="options")
+            self.assertEqual(img_initial.size, (1080, 1920))
+
+            # Verifica que o frame de opções é diferente da folha em branco
+            img_blank = engine._draw_paper_sheet()
+            self.assertNotEqual(img_initial.tobytes(), img_blank.tobytes())
+
+            # Verifica que a resposta correta NÃO está revelada prematuramente no primeiro frame
+            pixels = list(img_initial.getdata())
+            has_emerald_border = any(p[0] == 5 and p[1] == 150 and p[2] == 105 for p in pixels)
+            self.assertFalse(has_emerald_border, f"Questão {q['id']}: resposta correta revelada prematuramente no frame inicial!")
+
+    def test_narration_contains_only_question_statement(self):
+        """P1.1: Narração contém estritamente o enunciado da pergunta (sem alternativas nem números)."""
+        config = PaperQuizConfig.from_json(self.template_path)
         voice_rate = config.voice_settings.get("voice_rate")
         self.assertEqual(voice_rate, "+20%", f"Taxa de voz esperada de +20%, obtido: {voice_rate}")
 
         for q in config.questions:
             narr = q.get("narration", "").strip()
             self.assertTrue(len(narr) > 0, f"Questão {q['id']} sem narração")
-            
-            # Não deve conter anúncio de alternativas (A:, B:, Letra A, etc.)
-            for forbidden in ["letra a", "letra b", "letra c", "letra d", "opção a", "opção b", "opção c", "opção d"]:
-                self.assertNotIn(forbidden, narr.lower(), f"Narração da questão {q['id']} não pode conter alternativas: {narr}")
-            
-            # Não deve narrar números das questões ("questão 1", "pergunta 1")
-            for forbidden_num in ["questão 1", "questão 2", "questão 3", "pergunta 1", "pergunta 2", "pergunta 0"]:
-                self.assertNotIn(forbidden_num, narr.lower(), f"Narração da questão {q['id']} não pode anunciar o número: {narr}")
 
-            # Narração deve ser idêntica ou equivalente ao enunciado da pergunta
+            for forbidden in ["letra a", "letra b", "letra c", "letra d", "opção a", "opção b", "opção c", "opção d"]:
+                self.assertNotIn(forbidden, narr.lower(), f"Narração da questão {q['id']} contém alternativas: {narr}")
+
+            for forbidden_num in ["questão 1", "questão 2", "questão 3", "pergunta 1", "pergunta 2", "pergunta 0"]:
+                self.assertNotIn(forbidden_num, narr.lower(), f"Narração da questão {q['id']} anuncia o número: {narr}")
+
             self.assertEqual(narr, q["question"].strip())
 
-    def test_p1_temporal_sequence_calculation(self):
-        """P1: Valida sequência temporal rigorosa: pergunta -> alternativas -> espera -> resposta -> corte."""
+    def test_p1_1_thinking_window_ticks_sfx_and_timing(self):
+        """P1.1: Valida janela de 4 segundos com tique-taque sintetizado durante a espera (não durante a voz)."""
         config = PaperQuizConfig.from_json(self.template_path)
-        exp_sec = float(config.timing_settings.get("expectation_sec", 2.5))
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        exp_sec = float(config.timing_settings.get("expectation_sec", 4.0))
         rev_sec = float(config.timing_settings.get("reveal_sec", 1.0))
 
-        self.assertAlmostEqual(exp_sec, 2.5, places=1, msg="Janela de raciocínio deve ser entre 2 e 3 segundos (~2.5s)")
-        self.assertAlmostEqual(rev_sec, 1.0, places=1, msg="Janela de revelação da resposta deve ser ~1.0s")
+        # 1. Janela de expectativa deve ser exatamente 4.0 segundos
+        self.assertAlmostEqual(exp_sec, 4.0, places=2, msg="Janela de expectativa deve ser exatamente 4.0 segundos")
+        self.assertAlmostEqual(rev_sec, 1.0, places=2, msg="Janela de revelação da resposta deve ser 1.0 segundo")
 
-        # Simulação com duração de narração representativa
-        dur_narr = 2.40  # segundos de narração rápida
-        t_options_start = dur_narr
-        t_reveal_start = t_options_start + exp_sec
+        # 2. Síntese do áudio procedural de tique-taques
+        ticks_wav = engine.generate_thinking_ticks_sfx(duration=exp_sec)
+        self.assertTrue(os.path.exists(ticks_wav))
+
+        with wave.open(ticks_wav, "r") as wf:
+            self.assertEqual(wf.getnchannels(), 1)
+            self.assertEqual(wf.getframerate(), 44100)
+            dur_ticks = wf.getnframes() / float(wf.getframerate())
+            self.assertAlmostEqual(dur_ticks, 4.0, places=2, msg="Arquivo de tique-taque deve ter 4 segundos de duração")
+
+        # 3. Timing da mixagem: tique-taques ocorrem após a voz, não durante ela
+        dur_narr = 2.65
+        t_thinking_start = dur_narr
+        t_reveal_start = t_thinking_start + exp_sec
         tot_dur = t_reveal_start + rev_sec
 
-        # 1. Pergunta narrada isolada
-        self.assertAlmostEqual(t_options_start, dur_narr, places=5)
-        # 2. Alternativas surgem juntas após a pergunta e duram o tempo de raciocínio
-        self.assertAlmostEqual(t_reveal_start - t_options_start, exp_sec, places=5)
-        # 3. Resposta correta revelada por ~1.0s antes de cortar direto para a próxima
-        self.assertAlmostEqual(tot_dur - t_reveal_start, rev_sec, places=5)
-        # 4. Sequência estritamente crescente e sem sobreposição
-        self.assertTrue(0 < t_options_start < t_reveal_start < tot_dur)
+        # Tique-taques iniciam estritamente após a voz
+        self.assertEqual(t_thinking_start, dur_narr)
+        # Janela de raciocínio é de exatamente 4 segundos
+        self.assertAlmostEqual(t_reveal_start - t_thinking_start, 4.0, places=5)
+        # Revelação da resposta inicia somente após o término dos 4 segundos de espera
+        self.assertAlmostEqual(tot_dur - t_reveal_start, 1.0, places=5)
+        # Ordem temporal estrita
+        self.assertTrue(0 < dur_narr == t_thinking_start < t_reveal_start < tot_dur)
 
-    def test_three_frame_states_and_no_premature_reveal(self):
-        """P1: Garante 3 estados visuais distintos e que a resposta não é revelada antecipadamente."""
+    def test_answer_revealed_only_after_waiting_window(self):
+        """P1.1: A resposta correta deve ser revelada somente após o término da janela de espera."""
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         engine = PaperQuizEngine(config)
 
         q1 = config.questions[0]
-        img_q_only = engine.render_question_frame(q1, state="question_only")
-        img_options = engine.render_question_frame(q1, state="options")
+        img_unrevealed = engine.render_question_frame(q1, state="options")
         img_revealed = engine.render_question_frame(q1, state="revealed")
 
-        self.assertEqual(img_q_only.size, (1080, 1920))
-        self.assertEqual(img_options.size, (1080, 1920))
+        # Os dois frames devem ter tamanhos idênticos e conteúdos visuais distintos
+        self.assertEqual(img_unrevealed.size, (1080, 1920))
         self.assertEqual(img_revealed.size, (1080, 1920))
+        self.assertNotEqual(img_unrevealed.tobytes(), img_revealed.tobytes())
 
-        bytes_q_only = img_q_only.tobytes()
-        bytes_options = img_options.tobytes()
-        bytes_revealed = img_revealed.tobytes()
-
-        # Os 3 estados devem ser estritamente diferentes entre si
-        self.assertNotEqual(bytes_q_only, bytes_options, "Estado question_only deve diferir do estado com opções")
-        self.assertNotEqual(bytes_options, bytes_revealed, "Estado options não pode conter a revelação da resposta")
-        self.assertNotEqual(bytes_q_only, bytes_revealed, "Estado question_only não pode ser igual ao revelado")
-
-        # Verifica que o estado 'options' não contém os pixels verdes de destaque da resposta correta
-        # Cor de destaque da resposta correta no estado revelado: (5, 150, 105)
-        # No estado options (não revelado), nenhum card deve possuir a borda esmeralda (5, 150, 105)
-        pixels_opts = list(img_options.getdata())
-        has_emerald_in_options = any(p[0] == 5 and p[1] == 150 and p[2] == 105 for p in pixels_opts)
-        self.assertFalse(has_emerald_in_options, "O estado 'options' revelou prematuramente a resposta correta!")
-
+        # No frame revelado, deve constar a marcação esmeralda
         pixels_rev = list(img_revealed.getdata())
-        has_emerald_in_revealed = any(p[0] == 5 and p[1] == 150 and p[2] == 105 for p in pixels_rev)
-        self.assertTrue(has_emerald_in_revealed, "O estado 'revealed' deve conter a marcação esmeralda de resposta correta!")
+        has_emerald = any(p[0] == 5 and p[1] == 150 and p[2] == 105 for p in pixels_rev)
+        self.assertTrue(has_emerald, "O frame revelado deve conter a marcação de resposta correta!")
 
     def test_procedural_chime_generation(self):
-        """3. Valida síntese matemática do chime harmônico de acerto."""
+        """Valida síntese matemática do chime harmônico de acerto."""
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         engine = PaperQuizEngine(config)
@@ -154,7 +168,7 @@ class TestQuizPaperPrototype(unittest.TestCase):
             self.assertLess(dur, 1.0)
 
     def test_thumbnail_generation(self):
-        """4. Valida geração de thumbnail independente 1080x1920 em formato JPG."""
+        """Valida geração de thumbnail independente 1080x1920 em formato JPG."""
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         config.output_thumbnail_path = os.path.join(self.test_dir, "test_thumb.jpg")

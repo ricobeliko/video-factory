@@ -26,7 +26,7 @@
     "voice_rate": "+20%"
   },
   "timing_settings": {
-    "expectation_sec": 2.5,
+    "expectation_sec": 4.0,
     "reveal_sec": 1.0
   },
   "intro_hook": {

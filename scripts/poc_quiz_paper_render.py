@@ -85,8 +85,8 @@ class PaperQuizConfig:
     })
 
     timing_settings: Dict[str, Any] = field(default_factory=lambda: {
-        "expectation_sec": 2.0,
-        "reveal_sec": 1.2,
+        "expectation_sec": 4.0,
+        "reveal_sec": 1.0,
     })
 
     intro_hook: Dict[str, Any] = field(default_factory=lambda: {
@@ -619,6 +619,46 @@ class PaperQuizEngine:
         logger.info(f"[SFX] Chime de acerto sintetizado com sucesso: {out_wav}")
         return out_wav
 
+    def generate_thinking_ticks_sfx(self, duration: float = 4.0) -> str:
+        """Sintetiza proceduralmente tique-taques curtos, ritmados e discretos (~1 por segundo)."""
+        out_wav = os.path.join(self.config.temp_dir, "sfx_thinking_ticks.wav")
+        if os.path.exists(out_wav) and os.path.getsize(out_wav) > 1000:
+            return out_wav
+
+        sample_rate = 44100
+        total_samples = int(sample_rate * duration)
+        samples = [0] * total_samples
+
+        # 4 tiques distribuídos uniformemente na janela de 4 segundos:
+        # a cada 1.0s (t = 0.5s, 1.5s, 2.5s, 3.5s)
+        # Cada tique tem ~25ms de duração, discreto e suave
+        tick_offsets = [0.5, 1.5, 2.5, 3.5]
+        tick_duration = 0.025
+        tick_samples_len = int(sample_rate * tick_duration)
+
+        for offset_sec in tick_offsets:
+            start_idx = int(offset_sec * sample_rate)
+            for i in range(tick_samples_len):
+                if start_idx + i >= total_samples:
+                    break
+                t = i / sample_rate
+                attack = min(1.0, t / 0.0008)
+                decay = math.exp(-t * 140.0)
+                env = attack * decay
+                val = 0.65 * math.sin(2.0 * math.pi * 1600.0 * t) + 0.35 * math.sin(2.0 * math.pi * 2400.0 * t)
+                sample_val = int(val * env * 14000)
+                samples[start_idx + i] = max(-32768, min(32767, sample_val))
+
+        with wave.open(out_wav, "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            raw_data = struct.pack(f"<{len(samples)}h", *samples)
+            wf.writeframes(raw_data)
+
+        logger.info(f"[SFX] Tique-taque de expectativa sintetizado com sucesso: {out_wav}")
+        return out_wav
+
     # -------------------------------------------------------------------------
     # 6. Síntese de Voz Edge TTS
     # -------------------------------------------------------------------------
@@ -663,36 +703,45 @@ class PaperQuizEngine:
         narration_path: str,
         output_audio_path: str,
         total_duration: float,
+        ticks_path: Optional[str] = None,
+        ticks_start_time: float = 0.0,
         sfx_path: Optional[str] = None,
         sfx_start_time: float = 0.0,
     ) -> bool:
-        """Combina narração com SFX de revelação no ponto exato da revelação."""
+        """Combina narração, tique-taques da janela de expectativa e chime de acerto."""
+        inputs = ["-i", os.path.abspath(narration_path)]
+        filter_parts = [f"[0:a]volume=1.0,apad=whole_dur={total_duration:.3f}[voice]"]
+        mix_inputs = ["[voice]"]
+        input_idx = 1
+
+        if ticks_path and os.path.exists(ticks_path):
+            delay_ticks_ms = int(max(0.0, ticks_start_time) * 1000)
+            inputs.extend(["-i", os.path.abspath(ticks_path)])
+            filter_parts.append(f"[{input_idx}:a]volume=0.55,adelay={delay_ticks_ms}|{delay_ticks_ms}[ticks]")
+            mix_inputs.append("[ticks]")
+            input_idx += 1
+
         if sfx_path and os.path.exists(sfx_path):
-            delay_ms = int(max(0.0, sfx_start_time) * 1000)
-            filter_complex = (
-                f"[0:a]volume=1.0,apad=whole_dur={total_duration:.3f}[voice];"
-                f"[1:a]volume=0.95,adelay={delay_ms}|{delay_ms}[sfx];"
-                f"[voice][sfx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
-            )
-            cmd = [
-                self.ffmpeg_bin, "-y",
-                "-i", os.path.abspath(narration_path),
-                "-i", os.path.abspath(sfx_path),
-                "-filter_complex", filter_complex,
-                "-map", "[aout]",
-                "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
-                "-t", f"{total_duration:.3f}",
-                os.path.abspath(output_audio_path),
-            ]
-        else:
-            cmd = [
-                self.ffmpeg_bin, "-y",
-                "-i", os.path.abspath(narration_path),
-                "-af", f"apad=whole_dur={total_duration:.3f}",
-                "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
-                "-t", f"{total_duration:.3f}",
-                os.path.abspath(output_audio_path),
-            ]
+            delay_sfx_ms = int(max(0.0, sfx_start_time) * 1000)
+            inputs.extend(["-i", os.path.abspath(sfx_path)])
+            filter_parts.append(f"[{input_idx}:a]volume=0.95,adelay={delay_sfx_ms}|{delay_sfx_ms}[sfx]")
+            mix_inputs.append("[sfx]")
+            input_idx += 1
+
+        filter_parts.append(
+            f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0:normalize=0[aout]"
+        )
+        filter_complex = ";".join(filter_parts)
+
+        cmd = [
+            self.ffmpeg_bin, "-y",
+            *inputs,
+            "-filter_complex", filter_complex,
+            "-map", "[aout]",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+            "-t", f"{total_duration:.3f}",
+            os.path.abspath(output_audio_path),
+        ]
 
         res = subprocess.run(cmd, capture_output=True, text=True)
         return res.returncode == 0 and os.path.exists(output_audio_path)
@@ -703,41 +752,34 @@ class PaperQuizEngine:
     def render_question_video_scene(
         self,
         scene_id: str,
-        img_q_only: str,
         img_options: str,
         img_revealed: str,
         audio_path: str,
         duration: float,
-        t_options_start: float,
         t_reveal_start: float,
     ) -> str:
-        """Gera o vídeo do segmento da questão com a sequência de 3 etapas e leve zoompan:
-        1. Pergunta em foco isolada enquanto é narrada (0 -> t_options_start).
-        2. Alternativas surgem juntas após a pergunta para janela de raciocínio (t_options_start -> t_reveal_start).
-        3. Revelação clara e imediata da correta com chime de acerto (t_reveal_start -> duration).
+        """Gera o vídeo do segmento da questão (P1.1):
+        1. Pergunta e 4 alternativas visíveis desde o início da cena (t=0 -> t_reveal_start) com leve zoompan.
+        2. Revelação da correta com círculo de caneta, destaque verde e chime (t_reveal_start -> duration).
         """
         fps = self.config.video_settings.get("fps", 30)
         total_frames = int(duration * fps) + 2
         output_scene_mp4 = os.path.join(self.config.temp_dir, f"scene_{scene_id}.mp4")
 
-        # Sequência audiovisual em 3 etapas com leve Ken Burns contínuo:
         filter_complex = (
-            f"[0:v]zoompan=z='min(zoom+0.0004,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[base_motion];"
-            f"[1:v]zoompan=z='min(zoom+0.0004,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[opts_motion];"
-            f"[2:v]zoompan=z='min(zoom+0.0004,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[rev_motion];"
-            f"[base_motion][opts_motion]overlay=0:0:enable='gte(t,{t_options_start:.2f})'[v_opts];"
-            f"[v_opts][rev_motion]overlay=0:0:enable='gte(t,{t_reveal_start:.2f})'[vfinal]"
+            f"[0:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[base_motion];"
+            f"[1:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[rev_motion];"
+            f"[base_motion][rev_motion]overlay=0:0:enable='gte(t,{t_reveal_start:.2f})'[vfinal]"
         )
 
         cmd = [
             self.ffmpeg_bin, "-y",
-            "-loop", "1", "-i", os.path.abspath(img_q_only),
             "-loop", "1", "-i", os.path.abspath(img_options),
             "-loop", "1", "-i", os.path.abspath(img_revealed),
             "-i", os.path.abspath(audio_path),
             "-filter_complex", filter_complex,
             "-map", "[vfinal]",
-            "-map", "3:a",
+            "-map", "2:a",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
             "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
             "-t", f"{duration:.3f}",
@@ -748,6 +790,8 @@ class PaperQuizEngine:
         if res.returncode != 0:
             logger.error(f"[RENDER] Falha na renderização de {scene_id}: {res.stderr[-500:]}")
             raise RuntimeError(f"FFmpeg falhou ao renderizar {scene_id}")
+
+        return output_scene_mp4
 
         return output_scene_mp4
 
@@ -841,15 +885,18 @@ class PaperQuizEngine:
     # 10. Pipeline Completo de Renderização
     # -------------------------------------------------------------------------
     async def render_async(self) -> Dict[str, Any]:
-        """Executa a renderização completa do protótipo e grava os metadados."""
+        """Executa a renderização completa do protótipo P1.1 e grava os metadados."""
         t_start = time.perf_counter()
-        logger.info(f"=== INICIANDO RENDERIZAÇÃO P1: QUIZ FOLHA DE PAPEL ({self.config.quiz_title}) ===")
+        logger.info(f"=== INICIANDO RENDERIZAÇÃO P1.1: QUIZ FOLHA DE PAPEL ({self.config.quiz_title}) ===")
 
         # 1. Gerar Thumbnail
         self.generate_thumbnail()
 
-        # 2. Gerar SFX de Acerto
+        # 2. Gerar SFX de Acerto e Tique-taques da Janela de Expectativa
+        exp_sec = float(self.config.timing_settings.get("expectation_sec", 4.0))
+        rev_sec = float(self.config.timing_settings.get("reveal_sec", 1.0))
         sfx_ding = self.generate_correct_ding_sfx()
+        sfx_ticks = self.generate_thinking_ticks_sfx(duration=exp_sec)
 
         scene_files: List[str] = []
         timing_records: List[Dict[str, Any]] = []
@@ -871,23 +918,15 @@ class PaperQuizEngine:
             scene_files.append(intro_mp4)
             timing_records.append({"scene": "intro", "duration": round(dur_intro_tot, 3)})
 
-        # 4. Renderizar Cada Pergunta (Questões 1 a N) com Ritmo P1 Refinado
-        exp_sec = float(self.config.timing_settings.get("expectation_sec", 2.5))
-        rev_sec = float(self.config.timing_settings.get("reveal_sec", 1.0))
-
+        # 4. Renderizar Cada Pergunta (Questões 1 a N) com Sequência P1.1
         for idx, item in enumerate(self.config.questions):
             scene_id = item["id"]
             logger.info(f"Processando questão {scene_id} ({idx + 1}/{len(self.config.questions)})...")
 
-            # 3 frames para a nova sequência audiovisual P1:
-            # 1. Enunciado isolado (enquanto é narrado)
-            # 2. Alternativas surgem juntas (janela de pensamento de 2 a 3s)
-            # 3. Resposta correta revelada com chime harmônico (~1.0s)
-            img_q_only = os.path.join(self.config.temp_dir, f"frame_{scene_id}_q_only.png")
+            # Em P1.1: Pergunta e as 4 alternativas visíveis desde o início da cena (frame 0)
             img_options = os.path.join(self.config.temp_dir, f"frame_{scene_id}_options.png")
             img_rev = os.path.join(self.config.temp_dir, f"frame_{scene_id}_revealed.png")
 
-            self.render_question_frame(item, state="question_only").save(img_q_only, "PNG")
             self.render_question_frame(item, state="options").save(img_options, "PNG")
             self.render_question_frame(item, state="revealed").save(img_rev, "PNG")
 
@@ -895,12 +934,12 @@ class PaperQuizEngine:
             audio_narr = os.path.join(self.config.temp_dir, f"narration_{scene_id}.mp3")
             dur_narr = await self.synthesize_voice(item["narration"], audio_narr)
 
-            # Sequência Temporal P1:
-            # 0.0 -> dur_narr: Pergunta narrada isolada
-            # dur_narr -> t_reveal_start: Alternativas visíveis por ~2.5s
-            # t_reveal_start -> tot_dur: Resposta correta revelada por ~1.0s
-            t_options_start = dur_narr
-            t_reveal_start = t_options_start + exp_sec
+            # Sequência Temporal P1.1:
+            # 0.0 -> dur_narr: Pergunta narrada com alternativas já presentes na folha
+            # dur_narr -> t_reveal_start: Janela de raciocínio de exatamente 4.0s com tique-taques rítmicos
+            # t_reveal_start -> tot_dur: Resposta correta revelada por ~1.0s com chime de acerto
+            t_thinking_start = dur_narr
+            t_reveal_start = t_thinking_start + exp_sec
             tot_dur = t_reveal_start + rev_sec
 
             audio_scene = os.path.join(self.config.temp_dir, f"audio_{scene_id}.mp4")
@@ -908,25 +947,25 @@ class PaperQuizEngine:
                 narration_path=audio_narr,
                 output_audio_path=audio_scene,
                 total_duration=tot_dur,
+                ticks_path=sfx_ticks,
+                ticks_start_time=t_thinking_start,
                 sfx_path=sfx_ding,
                 sfx_start_time=t_reveal_start,
             )
 
             q_mp4 = self.render_question_video_scene(
                 scene_id=scene_id,
-                img_q_only=img_q_only,
                 img_options=img_options,
                 img_revealed=img_rev,
                 audio_path=audio_scene,
                 duration=tot_dur,
-                t_options_start=t_options_start,
                 t_reveal_start=t_reveal_start,
             )
             scene_files.append(q_mp4)
             timing_records.append({
                 "scene": scene_id,
                 "narration_sec": round(dur_narr, 3),
-                "options_start_sec": round(t_options_start, 3),
+                "thinking_start_sec": round(t_thinking_start, 3),
                 "thinking_sec": round(exp_sec, 3),
                 "reveal_start_sec": round(t_reveal_start, 3),
                 "reveal_sec": round(rev_sec, 3),
@@ -964,7 +1003,7 @@ class PaperQuizEngine:
         meta_path = os.path.join(os.path.dirname(self.config.output_video_path), "metadata.json")
         metadata = {
             "format": "quiz_paper_prototype",
-            "prototype_code": "P1",
+            "prototype_code": "P1.1",
             "quiz_title": self.config.quiz_title,
             "niche": self.config.niche,
             "video_path": self.config.output_video_path,
@@ -1018,7 +1057,7 @@ class PaperQuizEngine:
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Renderiza protótipo de Quiz no formato Folha de Papel (P1)")
+    parser = argparse.ArgumentParser(description="Renderiza protótipo de Quiz no formato Folha de Papel (P1.1)")
     parser.add_argument(
         "--config",
         default="resource/quiz_templates/quiz_template_perguntas_respostas_papel.json",
@@ -1036,7 +1075,7 @@ def main():
     meta = engine.render()
 
     print("\n" + "=" * 60)
-    print("RELATÓRIO DO PROTÓTIPO P1:")
+    print("RELATÓRIO DO PROTÓTIPO P1.1:")
     print(f"Vídeo MP4:   {meta['video_path']}")
     print(f"Thumbnail:   {meta['thumbnail_path']}")
     print(f"Duração:     {meta['video_duration_sec']:.2f}s (Min > 60s: {meta['meets_min_target_duration']})")

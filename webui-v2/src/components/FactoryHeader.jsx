@@ -67,8 +67,8 @@ export default function FactoryHeader({
       console.error(`Falha ao executar ${action} da fábrica:`, err);
       let msg = err.message || `Falha ao processar operação. Tente novamente.`;
       if (err.status === 409) {
-        if (msg.toLowerCase().includes('already in progress') || msg.toLowerCase().includes('em andamento')) {
-          msg = 'Ciclo já em andamento.';
+        if (msg.toLowerCase().includes('already in progress')) {
+          msg = 'Ciclo de produção já em andamento em segundo plano.';
         } else if (msg.toLowerCase().includes('paused') || msg.toLowerCase().includes('pausada')) {
           msg = 'Fábrica pausada — retome para disparar.';
         }

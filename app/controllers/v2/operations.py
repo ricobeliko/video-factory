@@ -139,11 +139,12 @@ def run_factory_cycle(
     if not isinstance(result, dict):
         result = {"status": "completed", "result": result}
 
-    if result.get("status") == "busy" or result.get("reason") == "cycle_in_progress":
+    if result.get("status") == "busy" or result.get("reason") in ("cycle_in_progress", "active_tasks_generating"):
+        busy_msg = result.get("message") or "Operation blocked: a production cycle is already in progress"
         raise HttpException(
             task_id=request_id,
             status_code=409,
-            message="Operation blocked: a production cycle is already in progress",
+            message=busy_msg,
             data=result,
         )
 

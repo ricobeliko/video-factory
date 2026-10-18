@@ -21,6 +21,7 @@
 | **V2.6** | Migração das Demais Funcionalidades & Matriz de Paridade | `FUNCTIONAL_PARITY_PASS` | **CONCLUÍDO (13/13 100%)** |
 | **V2.7** | Otimização de Desempenho e Tempos de Resposta | `PERFORMANCE_PASS` | **CONCLUÍDO (3/3 PASS)** |
 | **V2.8** | Homologação Integrada, Testes de Migração e Cutover Plan | `V2_DEV_HOMOLOGATED` | **CONCLUÍDO** |
+| **V2.9** | Integração do Hotfix Autônomo (`busy` contract, órfãs, `rejected_struct`) | `HOTFIX_INTEGRATED` | **CONCLUÍDO (4/4 PASS)** |
 
 
 ---

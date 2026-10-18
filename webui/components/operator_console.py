@@ -1640,14 +1640,27 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                                 profile_id=active_prof_id,
                                 channel_id=active_channel_id,
                             )
-                            if res.get("status") in ("scheduled", "generation_started"):
-                                st.success(f"✓ {res.get('message')}")
-                            elif res.get("status") == "idle":
-                                st.info(f"ℹ️ {res.get('message')}")
-                            elif res.get("status") == "blocked":
-                                st.warning(f"⚠️ Bloqueado: {res.get('message')}")
+                            status = res.get("status")
+                            reason = res.get("reason")
+                            msg = res.get("message") or reason or "Ciclo processado"
+
+                            if status in ("scheduled", "generation_started"):
+                                st.toast(f"✓ {msg}", icon="⚡")
+                                st.success(f"✓ {msg}")
+                            elif status == "idle":
+                                st.toast(f"ℹ️ {msg}", icon="ℹ️")
+                                st.info(f"ℹ️ {msg}")
+                            elif status == "blocked":
+                                st.toast(f"⚠️ {msg}", icon="⚠️")
+                                st.warning(f"⚠️ Bloqueado: {msg}")
+                            elif status == "busy":
+                                display_msg = f"⏳ Ocupado: {msg}"
+                                st.toast(display_msg, icon="⏳")
+                                st.warning(display_msg)
                             else:
-                                st.info(f"ℹ️ Resultado: {res.get('status')} — {res.get('message')}")
+                                display_msg = f"ℹ️ Resultado: {status} — {msg}"
+                                st.toast(display_msg, icon="ℹ️")
+                                st.info(display_msg)
                             st.rerun()
                     else:
                         st.toast("Ciclo executado no modo demo.", icon="⚡")

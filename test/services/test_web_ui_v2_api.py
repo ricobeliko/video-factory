@@ -334,6 +334,25 @@ class TestWebUiV2Api(unittest.TestCase):
             self.assertEqual(resp.status_code, 409)
             self.assertIn("already in progress", resp.json().get("message", "").lower())
 
+    def test_factory_run_cycle_active_tasks_guard_returns_409(self):
+        """17b. Geração em andamento retorna 409 com motivo e tarefas ativas."""
+        with patch(
+            "app.services.operator_console.run_autonomous_cycle_op",
+            return_value={
+                "status": "busy",
+                "reason": "active_tasks_generating",
+                "message": "Geração em andamento (tarefas ativas: task-abc)",
+                "active_task_ids": ["task-abc"],
+            },
+        ):
+            resp = self.client.post("/api/v2/factory/run-cycle")
+            self.assertEqual(resp.status_code, 409)
+            data = resp.json().get("data", {})
+            self.assertEqual(data.get("status"), "busy")
+            self.assertEqual(data.get("reason"), "active_tasks_generating")
+            self.assertEqual(data.get("active_task_ids"), ["task-abc"])
+            self.assertIn("geração em andamento", resp.json().get("message", "").lower())
+
     def test_factory_run_cycle_paused_guard_returns_409(self):
         """18. Fábrica pausada bloqueia disparo de ciclo com 409 Conflict."""
         with patch(

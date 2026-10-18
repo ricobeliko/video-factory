@@ -14,17 +14,17 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `16/10/2026`
+- **LAST_UPDATED:** `18/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `HOTFIX PLAYER FASTSTART & REMUX GOVERNANCE (NEW MP4 FASTSTART + WEB UI V2 SINGLE LOAD)`
+- **CURRENT_FOCUS:** `HOTFIX CONSOLIDADO DE PRODUÇÃO AUTÔNOMA (BUSY REASON/MESSAGE + REJECTED_STRUCT)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / PLAYER_FASTSTART_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / AUTONOMOUS_PRODUCTION_HOTFIX_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
 - **DEV_BRANCH_HEAD_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `PLAYER FASTSTART HOTFIX LOCAL COMMIT GATE (NO PUSH / NO PROD DEPLOY)`
+- **CURRENT_GATE:** `AUTONOMOUS_PRODUCTION_HOTFIX_LOCAL_COMMIT_GATE (NO PUSH / NO PROD DEPLOY)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
@@ -97,6 +97,20 @@
       - Roteamento dinâmico do cliente em todo o ciclo via `post_for_me.get_client_for_channel(channel_id, platform, profile_id, db_path)`: descoberta, upload de mídia, criação de posts, polling de status e reconciliação de idempotência (`video-factory:<task_id>:<platform>:<channel_id>`).
       - Proteção contra vazamento de segredos: `sanitize_secrets` redige `POST_FOR_ME_TIKTOK_API_KEY`, `POST_FOR_ME_API_KEY` e `POST_FOR_ME_QUICKSTART_API_KEY`.
       - Validação com mocks: 8 testes direcionados em `test/services/test_multiproject_post_for_me.py` (100% PASS) e 44 testes em `test/services/test_channel_factory.py` (100% PASS).
+  - **Hotfix Consolidado de Produção Autônoma (18/10/2026):**
+    - **Sintoma / Problemas Resolvidos:**
+      1. `UnboundLocalError: cannot access local variable 'rejected_struct' where it is not associated with a value`: em perfis com formato fixo configurado (ex.: Quiz `quiz_dilemma` ou `quiz_paper`), o bloco `else` de seleção dinâmica não era executado e a variável `rejected_struct` não era inicializada, quebrando a thread de planejamento autônomo na linha 2713 (`if rejected_struct:`).
+      2. Retorno `busy — None`: a contenção de lock em memória (`_cycle_lock` em `run_autonomous_cycle()`) retornava `{"status": "busy", "reason": "cycle_in_progress"}` sem a chave `message`. Concomitantemente, a detecção de tarefas ativas em `_run_autonomous_cycle()` retornava `message` sem `reason: "active_tasks_generating"`.
+      3. Feedback visual Streamlit: em `operator_console.py`, o bloco de fallback renderizava `res.get('status') — res.get('message')` e disparava `st.rerun()`, exibindo `busy — None` na tela e limpando a notificação.
+      4. Tarefas órfãs pós-restart: tarefas com `final-1.mp4` íntegro que permaneceram em `PROCESSING` por falha de processo ou reinício agora são reconciliadas automaticamente para `COMPLETE` na Etapa A2 do ciclo autônomo via `operator_console.reconcile_orphaned_tasks()`.
+    - **Correções Aplicadas:**
+      - `app/services/autonomous_production.py`:
+        - Inicialização determinística de `rejected_struct = None` antes da verificação condicional de formato fixo.
+        - Padronização do contrato de retorno para todos os casos de `busy` com `status="busy"`, `reason` explícito (`"cycle_in_progress"` ou `"active_tasks_generating"`), `message` contextualizada e lista de IDs ativos.
+        - Chamada de `operator_console.reconcile_orphaned_tasks(task_base_dir, db_path)` no início da Etapa A2.
+      - `webui/components/operator_console.py`:
+        - Tratamento explícito para `res.get("status") == "busy"` com `st.toast(display_msg, icon="⏳")` e `st.warning(display_msg)`.
+    - **Validação Local:** 4 testes unitários isolados em `test/services/test_hotfix_autonomous_cycle_busy.py` (100% PASS).
 - **QUIZ_ENGINE_STATUS:** `DEV HOMOLOGATED / Q5-B2A.1 COMPLETE` (Homologação real concluída com sucesso em DEV; preflight de produção Q5-B2A validado; Quiz Engine exposto na Web UI via STRUCTURE_QUIZ_DILEMMA em Q5-B2A.1; pipeline tradicional 100% preservado; aguardando autorização humana para Q5-B2B)
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte

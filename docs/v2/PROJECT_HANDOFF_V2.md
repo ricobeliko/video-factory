@@ -59,3 +59,21 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
    - Zero modificações no ambiente de Produção (`C:\Projetos\MoneyPrinterTurbo`).
    - Zero modificações no DEV de referência (`D:\Projetos\MoneyPrinterTurbo`).
    - Publicação externa desativada por padrão em DEV.
+
+
+---
+
+## 4. Integracao do Hotfix Consolidado de Producao Autonoma (18/10/2026)
+
+- **Commits de Origem (main):** `18d21cf`, `91e2e83`, `0479203`
+- **Itens Integrados e Validados:**
+  1. **Contrato Estruturado de Busy:** tanto a contencao de lock em memoria (`_cycle_lock`) quanto a deteccao de tarefas ativas (`has_active_generation_tasks()`) retornam `status="busy"` com `reason` explicito (`"cycle_in_progress"` ou `"active_tasks_generating"`), `message` descritiva e lista de `active_task_ids`.
+  2. **Propagacao pela API V2 (`/api/v2/factory/run-cycle`):** o endpoint FastAPI propaga mensagens especificas de bloqueio acompanhadas de payload completo com `status`, `reason`, `message` e `active_task_ids` sob HTTP 409 Conflict.
+  3. **Feedback Visual no Frontend V2:** `FactoryHeader` e `ExecutionDrawer` preservam os detalhes reais de bloqueio (exibindo tarefas ativas em andamento), sem supressao por textos genericos e sem recarregamentos desnecessarios de tela.
+  4. **Eliminacao do UnboundLocalError (`rejected_struct`):** inicializacao preventiva `rejected_struct = None` antes da checagem de formato fixo, garantindo operacao continua em canais de Quiz.
+  5. **Reconciliacao Nao-Destrutiva de Tarefas Orfas:** `operator_console.reconcile_orphaned_tasks()` na Etapa A2 reconcilia tarefas pos-restart preservando rigorosamente todos os Gates de Qualidade, Seguranca e Copyright.
+- **Validacao de Testes na V2:**
+  - `test_hotfix_autonomous_cycle_busy.py`: 4/4 PASS (3.75s).
+  - `test_v2_isolation.py`: 3/3 PASS (bloqueio estrito de acesso ao PROD e DEV).
+  - `test_v2_performance.py`: 3/3 PASS.
+  - `test_web_ui_v2_api.py` (run-cycle active tasks & concurrency guards): PASS.

@@ -2068,7 +2068,11 @@ def run_autonomous_cycle(
 ) -> Dict[str, Any]:
     """Serialize worker/manual cycles inside the PRIMARY process."""
     if not _cycle_lock.acquire(blocking=False):
-        return {"status": "busy", "reason": "cycle_in_progress"}
+        return {
+            "status": "busy",
+            "reason": "cycle_in_progress",
+            "message": "Ciclo de produção autônoma já em execução em segundo plano.",
+        }
     try:
         return _run_autonomous_cycle(
             force=force,
@@ -2163,6 +2167,12 @@ def _run_autonomous_cycle(
     # -----------------------------------------------------------------------
     # Etapa A2: Tratar Geração Anterior / Revisão de Tarefas Concluídas
     # -----------------------------------------------------------------------
+    # Reconciliação não-destrutiva de tarefas órfãs (reutiliza mecanismo existente)
+    try:
+        operator_console.reconcile_orphaned_tasks(task_base_dir=task_base_dir, db_path=db_path)
+    except Exception as rec_err:
+        logger.debug(f"[AUTONOMOUS] Erro na reconciliação de tarefas órfãs (ignorado): {rec_err}")
+
     current_task_id = _get_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, None)
     if current_task_id:
         task_prof = profile_manager.get_task_profile_id(current_task_id, db_path=db_path)
@@ -2179,8 +2189,10 @@ def _run_autonomous_cycle(
         _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         res = {
             "status": "busy",
+            "reason": "active_tasks_generating",
             "state": STATE_GENERATING,
             "message": msg,
+            "active_task_ids": active_ids,
         }
         if current_task_id:
             res["task_id"] = current_task_id
@@ -2690,6 +2702,7 @@ def _run_autonomous_cycle(
 
     # Recomenda estrutura narrativa diversificada evitando repetições (isolada por perfil e canal)
     # Mas se o canal tiver formato fixo configurado (ex: quiz_dilemma), honra estritamente o formato (Fase Q5-C1)
+    rejected_struct = None
     prof_ctx = profile_manager.get_generation_profile_context(profile_id=target_profile_id, db_path=db_path)
     fixed_format = prof_ctx.get("video_format") or prof_ctx.get("content_style")
     if fixed_format and fixed_format not in ("traditional", "standard", "auto", ""):

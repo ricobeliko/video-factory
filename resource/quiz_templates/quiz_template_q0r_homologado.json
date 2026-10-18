@@ -1,0 +1,396 @@
+{
+  "niche": "dilemas",
+  "quiz_title": "QUAL VOCÊ ESCOLHERIA?",
+  "output_video_path": "storage/poc_quiz/quiz_dilemas.mp4",
+  "output_thumbnail_path": "storage/poc_quiz/quiz_dilemas_thumb.jpg",
+  "temp_dir": "storage/poc_quiz/temp_dilemas",
+  "images_dir": "storage/poc_quiz/images_v2",
+  "min_target_duration_sec": 60.0,
+  "target_duration_range": [
+    62.0,
+    66.0
+  ],
+  "video_settings": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font_path": "resource/fonts/BeVietnamPro-Bold.ttf",
+    "bgm_path": "resource/songs/output000.mp3",
+    "bgm_volume": 0.14
+  },
+  "voice_settings": {
+    "voice_name": "pt-BR-AntonioNeural",
+    "voice_rate": "+12%"
+  },
+  "countdown_settings": {
+    "default_sec": 3.0,
+    "expectation_sec": 2.0,
+    "reveal_sec": 1.0,
+    "enable_countdown_badges": false,
+    "enable_percentages": true,
+    "closing_sec": 3.0,
+    "badges": [
+      "3",
+      "2",
+      "1"
+    ],
+    "colors": {
+      "badge_ou_bg": [
+        255,
+        214,
+        0
+      ],
+      "badge_ou_text": [
+        0,
+        0,
+        0
+      ],
+      "badge_3_bg": [
+        255,
+        75,
+        75
+      ],
+      "badge_2_bg": [
+        255,
+        170,
+        0
+      ],
+      "badge_1_bg": [
+        45,
+        210,
+        60
+      ],
+      "badge_countdown_text": [
+        255,
+        255,
+        255
+      ]
+    }
+  },
+  "retention_hook": {
+    "enabled": true,
+    "question_id": "q2",
+    "narration": "Mas atenção... a última escolha vai te surpreender!",
+    "min_countdown_sec": 3.5
+  },
+  "theme_palettes": {
+    "red": {
+      "card_fill": [
+        140,
+        12,
+        24,
+        230
+      ],
+      "card_outline": [
+        255,
+        65,
+        75,
+        255
+      ],
+      "tag_fill": [
+        230,
+        25,
+        38,
+        255
+      ],
+      "tag_outline": [
+        255,
+        255,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "blue": {
+      "card_fill": [
+        12,
+        45,
+        125,
+        230
+      ],
+      "card_outline": [
+        55,
+        140,
+        255,
+        255
+      ],
+      "tag_fill": [
+        20,
+        95,
+        230,
+        255
+      ],
+      "tag_outline": [
+        255,
+        255,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "gold_red": {
+      "card_fill": [
+        150,
+        15,
+        25,
+        235
+      ],
+      "card_outline": [
+        255,
+        215,
+        0,
+        255
+      ],
+      "tag_fill": [
+        220,
+        30,
+        40,
+        255
+      ],
+      "tag_outline": [
+        255,
+        215,
+        0,
+        255
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    },
+    "blue_neutral": {
+      "card_fill": [
+        20,
+        35,
+        75,
+        235
+      ],
+      "card_outline": [
+        90,
+        150,
+        230,
+        255
+      ],
+      "tag_fill": [
+        30,
+        70,
+        150,
+        255
+      ],
+      "tag_outline": [
+        200,
+        220,
+        255,
+        240
+      ],
+      "text_color": [
+        255,
+        255,
+        255
+      ]
+    }
+  },
+  "thumbnail_settings": {
+    "banner_text": "QUAL VOCÊ ESCOLHERIA?",
+    "top_option": {
+      "tag": "MUDO",
+      "title": "Silêncio absoluto para sempre",
+      "image_name": "q2_top.jpg"
+    },
+    "bottom_option": {
+      "tag": "GRITO",
+      "title": "Falar gritando sempre",
+      "image_name": "q2_bot.jpg"
+    }
+  },
+  "questions": [
+    {
+      "id": "q2",
+      "header": "O QUE VOCÊ PREFERE?",
+      "narration": "O que você prefere? Nunca mais conseguir falar... Ou só conseguir falar gritando?",
+      "top": {
+        "title": "Silêncio absoluto para sempre",
+        "tag": "MUDO",
+        "image_query": "person silence finger on lips",
+        "image_name": "q2_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "Falar gritando sempre",
+        "tag": "GRITO",
+        "image_query": "person shouting screaming loud",
+        "image_name": "q2_bot.jpg",
+        "theme": "blue"
+      },
+      "percentage_top": 71,
+      "percentage_bottom": 29,
+      "countdown_sec": 3.0,
+      "is_hook": true,
+      "hook_narration": "Mas atenção... a última escolha vai te surpreender!"
+    },
+    {
+      "id": "q3",
+      "header": "PRÓXIMO DILEMA",
+      "narration": "Sempre sentir cheiro ruim... Ou ter gosto de cinzas na boca?",
+      "top": {
+        "title": "Cheiro ruim eterno",
+        "tag": "CHEIRO",
+        "image_query": "bad smell disgusting expression",
+        "image_name": "q3_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "Gosto de cinzas",
+        "tag": "GOSTO",
+        "image_query": "ashes grey dry texture",
+        "image_name": "q3_bot.jpg",
+        "theme": "blue"
+      },
+      "percentage_top": 45,
+      "percentage_bottom": 55,
+      "countdown_sec": 3.0
+    },
+    {
+      "id": "q4",
+      "header": "PRÓXIMO DILEMA",
+      "narration": "Apagar suas piores memórias... Ou saber o dia exato da sua morte?",
+      "top": {
+        "title": "Apagar memórias ruins",
+        "tag": "PASSADO",
+        "image_query": "forgetting memory fading away",
+        "image_name": "q4_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "Saber quando vai morrer",
+        "tag": "DESTINO",
+        "image_query": "hourglass running out of time",
+        "image_name": "q4_bot.jpg",
+        "theme": "blue"
+      },
+      "percentage_top": 62,
+      "percentage_bottom": 38,
+      "countdown_sec": 3.0
+    },
+    {
+      "id": "q5",
+      "header": "PRÓXIMO DILEMA",
+      "narration": "Viver sem internet para sempre... Ou nunca mais poder viajar?",
+      "top": {
+        "title": "Sem internet para sempre",
+        "tag": "OFFLINE",
+        "image_query": "disconnecting technology sadness",
+        "image_name": "q5_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "Nunca mais viajar",
+        "tag": "PRESO",
+        "image_query": "locked cage traveler longing",
+        "image_name": "q5_bot.jpg",
+        "theme": "blue"
+      },
+      "percentage_top": 39,
+      "percentage_bottom": 61,
+      "countdown_sec": 3.0
+    },
+    {
+      "id": "q6",
+      "header": "PRÓXIMO DILEMA",
+      "narration": "Sempre dizer a verdade nua e crua... Ou nunca mais poder falar a verdade?",
+      "top": {
+        "title": "Sempre falar a verdade",
+        "tag": "VERDADE",
+        "image_query": "honest person talking open",
+        "image_name": "q6_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "Nunca mais falar a verdade",
+        "tag": "MENTIRA",
+        "image_query": "masked person deceitful smile",
+        "image_name": "q6_bot.jpg",
+        "theme": "blue"
+      },
+      "percentage_top": 82,
+      "percentage_bottom": 18,
+      "countdown_sec": 3.0
+    },
+    {
+      "id": "q7",
+      "header": "PRÓXIMO DILEMA",
+      "narration": "Ter o dobro de inteligência e ser solitário... Ou ser comum e muito amado?",
+      "top": {
+        "title": "Super inteligente e solitário",
+        "tag": "GÊNIO",
+        "image_query": "lonely genius working alone",
+        "image_name": "q7_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "Comum e muito amado",
+        "tag": "AMOR",
+        "image_query": "group of happy friends hugging",
+        "image_name": "q7_bot.jpg",
+        "theme": "blue"
+      },
+      "percentage_top": 34,
+      "percentage_bottom": 66,
+      "countdown_sec": 3.0
+    },
+    {
+      "id": "q8",
+      "header": "ESCOLHA RÁPIDO:",
+      "narration": "Ficar dois dias sem internet e sem Wi-Fi... Ou curtir e comentar: Jesus te ama?",
+      "top": {
+        "title": "FICAR DOIS DIAS SEM WI-FI",
+        "tag": "OPÇÃO A",
+        "image_query": "broken wifi smartphone internet disconnect",
+        "image_name": "q8_top.jpg",
+        "theme": "red"
+      },
+      "bottom": {
+        "title": "CURTIR E COMENTAR: JESUS TE AMA",
+        "tag": "OPÇÃO B",
+        "image_query": "jesus christ cross heavenly light sunset",
+        "image_name": "q8_bot.jpg",
+        "theme": "gold_red"
+      },
+      "percentage_top": 14,
+      "percentage_bottom": 86,
+      "countdown_sec": 3.0
+    },
+    {
+      "id": "q1",
+      "header": "QUAL O SEU DESTINO:",
+      "narration": "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?",
+      "top": {
+        "title": "PASSAR DIRETO E PERDER TUDO",
+        "tag": "OPÇÃO A",
+        "image_query": "person walking away empty dark road night",
+        "image_name": "q1_top.jpg",
+        "theme": "blue_neutral"
+      },
+      "bottom": {
+        "title": "SEGUIR O PERFIL AGORA",
+        "tag": "OPÇÃO B",
+        "image_query": "smartphone social media follow subscribe celebration confetti",
+        "image_name": "q1_bot.jpg",
+        "theme": "gold_red"
+      },
+      "percentage_top": 9,
+      "percentage_bottom": 91,
+      "countdown_sec": 3.0,
+      "is_closing_choice": true
+    }
+  ]
+}

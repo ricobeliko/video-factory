@@ -113,7 +113,7 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Automatização de Imagens e Assets Concluída e Homologada; Fase Q4 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada como Padrão Visual Oficial; Fase Q4 Próxima)
 
 ---
 
@@ -155,6 +155,24 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
   - Fallback visual estilizado de alta fidelidade com gradientes temáticos e tipografia BeVietnamPro quando não há retorno novo de stock.
   - 4 testes unitários direcionados PASS em `test/services/test_quiz_assets.py` (5.39s).
   - **Gate Integrado Q3 Homologado:** Q2 gerou dilemas -> Q3 baixou e preparou 12 imagens únicas com proveniência -> Q1 renderizou MP4 vertical (60.60s) e thumbnail independente (1080x1920) em 183.25s sem qualquer alteração nos canais ou serviços de produção.
+
+- **Fase Q0-R — Refinamento de Retenção Visual e Sonora:** `HOMOLOGADA / FROZEN VISUAL STANDARD`
+  - **Status:** OFICIALMENTE HOMOLOGADA E CONGELADA PELO USUÁRIO como padrão visual canônico da Quiz Engine.
+  - **Vídeo de Referência Oficial:** `storage/poc_quiz/quiz_gate_q0r_escolhas_impossiveis.mp4` (MP4 1080x1920, 69.26s, 6.29 MB, 2077 frames a 30fps).
+  - **Template Canônico Versionado:** `resource/quiz_templates/quiz_template_q0r_homologado.json`.
+  - **Regras Visuais, Ritmo e Retenção Congeladas:**
+    1. **Narração Direta e Ágil:** Expressão "O que você prefere?" restrita unicamente à abertura (q1). Da 2ª pergunta em diante, narração imediata das opções sem anúncios ordinais ("segunda escolha", etc.) e sem pausas mortas (Edge TTS pt-BR-AntonioNeural a +12% rate).
+    2. **Eliminação do Contador Numérico:** Remoção dos números 3, 2, 1; mantida janela de 2.0s de expectativa dinâmica com movimento contínuo Ken Burns (zoompan lento) sem congelar a imagem.
+    3. **Remoção de Tique-Taque Repetitivo:** Substituído por BGM ambiente suave com ducking contínuo durante a expectativa.
+    4. **Porcentagens Simultâneas:** Exibição imediata das porcentagens de ambas as alternativas por aproximadamente 1.0s com pill badges de destaque luminosos, barras de progresso horizontais no rodapé do card e corte seco para o próximo dilema.
+    5. **Efeito Sonoro de Revelação:** Chime harmônico suave sintetizado proceduralmente em PCM (1046.5Hz, 1318.5Hz, 2093Hz) disparado no início exato da exibição das porcentagens.
+    6. **Transparência Ética:** Identificação discreta de simulação (`*estimativa de escolhas baseada em simulação`) renderizada no rodapé.
+    7. **Encerramento de Engajamento Religioso:** Penúltima escolha configurada no mesmo layout dos cards ("Ficar dois dias sem Wi-Fi" vs "Curtir e comentar: Jesus te ama"), configurável por nicho.
+    8. **Encerramento de Seguir o Perfil:** Última escolha configurada no mesmo layout dos cards ("Passar direto e perder os próximos vídeos" vs "Seguir o perfil e apoiar o canal agora"), sem ameaças de azar ou tela estática de despedida.
+    9. **Thumbnail Independente 9:16:** Resolução 1080x1920 de alto contraste sem adulterar a abertura do vídeo (`storage/poc_quiz/quiz_gate_q0r_thumbnail.jpg`).
+    10. **Duração e Pacing:** 8 dilemas cronometrados totalizando 69.26s (>60s) com ~7.8s por dilema, garantindo elegibilidade a monetização e alta densidade de engajamento.
+  - **Reutilização:** Regras homologadas integradas à arquitetura para reutilização automática em qualquer nicho temático, mantendo conteúdo editorial, imagens e encerramentos configuráveis por canal.
+  - **Validação:** 7 testes unitários direcionados PASS (3/3 em `test_quiz_engine.py` e 4/4 em `test_quiz_generator.py`).
 
 - **Fase Q4 — Integração à Video Factory & Channel Factory:** `PLANNED (NEXT GATE)`
   - Onboarding do novo tipo de vídeo ("Quiz") no `profile_manager` e criação de canal dedicado.

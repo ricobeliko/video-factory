@@ -168,11 +168,13 @@ class QuizContentGenerator:
     # -------------------------------------------------------------------------
     # Geração de Conteúdo via LLM
     # -------------------------------------------------------------------------
+    # Geração Principal de Conteúdo Automatizado
+    # -------------------------------------------------------------------------
     def generate_quiz_structure(
         self,
         niche: str,
         format_type: str = "subjective",
-        num_questions: int = 6,
+        num_questions: int = 8,
         quiz_title: Optional[str] = None,
         closing_type: str = "engagement_cta",
     ) -> Dict[str, Any]:
@@ -232,19 +234,49 @@ class QuizContentGenerator:
 
         parsed_data["questions"] = validated_questions[:num_questions]
 
-        # Configura Gancho de Retenção Dinâmico baseado na última pergunta
-        last_q = parsed_data["questions"][-1]
-        hook_text = self._build_dynamic_hook(last_q, format_type)
+        # Sanitização e normalização de retenção Q0-R
+        for idx, q in enumerate(parsed_data["questions"]):
+            # Garante porcentagens simuladas coerentes
+            pct_top = q.get("percentage_top")
+            pct_bot = q.get("percentage_bottom")
+            if pct_top is None or pct_bot is None or (pct_top + pct_bot != 100):
+                splits = [(64, 36), (58, 42), (72, 28), (47, 53), (65, 35), (54, 46), (79, 21), (61, 39)]
+                s_top, s_bot = splits[idx % len(splits)]
+                q["percentage_top"] = s_top
+                q["percentage_bottom"] = s_bot
+
+            # Regra Q0-R Item A: "O que você prefere?" SOMENTE na abertura (idx == 0)
+            if idx == 0:
+                if format_type == "subjective":
+                    q["header"] = "O QUE VOCÊ PREFERE?"
+                    narr = q.get("narration", "").strip()
+                    if not re.search(r"^o\s+que\s+voc[êe]\s+prefere", narr, re.IGNORECASE):
+                        q["narration"] = f"O que você prefere? {narr}"
+            else:
+                # Da 2ª pergunta em diante: remove anúncios ordinais e "o que você prefere"
+                narr = q.get("narration", "")
+                narr = re.sub(r"^(?:o\s+que\s+voc[êe]\s+prefere\??\s*:?\s*)", "", narr, flags=re.IGNORECASE)
+                narr = re.sub(r"^(?:(?:primeira|segunda|terceira|quarta|quinta|sexta|s[ée]tima|oitava|\d+[ªºa]?)\s+(?:pergunta|escolha|dilema|op[çc][ãa]o)\s*:?\s*)", "", narr, flags=re.IGNORECASE)
+                q["narration"] = narr.strip()
+
+                hdr = q.get("header", "")
+                if re.search(r"(?:primeira|segunda|terceira|quarta|quinta|sexta|s[ée]tima|oitava|\d+[ªºa]?)", hdr, re.IGNORECASE):
+                    headers_pool = ["QUAL VOCÊ ESCOLHE?", "DECISÃO DIFÍCIL:", "ESCOLHA RÁPIDO:", "DILEMA IMPOSSÍVEL:", "QUAL O SEU DESTINO:"]
+                    q["header"] = headers_pool[(idx - 1) % len(headers_pool)]
+
+        # Configura Gancho de Retenção Dinâmico baseado na penúltima pergunta
+        target_climax = parsed_data["questions"][-2] if len(parsed_data["questions"]) >= 2 else parsed_data["questions"][-1]
+        hook_text = self._build_dynamic_hook(target_climax, format_type)
         parsed_data["questions"][0]["is_hook"] = True
         parsed_data["questions"][0]["hook_narration"] = hook_text
         parsed_data["retention_hook"] = {
             "enabled": True,
             "question_id": parsed_data["questions"][0]["id"],
             "narration": hook_text,
-            "min_countdown_sec": 3.85,
+            "min_countdown_sec": 3.5,
         }
 
-        # Configura Encerramento por Canal
+        # Configura Encerramento por Canal (Religioso e Seguir)
         self._apply_channel_closing(parsed_data, closing_type, format_type)
 
         return parsed_data
@@ -266,13 +298,15 @@ class QuizContentGenerator:
             return f"""Você é um roteirista sênior e checador de fatos especialista em quizzes virais educativos (YouTube Shorts / TikTok).
 Gere um quiz FACTUAL de alta retenção no nicho '{niche}' com exatamente {num_questions} perguntas.
 
-REGRAS ESTRITAS DE VERIFICAÇÃO FACTUAL:
+REGRAS ESTRITAS DE VERIFICAÇÃO FACTUAL E RETENÇÃO:
 1. Todas as respostas DEVEM ser cientificamente ou historicamente comprovadas e aceitas. Não use mitos populares ou fatos controversos.
 2. Cada pergunta DEVE ter duas alternativas: uma rigorosamente VERDADEIRA e outra um distrator plausível.
 3. No campo 'correct_option', indique estritamente 'A' ou 'B'.
 4. No campo 'fact_explanation', resuma a evidência comprovada em 1 frase.
 5. As opções de texto devem ser curtas e diretas (máximo 4 a 5 palavras por opção).
 6. As queries de imagem ('image_query') devem ser em inglês, altamente descritivas e cinematográficas.
+7. NARRAÇÃO DIRETA: Da 2ª pergunta em diante, NÃO anuncie 'segunda pergunta', 'terceira escolha'. Vá direto às alternativas!
+8. Adicione 'percentage_top' e 'percentage_bottom' somando 100.
 {avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
@@ -284,8 +318,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
   "questions": [
     {{
       "id": "q1",
-      "header": "PRIMEIRA PERGUNTA:",
-      "narration": "Texto falado da pergunta e alternativas com clareza...",
+      "header": "TESTE SEUS CONHECIMENTOS:",
+      "narration": "Qual animal tem o maior coração do reino animal? Opção A... Ou Opção B?",
       "top": {{
         "title": "TEXTO DA OPÇÃO A",
         "tag": "OPÇÃO A",
@@ -303,7 +337,9 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
       "correct_option": "A ou B",
       "fact_explanation": "Explicação factual verificada...",
       "verified": true,
-      "countdown_sec": 2.6
+      "percentage_top": 64,
+      "percentage_bottom": 36,
+      "countdown_sec": 3.0
     }}
   ]
 }}
@@ -312,11 +348,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             return f"""Você é um roteirista sênior especialista em quizzes psicológicos de escolhas impossíveis ("O que você prefere?").
 Gere um quiz SUBJETIVO de dilemas impossíveis no nicho '{niche}' com exatamente {num_questions} escolhas.
 
-REGRAS DE RETENÇÃO E ENGAJAMENTO:
-1. Sem certo ou errado: as duas alternativas devem ser tentadoras ou aterrorizantes, criando debate intenso nos comentários.
-2. Textos curtos e chamativos para os cards (máximo 4 a 5 palavras).
-3. A narração deve ser fluida e direta em português brasileiro.
-4. Queries de imagens ('image_query') em inglês para busca no Pexels.
+REGRAS DE RETENÇÃO ABSOLUTA (Q0-R):
+1. NARRAÇÃO DIRETA: Use "O que você prefere?" SOMENTE na primeira pergunta (q1).
+2. Da 2ª pergunta em diante, NUNCA anuncie "segunda pergunta", "terceira escolha" ou "o que você prefere". Narre direto as alternativas: "Alternativa A... Ou Alternativa B?".
+3. Sem pausas artificiais. Ritmo ágil e dinâmico.
+4. Sem certo ou errado: as duas alternativas devem ser tentadoras ou aterrorizantes, provocando curiosidade e debate.
+5. Textos curtos e chamativos para os cards (máximo 4 a 5 palavras).
+6. Queries de imagens ('image_query') em inglês para busca no Pexels.
+7. Adicione 'percentage_top' e 'percentage_bottom' somando 100 (simulação de votação popular).
 {avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
@@ -329,7 +368,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
     {{
       "id": "q1",
       "header": "O QUE VOCÊ PREFERE?",
-      "narration": "O que você prefere? Alternativa A... Ou Alternativa B?",
+      "narration": "O que você prefere? Ganhar um milhão todo mês... Ou ter juventude eterna?",
       "top": {{
         "title": "TEXTO CURTO A",
         "tag": "OPÇÃO A",
@@ -344,7 +383,9 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
         "image_name": "q1_bot.jpg",
         "theme": "blue"
       }},
-      "countdown_sec": 2.6
+      "percentage_top": 64,
+      "percentage_bottom": 36,
+      "countdown_sec": 3.0
     }}
   ]
 }}
@@ -382,35 +423,61 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             return "Mas atenção... a última escolha vai te surpreender!"
 
     def _apply_channel_closing(self, quiz_data: Dict[str, Any], closing_type: str, format_type: str) -> None:
-        """Configura o encerramento da última pergunta respeitando a política do canal."""
+        """Configura o encerramento respeitando as regras de retenção Q0-R."""
         questions = quiz_data.get("questions", [])
         if not questions:
             return
 
-        last_q = questions[-1]
-        last_q["is_closing_choice"] = True
-        last_q["countdown_sec"] = 3.2
-
         if closing_type == "quiz_choice_religious":
-            last_q["header"] = "ÚLTIMA ESCOLHA:"
-            last_q["narration"] = "Última e mais importante escolha: Se você ama Jesus, curta e comente... Ou, se não, não faça nada."
+            # Q0-R Item E: Penúltima escolha — Engajamento religioso
+            if len(questions) >= 2:
+                penult_q = questions[-2]
+                penult_q["header"] = "ESCOLHA RÁPIDO:"
+                penult_q["narration"] = "Ficar dois dias sem internet e sem Wi-Fi... Ou curtir e comentar: Jesus te ama?"
+                penult_q["top"] = {
+                    "title": "FICAR DOIS DIAS SEM WI-FI",
+                    "tag": "OPÇÃO A",
+                    "image_query": "broken wifi smartphone internet disconnect",
+                    "image_name": f"{penult_q['id']}_top.jpg",
+                    "theme": "red",
+                }
+                penult_q["bottom"] = {
+                    "title": "CURTIR E COMENTAR: JESUS TE AMA",
+                    "tag": "OPÇÃO B",
+                    "image_query": "jesus christ cross heavenly light sunset",
+                    "image_name": f"{penult_q['id']}_bot.jpg",
+                    "theme": "gold_red",
+                }
+                penult_q["percentage_top"] = 14
+                penult_q["percentage_bottom"] = 86
+                penult_q["countdown_sec"] = 3.0
+
+            # Q0-R Item F: Última escolha — Seguir o perfil
+            last_q = questions[-1]
+            last_q["is_closing_choice"] = True
+            last_q["header"] = "QUAL O SEU DESTINO:"
+            last_q["narration"] = "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?"
             last_q["top"] = {
-                "title": "SE VOCÊ AMA JESUS, CURTA E COMENTE",
+                "title": "PASSAR DIRETO E PERDER TUDO",
                 "tag": "OPÇÃO A",
-                "image_query": "jesus christ cross heavenly light sunset",
+                "image_query": "person walking away empty dark road night",
                 "image_name": f"{last_q['id']}_top.jpg",
-                "theme": "gold_red",
-            }
-            last_q["bottom"] = {
-                "title": "SE NÃO, NÃO FAÇA NADA",
-                "tag": "OPÇÃO B",
-                "image_query": "empty road mist silhouette",
-                "image_name": f"{last_q['id']}_bot.jpg",
                 "theme": "blue_neutral",
             }
+            last_q["bottom"] = {
+                "title": "SEGUIR O PERFIL AGORA",
+                "tag": "OPÇÃO B",
+                "image_query": "smartphone social media follow subscribe celebration confetti",
+                "image_name": f"{last_q['id']}_bot.jpg",
+                "theme": "gold_red",
+            }
+            last_q["percentage_top"] = 9
+            last_q["percentage_bottom"] = 91
+            last_q["countdown_sec"] = 3.0
         elif closing_type == "score_challenge" or format_type == "factual":
+            last_q = questions[-1]
+            last_q["is_closing_choice"] = True
             last_q["header"] = "DESAFIO FINAL:"
-            # Para quiz factual, encerramento de pontuação estimula alto engajamento nos comentários
             if not last_q.get("narration"):
                 last_q["narration"] = "Desafio final: Comente quantas você acertou! Opção A: Acertei todas... Ou Opção B: Errei alguma?"
                 last_q["top"] = {
@@ -427,9 +494,32 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     "image_name": f"{last_q['id']}_bot.jpg",
                     "theme": "blue_neutral",
                 }
+                last_q["percentage_top"] = 73
+                last_q["percentage_bottom"] = 27
+                last_q["countdown_sec"] = 3.0
         else:
-            # engagement_cta padrão neutro
-            last_q["header"] = "ÚLTIMA ESCOLHA:"
+            # engagement_cta padrão neutro (Q0-R Seguir)
+            last_q = questions[-1]
+            last_q["is_closing_choice"] = True
+            last_q["header"] = "QUAL O SEU DESTINO:"
+            last_q["narration"] = "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?"
+            last_q["top"] = {
+                "title": "PASSAR DIRETO E PERDER",
+                "tag": "OPÇÃO A",
+                "image_query": "person walking away road silhouette",
+                "image_name": f"{last_q['id']}_top.jpg",
+                "theme": "blue_neutral",
+            }
+            last_q["bottom"] = {
+                "title": "SEGUIR O PERFIL AGORA",
+                "tag": "OPÇÃO B",
+                "image_query": "smartphone follow subscribe celebration",
+                "image_name": f"{last_q['id']}_bot.jpg",
+                "theme": "gold_red",
+            }
+            last_q["percentage_top"] = 12
+            last_q["percentage_bottom"] = 88
+            last_q["countdown_sec"] = 3.0
 
     # -------------------------------------------------------------------------
     # Fallback Determinístico Factual e Subjetivo
@@ -613,12 +703,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                             "image_name": "q1_bot_v2.jpg",
                             "theme": "blue",
                         },
-                        "countdown_sec": 2.6,
+                        "percentage_top": 64,
+                        "percentage_bottom": 36,
+                        "countdown_sec": 3.0,
                     },
                     {
                         "id": "q2",
-                        "header": "SEGUNDA ESCOLHA:",
-                        "narration": "Segunda escolha: Ter a habilidade de voar para qualquer lugar do planeta... Ou poder ficar invisível sempre que você quiser?",
+                        "header": "DECISÃO DIFÍCIL:",
+                        "narration": "Ter a habilidade de voar para qualquer lugar do planeta... Ou poder ficar invisível sempre que você quiser?",
                         "top": {
                             "title": "PODER VOAR PELO PLANETA",
                             "tag": "OPÇÃO A",
@@ -633,12 +725,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                             "image_name": "q2_bot_v2.jpg",
                             "theme": "blue",
                         },
-                        "countdown_sec": 2.6,
+                        "percentage_top": 58,
+                        "percentage_bottom": 42,
+                        "countdown_sec": 3.0,
                     },
                     {
                         "id": "q3",
-                        "header": "TERCEIRA ESCOLHA:",
-                        "narration": "Terceira escolha: Conseguir ler a mente de qualquer pessoa no mundo... Ou saber exatamente o futuro da humanidade?",
+                        "header": "ESCOLHA RÁPIDO:",
+                        "narration": "Conseguir ler a mente de qualquer pessoa no mundo... Ou saber exatamente o futuro da humanidade?",
                         "top": {
                             "title": "LER A MENTE DE QUALQUER PESSOA",
                             "tag": "OPÇÃO A",
@@ -653,12 +747,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                             "image_name": "q3_bot_v2.jpg",
                             "theme": "blue",
                         },
-                        "countdown_sec": 2.6,
+                        "percentage_top": 72,
+                        "percentage_bottom": 28,
+                        "countdown_sec": 3.0,
                     },
                     {
                         "id": "q4",
-                        "header": "QUARTA ESCOLHA:",
-                        "narration": "Quarta escolha: Nunca mais sentir nenhum cansaço físico na vida... Ou nunca mais sentir nenhuma tristeza ou ansiedade?",
+                        "header": "DILEMA IMPOSSÍVEL:",
+                        "narration": "Nunca mais sentir nenhum cansaço físico na vida... Ou nunca mais sentir nenhuma tristeza ou ansiedade?",
                         "top": {
                             "title": "NUNCA MAIS SENTIR CANSAÇO",
                             "tag": "OPÇÃO A",
@@ -673,12 +769,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                             "image_name": "q4_bot_v2.jpg",
                             "theme": "blue",
                         },
-                        "countdown_sec": 2.6,
+                        "percentage_top": 47,
+                        "percentage_bottom": 53,
+                        "countdown_sec": 3.0,
                     },
                     {
                         "id": "q5",
-                        "header": "QUINTA ESCOLHA:",
-                        "narration": "Quinta escolha: Falar fluentemente todas as línguas do mundo... Ou saber se comunicar perfeitamente com todos os animais?",
+                        "header": "DECISÃO DIFÍCIL:",
+                        "narration": "Falar fluentemente todas as línguas do mundo... Ou saber se comunicar perfeitamente com todos os animais?",
                         "top": {
                             "title": "FALAR TODAS AS LÍNGUAS",
                             "tag": "OPÇÃO A",
@@ -693,30 +791,78 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                             "image_name": "q5_bot_v2.jpg",
                             "theme": "blue",
                         },
-                        "countdown_sec": 2.6,
+                        "percentage_top": 65,
+                        "percentage_bottom": 35,
+                        "countdown_sec": 3.0,
                     },
                     {
                         "id": "q6",
-                        "is_closing_choice": True,
-                        "header": "ÚLTIMA ESCOLHA:",
-                        "narration": "Última e mais importante escolha: Se você ama Jesus, curta e comente... Ou, se não, não faça nada.",
+                        "header": "ESCOLHA RÁPIDO:",
+                        "narration": "Viajar no tempo e conhecer a história antiga... Ou viajar para o futuro e ver civilizações espaciais?",
                         "top": {
-                            "title": "SE VOCÊ AMA JESUS, CURTA E COMENTE",
+                            "title": "VIAJAR PARA O PASSADO",
                             "tag": "OPÇÃO A",
-                            "image_query": "jesus christ cross light sunset heavenly",
+                            "image_query": "ancient pyramid egypt desert history",
                             "image_name": "q6_top_v2.jpg",
-                            "theme": "gold_red",
+                            "theme": "red",
                         },
                         "bottom": {
-                            "title": "SE NÃO, NÃO FAÇA NADA",
+                            "title": "VIAJAR PARA O FUTURO",
                             "tag": "OPÇÃO B",
-                            "image_query": "empty road mist silhouette",
+                            "image_query": "futuristic city cyberpunk night spaceship",
                             "image_name": "q6_bot_v2.jpg",
+                            "theme": "blue",
+                        },
+                        "percentage_top": 54,
+                        "percentage_bottom": 46,
+                        "countdown_sec": 3.0,
+                    },
+                    {
+                        "id": "q7",
+                        "header": "ESCOLHA RÁPIDO:",
+                        "narration": "Ficar dois dias sem internet e sem Wi-Fi... Ou curtir e comentar: Jesus te ama?",
+                        "top": {
+                            "title": "FICAR DOIS DIAS SEM WI-FI",
+                            "tag": "OPÇÃO A",
+                            "image_query": "broken wifi smartphone internet disconnect",
+                            "image_name": "q7_top_v2.jpg",
+                            "theme": "red",
+                        },
+                        "bottom": {
+                            "title": "CURTIR E COMENTAR: JESUS TE AMA",
+                            "tag": "OPÇÃO B",
+                            "image_query": "jesus christ cross heavenly light sunset",
+                            "image_name": "q7_bot_v2.jpg",
+                            "theme": "gold_red",
+                        },
+                        "percentage_top": 14,
+                        "percentage_bottom": 86,
+                        "countdown_sec": 3.0,
+                    },
+                    {
+                        "id": "q8",
+                        "is_closing_choice": True,
+                        "header": "QUAL O SEU DESTINO:",
+                        "narration": "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?",
+                        "top": {
+                            "title": "PASSAR DIRETO E PERDER TUDO",
+                            "tag": "OPÇÃO A",
+                            "image_query": "person walking away empty dark road night",
+                            "image_name": "q8_top_v2.jpg",
                             "theme": "blue_neutral",
                         },
-                        "countdown_sec": 3.2,
+                        "bottom": {
+                            "title": "SEGUIR O PERFIL AGORA",
+                            "tag": "OPÇÃO B",
+                            "image_query": "smartphone social media follow subscribe celebration confetti",
+                            "image_name": "q8_bot_v2.jpg",
+                            "theme": "gold_red",
+                        },
+                        "percentage_top": 9,
+                        "percentage_bottom": 91,
+                        "countdown_sec": 3.0,
                     },
-                ],
+                ][:num_questions],
             }
 
     # -------------------------------------------------------------------------
@@ -779,8 +925,12 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 "voice_rate": "+12%",
             },
             "countdown_settings": {
-                "default_sec": 2.6,
-                "closing_sec": 3.2,
+                "default_sec": 3.0,
+                "expectation_sec": 2.0,
+                "reveal_sec": 1.0,
+                "enable_countdown_badges": False,
+                "enable_percentages": True,
+                "closing_sec": 3.0,
                 "badges": ["3", "2", "1"],
                 "colors": {
                     "badge_ou_bg": [255, 214, 0],

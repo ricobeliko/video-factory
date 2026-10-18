@@ -20,8 +20,12 @@
     "voice_rate": "+12%"
   },
   "countdown_settings": {
-    "default_sec": 2.6,
-    "closing_sec": 3.2,
+    "default_sec": 3.0,
+    "expectation_sec": 2.0,
+    "reveal_sec": 1.0,
+    "enable_countdown_badges": false,
+    "enable_percentages": true,
+    "closing_sec": 3.0,
     "badges": ["3", "2", "1"],
     "colors": {
       "badge_ou_bg": [255, 214, 0],

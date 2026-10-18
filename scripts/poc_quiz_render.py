@@ -83,8 +83,12 @@ class QuizConfig:
     })
 
     countdown_settings: Dict[str, Any] = field(default_factory=lambda: {
-        "default_sec": 2.6,
-        "closing_sec": 3.2,
+        "default_sec": 3.0,
+        "expectation_sec": 2.0,
+        "reveal_sec": 1.0,
+        "closing_sec": 3.0,
+        "enable_countdown_badges": False,  # Q0-R: elimina números 3, 2, 1
+        "enable_percentages": True,        # Q0-R: exibe porcentagens simultâneas por ~1s
         "badges": ["3", "2", "1"],
         "colors": {
             "badge_ou_bg": [255, 214, 0],
@@ -348,7 +352,7 @@ class QuizEngine:
     # 3. Síntese Sonora e Efeitos
     # -------------------------------------------------------------------------
     def generate_countdown_sfx(self, duration: float = 3.5) -> str:
-        """Gera sfx de tique-taque em áudio puro PCM sintetizado."""
+        """Gera sfx de tique-taque em áudio puro PCM sintetizado (legado)."""
         output_wav = os.path.join(self.config.temp_dir, "countdown_sfx.wav")
         framerate = 44100
         nframes = int(framerate * duration)
@@ -369,6 +373,27 @@ class QuizEngine:
                 wav.writeframes(struct.pack("<h", sample))
         return output_wav
 
+    def generate_revelation_sfx(self, duration: float = 0.8) -> str:
+        """Gera sfx de revelação (chime/ding harmônico suave) em PCM sintetizado puro."""
+        output_wav = os.path.join(self.config.temp_dir, "reveal_chime.wav")
+        framerate = 44100
+        nframes = int(framerate * duration)
+        with wave.open(output_wav, "w") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(framerate)
+            for i in range(nframes):
+                t = i / framerate
+                decay = math.exp(-t * 8.0)
+                sample = (
+                    0.55 * math.sin(2 * math.pi * 1046.5 * t) +
+                    0.30 * math.sin(2 * math.pi * 1318.5 * t) +
+                    0.15 * math.sin(2 * math.pi * 2093.0 * t)
+                ) * decay
+                s16 = int(max(-32767, min(32767, sample * 24000)))
+                wav.writeframes(struct.pack("<h", s16))
+        return output_wav
+
     async def synthesize_voice(self, text: str, output_mp3: str) -> float:
         """Sintetiza narração pt-BR com Edge TTS."""
         import edge_tts
@@ -387,23 +412,43 @@ class QuizEngine:
     def mix_segment_audio(
         self,
         narration_mp3: str,
-        countdown_audio: str,
+        countdown_audio: Optional[str],
         output_audio: str,
         total_duration: float,
         countdown_sec: float,
+        reveal_sfx: Optional[str] = None,
+        reveal_sec: float = 1.0,
     ) -> bool:
-        """Combina narração da pergunta com áudio da contagem (gancho na Q1 ou sfx nas demais)."""
-        delay_ms = int(max(0.0, total_duration - countdown_sec) * 1000)
-        filter_complex = (
-            f"[0:a]volume=1.0[a_nar];"
-            f"[1:a]adelay={delay_ms}|{delay_ms},volume=1.0[a_cnt];"
-            f"[a_nar][a_cnt]amix=inputs=2:duration=longest:dropout_transition=0,alimiter=limit=0.98[aout]"
-        )
+        """Combina narração da pergunta com gancho ou chime de revelação (sem tique-taque repetitivo)."""
+        inputs = ["-i", os.path.abspath(narration_mp3)]
+        filters = ["[0:a]volume=1.0[a_nar]"]
+        input_count = 1
+
+        # Se houver áudio secundário (ex: hook de retenção na Q1 ou countdown legado)
+        if countdown_audio and os.path.exists(countdown_audio):
+            delay_cnt_ms = int(max(0.0, total_duration - countdown_sec) * 1000)
+            inputs.extend(["-i", os.path.abspath(countdown_audio)])
+            filters.append(f"[{input_count}:a]adelay={delay_cnt_ms}|{delay_cnt_ms},volume=1.0[a_cnt]")
+            input_count += 1
+
+        # Chime de revelação de porcentagem
+        if reveal_sfx and os.path.exists(reveal_sfx):
+            delay_rev_ms = int(max(0.0, total_duration - reveal_sec) * 1000)
+            inputs.extend(["-i", os.path.abspath(reveal_sfx)])
+            filters.append(f"[{input_count}:a]adelay={delay_rev_ms}|{delay_rev_ms},volume=0.90[a_rev]")
+            input_count += 1
+
+        if input_count == 1:
+            filter_complex = "[0:a]volume=1.0[aout]"
+        elif input_count == 2:
+            target_alias = "a_cnt" if "a_cnt" in filters[1] else "a_rev"
+            filter_complex = f"{filters[0]};{filters[1]};[a_nar][{target_alias}]amix=inputs=2:duration=longest:dropout_transition=0,alimiter=limit=0.98[aout]"
+        else:
+            filter_complex = f"{filters[0]};{filters[1]};{filters[2]};[a_nar][a_cnt][a_rev]amix=inputs=3:duration=longest:dropout_transition=0,alimiter=limit=0.98[aout]"
 
         cmd = [
             self.ffmpeg_bin, "-y",
-            "-i", os.path.abspath(narration_mp3),
-            "-i", os.path.abspath(countdown_audio),
+            *inputs,
             "-filter_complex", filter_complex,
             "-map", "[aout]",
             "-t", f"{total_duration:.3f}",
@@ -461,6 +506,50 @@ class QuizEngine:
         img.save(output_png, "PNG")
         return output_png
 
+    def create_question_reveal_overlay(self, item: Dict[str, Any], output_png: str) -> str:
+        """Gera overlay com porcentagens simuladas e barra de progresso para revelação instantânea."""
+        width = self.config.video_settings["width"]
+        height = self.config.video_settings["height"]
+        font_path = self.config.video_settings["font_path"]
+
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        font_pct = ImageFont.truetype(font_path, 42)
+        font_disc = ImageFont.truetype(font_path, 22)
+
+        pct_top = int(item.get("percentage_top", 64))
+        pct_bot = int(item.get("percentage_bottom", 36))
+        if pct_top + pct_bot != 100:
+            pct_bot = max(0, 100 - pct_top)
+
+        # 1. Badge de Porcentagem Opção A (Topo - acima do card, alinhado à Tag)
+        draw.rounded_rectangle([760, 650, 1010, 712], radius=16, fill=(15, 15, 25, 245), outline=(255, 215, 0, 255), width=3)
+        draw.text((885, 681), f"{pct_top}%", font=font_pct, fill=(255, 225, 0, 255), anchor="mm")
+
+        # Barra de Progresso Opção A
+        bar_w = 950
+        fill_top_w = int(bar_w * (pct_top / 100.0))
+        draw.rounded_rectangle([65, 878, 1015, 890], radius=5, fill=(20, 20, 30, 200))
+        if fill_top_w > 0:
+            draw.rounded_rectangle([65, 878, 65 + fill_top_w, 890], radius=5, fill=(255, 215, 0, 255))
+
+        # 2. Badge de Porcentagem Opção B (Base - acima do card, alinhado à Tag)
+        draw.rounded_rectangle([760, 1610, 1010, 1672], radius=16, fill=(15, 15, 25, 245), outline=(70, 160, 255, 255), width=3)
+        draw.text((885, 1641), f"{pct_bot}%", font=font_pct, fill=(255, 255, 255, 255), anchor="mm")
+
+        # Barra de Progresso Opção B
+        fill_bot_w = int(bar_w * (pct_bot / 100.0))
+        draw.rounded_rectangle([65, 1838, 1015, 1850], radius=5, fill=(20, 20, 30, 200))
+        if fill_bot_w > 0:
+            draw.rounded_rectangle([65, 1838, 65 + fill_bot_w, 1850], radius=5, fill=(70, 160, 255, 255))
+
+        # 3. Identificação Discreta de Simulação (Transparência Ética)
+        draw.text((540, 1888), "*estimativa de escolhas baseada em simulação", font=font_disc, fill=(255, 255, 255, 160), anchor="mm")
+
+        img.save(output_png, "PNG")
+        return output_png
+
     def create_center_badge(self, text: str, output_png: str, bg_color=(255, 214, 0), text_color=(0, 0, 0)) -> str:
         width = self.config.video_settings["width"]
         height = self.config.video_settings["height"]
@@ -505,51 +594,88 @@ class QuizEngine:
         badge_ou = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_ou.png"))
         self.create_center_badge("OU", badge_ou, bg_color=tuple(cnt_colors.get("badge_ou_bg", [255, 214, 0])), text_color=tuple(cnt_colors.get("badge_ou_text", [0, 0, 0])))
 
-        badge_3 = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_3.png"))
-        self.create_center_badge("3", badge_3, bg_color=tuple(cnt_colors.get("badge_3_bg", [255, 75, 75])), text_color=tuple(cnt_colors.get("badge_countdown_text", [255, 255, 255])))
+        enable_badges = self.config.countdown_settings.get("enable_countdown_badges", False)
+        reveal_sec = float(self.config.countdown_settings.get("reveal_sec", 1.0))
+        t_reveal_start = max(0.5, duration - reveal_sec)
 
-        badge_2 = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_2.png"))
-        self.create_center_badge("2", badge_2, bg_color=tuple(cnt_colors.get("badge_2_bg", [255, 170, 0])), text_color=tuple(cnt_colors.get("badge_countdown_text", [255, 255, 255])))
+        if enable_badges:
+            badge_3 = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_3.png"))
+            self.create_center_badge("3", badge_3, bg_color=tuple(cnt_colors.get("badge_3_bg", [255, 75, 75])), text_color=tuple(cnt_colors.get("badge_countdown_text", [255, 255, 255])))
 
-        badge_1 = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_1.png"))
-        self.create_center_badge("1", badge_1, bg_color=tuple(cnt_colors.get("badge_1_bg", [45, 210, 60])), text_color=tuple(cnt_colors.get("badge_countdown_text", [255, 255, 255])))
+            badge_2 = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_2.png"))
+            self.create_center_badge("2", badge_2, bg_color=tuple(cnt_colors.get("badge_2_bg", [255, 170, 0])), text_color=tuple(cnt_colors.get("badge_countdown_text", [255, 255, 255])))
 
-        step = countdown_sec / 3.0
-        t3_start, t3_end = t_countdown, t_countdown + step
-        t2_start, t2_end = t_countdown + step, t_countdown + 2.0 * step
-        t1_start = t_countdown + 2.0 * step
+            badge_1 = os.path.abspath(os.path.join(self.config.temp_dir, f"badge_{scene_id}_1.png"))
+            self.create_center_badge("1", badge_1, bg_color=tuple(cnt_colors.get("badge_1_bg", [45, 210, 60])), text_color=tuple(cnt_colors.get("badge_countdown_text", [255, 255, 255])))
 
-        filter_complex = (
-            f"[0:v]scale=1200:1066:force_original_aspect_ratio=increase,crop=1200:1066,"
-            f"zoompan=z='min(zoom+0.0015,1.14)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x960:fps={fps}[top];"
-            f"[1:v]scale=1200:1066:force_original_aspect_ratio=increase,crop=1200:1066,"
-            f"zoompan=z='if(lte(zoom,1.0),1.0,1.14-0.0015*on)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x960:fps={fps}[bot];"
-            f"[top][bot]vstack[stacked];"
-            f"[stacked][2:v]overlay=0:0[v_base];"
-            f"[v_base][3:v]overlay=0:0:enable='lt(t,{t_countdown:.2f})'[v_ou];"
-            f"[v_ou][4:v]overlay=0:0:enable='between(t,{t3_start:.2f},{t3_end:.2f})'[v_3];"
-            f"[v_3][5:v]overlay=0:0:enable='between(t,{t2_start:.2f},{t2_end:.2f})'[v_2];"
-            f"[v_2][6:v]overlay=0:0:enable='gte(t,{t1_start:.2f})'[vfinal]"
-        )
+            step = countdown_sec / 3.0
+            t3_start, t3_end = t_countdown, t_countdown + step
+            t2_start, t2_end = t_countdown + step, t_countdown + 2.0 * step
+            t1_start = t_countdown + 2.0 * step
 
-        cmd = [
-            self.ffmpeg_bin, "-y",
-            "-loop", "1", "-i", img_top,
-            "-loop", "1", "-i", img_bot,
-            "-i", overlay_base,
-            "-i", badge_ou,
-            "-i", badge_3,
-            "-i", badge_2,
-            "-i", badge_1,
-            "-i", audio_path,
-            "-t", f"{duration:.3f}",
-            "-filter_complex", filter_complex,
-            "-map", "[vfinal]",
-            "-map", "7:a",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
-            "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
-            output_scene_mp4,
-        ]
+            filter_complex = (
+                f"[0:v]scale=1200:1066:force_original_aspect_ratio=increase,crop=1200:1066,"
+                f"zoompan=z='min(zoom+0.0015,1.14)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x960:fps={fps}[top];"
+                f"[1:v]scale=1200:1066:force_original_aspect_ratio=increase,crop=1200:1066,"
+                f"zoompan=z='if(lte(zoom,1.0),1.0,1.14-0.0015*on)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x960:fps={fps}[bot];"
+                f"[top][bot]vstack[stacked];"
+                f"[stacked][2:v]overlay=0:0[v_base];"
+                f"[v_base][3:v]overlay=0:0:enable='lt(t,{t_countdown:.2f})'[v_ou];"
+                f"[v_ou][4:v]overlay=0:0:enable='between(t,{t3_start:.2f},{t3_end:.2f})'[v_3];"
+                f"[v_3][5:v]overlay=0:0:enable='between(t,{t2_start:.2f},{t2_end:.2f})'[v_2];"
+                f"[v_2][6:v]overlay=0:0:enable='gte(t,{t1_start:.2f})'[vfinal]"
+            )
+
+            cmd = [
+                self.ffmpeg_bin, "-y",
+                "-loop", "1", "-i", img_top,
+                "-loop", "1", "-i", img_bot,
+                "-i", overlay_base,
+                "-i", badge_ou,
+                "-i", badge_3,
+                "-i", badge_2,
+                "-i", badge_1,
+                "-i", audio_path,
+                "-t", f"{duration:.3f}",
+                "-filter_complex", filter_complex,
+                "-map", "[vfinal]",
+                "-map", "7:a",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+                output_scene_mp4,
+            ]
+        else:
+            # Modo Q0-R: Expectativa limpa sem números + Revelação simultânea de porcentagens por ~1s
+            overlay_reveal = os.path.abspath(os.path.join(self.config.temp_dir, f"overlay_{scene_id}_reveal.png"))
+            self.create_question_reveal_overlay(item, overlay_reveal)
+
+            filter_complex = (
+                f"[0:v]scale=1200:1066:force_original_aspect_ratio=increase,crop=1200:1066,"
+                f"zoompan=z='min(zoom+0.0015,1.14)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x960:fps={fps}[top];"
+                f"[1:v]scale=1200:1066:force_original_aspect_ratio=increase,crop=1200:1066,"
+                f"zoompan=z='if(lte(zoom,1.0),1.0,1.14-0.0015*on)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x960:fps={fps}[bot];"
+                f"[top][bot]vstack[stacked];"
+                f"[stacked][2:v]overlay=0:0[v_base];"
+                f"[v_base][3:v]overlay=0:0[v_ou];"
+                f"[v_ou][4:v]overlay=0:0:enable='gte(t,{t_reveal_start:.2f})'[vfinal]"
+            )
+
+            cmd = [
+                self.ffmpeg_bin, "-y",
+                "-loop", "1", "-i", img_top,
+                "-loop", "1", "-i", img_bot,
+                "-i", overlay_base,
+                "-i", badge_ou,
+                "-i", overlay_reveal,
+                "-i", audio_path,
+                "-t", f"{duration:.3f}",
+                "-filter_complex", filter_complex,
+                "-map", "[vfinal]",
+                "-map", "5:a",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+                output_scene_mp4,
+            ]
 
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
@@ -628,12 +754,17 @@ class QuizEngine:
         # 2. Thumbnail
         self.generate_thumbnail()
 
-        # 3. SFX de Countdown
-        sfx_wav = self.generate_countdown_sfx(duration=3.5)
+        # 3. SFX de Revelação e Countdown
+        sfx_chime = self.generate_revelation_sfx()
+        enable_badges = self.config.countdown_settings.get("enable_countdown_badges", False)
+        sfx_countdown = self.generate_countdown_sfx(duration=3.5) if enable_badges else None
 
         # 4. Síntese de Voz e Áudio dos Segmentos
         total_planned_duration = 0.0
         hook_cfg = self.config.retention_hook
+
+        reveal_sec = float(self.config.countdown_settings.get("reveal_sec", 1.0))
+        default_post_sec = float(self.config.countdown_settings.get("default_sec", 3.0))
 
         for idx, item in enumerate(self.config.questions):
             scene_id = item["id"]
@@ -646,22 +777,30 @@ class QuizEngine:
                 hook_narration = item.get("hook_narration") or hook_cfg.get("narration", "")
                 hook_mp3 = os.path.join(self.config.temp_dir, f"hook_{scene_id}.mp3")
                 dur_hook = await self.synthesize_voice(hook_narration, hook_mp3)
-                min_cd = hook_cfg.get("min_countdown_sec", 3.85)
-                countdown_sec = max(float(item.get("countdown_sec", min_cd)), dur_hook + 0.15)
-                item["countdown_sec"] = countdown_sec
+                min_cd = hook_cfg.get("min_countdown_sec", 3.5)
+                post_sec = max(float(item.get("countdown_sec", min_cd)), dur_hook + 0.15)
+                item["countdown_sec"] = post_sec
                 countdown_audio = hook_mp3
-                logger.info(f"Pergunta {scene_id} (GANCHO): voz_q={dur_voice:.2f}s | voz_gancho={dur_hook:.2f}s | countdown={countdown_sec:.2f}s")
+                logger.info(f"Pergunta {scene_id} (GANCHO): voz_q={dur_voice:.2f}s | voz_gancho={dur_hook:.2f}s | pos={post_sec:.2f}s")
             else:
-                countdown_sec = float(item.get("countdown_sec", self.config.countdown_settings["default_sec"]))
-                item["countdown_sec"] = countdown_sec
-                countdown_audio = sfx_wav
-                logger.info(f"Pergunta {scene_id}: voz_q={dur_voice:.2f}s | countdown_sfx={countdown_sec:.2f}s")
+                post_sec = float(item.get("countdown_sec", default_post_sec))
+                item["countdown_sec"] = post_sec
+                countdown_audio = sfx_countdown if enable_badges else None
+                logger.info(f"Pergunta {scene_id}: voz_q={dur_voice:.2f}s | pos_espera_revelacao={post_sec:.2f}s")
 
-            dur_total = dur_voice + countdown_sec
+            dur_total = dur_voice + post_sec
             item["total_duration"] = dur_total
 
             audio_scene = os.path.join(self.config.temp_dir, f"audio_{scene_id}.mp4")
-            self.mix_segment_audio(narration_mp3, countdown_audio, audio_scene, dur_total, countdown_sec)
+            self.mix_segment_audio(
+                narration_mp3=narration_mp3,
+                countdown_audio=countdown_audio,
+                output_audio=audio_scene,
+                total_duration=dur_total,
+                countdown_sec=post_sec,
+                reveal_sfx=sfx_chime,
+                reveal_sec=reveal_sec,
+            )
             total_planned_duration += dur_total
 
         logger.info(f"Duração Total Planejada: {total_planned_duration:.2f}s (Alvo: {self.config.target_duration_range[0]}-{self.config.target_duration_range[1]}s)")

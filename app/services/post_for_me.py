@@ -267,17 +267,55 @@ def list_connected_publishing_accounts(
 def resolve_target_tiktok_user_id(
     channel_id: Optional[str] = None,
     profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve o user_id real do canal TikTok de forma determinística.
+    """Resolve o user_id real do canal TikTok de forma determinística e segura.
 
-    Nesta fase:
-    - channel-default-tiktok -> -00084CZ8cOFQstM-kHqpIgjFOeYUf6w4a4F
-    - profile_id default se channel_id ausente/vazio
-    - user_id direto se for exatamente o homologado
-    Retorna None para qualquer outro canal ou perfil (Fail Closed).
+    Prioridade canônica:
+    1. Base de dados (publishing_channels.external_account_id via channel_id)
+    2. Base de dados (publishing_channels.external_account_id via profile_id se canal único)
+    3. Mapeamento legado homologado (TIKTOK_CHANNEL_MAP)
+    4. Fallback legado de profile default
+    Retorna None em caso de ausência ou ambiguidade (>1 canal TikTok sem channel_id explícito) - Fail Closed.
     """
     c_clean = str(channel_id or "").strip()
     p_clean = str(profile_id or "").strip()
+
+    # 1. Consulta dinâmica por channel_id no SQLite
+    if c_clean:
+        try:
+            from app.services import profile_manager
+            with profile_manager.get_connection(db_path) as conn:
+                row = conn.execute(
+                    "SELECT external_account_id, platform FROM publishing_channels WHERE id = ?;",
+                    (c_clean,),
+                ).fetchone()
+                if row and row["external_account_id"]:
+                    ext_id = str(row["external_account_id"]).strip()
+                    if ext_id:
+                        return ext_id
+        except Exception:
+            pass
+
+    # 2. Consulta dinâmica por profile_id se canal único habilitado
+    if p_clean and not c_clean:
+        try:
+            from app.services import profile_manager
+            with profile_manager.get_connection(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT external_account_id FROM publishing_channels "
+                    "WHERE profile_id = ? AND platform = 'tiktok' AND is_enabled = 1;",
+                    (p_clean,),
+                ).fetchall()
+                if len(rows) == 1 and rows[0]["external_account_id"]:
+                    ext_id = str(rows[0]["external_account_id"]).strip()
+                    if ext_id:
+                        return ext_id
+                elif len(rows) > 1:
+                    # Ambiguidade: mais de 1 canal ativo para a mesma plataforma sem channel_id explícito
+                    return None
+        except Exception:
+            pass
 
     if c_clean in TIKTOK_CHANNEL_MAP:
         return TIKTOK_CHANNEL_MAP[c_clean]["tiktok_user_id"]
@@ -1000,13 +1038,15 @@ class PostForMeClient:
                 f"Múltiplas contas Post for Me TikTok conectadas ({len(matching_accounts)}) encontradas para user_id '{expected_user_id}'. "
                 f"Bloqueando por ambiguidade (Fail Closed)."
             )
+        return matching_accounts[0]
 
-        account = matching_accounts[0]
-        acc_id = account.get("id")
-        if not acc_id:
-            raise PostForMeAccountNotFoundError("Conta TikTok resolvida não possui 'id' (spc_...) interno.")
-
-        return account
+    def resolve_tiktok_account_for_user(
+        self,
+        expected_account_id: Optional[str] = None,
+        profile_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Alias retrocompatível para resolve_tiktok_account."""
+        return self.resolve_tiktok_account(expected_account_id=expected_account_id, profile_id=profile_id)
 
     def create_media_upload_url(self) -> Tuple[str, str]:
         """Solicita URLs para upload temporário de mídia (POST /v1/media/create-upload-url sem body).

@@ -152,6 +152,24 @@ NARRATIVE_STRUCTURE_SPECS: Dict[str, Dict[str, Any]] = {
             "3. Estimule a decisão imediata e a discussão nos comentários."
         ),
     },
+    const.STRUCTURE_QUIZ_PAPER: {
+        "id": const.STRUCTURE_QUIZ_PAPER,
+        "name": "Quiz de Papel / Perguntas & Respostas",
+        "description": "Folha de exame -> Pergunta e alternativas visíveis -> Timer circular 6s -> Revelação -> Comentários",
+        "steps": [
+            "Apresentação da folha de exame e enunciado com 4 alternativas simultâneas",
+            "Janela de raciocínio de 6 segundos com timer circular progressivo e tique-taque",
+            "Revelação da alternativa correta com marcação verde e chime de acerto",
+            "Transição ágil para a próxima pergunta",
+            "Tela de fechamento para incentivar pontuação nos comentários mantida por 6s",
+        ],
+        "prompt_pt": (
+            "ESTRUTURA NARRATIVA: Quiz de Papel / Perguntas & Respostas\n"
+            "1. Apresente perguntas factuais com respostas cientificamente ou historicamente comprovadas.\n"
+            "2. Quatro alternativas visíveis com apenas uma rigorosamente correta.\n"
+            "3. Narração exclusiva da pergunta e encerramento incentivando engajamento nos comentários."
+        ),
+    },
 }
 
 

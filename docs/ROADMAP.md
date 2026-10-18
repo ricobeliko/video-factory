@@ -113,7 +113,7 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída `594e57c`; Fase Q5-B1 Homologada em DEV; Fase P1.3 Homologada pelo Operador `fe2d7cb`; Fase P2 Auditoria Concluída; Fase P3 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída `594e57c`; Fase Q5-B1 Homologada em DEV; Fase P1.3 Homologada pelo Operador `fe2d7cb`; Fase P2 Auditoria Concluída `b0f463e`; Fase P3 Concluída e Validada com 7 Testes PASS; Pronto para Deploy Consolidado)
 
 ---
 
@@ -242,22 +242,23 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     9. **Thumbnail Independente:** Resolução vertical 1080x1920 (`storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg`).
   - **Validação:** 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
 
-- **Fase P2 — Homologação do Quiz de Papel + Auditoria de Integração:** `COMPLETED / COMMITTED`
-  - **Congelamento P1.3:** Padrão P1.3 registrado como homologado e template canônico versionado em `resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`.
-  - **Auditoria YouTube + TikTok:**
-    - Schema de `publishing_channels` já suporta N canais por perfil e múltiplas plataformas (`platform` = 'youtube', 'tiktok').
-    - O Scheduler (`scheduler.py`) já processa separadamente ambas as plataformas em loops dedicados e o índice de idempotência (`idx_active_schedule_v2` em `task_id, COALESCE(channel_id, ''), platform`) permite agendamentos concomitantes em ambas as redes para o mesmo vídeo.
-    - O Post for Me já possui client capaz de listar contas de ambas as plataformas (`list_connected_publishing_accounts`).
-    - Menor caminho para seleção explícita: expor checkboxes/dropdowns de contas para YouTube e TikTok na Channel Factory (`webui/components/channel_factory.py`) e atualizar `resolve_target_tiktok_user_id` em `post_for_me.py` para consultar dinamicamente a tabela `publishing_channels` (como já ocorre para YouTube).
-  - **Auditoria Google Flow nos Formatos Quiz:**
-    - Em `app/services/task.py`, a função `_run_pipeline` intercepta a tarefa logo no início via `if narrative_structure.startswith("quiz"): return _run_quiz_pipeline(...)`.
-    - Esse desvio precede toda a geração de roteiro tradicional e o planejamento de cenas, contornando 100% o Google Flow mesmo que ativado globalmente no perfil.
-    - O pipeline de quiz opera estritamente com imagens estáticas (Pexels, Pixabay ou Canvas estilizado), FFmpeg e Edge TTS, consumindo zero créditos Flow.
-    - Menor correção necessária: nenhuma (já isolado por design tanto para `quiz_dilemma` quanto para o futuro `quiz_paper`).
-  - **Auditoria de Integração do Quiz de Papel:**
-    - Mapeado fluxo: Channel Factory (`format = "quiz_paper"`) -> VideoParams (`narrative_structure = "quiz_paper"`) -> TaskManager (`_run_quiz_pipeline`) -> `QuizContentGenerator` factual com 4 opções e fontes -> `factual_gate` bloqueando perguntas não verificadas -> `PaperQuizEngine` -> Quality Gates (Safety, Duração 60-65s, Mídia) -> READY_STOCK.
-    - Ambos os formatos Q0-R e Quiz de Papel coexistem de forma complementar e independente.
-  - **Status de Deploy:** `NOT_EXECUTED` (trabalho mantido em DEV; aguardando autorização humana antes da implementação P3).
+- **Fase P3 — Integração dos Dois Formatos de Quiz + YouTube/TikTok Multi-Destino:** `COMPLETED / DEV VALIDATED`
+  - **Dois Formatos Integrados na Channel Factory:** Adicionado `quiz_paper` ("📝 Quiz de Papel / Perguntas & Respostas") aos formatos editoriais da fábrica (`app/models/const.py`, `app/services/safety_gate.py`, `webui/components/channel_factory.py`, `webui/Main.py`), coexistindo com `quiz_dilemma` ("❓ Quiz / Escolhas Impossíveis") e `traditional`.
+  - **Templates Canônicos Preservados:**
+    - `quiz_paper`: Template canônico P1.3 homologado (`resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`) com 5 perguntas, 4 alternativas simultâneas, timer circular de 6s, revelação com chime e tela de comentários de 6s.
+    - `quiz_dilemma`: Template canônico Q0-R homologado (`resource/quiz_templates/quiz_template_q0r_homologado.json`) com 8 dilemas, 2 escolhas (top/bottom) e encerramento configurável.
+  - **Multi-Destino Independente (YouTube + TikTok):**
+    - Channel Factory permite escolher explicitamente Conta YouTube, Conta TikTok, Ambas ou Nenhuma (somente estoque).
+    - Descoberta automatizada de contas conectadas via `post_for_me.list_connected_publishing_accounts(platform=...)`.
+    - Persistência atômica multicanal em `publishing_channels` via `profile_manager.onboard_channel_workspace(destinations=...)` e atualização inline no expander de gerenciamento.
+    - Resolução TikTok dinâmica e sem IDs fixos: `resolve_target_tiktok_user_id` em `post_for_me.py` consulta a tabela `publishing_channels` via `channel_id` ou `profile_id`, espelhando a segurança do YouTube com comportamento fail-closed em caso de ambiguidade.
+    - Idempotência multi-plataforma comprovada: índice SQLite `idx_active_schedule_v2` em `(task_id, COALESCE(channel_id, ''), platform)` permite que uma mesma tarefa seja agendada simultaneamente para YouTube e TikTok sem colisão.
+  - **Segurança Factual Reforçada:** Perguntas factuais sem validação independente (`verified=False`) bloqueadas estritamente no `factual_gate` sem promoção a READY_STOCK. Textos LLM ou auto-declarações isoladas não constituem verificação.
+  - **Faixa Editorial de Duração Obrigatória:** 60.0 a 65.0 segundos aplicada e validada em ambos os formatos (`PaperQuizEngine` e `QuizEngine`) sem corte de falas ou transições. Violações bloqueiam no gate `duration_safety`.
+  - **Bypass Completo do Google Flow:** Verificação `if narrative_structure.startswith("quiz"): return _run_quiz_pipeline(...)` em `task.py` isola totalmente o pipeline de quiz, operando estritamente com imagens estáticas, Edge TTS e FFmpeg, consumindo zero créditos Flow mesmo com Flow ativo globalmente.
+  - **Preservação do Pipeline Tradicional:** Canais convencionais (`narrative_structure=None`) mantêm roteiro linear, Visual Director, Google Flow e stock fallback inalterados.
+  - **Validação:** 7/7 testes direcionados PASS em `test/services/test_p3_quiz_multi_dest.py` (seleção persistente, resolução independente, roteamento P1.3 vs Q0-R, bypass Flow, bloqueio factual, duração 60-65s e idempotência).
+  - **Status de Deploy:** `PREPARED_FOR_CONSOLIDATED_DEPLOY (NO PUSH / NO PROD DEPLOY)`. Aguardando aprovação humana.
 
 ---
 

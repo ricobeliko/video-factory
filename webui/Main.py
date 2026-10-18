@@ -5275,6 +5275,7 @@ def _render_script_settings(panel, params):
                     const.STRUCTURE_MYTH_REALITY: "Mito vs Realidade",
                     const.STRUCTURE_SHORT_STORY: "História Curta",
                     const.STRUCTURE_QUIZ_DILEMMA: "Quiz / Escolhas Impossíveis",
+                    const.STRUCTURE_QUIZ_PAPER: "Quiz de Papel (Perguntas & Respostas)",
                 }
                 prof_struct_default = manual_prof_ctx.get("video_format") or "auto"
                 if prof_struct_default not in struct_choices:
@@ -5295,6 +5296,9 @@ def _render_script_settings(panel, params):
                 if chosen_struct == const.STRUCTURE_QUIZ_DILEMMA:
                     params.closing_type = manual_prof_ctx.get("closing_type")
                     params.num_questions = manual_prof_ctx.get("num_questions")
+                elif chosen_struct == const.STRUCTURE_QUIZ_PAPER:
+                    params.closing_type = "comments"
+                    params.num_questions = 5
 
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。

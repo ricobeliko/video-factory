@@ -987,3 +987,130 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
 
         logger.success(f"[QUIZ_GEN] Configuração exportada para JSON com sucesso: {output_json_path}")
         return QuizConfig.from_dict(config_data)
+
+    def generate_paper_quiz_structure(
+        self,
+        niche: str = "conhecimentos_gerais",
+        num_questions: int = 10,
+        quiz_title: Optional[str] = None,
+        closing_type: str = "score_challenge",
+    ) -> Dict[str, Any]:
+        """Gera ou carrega estrutura canônica para o Quiz de Papel (multiple_choice_paper)."""
+        logger.info(f"[QUIZ_GEN] Gerando quiz de papel: nicho='{niche}', perguntas={num_questions}")
+        template_file = os.path.join(self.templates_dir, "quiz_template_p1_3_papel_homologado.json")
+        if not os.path.exists(template_file):
+            template_file = os.path.join(self.templates_dir, "quiz_template_perguntas_respostas_papel.json")
+
+        base_data = {}
+        if os.path.exists(template_file):
+            try:
+                with open(template_file, "r", encoding="utf-8") as f:
+                    base_data = json.load(f)
+            except Exception as e:
+                logger.warning(f"[QUIZ_GEN] Erro ao carregar template canônico de papel: {e}")
+
+        questions = list(base_data.get("questions", []))
+        # Marcação e garantia de governança factual estrita
+        for q in questions:
+            # Perguntas auditadas e com fontes independentes homologadas recebem VERIFIED
+            if q.get("source") and any(src in str(q["source"]) for src in ("NASA", "Smithsonian", "National Geographic", "NIST", "UNESCO", "Gray's Anatomy", "Louvre", "NOAA")):
+                q["verified"] = True
+                q["fact_status"] = "VERIFIED_CANONICAL"
+                q["publication_gate"] = "READY"
+            elif q.get("verified") is True:
+                q["verified"] = True
+                q["fact_status"] = "VERIFIED_CANONICAL"
+                q["publication_gate"] = "READY"
+            else:
+                # Perguntas sem comprovação independente são bloqueadas
+                q["verified"] = False
+                q["fact_status"] = "UNVERIFIED_HEURISTIC"
+                q["publication_gate"] = "BLOCKED_PENDING_EXTERNAL_AUDIT"
+
+        return {
+            "quiz_type": "multiple_choice_paper",
+            "niche": niche or base_data.get("niche", "conhecimentos_gerais"),
+            "quiz_title": quiz_title or base_data.get("quiz_title", "QUIZ CONHECIMENTOS GERAIS"),
+            "sheet_header": base_data.get("sheet_header", {
+                "title": "AVALIAÇÃO DE CONHECIMENTOS",
+                "subtitle": "TESTE DE RACIOCÍNIO & FATOS REAIS",
+                "exam_code": "PROVA N° 101 - TURBO QUIZ",
+            }),
+            "timing_settings": base_data.get("timing_settings", {
+                "expectation_sec": 6.0,
+                "reveal_sec": 1.0,
+            }),
+            "intro_hook": base_data.get("intro_hook", {
+                "enabled": True,
+                "narration": "Desafio de conhecimentos gerais! Quantas você acerta?",
+            }),
+            "outro_challenge": base_data.get("outro_challenge", {
+                "enabled": True,
+                "duration_sec": 6.0,
+                "narration": "Quantas você acertou? Comente sua pontuação!",
+            }),
+            "min_target_duration_sec": 60.0,
+            "max_target_duration_sec": 65.0,
+            "target_duration_range": [60.0, 65.0],
+            "questions": questions[:num_questions] if num_questions else questions,
+        }
+
+    def export_to_paper_quiz_config(
+        self,
+        raw_quiz: Dict[str, Any],
+        output_video_path: str,
+        output_thumbnail_path: str,
+        temp_dir: str,
+        output_json_path: Optional[str] = None,
+        voice_name: Optional[str] = None,
+        voice_rate: str = "+20%",
+    ) -> Any:
+        """Exporta configuração serializada para o PaperQuizEngine (P1.3)."""
+        from scripts.poc_quiz_paper_render import PaperQuizConfig
+        canonical_template_path = os.path.join(
+            self.templates_dir, "quiz_template_p1_3_papel_homologado.json"
+        )
+        if not os.path.exists(canonical_template_path):
+            canonical_template_path = os.path.join(
+                self.templates_dir, "quiz_template_perguntas_respostas_papel.json"
+            )
+
+        base_data = {}
+        if os.path.exists(canonical_template_path):
+            try:
+                with open(canonical_template_path, "r", encoding="utf-8") as f:
+                    base_data = json.load(f)
+            except Exception:
+                base_data = {}
+
+        config_data = dict(base_data)
+        config_data["output_video_path"] = output_video_path
+        config_data["output_thumbnail_path"] = output_thumbnail_path
+        config_data["temp_dir"] = temp_dir
+        config_data["niche"] = raw_quiz.get("niche") or config_data.get("niche", "conhecimentos_gerais")
+        config_data["quiz_title"] = raw_quiz.get("quiz_title") or config_data.get("quiz_title", "QUIZ CONHECIMENTOS GERAIS")
+        if raw_quiz.get("questions"):
+            config_data["questions"] = raw_quiz["questions"]
+        if raw_quiz.get("sheet_header"):
+            config_data["sheet_header"] = raw_quiz["sheet_header"]
+        if raw_quiz.get("intro_hook"):
+            config_data["intro_hook"] = raw_quiz["intro_hook"]
+        if raw_quiz.get("outro_challenge"):
+            config_data["outro_challenge"] = raw_quiz["outro_challenge"]
+
+        config_data["min_target_duration_sec"] = 60.0
+        config_data["max_target_duration_sec"] = 65.0
+        config_data["target_duration_range"] = [60.0, 65.0]
+
+        if "voice_settings" not in config_data:
+            config_data["voice_settings"] = {}
+        config_data["voice_settings"]["voice_name"] = voice_name or config_data["voice_settings"].get("voice_name") or "pt-BR-AntonioNeural"
+        config_data["voice_settings"]["voice_rate"] = voice_rate or "+20%"
+
+        if output_json_path:
+            os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, ensure_ascii=False, indent=2)
+
+        return PaperQuizConfig.from_dict(config_data)
+

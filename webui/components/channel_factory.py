@@ -13,10 +13,11 @@ import streamlit as st
 from app.config import config
 from app.services import autonomous_production, operator_console, post_for_me, profile_manager
 
-VIDEO_FORMAT_CHOICES = ["traditional", "quiz_dilemma"]
+VIDEO_FORMAT_CHOICES = ["traditional", "quiz_dilemma", "quiz_paper"]
 VIDEO_FORMAT_LABELS = {
     "traditional": "🎬 Vídeo Padrão / Narrativa Tradicional",
     "quiz_dilemma": "❓ Quiz / Escolhas Impossíveis",
+    "quiz_paper": "📝 Quiz de Papel / Perguntas & Respostas",
 }
 
 CLOSING_TYPE_CHOICES = ["auto", "engagement_cta", "score_challenge", "quiz_choice_religious"]
@@ -34,6 +35,7 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
     settings = profile_manager.get_profile_settings(pid, db_path=db_path)
     channels = profile_manager.list_channels(profile_id=pid, db_path=db_path)
     yt_channel = next((c for c in channels if c.get("platform") == "youtube"), None)
+    tiktok_channel = next((c for c in channels if c.get("platform") == "tiktok"), None)
 
     is_auto_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=db_path)
     target_stock = autonomous_production.get_target_ready_stock(pid, db_path=db_path)
@@ -52,6 +54,7 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
         "profile": p,
         "settings": settings,
         "yt_channel": yt_channel,
+        "tiktok_channel": tiktok_channel,
         "autonomous_enabled": is_auto_enabled,
         "target_stock": target_stock,
         "ready_stock": ready_stock,
@@ -64,16 +67,23 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
     st.markdown("#### 🚀 Configurar Novo Canal")
     st.caption("Cadastre um novo canal editorial sem necessidade de alterações no código.")
 
-    if "cf_connected_accounts" not in st.session_state:
+    if "cf_connected_yt_accounts" not in st.session_state:
         try:
-            st.session_state["cf_connected_accounts"] = post_for_me.list_connected_publishing_accounts(platform="youtube")
+            st.session_state["cf_connected_yt_accounts"] = post_for_me.list_connected_publishing_accounts(platform="youtube")
         except Exception:
-            st.session_state["cf_connected_accounts"] = []
+            st.session_state["cf_connected_yt_accounts"] = []
 
-    accounts = st.session_state.get("cf_connected_accounts", [])
+    if "cf_connected_tt_accounts" not in st.session_state:
+        try:
+            st.session_state["cf_connected_tt_accounts"] = post_for_me.list_connected_publishing_accounts(platform="tiktok")
+        except Exception:
+            st.session_state["cf_connected_tt_accounts"] = []
 
-    if not accounts:
-        st.warning("⚠️ Nenhuma conta YouTube conectada encontrada no Post for Me. Conecte uma conta antes de cadastrar um canal operacional.")
+    yt_accounts = st.session_state.get("cf_connected_yt_accounts", [])
+    tt_accounts = st.session_state.get("cf_connected_tt_accounts", [])
+
+    if not yt_accounts and not tt_accounts:
+        st.warning("⚠️ Nenhuma conta social (YouTube/TikTok) conectada encontrada no Post for Me. O canal pode ser criado apenas para geração de estoque (publicação desativada).")
 
     with st.form("new_channel_onboarding_form"):
         # 1. Identidade e Formato do Canal
@@ -91,7 +101,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                 options=VIDEO_FORMAT_CHOICES,
                 format_func=lambda f: VIDEO_FORMAT_LABELS.get(f, f),
                 key="cf_new_ch_format",
-                help="Define o formato permanente deste canal. Quiz utiliza a Quiz Engine Q0-R homologada.",
+                help="Define o formato permanente deste canal (Tradicional, Quiz Dilema Q0-R ou Quiz de Papel P1.3).",
             )
         with c_lang:
             st.selectbox("Idioma", options=["pt-BR"], index=0, key="cf_new_ch_lang", disabled=True)
@@ -106,7 +116,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
         quiz_closing = "auto"
         quiz_num_q = 8
         if sel_format == "quiz_dilemma":
-            st.markdown("###### ⚙️ Configurações do Quiz Engine")
+            st.markdown("###### ⚙️ Configurações do Quiz Engine (Q0-R)")
             c_qc, c_qn = st.columns(2)
             with c_qc:
                 quiz_closing = st.selectbox(
@@ -126,31 +136,51 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                     key="cf_new_ch_quiz_num_q",
                     help="Padrão homologado Q0-R: 8 dilemas (duração ~65-75s).",
                 )
+        elif sel_format == "quiz_paper":
+            st.info("📝 **Quiz de Papel (Padrão P1.3 Homologado)**: 5 perguntas factuais com 4 alternativas simultâneas, timer circular de 6s, tela final de comentários de 6s e duração editorial estrita de 60-65s.")
 
         # 2. Publicação e Destino
         st.markdown("##### 2. Publicação e Destino")
-        st.caption("Destino YouTube via Post for Me (vínculo explícito)")
+        st.caption("Destinos de publicação via Post for Me (vínculo explícito por plataforma). Escolha YouTube, TikTok, ambos ou nenhum (somente estoque).")
 
-        ext_account_id = None
-        require_destination = False
-        if accounts:
-            acc_choices = ["none"] + [acc["external_account_id"] for acc in accounts]
-            acc_labels = {
-                "none": "🚫 Sem destino vinculado (Apenas gerar estoque / Publicação desativada)",
-                **{acc["external_account_id"]: f"▶️ {acc['display_name']} ({acc['external_account_id']})" for acc in accounts}
-            }
-            sel_acc = st.selectbox(
-                "Conta YouTube Conectada *",
-                options=acc_choices,
-                format_func=lambda k: acc_labels.get(k, k),
-                key="cf_new_ch_yt_acc_sel",
-                help="Selecione explicitamente a conta social vinculada a este canal.",
-            )
-            if sel_acc != "none":
-                ext_account_id = sel_acc
-                require_destination = True
-        else:
-            st.info("ℹ️ Nenhuma conta YouTube conectada no Post for Me. O canal será criado apenas para geração de estoque (publicação desativada).")
+        c_dest_yt, c_dest_tt = st.columns(2)
+        with c_dest_yt:
+            st.markdown("###### ▶️ Destino YouTube")
+            if yt_accounts:
+                yt_choices = ["none"] + [acc["external_account_id"] for acc in yt_accounts]
+                yt_labels = {
+                    "none": "🚫 Não vincular YouTube",
+                    **{acc["external_account_id"]: f"▶️ {acc['display_name']} ({acc['external_account_id']})" for acc in yt_accounts}
+                }
+                sel_yt_acc = st.selectbox(
+                    "Conta YouTube",
+                    options=yt_choices,
+                    format_func=lambda k: yt_labels.get(k, k),
+                    key="cf_new_ch_yt_acc_sel",
+                    help="Selecione explicitamente a conta YouTube conectada no Post for Me.",
+                )
+            else:
+                sel_yt_acc = "none"
+                st.caption("ℹ️ Nenhuma conta YouTube conectada no Post for Me.")
+
+        with c_dest_tt:
+            st.markdown("###### 🎵 Destino TikTok")
+            if tt_accounts:
+                tt_choices = ["none"] + [acc["external_account_id"] for acc in tt_accounts]
+                tt_labels = {
+                    "none": "🚫 Não vincular TikTok",
+                    **{acc["external_account_id"]: f"🎵 {acc['display_name']} ({acc['external_account_id']})" for acc in tt_accounts}
+                }
+                sel_tt_acc = st.selectbox(
+                    "Conta TikTok",
+                    options=tt_choices,
+                    format_func=lambda k: tt_labels.get(k, k),
+                    key="cf_new_ch_tt_acc_sel",
+                    help="Selecione explicitamente a conta TikTok conectada no Post for Me.",
+                )
+            else:
+                sel_tt_acc = "none"
+                st.caption("ℹ️ Nenhuma conta TikTok conectada no Post for Me.")
 
         # 3. Produção & Visual
         st.markdown("##### 3. Produção & Visual")
@@ -214,9 +244,18 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                 st.error("Apenas o nó PRIMARY pode cadastrar canais.")
                 return
 
-            if require_destination and (not ext_account_id or not ext_account_id.startswith("UC")):
-                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{ext_account_id}').")
+            if sel_yt_acc != "none" and not sel_yt_acc.startswith("UC"):
+                st.error(f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{sel_yt_acc}').")
                 return
+
+            destinations = []
+            if sel_yt_acc != "none":
+                destinations.append({"platform": "youtube", "external_account_id": sel_yt_acc, "is_enabled": True})
+            if sel_tt_acc != "none":
+                destinations.append({"platform": "tiktok", "external_account_id": sel_tt_acc, "is_enabled": True})
+
+            ext_account_id = sel_yt_acc if sel_yt_acc != "none" else None
+            require_destination = bool(destinations)
 
             clean_name = str(name_val or "").strip()
             clean_niche = str(niche_val or "").strip()
@@ -236,8 +275,16 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
             settings_obj.editorial.topic_brief = clean_topic
             settings_obj.editorial.video_format = sel_format
             settings_obj.editorial.content_style = sel_format
-            settings_obj.editorial.closing_type = quiz_closing if sel_format == "quiz_dilemma" else None
-            settings_obj.editorial.num_questions = int(quiz_num_q) if sel_format == "quiz_dilemma" else None
+            if sel_format == "quiz_paper":
+                settings_obj.editorial.closing_type = "comments"
+                settings_obj.editorial.num_questions = 5
+            elif sel_format == "quiz_dilemma":
+                settings_obj.editorial.closing_type = quiz_closing
+                settings_obj.editorial.num_questions = int(quiz_num_q)
+            else:
+                settings_obj.editorial.closing_type = None
+                settings_obj.editorial.num_questions = None
+
             settings_obj.voice.voice_name = global_voice
             settings_obj.visual.visual_director_enabled = bool(vd_enabled)
             settings_obj.visual.flow_enabled = bool(flow_enabled)
@@ -261,6 +308,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                     autonomous_enabled=autonomous_start,
                     require_destination=require_destination,
                     db_path=db_path,
+                    destinations=destinations,
                 )
                 new_p = res.get("profile", {})
                 st.session_state["channel_factory_feedback"] = {
@@ -442,6 +490,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
         p = card["profile"]
         settings = card["settings"]
         yt = card["yt_channel"]
+        tiktok = card.get("tiktok_channel")
         is_auto = card["autonomous_enabled"]
         p_id = p.get("id", "")
 
@@ -457,10 +506,14 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 st.caption(f"📝 {brief[:120]}{'...' if len(brief) > 120 else ''}")
 
             with col_ops:
-                dest_label = "Não configurado"
-                if yt:
+                dest_parts = []
+                if yt and yt.get("is_enabled"):
                     acc_display = yt.get("external_account_id") or yt.get("display_name") or "Conectado"
-                    dest_label = f"YouTube ({acc_display})"
+                    dest_parts.append(f"YouTube ({acc_display})")
+                if tiktok and tiktok.get("is_enabled"):
+                    acc_display = tiktok.get("external_account_id") or tiktok.get("display_name") or "Conectado"
+                    dest_parts.append(f"TikTok ({acc_display})")
+                dest_label = " + ".join(dest_parts) if dest_parts else "Somente Estoque (Sem publicação)"
                 st.markdown(f"📡 **Destino:** `{dest_label}`")
 
                 auto_badge = "🟢 Produção ON" if is_auto else "⏸️ Produção PAUSADA"
@@ -485,6 +538,10 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
             with st.expander(f"⚙️ Gerenciar Canal: {p.get('name')}", expanded=False):
                 if not is_primary:
                     st.caption("🔒 View Only — alterações devem ser feitas no nó PRIMARY.")
+
+                prof_channels = profile_manager.list_channels(profile_id=p_id, db_path=db_path)
+                m_yt = next((c for c in prof_channels if c.get("platform") == "youtube"), None)
+                m_tiktok = next((c for c in prof_channels if c.get("platform") == "tiktok"), None)
 
                 c_m_name, c_m_niche = st.columns(2)
                 with c_m_name:
@@ -529,6 +586,11 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         key=f"m_num_q_{p_id}",
                         disabled=not is_primary,
                     )
+                elif m_video_format == "quiz_paper":
+                    with c_m_close:
+                        st.caption("📝 Padrão P1.3 Homologado: 5 perguntas factuais, timer circular 6s, encerramento de 6s.")
+                    m_closing_type = "comments"
+                    m_num_questions = 5
                 else:
                     with c_m_close:
                         st.caption("ℹ️ Formato padrão utiliza narrativa tradicional linear.")
@@ -588,13 +650,20 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         disabled=not is_primary,
                     ).lower()
 
-                # Destino YouTube
-                if yt:
-                    m_yt_enabled = st.checkbox("Destino YouTube Habilitado", value=bool(yt.get("is_enabled")), key=f"m_yt_en_{p_id}", disabled=not is_primary)
-                    m_yt_ext = st.text_input("YouTube Channel ID (UC...)", value=yt.get("external_account_id") or "", key=f"m_yt_ext_{p_id}", disabled=not is_primary)
-                else:
-                    m_yt_enabled = False
-                    m_yt_ext = ""
+                # Destinos de Publicação
+                st.markdown("##### 📡 Destinos de Publicação")
+                c_dest_yt_m, c_dest_tt_m = st.columns(2)
+                with c_dest_yt_m:
+                    st.markdown("###### ▶️ YouTube")
+                    yt_is_en = bool(m_yt.get("is_enabled")) if m_yt else False
+                    m_yt_enabled = st.checkbox("Destino YouTube Habilitado", value=yt_is_en, key=f"m_yt_en_{p_id}", disabled=not is_primary)
+                    m_yt_ext = st.text_input("YouTube Channel ID (UC...)", value=(m_yt.get("external_account_id") or "") if m_yt else "", key=f"m_yt_ext_{p_id}", disabled=not is_primary)
+
+                with c_dest_tt_m:
+                    st.markdown("###### 🎵 TikTok")
+                    tt_is_en = bool(m_tiktok.get("is_enabled")) if m_tiktok else False
+                    m_tiktok_enabled = st.checkbox("Destino TikTok Habilitado", value=tt_is_en, key=f"m_tt_en_{p_id}", disabled=not is_primary)
+                    m_tiktok_ext = st.text_input("TikTok Account / User ID", value=(m_tiktok.get("external_account_id") or "") if m_tiktok else "", key=f"m_tt_ext_{p_id}", disabled=not is_primary)
 
                 if st.button("💾 Salvar Alterações", key=f"save_prof_{p_id}", disabled=not is_primary):
                     clean_m_name = str(m_name).strip()
@@ -606,8 +675,16 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         updated_settings = settings.model_copy(deep=True)
                         updated_settings.editorial.topic_brief = str(m_brief or "").strip()
                         updated_settings.editorial.video_format = str(m_video_format)
-                        updated_settings.editorial.closing_type = str(m_closing_type) if m_video_format == "quiz_dilemma" and m_closing_type else None
-                        updated_settings.editorial.num_questions = int(m_num_questions) if m_video_format == "quiz_dilemma" and m_num_questions else None
+                        if m_video_format == "quiz_paper":
+                            updated_settings.editorial.closing_type = "comments"
+                            updated_settings.editorial.num_questions = 5
+                        elif m_video_format == "quiz_dilemma":
+                            updated_settings.editorial.closing_type = str(m_closing_type) if m_closing_type else None
+                            updated_settings.editorial.num_questions = int(m_num_questions) if m_num_questions else None
+                        else:
+                            updated_settings.editorial.closing_type = None
+                            updated_settings.editorial.num_questions = None
+
                         updated_settings.voice.voice_name = settings.voice.voice_name or global_voice
                         updated_settings.visual.visual_director_enabled = bool(m_vd)
                         updated_settings.visual.flow_enabled = bool(m_flow)
@@ -620,12 +697,43 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                         updated_settings.music.default_mood = str(m_music_default_mood).lower()
                         profile_manager.update_profile_settings(p_id, updated_settings, db_path=db_path)
 
-                        if yt:
+                        # Atualiza ou cria destino YouTube
+                        if m_yt:
                             profile_manager.update_channel(
-                                yt["id"],
+                                m_yt["id"],
                                 is_enabled=bool(m_yt_enabled),
                                 external_account_id=str(m_yt_ext).strip() if m_yt_ext else None,
                                 db_path=db_path,
                             )
+                        elif m_yt_ext:
+                            profile_manager.create_channel(
+                                profile_id=p_id,
+                                platform="youtube",
+                                display_name=f"{clean_m_name} (YouTube)",
+                                external_profile_name=clean_m_name,
+                                external_account_id=str(m_yt_ext).strip(),
+                                is_enabled=bool(m_yt_enabled),
+                                db_path=db_path,
+                            )
+
+                        # Atualiza ou cria destino TikTok
+                        if m_tiktok:
+                            profile_manager.update_channel(
+                                m_tiktok["id"],
+                                is_enabled=bool(m_tiktok_enabled),
+                                external_account_id=str(m_tiktok_ext).strip() if m_tiktok_ext else None,
+                                db_path=db_path,
+                            )
+                        elif m_tiktok_ext:
+                            profile_manager.create_channel(
+                                profile_id=p_id,
+                                platform="tiktok",
+                                display_name=f"{clean_m_name} (TikTok)",
+                                external_profile_name=clean_m_name,
+                                external_account_id=str(m_tiktok_ext).strip(),
+                                is_enabled=bool(m_tiktok_enabled),
+                                db_path=db_path,
+                            )
+
                         st.toast(f"Canal '{clean_m_name}' atualizado com sucesso!")
                         st.rerun()

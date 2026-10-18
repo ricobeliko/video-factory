@@ -1130,6 +1130,7 @@ def onboard_channel_workspace(
     video_format: Optional[str] = None,
     closing_type: Optional[str] = None,
     num_questions: Optional[int] = None,
+    destinations: Optional[List[Dict[str, Any]]] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Onboarding atômico de novo workspace/canal.
@@ -1137,7 +1138,7 @@ def onboard_channel_workspace(
     Executa em UMA ÚNICA transação SQLite:
     1. Validações preliminares antes da transação (external_account_id para YouTube quando destino exigido).
     2. INSERT em content_profiles com settings_json tipado.
-    3. INSERT em publishing_channels com external_account_id e status de ativação de publicação.
+    3. INSERT em publishing_channels com external_account_id e status de ativação de publicação (suporte a multi-destino YouTube e TikTok).
     4. Inicialização de autopilot_settings (autonomous_mode_enabled=False por padrão seguro).
     5. Se qualquer etapa falhar, ROLLBACK completo é executado sem deixar profile órfão.
     """
@@ -1159,24 +1160,25 @@ def onboard_channel_workspace(
 
     clean_ext_id = None
     ch_is_enabled = 1
-    if clean_plat == "youtube":
-        if require_destination:
-            if not external_account_id or not str(external_account_id).strip().startswith("UC"):
-                raise ValueError(
-                    "Onboarding de canal YouTube exige conta conectada com external_account_id válido iniciando com 'UC'."
-                )
-            clean_ext_id = str(external_account_id).strip()
-            ch_is_enabled = 1
-        else:
-            if external_account_id and str(external_account_id).strip().startswith("UC"):
+    if destinations is None:
+        if clean_plat == "youtube":
+            if require_destination:
+                if not external_account_id or not str(external_account_id).strip().startswith("UC"):
+                    raise ValueError(
+                        "Onboarding de canal YouTube exige conta conectada com external_account_id válido iniciando com 'UC'."
+                    )
                 clean_ext_id = str(external_account_id).strip()
                 ch_is_enabled = 1
             else:
-                clean_ext_id = None
-                ch_is_enabled = 0
-    else:
-        clean_ext_id = str(external_account_id).strip() if external_account_id else None
-        ch_is_enabled = 1 if clean_ext_id else 0
+                if external_account_id and str(external_account_id).strip().startswith("UC"):
+                    clean_ext_id = str(external_account_id).strip()
+                    ch_is_enabled = 1
+                else:
+                    clean_ext_id = None
+                    ch_is_enabled = 0
+        else:
+            clean_ext_id = str(external_account_id).strip() if external_account_id else None
+            ch_is_enabled = 1 if clean_ext_id else 0
 
     clean_ch_display = str(channel_display_name or f"{clean_name} ({clean_plat.capitalize()})").strip()
 
@@ -1243,25 +1245,73 @@ def onboard_channel_workspace(
             ),
         )
 
-        conn.execute(
-            """
-            INSERT INTO publishing_channels (
-                id, profile_id, platform, display_name, external_profile_name,
-                external_account_id, is_enabled, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-            """,
-            (
-                new_cid,
-                new_pid,
-                clean_plat,
-                clean_ch_display,
-                None,
-                clean_ext_id,
-                ch_is_enabled,
-                now_iso,
-                now_iso,
-            ),
-        )
+        created_channels = []
+        if destinations is not None:
+            if not destinations:
+                # Nenhum destino ativo (somente estoque)
+                fallback_cid = new_cid
+                conn.execute(
+                    """
+                    INSERT INTO publishing_channels (
+                        id, profile_id, platform, display_name, external_profile_name,
+                        external_account_id, is_enabled, created_at, updated_at
+                    ) VALUES (?, ?, 'youtube', ?, NULL, NULL, 0, ?, ?);
+                    """,
+                    (fallback_cid, new_pid, f"{clean_name} (Somente Estoque)", now_iso, now_iso),
+                )
+                created_channels.append(fallback_cid)
+            else:
+                for d in destinations:
+                    d_plat = _validate_platform(d.get("platform", "youtube"))
+                    d_ext_id = str(d.get("external_account_id") or "").strip() or None
+                    d_is_en = 1 if d.get("is_enabled", True) and d_ext_id else 0
+                    d_cid = d.get("channel_id") or f"channel-{uuid.uuid4().hex[:12]}"
+                    d_display = str(d.get("display_name") or f"{clean_name} ({d_plat.capitalize()})").strip()
+
+                    if d_plat == "youtube" and d_ext_id and not d_ext_id.startswith("UC"):
+                        raise ValueError(f"ID do YouTube deve iniciar com 'UC' (recebido: '{d_ext_id}')")
+
+                    conn.execute(
+                        """
+                        INSERT INTO publishing_channels (
+                            id, profile_id, platform, display_name, external_profile_name,
+                            external_account_id, is_enabled, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        """,
+                        (
+                            d_cid,
+                            new_pid,
+                            d_plat,
+                            d_display,
+                            None,
+                            d_ext_id,
+                            d_is_en,
+                            now_iso,
+                            now_iso,
+                        ),
+                    )
+                    created_channels.append(d_cid)
+        else:
+            conn.execute(
+                """
+                INSERT INTO publishing_channels (
+                    id, profile_id, platform, display_name, external_profile_name,
+                    external_account_id, is_enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    new_cid,
+                    new_pid,
+                    clean_plat,
+                    clean_ch_display,
+                    None,
+                    clean_ext_id,
+                    ch_is_enabled,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            created_channels.append(new_cid)
 
         conn.execute(
             """
@@ -1289,13 +1339,15 @@ def onboard_channel_workspace(
         )
 
         p_row = conn.execute("SELECT * FROM content_profiles WHERE id = ?;", (new_pid,)).fetchone()
-        ch_row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (new_cid,)).fetchone()
+        primary_cid = created_channels[0] if created_channels else new_cid
+        ch_row = conn.execute("SELECT * FROM publishing_channels WHERE id = ?;", (primary_cid,)).fetchone()
 
     return {
         "ok": True,
         "profile_id": new_pid,
         "profile": dict(p_row),
-        "channel": _normalize_channel_dict(dict(ch_row)),
+        "channel": _normalize_channel_dict(dict(ch_row)) if ch_row else {},
+        "channel_ids": created_channels,
         "settings": settings_model,
     }
 

@@ -113,7 +113,7 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída e Validada; Fase Q5 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída `594e57c`; Fase Q5-B1 Homologada em DEV; Fase Q5-B2 Próxima)
 
 ---
 
@@ -186,10 +186,17 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Preservação integral do fluxo de tarefas tradicionais sem qualquer regressão.
     - Suíte de testes direcionados da integração: 5/5 testes PASS em `test/services/test_quiz_integration.py`.
 
-- **Fase Q5 — Agendamento, Autonomia e Publicação:** `PLANNED (NEXT GATE)`
-  - Habilitação no Scheduler para produção autônoma com limites de quota.
-  - Publicação automática via Post for Me com upload da thumbnail independente 9:16 via parâmetro `thumbnail_url`.
-  - Telemetria de retenção e fechamento de ciclo de feedback analítico.
+- **Fase Q5 — Agendamento, Autonomia e Publicação:** `IN PROGRESS (Q5-A & Q5-B1 COMPLETED)`
+  - **Q5-A (Auditoria de Agendamento e Publicação):** Mapeamento do isolamento do Scheduler (`auto_publish_enabled=0`, `dry_run=1`), contrato de upload Post for Me e tripla proteção de idempotência.
+  - **Q5-B1 (Homologação Real em DEV):** `COMPLETED / DEV VALIDATED`
+    - Execução de 1 ciclo real de geração via `task.start()` sem mocks (`homolog_q5b1_1792285986`).
+    - Geração ponta a ponta dos artefatos: `final-1.mp4` (76.09s, 8.09 MB, 1080x1920 a 30fps), `thumbnail.jpg` (1080x1920, 289 KB) e `script.json`.
+    - Quality Gates 100% aprovados: Safety Script PASS, Factual Safety PASS, Safety Duration PASS, Media Quality PASS.
+    - Promoção segura para `READY_STOCK` (state=COMPLETE, stage=READY_STOCK).
+    - Isolamento de publicação confirmado: 0 registros em `publication_events` e 0 registros em `scheduled_posts`.
+    - Preservação do pipeline tradicional verificada (1/1 teste direcionado PASS).
+    - Tempo total de renderização: 229.03s.
+  - **Q5-B2 (Próximo Passo):** Cadastro controlado do canal de Quiz de Escolhas Impossíveis e planejamento no Scheduler em modo `dry_run` / `auto_publish=0` no PC Forte. **Aguardando aprovação humana explícita antes de iniciar.**
 
 ---
 

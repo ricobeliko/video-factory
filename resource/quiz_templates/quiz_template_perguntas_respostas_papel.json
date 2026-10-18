@@ -36,7 +36,8 @@
   },
   "outro_challenge": {
     "enabled": true,
-    "narration": "E aí, qual foi a sua nota? Comente quantas você acertou!"
+    "duration_sec": 6.0,
+    "narration": "Quantas você acertou? Comente sua pontuação!"
   },
   "questions": [
     {

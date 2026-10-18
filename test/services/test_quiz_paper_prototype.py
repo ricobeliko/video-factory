@@ -133,28 +133,85 @@ class TestQuizPaperPrototype(unittest.TestCase):
             self.assertAlmostEqual(t_scene_end - t_reveal_start, 1.0, places=5)
             self.assertAlmostEqual(t_scene_end, expected_scene_duration, places=5)
 
-    def test_p1_2_dynamic_selection_of_questions(self):
-        """P1.2: Seleciona dinamicamente a quantidade de perguntas para caber na faixa [60.0, 65.0]s."""
+    def test_p1_3_circular_timer_frames_progression(self):
+        """P1.3: Valida geração de frames do timer circular progressivo de 0% a 100% durante 6 segundos (180 frames a 30fps)."""
+        config = PaperQuizConfig.from_json(self.template_path)
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        exp_sec = float(config.timing_settings.get("expectation_sec", 6.0))
+        fps = int(config.video_settings.get("fps", 30))
+        pattern, (tw, th) = engine.generate_circular_timer_frames(duration=exp_sec, fps=fps)
+
+        self.assertEqual(tw, 48)
+        self.assertEqual(th, 48)
+        timer_dir = os.path.dirname(pattern)
+        frames = sorted([f for f in os.listdir(timer_dir) if f.endswith(".png")])
+        self.assertEqual(len(frames), 180, "Timer de 6s a 30fps deve gerar exatamente 180 frames")
+
+        # Frame 0 (início a 0%): arco ainda não percorrido
+        im0 = Image.open(os.path.join(timer_dir, frames[0]))
+        self.assertEqual(im0.size, (48, 48))
+        self.assertEqual(im0.mode, "RGBA")
+
+        # Frame 179 (final a 100%): arco percorrido completo
+        im_last = Image.open(os.path.join(timer_dir, frames[-1]))
+        self.assertEqual(im_last.size, (48, 48))
+
+        # Frames intermediários devem possuir preenchimentos crescentes
+        self.assertNotEqual(im0.tobytes(), im_last.tobytes())
+
+    def test_p1_3_timer_synchronization_and_position(self):
+        """P1.3: Valida sincronização exata do timer com a revelação e coordenadas alinhadas ao slot."""
+        config = PaperQuizConfig.from_json(self.template_path)
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        q1 = config.questions[0]
+        timer_pos = engine.get_question_timer_position(q1["question"])
+        self.assertIsInstance(timer_pos, tuple)
+        self.assertEqual(len(timer_pos), 2)
+        tx, ty = timer_pos
+        self.assertTrue(800 <= tx <= 950, f"Posição X do timer ({tx}) deve estar no slot direito do card")
+        self.assertTrue(400 <= ty <= 800, f"Posição Y do timer ({ty}) deve acompanhar a altura da pergunta")
+
+        # No frame de opções, o slot existe; no frame revelado, o timer não existe e resposta está revelada
+        im_opts = engine.render_question_frame(q1, state="options")
+        im_rev = engine.render_question_frame(q1, state="revealed")
+        self.assertNotEqual(im_opts.tobytes(), im_rev.tobytes())
+
+    def test_p1_3_outro_duration_6s_and_comment_challenge(self):
+        """P1.3: Valida encerramento com exatamente 6 segundos e chamada clara para comentários."""
+        config = PaperQuizConfig.from_json(self.template_path)
+        config.temp_dir = self.test_dir
+        engine = PaperQuizEngine(config)
+
+        outro_cfg = config.outro_challenge
+        self.assertEqual(float(outro_cfg.get("duration_sec", 6.0)), 6.0)
+        self.assertIn("Comente", outro_cfg.get("narration", ""))
+
+        img_outro = engine.render_outro_frame()
+        self.assertEqual(img_outro.size, (1080, 1920))
+
+    def test_p1_3_dynamic_selection_with_6s_outro(self):
+        """P1.3: Seleciona dinamicamente a quantidade de perguntas considerando o novo encerramento de 6s."""
         import asyncio
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         engine = PaperQuizEngine(config)
 
-        # Simula 10 questões candidatas
         candidate_questions = [
             {"id": i, "question": f"Pergunta {i}?", "narration": f"Pergunta {i}?", "options": [], "correct_option": "A"}
             for i in range(1, 11)
         ]
-        # Baseline intro=4.7s + 0.25 = 4.95s, outro=5.4s + 0.60 = 6.00s => dur_baseline = 10.95s
+        # Baseline intro=4.7s + 0.25 = 4.95s, outro=6.0s => dur_baseline = 10.95s
         # Perguntas: narração=3.3s + 6.0s (espera) + 1.0s (revelação) = 10.3s por pergunta.
-        # Com 5 perguntas: 10.95 + 5 * 10.3 = 62.45s (cabe perfeitamente em [60.0, 65.0]s, quase no ponto médio 62.5s)
-        # Com 4 perguntas: 10.95 + 4 * 10.3 = 52.15s (< 60s)
-        # Com 6 perguntas: 10.95 + 6 * 10.3 = 72.75s (> 65s)
+        # Com 5 perguntas: 10.95 + 5 * 10.3 = 62.45s (dentro de [60.0, 65.0]s, quase no ponto médio 62.5s)
         async def mock_synthesize(text, output_path):
             if "intro" in output_path:
                 return 4.7
             elif "outro" in output_path:
-                return 5.4
+                return 2.5
             return 3.3
 
         engine.synthesize_voice = mock_synthesize
@@ -169,14 +226,13 @@ class TestQuizPaperPrototype(unittest.TestCase):
         for idx, q in enumerate(selected, 1):
             self.assertEqual(q["number"], idx)
 
-    def test_p1_2_duration_gate_blocking(self):
-        """P1.2: Bloqueia homologação e levanta DurationGateError se nenhuma combinação atingir a faixa."""
+    def test_p1_3_duration_gate_blocking(self):
+        """P1.3: Bloqueia homologação e levanta DurationGateError se nenhuma combinação atingir a faixa."""
         import asyncio
         config = PaperQuizConfig.from_json(self.template_path)
         config.temp_dir = self.test_dir
         engine = PaperQuizEngine(config)
 
-        # Cenário onde as perguntas são tão poucas que o vídeo mal chega a 30s
         few_questions = [
             {"id": 1, "question": "P1?", "narration": "P1?", "options": [], "correct_option": "A"}
         ]

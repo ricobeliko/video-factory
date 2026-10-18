@@ -322,28 +322,33 @@ class PaperQuizEngine:
         curr_y += q_box_h + 40
 
         # 3. Caixa de Dica de Tempo / Status conforme o estado da cena
-        f_timer = self._get_font(22, bold=True)
+        f_timer = self._get_font(23, bold=True)
+        bar_h = 64
         if state == "revealed":
             timer_bg = (209, 250, 229, 255)
             timer_outline = (16, 185, 129, 255)
             timer_text = "✓ RESPOSTA CORRETA!"
             timer_text_color = (6, 95, 70, 255)
+            draw.rounded_rectangle([margin_left, curr_y, box_right, curr_y + bar_h], radius=14, fill=timer_bg, outline=timer_outline, width=2)
+            tw = draw.textlength(timer_text, font=f_timer)
+            draw.text((margin_left + (box_width - tw) / 2, curr_y + 19), timer_text, font=f_timer, fill=timer_text_color)
         elif state == "question_only":
             timer_bg = (241, 245, 249, 255)
             timer_outline = (148, 163, 184, 255)
             timer_text = "📝 OUÇA A QUESTÃO... (AS OPÇÕES VÃO SURGIR)"
             timer_text_color = (30, 41, 59, 255)
+            draw.rounded_rectangle([margin_left, curr_y, box_right, curr_y + bar_h], radius=14, fill=timer_bg, outline=timer_outline, width=2)
+            tw = draw.textlength(timer_text, font=f_timer)
+            draw.text((margin_left + (box_width - tw) / 2, curr_y + 19), timer_text, font=f_timer, fill=timer_text_color)
         else:
             timer_bg = (254, 243, 199, 255)
             timer_outline = (245, 158, 11, 255)
-            timer_text = "⏱️ PENSE RÁPIDO... QUAL É A SUA RESPOSTA?"
+            timer_text = "⏱️ ESCOLHA SUA RESPOSTA: 6 SEGUNDOS"
             timer_text_color = (146, 64, 14, 255)
+            draw.rounded_rectangle([margin_left, curr_y, box_right, curr_y + bar_h], radius=14, fill=timer_bg, outline=timer_outline, width=2)
+            draw.text((margin_left + 26, curr_y + 19), timer_text, font=f_timer, fill=timer_text_color)
 
-        draw.rounded_rectangle([margin_left, curr_y, box_right, curr_y + 54], radius=12, fill=timer_bg, outline=timer_outline, width=2)
-        tw = draw.textlength(timer_text, font=f_timer)
-        draw.text((margin_left + (box_width - tw) / 2, curr_y + 14), timer_text, font=f_timer, fill=timer_text_color)
-
-        curr_y += 84
+        curr_y += bar_h + 30
 
         # Se for estado 'question_only', as alternativas ainda não surgiram na folha
         if state == "question_only":
@@ -430,6 +435,32 @@ class PaperQuizEngine:
 
         return base_img
 
+    def get_question_timer_position(self, question_text: str) -> Tuple[int, int]:
+        """Calcula as coordenadas (x, y) exatas no vídeo para o overlay do timer circular progressivo,
+        alinhando perfeitamente ao slot na folha com compensação do leve movimento Ken Burns.
+        """
+        margin_left = 120
+        box_width = 840
+        box_right = margin_left + box_width  # 960
+        curr_y = 330
+        f_q = self._get_font(38, bold=True)
+        wrapped_q_lines = self._wrap_text(question_text, f_q, box_width - 80)
+        line_height = 50
+        q_box_h = max(130, len(wrapped_q_lines) * line_height + 48)
+        curr_y += q_box_h + 40
+
+        bar_h = 64
+        slot_cx = box_right - 44
+        slot_cy = curr_y + (bar_h // 2)
+        widget_size = 48
+        raw_x = slot_cx - (widget_size // 2)
+        raw_y = slot_cy - (widget_size // 2)
+
+        # Ajuste de compensação da sutil escala Ken Burns (zoom=1.025 centrado em 540, 960)
+        zoomed_x = int(round(540 + (raw_x - 540) * 1.025))
+        zoomed_y = int(round(960 + (raw_y - 960) * 1.025))
+        return (zoomed_x, zoomed_y)
+
     # -------------------------------------------------------------------------
     # 3. Telas Especiais: Abertura (Intro) e Encerramento (Outro)
     # -------------------------------------------------------------------------
@@ -478,30 +509,30 @@ class PaperQuizEngine:
         return img
 
     def render_outro_frame(self) -> Image.Image:
-        """Renderiza a folha de notas e encerramento do desafio."""
+        """Renderiza a folha de notas e encerramento do desafio (P1.3: 6s com incentivo aos comentários)."""
         img = self._draw_paper_sheet()
         draw = ImageDraw.Draw(img)
 
         w = self.config.video_settings["width"]
         f_big = self._get_font(48, bold=True)
-        f_sub = self._get_font(30, bold=False)
+        f_sub = self._get_font(32, bold=True)
         f_badge = self._get_font(24, bold=True)
 
-        center_y = 520
+        center_y = 500
         badge_txt = "RESULTADO FINAL"
         bw = draw.textlength(badge_txt, font=f_badge) + 40
         draw.rounded_rectangle([(w - bw) / 2, center_y, (w + bw) / 2, center_y + 44], radius=10, fill=(5, 150, 105, 255))
         draw.text(((w - bw) / 2 + 20, center_y + 8), badge_txt, font=f_badge, fill=(255, 255, 255, 255))
 
-        center_y += 90
-        t1 = "E AÍ, QUAL FOI A SUA NOTA?"
+        center_y += 84
+        t1 = "QUANTAS VOCÊ ACERTOU?"
         tw1 = draw.textlength(t1, font=f_big)
         draw.text(((w - tw1) / 2, center_y), t1, font=f_big, fill=(15, 23, 42, 255))
 
-        center_y += 76
-        t2 = "QUANTAS QUESTÕES VOCÊ ACERTOU?"
+        center_y += 66
+        t2 = "Comente sua pontuação!"
         tw2 = draw.textlength(t2, font=f_sub)
-        draw.text(((w - tw2) / 2, center_y), t2, font=f_sub, fill=(71, 85, 105, 255))
+        draw.text(((w - tw2) / 2, center_y), t2, font=f_sub, fill=(37, 99, 235, 255))
 
         center_y += 90
         nq = len(self.config.questions)
@@ -668,6 +699,49 @@ class PaperQuizEngine:
         logger.info(f"[SFX] Tique-taque de expectativa ({duration:.1f}s) sintetizado com sucesso: {out_wav}")
         return out_wav
 
+    def generate_circular_timer_frames(self, duration: float = 6.0, fps: int = 30) -> Tuple[str, Tuple[int, int]]:
+        """Sintetiza os frames transparentes do indicador circular progressivo que se preenche
+        no sentido horário de 0% a 100% exatamente durante a janela de expectativa de 6 segundos.
+        """
+        timer_dir = os.path.join(self.config.temp_dir, "timer_frames")
+        os.makedirs(timer_dir, exist_ok=True)
+        total_frames = int(round(duration * fps))
+
+        size = 48
+        cx = size // 2
+        cy = size // 2
+        radius = 18
+        stroke_width = 4
+
+        first_frame = os.path.join(timer_dir, "timer_000.png")
+        last_frame = os.path.join(timer_dir, f"timer_{total_frames - 1:03d}.png")
+        if os.path.exists(first_frame) and os.path.exists(last_frame) and os.path.getsize(last_frame) > 100:
+            pattern = os.path.join(timer_dir, "timer_%03d.png").replace("\\", "/")
+            return pattern, (size, size)
+
+        for i in range(total_frames):
+            frame_path = os.path.join(timer_dir, f"timer_{i:03d}.png")
+            img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+
+            # 1. Base circular com fundo branco e contorno sutil
+            draw.ellipse([2, 2, size - 2, size - 2], fill=(255, 255, 255, 255), outline=(245, 158, 11, 230), width=2)
+
+            # 2. Track circular suave de fundo
+            draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], outline=(226, 232, 240, 255), width=stroke_width)
+
+            # 3. Arco de progresso no sentido horário iniciando às 12 horas (-90 graus)
+            prog = i / float(total_frames)
+            if prog > 0.003:
+                end_angle = -90.0 + (prog * 360.0)
+                draw.arc([cx - radius, cy - radius, cx + radius, cy + radius], start=-90.0, end=end_angle, fill=(37, 99, 235, 255), width=stroke_width)
+
+            img.save(frame_path, "PNG")
+
+        logger.info(f"[TIMER] Gerados {total_frames} frames do indicador circular progressivo (30fps x {duration}s) em {timer_dir}")
+        pattern = os.path.join(timer_dir, "timer_%03d.png").replace("\\", "/")
+        return pattern, (size, size)
+
     # -------------------------------------------------------------------------
     # 6. Síntese de Voz Edge TTS
     # -------------------------------------------------------------------------
@@ -765,27 +839,46 @@ class PaperQuizEngine:
         img_revealed: str,
         audio_path: str,
         duration: float,
-        t_reveal_start: float,
+        t_thinking_start: float = 0.0,
+        t_reveal_start: float = 6.0,
+        timer_frames_pattern: Optional[str] = None,
+        timer_x: int = 892,
+        timer_y: int = 500,
     ) -> str:
-        """Gera o vídeo do segmento da questão (P1.1):
+        """Gera o vídeo do segmento da questão (P1.3):
         1. Pergunta e 4 alternativas visíveis desde o início da cena (t=0 -> t_reveal_start) com leve zoompan.
-        2. Revelação da correta com círculo de caneta, destaque verde e chime (t_reveal_start -> duration).
+        2. Timer circular progressivo preenchendo no sentido horário (t_thinking_start -> t_reveal_start).
+        3. Revelação da correta com círculo de caneta, destaque verde e chime (t_reveal_start -> duration).
         """
         fps = self.config.video_settings.get("fps", 30)
         total_frames = int(duration * fps) + 2
         output_scene_mp4 = os.path.join(self.config.temp_dir, f"scene_{scene_id}.mp4")
 
-        filter_complex = (
-            f"[0:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[base_motion];"
-            f"[1:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[rev_motion];"
-            f"[base_motion][rev_motion]overlay=0:0:enable='gte(t,{t_reveal_start:.2f})'[vfinal]"
-        )
-
-        cmd = [
-            self.ffmpeg_bin, "-y",
+        inputs = [
             "-loop", "1", "-i", os.path.abspath(img_options),
             "-loop", "1", "-i", os.path.abspath(img_revealed),
             "-i", os.path.abspath(audio_path),
+        ]
+
+        if timer_frames_pattern:
+            inputs.extend(["-framerate", str(fps), "-i", timer_frames_pattern])
+            filter_complex = (
+                f"[0:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[base_motion];"
+                f"[1:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[rev_motion];"
+                f"[3:v]setpts=PTS-STARTPTS+{t_thinking_start:.3f}/TB[timer_timed];"
+                f"[base_motion][timer_timed]overlay={timer_x}:{timer_y}:enable='between(t,{t_thinking_start:.3f},{t_reveal_start:.3f})'[with_timer];"
+                f"[with_timer][rev_motion]overlay=0:0:enable='gte(t,{t_reveal_start:.3f})'[vfinal]"
+            )
+        else:
+            filter_complex = (
+                f"[0:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[base_motion];"
+                f"[1:v]zoompan=z='min(zoom+0.0003,1.025)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps}[rev_motion];"
+                f"[base_motion][rev_motion]overlay=0:0:enable='gte(t,{t_reveal_start:.3f})'[vfinal]"
+            )
+
+        cmd = [
+            self.ffmpeg_bin, "-y",
+            *inputs,
             "-filter_complex", filter_complex,
             "-map", "[vfinal]",
             "-map", "2:a",
@@ -799,8 +892,6 @@ class PaperQuizEngine:
         if res.returncode != 0:
             logger.error(f"[RENDER] Falha na renderização de {scene_id}: {res.stderr[-500:]}")
             raise RuntimeError(f"FFmpeg falhou ao renderizar {scene_id}")
-
-        return output_scene_mp4
 
         return output_scene_mp4
 
@@ -917,9 +1008,8 @@ class PaperQuizEngine:
 
         outro_cfg = self.config.outro_challenge
         if outro_cfg.get("enabled", True):
-            outro_audio = os.path.join(self.config.temp_dir, "narration_outro.mp3")
-            dur_outro = await self.synthesize_voice(outro_cfg["narration"], outro_audio)
-            dur_baseline += (dur_outro + 0.60)
+            dur_outro_tot = float(outro_cfg.get("duration_sec", 6.0))
+            dur_baseline += dur_outro_tot
 
         # 2. Medir duração exata da narração de cada pergunta candidata
         candidates_with_dur: List[Tuple[Dict[str, Any], float]] = []
@@ -994,10 +1084,13 @@ class PaperQuizEngine:
         sfx_ding = self.generate_correct_ding_sfx()
         sfx_ticks = self.generate_thinking_ticks_sfx(duration=exp_sec)
 
+        # 4. Gerar Frames do Timer Circular Progressivo (6.0s a 30fps = 180 frames)
+        timer_pattern, _ = self.generate_circular_timer_frames(duration=exp_sec, fps=self.config.video_settings.get("fps", 30))
+
         scene_files: List[str] = []
         timing_records: List[Dict[str, Any]] = []
 
-        # 4. Renderizar Cena de Abertura (Intro Hook - Direta e Dinâmica)
+        # 5. Renderizar Cena de Abertura (Intro Hook - Direta e Dinâmica)
         intro_cfg = self.config.intro_hook
         if intro_cfg.get("enabled", True):
             intro_img = os.path.join(self.config.temp_dir, "frame_intro.png")
@@ -1014,7 +1107,7 @@ class PaperQuizEngine:
             scene_files.append(intro_mp4)
             timing_records.append({"scene": "intro", "duration": round(dur_intro_tot, 3)})
 
-        # 5. Renderizar Perguntas Selecionadas Dinamicamente
+        # 6. Renderizar Perguntas Selecionadas Dinamicamente com Timer Circular Progressivo
         for idx, item in enumerate(self.config.questions):
             scene_id = item["id"]
             logger.info(f"Processando questão {scene_id} ({idx + 1}/{len(self.config.questions)})...")
@@ -1030,10 +1123,10 @@ class PaperQuizEngine:
             audio_narr = os.path.join(self.config.temp_dir, f"narration_{scene_id}.mp3")
             dur_narr = await self.synthesize_voice(item["narration"], audio_narr)
 
-            # Sequência Temporal P1.2:
+            # Sequência Temporal P1.3:
             # 0.0 -> dur_narr: Pergunta narrada com alternativas já presentes na folha
-            # dur_narr -> t_reveal_start: Janela de raciocínio de exatamente 6.0s com tique-taques rítmicos
-            # t_reveal_start -> tot_dur: Resposta correta revelada por ~1.0s com chime de acerto
+            # dur_narr -> t_reveal_start: Janela de raciocínio de 6.0s com timer circular progressivo e tique-taques
+            # t_reveal_start -> tot_dur: Resposta correta revelada por ~1.0s com chime de acerto (timer removido)
             t_thinking_start = dur_narr
             t_reveal_start = t_thinking_start + exp_sec
             tot_dur = t_reveal_start + rev_sec
@@ -1049,13 +1142,19 @@ class PaperQuizEngine:
                 sfx_start_time=t_reveal_start,
             )
 
+            timer_x, timer_y = self.get_question_timer_position(item["question"])
+
             q_mp4 = self.render_question_video_scene(
                 scene_id=scene_id,
                 img_options=img_options,
                 img_revealed=img_rev,
                 audio_path=audio_scene,
                 duration=tot_dur,
+                t_thinking_start=t_thinking_start,
                 t_reveal_start=t_reveal_start,
+                timer_frames_pattern=timer_pattern,
+                timer_x=timer_x,
+                timer_y=timer_y,
             )
             scene_files.append(q_mp4)
             timing_records.append({
@@ -1066,26 +1165,37 @@ class PaperQuizEngine:
                 "reveal_start_sec": round(t_reveal_start, 3),
                 "reveal_sec": round(rev_sec, 3),
                 "total_duration": round(tot_dur, 3),
+                "timer_circular": {
+                    "enabled": True,
+                    "sweep_deg": 360.0,
+                    "pos_x": timer_x,
+                    "pos_y": timer_y,
+                },
             })
 
-        # 6. Renderizar Cena de Encerramento (Outro Challenge)
+        # 7. Renderizar Cena de Encerramento (Outro Challenge mantida por 6.0s completos)
         outro_cfg = self.config.outro_challenge
         if outro_cfg.get("enabled", True):
             outro_img = os.path.join(self.config.temp_dir, "frame_outro.png")
             self.render_outro_frame().save(outro_img, "PNG")
 
+            dur_outro_tot = float(outro_cfg.get("duration_sec", 6.0))
             outro_audio = os.path.join(self.config.temp_dir, "narration_outro.mp3")
-            dur_outro = await self.synthesize_voice(outro_cfg["narration"], outro_audio)
-            dur_outro_tot = dur_outro + 0.6  # Fade out agradável
+            dur_outro_speech = await self.synthesize_voice(outro_cfg["narration"], outro_audio)
 
             outro_scene_audio = os.path.join(self.config.temp_dir, "audio_outro.mp4")
             self.mix_scene_audio(outro_audio, outro_scene_audio, dur_outro_tot)
 
             outro_mp4 = self.render_static_scene("outro", outro_img, outro_scene_audio, dur_outro_tot)
             scene_files.append(outro_mp4)
-            timing_records.append({"scene": "outro", "duration": dur_outro_tot})
+            timing_records.append({
+                "scene": "outro",
+                "narration_sec": round(dur_outro_speech, 3),
+                "duration": dur_outro_tot,
+                "hold_comment_sec": round(dur_outro_tot - dur_outro_speech, 3),
+            })
 
-        # 7. Concatenação e Mixagem Final
+        # 8. Concatenação e Mixagem Final
         logger.info(f"Concatenando {len(scene_files)} segmentos com trilha ambiente...")
         ok_concat = self.concat_and_mix_bgm(scene_files)
         if not ok_concat:
@@ -1095,7 +1205,7 @@ class PaperQuizEngine:
         probe = probe_media(self.config.output_video_path)
         final_dur = float(probe.get("format_duration", 0.0) or 0.0)
 
-        # 8. Verificação Rigorosa do Duration Gate [target_min, target_max]
+        # 9. Verificação Rigorosa do Duration Gate [target_min, target_max]
         gate_passed = (t_min <= final_dur <= t_max)
         if not gate_passed:
             raise DurationGateError(
@@ -1103,11 +1213,11 @@ class PaperQuizEngine:
                 f"[{t_min:.1f}s, {t_max:.1f}s]!"
             )
 
-        # 9. Gravação de Metadados JSON no Diretório do Protótipo
+        # 10. Gravação de Metadados JSON no Diretório do Protótipo
         meta_path = os.path.join(os.path.dirname(self.config.output_video_path), "metadata.json")
         metadata = {
             "format": "quiz_paper_prototype",
-            "prototype_code": "P1.2",
+            "prototype_code": "P1.3",
             "quiz_title": self.config.quiz_title,
             "niche": self.config.niche,
             "video_path": self.config.output_video_path,
@@ -1123,6 +1233,11 @@ class PaperQuizEngine:
                 "margin_min_sec": round(final_dur - t_min, 3),
                 "margin_max_sec": round(t_max - final_dur, 3),
             },
+            "features_p1_3": {
+                "timer_circular": "6.0s progressive clockwise ring synchronized with ticks (180 frames at 30fps)",
+                "closing_hold_duration_sec": dur_outro_tot,
+                "closing_cta_text": "Quantas você acertou? Comente sua pontuação!",
+            },
             "factual_sources": [
                 {"id": q["id"], "question": q["question"], "answer": q["correct_option"], "source": q.get("source")}
                 for q in self.config.questions
@@ -1134,7 +1249,7 @@ class PaperQuizEngine:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
         logger.info(
-            f"=== PROTÓTIPO P1.2 CONCLUÍDO COM SUCESSO! Duração: {final_dur:.2f}s (Faixa: [{t_min}s, {t_max}s]) "
+            f"=== PROTÓTIPO P1.3 CONCLUÍDO COM SUCESSO! Duração: {final_dur:.2f}s (Faixa: [{t_min}s, {t_max}s]) "
             f"| Perguntas: {len(self.config.questions)} | Tempo de Render: {t_elapsed:.2f}s ==="
         )
         return metadata

@@ -223,30 +223,31 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
 - **Fase P1.1 — Quiz de Papel com Expectativa Sonora:** `COMPLETED / COMMITTED (4cc386e)`
   - Introdução da janela sonora com tique-taques discretos a cada segundo e apresentação simultânea de pergunta e alternativas.
 
-- **Fase P1.2 — Quiz de Papel com Duração Controlada (60–65s):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - **Status:** Renderização única completa P1.2, 10 testes unitários direcionados PASS e validação FFprobe concluídos com sucesso.
-  - **Objetivo:** Refinamento do Quiz de Papel para produzir vídeos com duração rigorosamente controlada entre 60.0s e 65.0s, oferecendo 6 segundos para o público escolher cada resposta.
-  - **Preservação Visual e Editorial:**
-    - Estética visual de folha de papel, caneta esferográfica e marcadores preservada integralmente.
-    - Pergunta e 4 alternativas visíveis desde o início da cena (`t=0`).
-    - Narração exclusivamente do enunciado da pergunta com Edge TTS +20%.
-    - Resposta revelada por ~1.0s com círculo de caneta verde, badge esmeralda e chime harmônico procedural.
-  - **Duração e Seleção Dinâmica:**
-    - Seleção dinâmica inteligente (`select_questions_for_target_duration`) baseada na duração real do áudio de narração TTS de cada questão candidata, intro e encerramento.
-    - Fórmula de cena: `dur_narr + 6.0s (espera) + 1.0s (revelação)`.
-    - Selecionadas 5 perguntas factuais de 10 candidatas (q3, q4, q5, q6, q10), re-indexadas de 1 a 5 com nota máxima reescalonada ("NOTA: [ / 05 ]").
-    - Duração final obtida: **61.25s** (margem de segurança perfeita dentro da faixa [60.0, 65.0]s).
-  - **Duration Gate:**
-    - Bloqueio determinístico via `DurationGateError` se a duração final ou seleção ficar fora de `[60.0, 65.0]s`.
-    - Telemetria de gate registrada em `storage/poc_quiz_papel/metadata.json` (`passed: true`, `margin_min_sec: 1.252`, `margin_max_sec: 3.748`).
-  - **Expectativa Sonora:**
-    - Janela de raciocínio de 6.0s (`expectation_sec: 6.0`) com 6 tique-taques discretos sintetizados proceduralmente (`[0.5, 1.5, 2.5, 3.5, 4.5, 5.5]s`).
+- **Fase P1.2 — Quiz de Papel com Duração Controlada (60–65s):** `COMPLETED / COMMITTED (ae74458)`
+  - Controle de duração com seleção dinâmica de perguntas e bloqueio via DurationGateError.
+
+- **Fase P1.3 — Timer Circular e Encerramento para Comentários:** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - **Status:** Renderização única completa P1.3, 13 testes unitários direcionados PASS e validação rigorosa FFprobe concluídos com sucesso.
+  - **Objetivo:** Refinamentos de retenção e engajamento no Quiz de Papel:
+    1. Indicador circular animado preenchendo progressivamente no sentido horário de 0% a 100% durante os 6 segundos de expectativa, sincronizado com os 6 tique-taques e removido imediatamente na revelação da resposta.
+    2. Tela final de encerramento mantida por exatamente 6.0 segundos completos, com chamada clara: "Quantas você acertou? Comente sua pontuação!", nota adaptada ao número real de questões e música ambiente com sutil Ken Burns para incentivar a abertura dos comentários.
+  - **Timer Circular Progressivo:**
+    - Sintetizado proceduralmente via Pillow em 180 frames transparentes RGBA (30fps x 6.0s), com track suave e arco em azul caneta esferográfica real (`(37, 99, 235)`).
+    - Posicionado de forma limpa e desobstruída no card de status da folha, sem cobrir o enunciado nem as 4 alternativas.
+    - Sincronização temporal exata: inicia em `t_thinking_start`, preenche 360° em 6.0s e desaparece em `t_reveal_start` quando a resposta é revelada em verde.
+  - **Encerramento de 6 Segundos:**
+    - Narração curta no início ("Quantas você acertou? Comente sua pontuação!").
+    - Retenção estendida da tela de notas ("NOTA: [ / 05 ]", cards de pontuação e CTA) pelos 6 segundos completos, permitindo leitura confortável e estímulo ao comentário.
+  - **Duração e Duration Gate:**
+    - Baseline atualizada considerando abertura (4.74s) + encerramento (6.0s) = 10.74s.
+    - Seleção dinâmica (`select_questions_for_target_duration`) escolheu 5 perguntas factuais (q3, q4, q5, q6, q10), atingindo **61.85s** (distância de apenas 0.65s do ponto médio ideal de 62.5s, dentro da faixa [60.0s, 65.0s]).
+    - Duration Gate determinístico `DurationGateError` ativo e validado.
   - **Artefatos Gerados:**
-    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.25s, 4.85 MB, 1080x1920 a 30fps, AVC High + AAC).
+    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.85s, 4.94 MB, 1080x1920 a 30fps, H.264 + AAC 44.1kHz).
     - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
     - Metadados: `storage/poc_quiz_papel/metadata.json`.
-  - **Validação de Testes:** 10 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
-  - **Isolamento Total:** Zero alterações em canais de produção, banco de dados, Channel Factory, Scheduler ou Post for Me. Formato Q0-R 100% preservado e inalterado. Zero novas dependências.
+  - **Validação de Testes:** 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+  - **Isolamento de Produção:** Formato Q0-R 100% inalterado. Zero dependências novas. Zero alterações em Channel Factory, Scheduler, Post for Me ou produção.
 
 ---
 

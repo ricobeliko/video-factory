@@ -248,22 +248,26 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
 - **Fase P1.1 (Quiz de Papel com Expectativa Sonora):** `COMPLETED / COMMITTED (4cc386e)`
   - Introdução da janela sonora com tique-taques discretos a cada segundo e apresentação simultânea de pergunta e alternativas.
 
-- **Fase P1.2 (Quiz de Papel com Duração Controlada — 60 a 65s):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
-  - Renderização única completa P1.2, 10 testes unitários direcionados PASS e validação FFprobe concluídos em `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4`.
+- **Fase P1.2 (Quiz de Papel com Duração Controlada — 60 a 65s):** `COMPLETED / COMMITTED (ae74458)`
+  - Controle de duração com seleção dinâmica de perguntas e bloqueio via DurationGateError.
+
+- **Fase P1.3 (Timer Circular e Encerramento para Comentários):** `COMPLETED / DEV VALIDATED (AGUARDANDO AVALIAÇÃO DO OPERADOR)`
+  - Renderização única completa P1.3, 13 testes unitários direcionados PASS e validação FFprobe concluídos em `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4`.
+  - Timer Circular Progressivo:
+    - Indicador circular animado sintetizado proceduralmente em 180 frames transparentes RGBA (30fps x 6.0s), preenchendo no sentido horário de 0% a 100% durante os 6 segundos de resposta.
+    - Sincronizado aos 6 tique-taques sonoros e posicionado de forma limpa no card de status da folha sem cobrir o enunciado nem as 4 alternativas.
+    - Removido imediatamente na revelação da resposta, quando surge o círculo verde e o chime.
+  - Encerramento de 6 Segundos para Comentários:
+    - Tela final mantida por exatamente 6.0 segundos completos com sutil Ken Burns e trilha ambiente.
+    - Chamada clara: "Quantas você acertou? Comente sua pontuação!", nota adaptada ao número real de questões ("NOTA: [ / 05 ]") e cards de pontuação para incentivar o engajamento.
   - Controle de Duração e Seleção Dinâmica:
-    - Algoritmo `select_questions_for_target_duration` seleciona dinamicamente o número exato de perguntas calculando as durações reais do áudio de narração TTS (+20%), a janela de expectativa de 6.0s e a revelação de 1.0s, somados a abertura e encerramento.
-    - 5 perguntas selecionadas de 10 candidatas (IDs: q3, q4, q5, q6, q10), re-indexadas de 1 a 5 com cartão de pontuação atualizado para "NOTA: [ / 05 ]".
-    - Duração final alcançada: **61.25s** (dentro do intervalo obrigatório `[60.0s, 65.0s]`).
-  - Duration Gate:
-    - Bloqueio determinístico via `DurationGateError` levantado pelo renderizador caso a duração final ou combinação fique fora do intervalo `[60.0, 65.0]s`.
-    - Telemetria de conformidade registrada em `storage/poc_quiz_papel/metadata.json` (`passed: true`, `target_min_sec: 60.0`, `target_max_sec: 65.0`, `margin_min_sec: 1.252`, `margin_max_sec: 3.748`).
-  - Expectativa Sonora de 6 Segundos:
-    - Janela ampliada para 6.0s com 6 tique-taques uniformes sintetizados proceduralmente a cada 1.0s (`[0.5, 1.5, 2.5, 3.5, 4.5, 5.5]s`), conferindo tempo confortável para escolha do público.
+    - Seleção dinâmica (`select_questions_for_target_duration`) escolheu 5 perguntas factuais (q3, q4, q5, q6, q10), atingindo **61.85s** (apenas 0.65s do ponto médio 62.5s, dentro do intervalo obrigatório `[60.0s, 65.0s]`).
+    - Duration Gate determinístico `DurationGateError` ativo e validado.
   - Artefatos Gerados:
-    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.25s, 4.85 MB, 1080x1920, 30fps).
+    - Vídeo MP4: `storage/poc_quiz_papel/quiz_perguntas_respostas_papel.mp4` (61.85s, 4.94 MB, 1080x1920 a 30fps).
     - Thumbnail independente: `storage/poc_quiz_papel/quiz_perguntas_respostas_thumbnail.jpg` (1080x1920).
     - Metadados: `storage/poc_quiz_papel/metadata.json`.
-  - Validação de Testes: 10 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
+  - Validação de Testes: 13 testes unitários direcionados PASS em `test/services/test_quiz_paper_prototype.py`.
   - Isolamento Total: Formato Q0-R permanece congelado e inalterado. Zero novas dependências. Zero alterações em Channel Factory, Scheduler, Post for Me ou produção.
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):

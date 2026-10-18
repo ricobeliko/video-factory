@@ -1,154 +1,121 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
+import {
+  getChannelsOverview,
+  getLiveExecutions,
+  getReviewTasks,
+  getSystemStatus,
+} from './api';
 import Sidebar from './components/Sidebar';
 import FactoryHeader from './components/FactoryHeader';
-import ChannelCard from './components/ChannelCard';
-import FlowAccountsSection from './components/FlowAccountsSection';
-import FactoryLiveGraph from './components/FactoryLiveGraph';
-import ExecutionDrawer from './components/ExecutionDrawer';
-import AgentOpsView from './components/AgentOps/AgentOpsView';
-import VideoReviewView from './components/VideoReview/VideoReviewView';
+import DashboardView from './components/DashboardView';
+import ProductionView from './components/ProductionView';
+import SchedulesView from './components/SchedulesView';
+import AnalyticsView from './components/AnalyticsView';
+import SettingsView from './components/SettingsView';
 import ChannelListView from './components/ChannelWorkspace/ChannelListView';
 import ChannelDetailView from './components/ChannelWorkspace/ChannelDetailView';
+import VideoReviewView from './components/VideoReview/VideoReviewView';
+import ExecutionDrawer from './components/ExecutionDrawer';
 import CreateChannelModal from './components/ChannelWorkspace/CreateChannelModal';
-import SettingsView from './components/SettingsView';
-import { getLiveExecutions, getSystemStatus, getReviewTasks, getChannelsOverview } from './api';
-import './styles.css';
 
-/**
- * App — Video Factory V2 Main Console
- * Features:
- * - Modern Sidebar navigation (Dashboard, Meus Canais, Pipeline, Estoque, Agent Ops, Configurações).
- * - Channel-Centric Workspace (Channel Workspace & 7 Management Tabs).
- * - Smart Format-Aware Forms (Traditional, Quiz Q0-R, Quiz Paper P1.3).
- * - Real-time Execution Pipeline and Decoupled Lateral Drawer.
- * - Human Video Review Center for Quality Gate recovery.
- */
 export default function App() {
-  const [activeNav, setActiveNav] = useState(() => {
-    if (typeof window !== 'undefined') {
-      if (window.location.hash === '#channels') return 'channels';
-      if (window.location.hash === '#pipeline') return 'pipeline';
-      if (window.location.hash === '#review') return 'review';
-      if (window.location.hash === '#agent-ops') return 'agent-ops';
-      if (window.location.hash === '#settings') return 'settings';
-    }
-    return 'dashboard';
-  });
-
+  const [activeNav, setActiveNav] = useState('dashboard'); // 'dashboard' | 'channels' | 'production' | 'review' | 'schedules' | 'analytics' | 'settings'
   const [channels, setChannels] = useState([]);
   const [channelsDetailed, setChannelsDetailed] = useState([]);
-  const [selectedChannelDetail, setSelectedChannelDetail] = useState(null);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [systemStatus, setSystemStatus] = useState(null);
+  const [liveExecutions, setLiveExecutions] = useState(null);
   const [flowPool, setFlowPool] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isApiOnline, setIsApiOnline] = useState(true);
   const [unreviewedCount, setUnreviewedCount] = useState(0);
 
-  // Focus selection for the detailed pipeline
+  // Foco do canal
   const [userSelectedChannelId, setUserSelectedChannelId] = useState(null);
   const [hasUserManuallySelected, setHasUserManuallySelected] = useState(false);
+  const [selectedChannelDetail, setSelectedChannelDetail] = useState(null);
 
-  // Drawer state
+  // Modais e Drawers
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [drawerChannel, setDrawerChannel] = useState(null);
   const [drawerTaskId, setDrawerTaskId] = useState(null);
   const [drawerStage, setDrawerStage] = useState(null);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  // Polling loop for live execution, system status and review count
-  const pollData = useCallback(async () => {
+  // Sincronização dinâmica de hash
+  useEffect(() => {
+    const handleHash = () => {
+      if (typeof window !== 'undefined') {
+        const hash = window.location.hash.replace('#', '');
+        const validNavs = ['dashboard', 'channels', 'production', 'review', 'schedules', 'analytics', 'settings'];
+        if (validNavs.includes(hash)) {
+          setActiveNav(hash);
+        }
+      }
+    };
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
+
+  // Polling unificado dos dados da fábrica
+  const pollData = async () => {
     try {
-      const [liveRes, statusRes, reviewRes, chRes] = await Promise.all([
-        getLiveExecutions(),
-        getSystemStatus(),
-        getReviewTasks('pending').catch(() => null),
+      const [liveRes, statusRes, channelsRes, reviewRes] = await Promise.all([
+        getLiveExecutions().catch(() => null),
+        getSystemStatus().catch(() => null),
         getChannelsOverview().catch(() => null),
+        getReviewTasks('pending').catch(() => null),
       ]);
 
-      const channelsList = liveRes?.channels || liveRes?.data?.channels;
-      if (Array.isArray(channelsList)) {
-        setChannels(channelsList);
+      if (liveRes) {
+        setLiveExecutions(liveRes);
+        if (Array.isArray(liveRes.channels)) {
+          setChannels(liveRes.channels);
+        }
+        if (liveRes.flow_pool) {
+          setFlowPool(liveRes.flow_pool);
+        }
       }
 
-      if (chRes?.channels) {
-        setChannelsDetailed(chRes.channels);
-      } else if (Array.isArray(channelsList)) {
-        setChannelsDetailed(channelsList);
+      if (statusRes) {
+        setSystemStatus(statusRes);
       }
 
-      const poolData =
-        liveRes?.flow_accounts ||
-        liveRes?.data?.flow_accounts ||
-        liveRes?.flow_pool ||
-        liveRes?.data?.flow_pool;
-      if (poolData) {
-        setFlowPool(poolData);
+      if (channelsRes && Array.isArray(channelsRes.channels)) {
+        setChannelsDetailed(channelsRes.channels);
+        if (!liveRes || !Array.isArray(liveRes.channels) || liveRes.channels.length === 0) {
+          setChannels(channelsRes.channels);
+        }
       }
 
-      const sysData = statusRes?.data || statusRes;
-      if (sysData) {
-        setSystemStatus(sysData);
+      if (reviewRes && Array.isArray(reviewRes.tasks)) {
+        setUnreviewedCount(reviewRes.tasks.length);
       }
 
-      const pendingTasks = reviewRes?.tasks || reviewRes?.data?.tasks;
-      if (Array.isArray(pendingTasks)) {
-        setUnreviewedCount(pendingTasks.length);
-      }
-
-      setLastUpdated(new Date());
       setIsApiOnline(true);
+      setLastUpdated(new Date());
     } catch (err) {
-      console.warn('Live API poll failed, keeping memory snapshot:', err.message);
+      console.warn('Erro na sincronização de dados da API:', err);
       setIsApiOnline(false);
     }
-  }, []);
+  };
 
   useEffect(() => {
     pollData();
-    const interval = setInterval(pollData, 3000);
-    return () => clearInterval(interval);
-  }, [pollData]);
+    const timer = setInterval(pollData, 4000);
+    return () => clearInterval(timer);
+  }, []);
 
-  // Set default initial channel ID once loaded
-  useEffect(() => {
-    if (!userSelectedChannelId && channels.length > 0) {
-      const initialRunning = channels.find(
-        (c) => c.execution?.status === 'RUNNING' || c.status === 'RUNNING'
-      );
-      const initial = initialRunning || channels[0];
-      setUserSelectedChannelId(initial.channel_id || initial.profile_id);
-    }
-  }, [channels, userSelectedChannelId]);
-
-  // Deterministic focused channel resolution
-  const focusedChannel = useMemo(() => {
-    if (!channels || channels.length === 0) return null;
-
-    if (hasUserManuallySelected && userSelectedChannelId) {
-      const found = channels.find(
-        (c) => (c.channel_id || c.profile_id) === userSelectedChannelId
-      );
-      if (found) return found;
-    }
-
-    const active = channels.find(
-      (c) =>
-        c.execution?.status === 'RUNNING' ||
-        c.status === 'RUNNING' ||
-        c.execution?.status === 'RETRYING' ||
-        c.status === 'RETRYING'
+  // Resolução do canal focado para o pipeline
+  let focusedChannel = null;
+  if (hasUserManuallySelected && userSelectedChannelId) {
+    focusedChannel = channels.find(
+      (c) => (c.channel_id || c.profile_id) === userSelectedChannelId
     );
-    if (active) return active;
-
-    if (userSelectedChannelId) {
-      const found = channels.find(
-        (c) => (c.channel_id || c.profile_id) === userSelectedChannelId
-      );
-      if (found) return found;
-    }
-
-    return channels[0];
-  }, [channels, userSelectedChannelId, hasUserManuallySelected]);
+  }
+  if (!focusedChannel) {
+    focusedChannel = channels.find((c) => c.execution?.status === 'RUNNING') || channels[0] || null;
+  }
 
   const handleSelectNav = (navId) => {
     setActiveNav(navId);
@@ -163,6 +130,11 @@ export default function App() {
     setHasUserManuallySelected(true);
   };
 
+  const handleResetFocus = () => {
+    setHasUserManuallySelected(false);
+    setUserSelectedChannelId(null);
+  };
+
   const handleOpenDrawer = (channel, stage = null) => {
     setDrawerChannel(channel);
     setDrawerTaskId(channel?.execution?.task_id || channel?.task_id);
@@ -170,9 +142,17 @@ export default function App() {
     setIsDrawerOpen(true);
   };
 
+  const handleOpenChannelWorkspace = (channel) => {
+    setSelectedChannelDetail(channel);
+    setActiveNav('channels');
+    if (typeof window !== 'undefined') {
+      window.location.hash = '#channels';
+    }
+  };
+
   return (
     <div className="v2-app-layout">
-      {/* 1. Sidebar Lateral Moderna */}
+      {/* 1. Sidebar Lateral Moderna (7 Seções) */}
       <Sidebar
         activeNav={activeNav}
         onSelectNav={handleSelectNav}
@@ -183,108 +163,31 @@ export default function App() {
       {/* 2. Área de Conteúdo Principal */}
       <main className="v2-main-content">
         <FactoryHeader
+          activeNav={activeNav}
           systemStatus={systemStatus}
-          flowPool={flowPool}
           lastUpdated={lastUpdated}
           isApiOnline={isApiOnline}
           onRefresh={pollData}
           unreviewedCount={unreviewedCount}
+          onNavigate={handleSelectNav}
         />
 
-        {/* NAVEGAÇÃO 1: DASHBOARD */}
+        {/* VIEW 1: DASHBOARD REDESENHADO */}
         {activeNav === 'dashboard' && (
           <div className="v2-view-section">
-            <div className="channels-deck-container">
-              <div className="section-title-bar deck-title-bar">
-                <div className="title-left">
-                  <span className="section-title-icon">📺</span>
-                  <span className="section-title">Canais em Operação</span>
-                  {hasUserManuallySelected ? (
-                    <button
-                      type="button"
-                      className="auto-track-toggle-btn manual"
-                      onClick={() => setHasUserManuallySelected(false)}
-                      title="Voltar ao foco automático"
-                      style={{
-                        fontSize: '11px',
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        border: '1px solid rgba(56, 189, 248, 0.4)',
-                        backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                        color: '#38bdf8',
-                        cursor: 'pointer',
-                        marginLeft: '8px',
-                      }}
-                    >
-                      🎯 Foco Manual [Voltar para Auto]
-                    </button>
-                  ) : (
-                    <span
-                      style={{
-                        fontSize: '11px',
-                        color: '#34d399',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        marginLeft: '8px',
-                      }}
-                    >
-                      ● Rastreamento Dinâmico Ativo
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="channels-deck">
-                {channels.length === 0 ? (
-                  <div style={{ padding: '16px', color: '#64748b', fontSize: '12px' }}>
-                    {isApiOnline ? 'Carregando canais operacionais...' : 'Nenhum canal disponível.'}
-                  </div>
-                ) : (
-                  channels.map((channel) => {
-                    const channelKey = channel.channel_id || channel.profile_id;
-                    const isFocused =
-                      (focusedChannel?.channel_id || focusedChannel?.profile_id) === channelKey;
-
-                    return (
-                      <ChannelCard
-                        key={channelKey}
-                        channel={channel}
-                        isFocused={isFocused}
-                        onSelectFocus={() => handleSelectFocus(channel)}
-                        onOpenDrawer={() => handleOpenDrawer(channel)}
-                      />
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            <FlowAccountsSection flowPool={flowPool} />
-
-            <div className="live-pipeline-section">
-              <div className="section-title-bar pipeline-title-bar">
-                <div className="title-left">
-                  <span className="section-title-icon">⚡</span>
-                  <span className="section-title">Pipeline em Tempo Real</span>
-                  {focusedChannel && (
-                    <span className="focused-channel-tag">
-                      Canal: <strong>{focusedChannel.channel_name || focusedChannel.profile_name}</strong>
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <FactoryLiveGraph
-                channel={focusedChannel}
-                onSelectChannelTask={handleOpenDrawer}
-              />
-            </div>
+            <DashboardView
+              channels={channelsDetailed.length > 0 ? channelsDetailed : channels}
+              systemStatus={systemStatus}
+              liveExecutions={liveExecutions}
+              onOpenChannel={handleOpenChannelWorkspace}
+              onOpenCreateModal={() => setIsCreateModalOpen(true)}
+              onNavigate={handleSelectNav}
+              onRefresh={pollData}
+            />
           </div>
         )}
 
-        {/* NAVEGAÇÃO 2: MEUS CANAIS (CHANNEL WORKSPACE - FASE V2.4) */}
+        {/* VIEW 2: MEUS CANAIS (CHANNEL WORKSPACE) */}
         {activeNav === 'channels' && (
           <div className="v2-view-section">
             {selectedChannelDetail ? (
@@ -304,30 +207,23 @@ export default function App() {
           </div>
         )}
 
-        {/* NAVEGAÇÃO 3: PIPELINE EM TELA CHEIA */}
-        {activeNav === 'pipeline' && (
+        {/* VIEW 3: ESTEIRA DE PRODUÇÃO & GRAFO CAUSAL */}
+        {activeNav === 'production' && (
           <div className="v2-view-section">
-            <div className="live-pipeline-section">
-              <div className="section-title-bar pipeline-title-bar">
-                <div className="title-left">
-                  <span className="section-title-icon">⚡</span>
-                  <span className="section-title">Pipeline Completo de Execução</span>
-                  {focusedChannel && (
-                    <span className="focused-channel-tag">
-                      Canal: <strong>{focusedChannel.channel_name || focusedChannel.profile_name}</strong>
-                    </span>
-                  )}
-                </div>
-              </div>
-              <FactoryLiveGraph
-                channel={focusedChannel}
-                onSelectChannelTask={handleOpenDrawer}
-              />
-            </div>
+            <ProductionView
+              channels={channels}
+              focusedChannel={focusedChannel}
+              hasUserManuallySelected={hasUserManuallySelected}
+              onSelectFocus={handleSelectFocus}
+              onResetFocus={handleResetFocus}
+              onOpenDrawer={handleOpenDrawer}
+              flowPool={flowPool}
+              isApiOnline={isApiOnline}
+            />
           </div>
         )}
 
-        {/* NAVEGAÇÃO 4: ESTOQUE & REVISÃO HUMANA DE VÍDEOS */}
+        {/* VIEW 4: ESTOQUE & REVISÃO HUMANA DE VÍDEOS */}
         {activeNav === 'review' && (
           <div className="v2-view-section">
             <VideoReviewView
@@ -337,21 +233,37 @@ export default function App() {
           </div>
         )}
 
-        {/* NAVEGAÇÃO 5: AGENT OPS ROOM */}
-        {activeNav === 'agent-ops' && (
+        {/* VIEW 5: AGENDAMENTOS */}
+        {activeNav === 'schedules' && (
           <div className="v2-view-section">
-            <AgentOpsView />
+            <SchedulesView
+              channels={channelsDetailed.length > 0 ? channelsDetailed : channels}
+              onOpenChannel={handleOpenChannelWorkspace}
+            />
           </div>
         )}
 
-        {/* NAVEGAÇÃO 6: CONFIGURAÇÕES E DIAGNÓSTICO */}
+        {/* VIEW 6: ANALYTICS & HISTÓRICO */}
+        {activeNav === 'analytics' && (
+          <div className="v2-view-section">
+            <AnalyticsView
+              channels={channelsDetailed.length > 0 ? channelsDetailed : channels}
+            />
+          </div>
+        )}
+
+        {/* VIEW 7: CONFIGURAÇÕES, FLOW POOL & DIAGNÓSTICO */}
         {activeNav === 'settings' && (
           <div className="v2-view-section">
-            <SettingsView systemStatus={systemStatus} onRefresh={pollData} />
+            <SettingsView
+              systemStatus={systemStatus}
+              onRefresh={pollData}
+              flowPool={flowPool}
+            />
           </div>
         )}
 
-        {/* Drawer Lateral de Telemetria */}
+        {/* Drawer Lateral de Telemetria Causal */}
         <ExecutionDrawer
           isOpen={isDrawerOpen}
           onClose={() => setIsDrawerOpen(false)}

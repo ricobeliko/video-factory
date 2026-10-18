@@ -2,20 +2,18 @@ import React, { useState } from 'react';
 import { pauseFactory, resumeFactory, runFactoryCycle } from '../api';
 
 /**
- * FactoryHeader — Top bar displaying system health, workers and sync state (R6A.3).
- * Semantic chip colors:
- * - ONLINE / ON: green
- * - OFF intentional: gray
- * - PARADO unexpected: red
- * - DRY RUN ON: amber
+ * FactoryHeader — Cabecalho Global Simplificado (SaaS Minimalist)
+ * Radicalmente limpo: exibe o titulo da pagina ativa, acoes operacionais rapidas e
+ * notificacoes importantes, sem poluir a barra com dezenas de badges tecnicos.
  */
 export default function FactoryHeader({
+  activeNav = 'dashboard',
   systemStatus,
   lastUpdated,
   isApiOnline,
   onRefresh,
-  activeTab = 'factory-live',
-  onSelectTab,
+  unreviewedCount = 0,
+  onNavigate,
 }) {
   const [confirmAction, setConfirmAction] = useState(null); // 'pause' | 'resume' | 'run-cycle' | null
   const [isMutating, setIsMutating] = useState(false);
@@ -23,11 +21,19 @@ export default function FactoryHeader({
   const [successFeedback, setSuccessFeedback] = useState(null);
 
   const isPaused = Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED');
-  const factoryState = systemStatus?.factory_state || (isPaused ? 'PAUSED' : 'RUNNING');
-  const workerRunning = Boolean(systemStatus?.worker_running);
-  const schedulerRunning = Boolean(systemStatus?.scheduler_running);
-  const autoPublish = Boolean(systemStatus?.auto_publish_enabled);
-  const dryRun = Boolean(systemStatus?.dry_run);
+
+  // Mapeamento semântico dos títulos de página
+  const titles = {
+    dashboard: { title: 'Dashboard', subtitle: 'Visão executiva e status da fábrica' },
+    channels: { title: 'Meus Canais', subtitle: 'Gerenciamento de canais e templates de conteúdo' },
+    production: { title: 'Esteira de Produção', subtitle: 'Grafo de renderização e tarefas ativas' },
+    review: { title: 'Estoque & Revisão', subtitle: 'Aprovação de vídeos homologados e controle de qualidade' },
+    schedules: { title: 'Agendamentos', subtitle: 'Fila de publicação automatizada no YouTube' },
+    analytics: { title: 'Analytics', subtitle: 'Métricas de publicação e histórico de postagens' },
+    settings: { title: 'Configurações', subtitle: 'Preferências gerais, provedores e diagnóstico' },
+  };
+
+  const currentMeta = titles[activeNav] || { title: 'Video Factory', subtitle: 'Operação autônoma de vídeos' };
 
   const handleRequestAction = (action) => {
     setErrorMessage(null);
@@ -55,17 +61,15 @@ export default function FactoryHeader({
         await resumeFactory();
         setSuccessFeedback('Fábrica retomada');
       } else if (action === 'run-cycle') {
-        await runFactoryCycle({ force: true, one_shot: true });
-        setSuccessFeedback('Ciclo disparado com sucesso');
+        const res = await runFactoryCycle({ force: true, oneShot: true });
+        setSuccessFeedback(res.message || 'Ciclo disparado com sucesso');
       }
       setConfirmAction(null);
-      if (onRefresh) {
-        await onRefresh();
-      }
+      if (onRefresh) await onRefresh();
       setTimeout(() => setSuccessFeedback(null), 4000);
     } catch (err) {
-      console.error(`Falha ao executar ${action} da fábrica:`, err);
-      let msg = err.message || `Falha ao processar operação. Tente novamente.`;
+      console.error(`Falha ao executar ${action}:`, err);
+      let msg = err.message || 'Falha ao processar operação.';
       if (err.status === 409) {
         if (msg.toLowerCase().includes('already in progress')) {
           msg = 'Ciclo de produção já em andamento em segundo plano.';
@@ -85,235 +89,109 @@ export default function FactoryHeader({
 
   return (
     <>
-      <header className="factory-header">
-        <div className="header-brand">
-          <div className="brand-title">
-            <span>⚙️ VIDEO FACTORY</span>
-            <span className="brand-badge">
-              {activeTab === 'agent-ops' ? 'Agent Ops' : activeTab === 'video-review' ? 'Revisão' : 'Factory Live'}
-            </span>
-          </div>
-
-          {/* Navigation Tab Switcher: Factory Live | Agent Ops | Revisão de Vídeos */}
-          <nav className="header-nav-switcher" aria-label="Navegação Principal">
-            <button
-              type="button"
-              className={`nav-switch-tab ${activeTab === 'factory-live' ? 'active' : ''}`}
-              onClick={() => onSelectTab && onSelectTab('factory-live')}
-            >
-              <span className="tab-icon">🏭</span>
-              <span>Factory Live</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-switch-tab ${activeTab === 'agent-ops' ? 'active' : ''}`}
-              onClick={() => onSelectTab && onSelectTab('agent-ops')}
-            >
-              <span className="tab-icon">🤖</span>
-              <span>Agent Ops</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-switch-tab ${activeTab === 'video-review' ? 'active' : ''}`}
-              onClick={() => onSelectTab && onSelectTab('video-review')}
-            >
-              <span className="tab-icon">🎬</span>
-              <span>Revisão de Vídeos</span>
-            </button>
-          </nav>
+      <header className="v2-header">
+        {/* Esquerda: Titulo e Subtitulo Contextual */}
+        <div className="v2-header-title-box">
+          <h1 className="v2-header-title">{currentMeta.title}</h1>
+          <span className="v2-header-subtitle">{currentMeta.subtitle}</span>
         </div>
 
-        <div className="header-status-group">
-          {/* 1. Fábrica (RUNNING / PAUSED) */}
-          <div className={`status-pill ${isPaused ? 'pill-paused' : 'pill-online'}`}>
-            <span className={`indicator-dot ${isPaused ? 'inactive' : 'active'}`} />
-            <span>Fábrica: {factoryState === 'PAUSED' ? 'Pausada' : 'Online'}</span>
-          </div>
-
-          {/* Controle Operacional de Fábrica (Missão 3: Pause/Resume; Missão 4: Run Cycle) */}
-          <div className="factory-action-container" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        {/* Direita: Acoes Rapidas & Notificacoes */}
+        <div className="v2-header-actions-box">
+          {/* Acoes de Controle da Fabrica (Pause / Resume / Run-Cycle) */}
+          <div className="v2-header-cycle-controls">
             {!confirmAction ? (
               <>
                 <button
                   type="button"
-                  className="factory-toggle-btn"
+                  className={`v2-btn-toggle-factory ${isPaused ? 'paused' : 'live'}`}
                   onClick={() => handleRequestAction(isPaused ? 'resume' : 'pause')}
                   disabled={isMutating}
                   title={isPaused ? 'Retomar operações da fábrica' : 'Pausar operações da fábrica'}
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    padding: '3px 10px',
-                    borderRadius: '16px',
-                    border: isPaused ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
-                    backgroundColor: isPaused ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
-                    color: isPaused ? '#34d399' : '#fbbf24',
-                    cursor: isMutating ? 'not-allowed' : 'pointer',
-                    opacity: isMutating ? 0.6 : 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s ease',
-                  }}
                 >
-                  {isPaused ? '▶ Retomar' : '⏸ Pausar'}
+                  <span className={`v2-btn-dot ${isPaused ? 'dot-paused' : 'dot-live'}`} />
+                  {isPaused ? 'Retomar Fábrica' : 'Pausar'}
                 </button>
 
                 <button
                   type="button"
-                  className="factory-cycle-btn"
+                  className="v2-btn-header-cycle"
                   onClick={() => handleRequestAction('run-cycle')}
                   disabled={isMutating || isPaused}
-                  title={isPaused ? 'Fábrica pausada — retome antes de disparar' : 'Disparar ciclo de produção autônoma supervisionado'}
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    padding: '3px 10px',
-                    borderRadius: '16px',
-                    border: '1px solid rgba(56, 189, 248, 0.4)',
-                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                    color: '#38bdf8',
-                    cursor: (isMutating || isPaused) ? 'not-allowed' : 'pointer',
-                    opacity: (isMutating || isPaused) ? 0.5 : 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s ease',
-                  }}
+                  title={isPaused ? 'Fábrica pausada — retome antes de disparar' : 'Disparar ciclo autônomo supervisionado'}
                 >
                   ⚡ Executar Ciclo
                 </button>
               </>
             ) : (
-              <div
-                className="factory-confirm-inline"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '2px 8px',
-                  borderRadius: '14px',
-                  backgroundColor: 'rgba(30, 41, 59, 0.8)',
-                  border: '1px solid rgba(148, 163, 184, 0.25)',
-                }}
-              >
-                <span style={{ fontSize: '11px', color: '#e2e8f0' }}>
+              <div className="v2-header-confirm-inline">
+                <span className="v2-confirm-text">
                   {confirmAction === 'pause'
-                    ? 'Confirmar pausa?'
+                    ? 'Pausar fábrica?'
                     : confirmAction === 'resume'
-                    ? 'Confirmar retomada?'
-                    : 'Disparar ciclo autônomo agora?'}
+                    ? 'Retomar fábrica?'
+                    : 'Disparar ciclo agora?'}
                 </span>
                 <button
                   type="button"
-                  className="confirm-btn-yes"
+                  className="v2-confirm-btn-yes"
                   onClick={handleConfirmAction}
                   disabled={isMutating}
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    border: 'none',
-                    backgroundColor: confirmAction === 'pause' ? '#d97706' : confirmAction === 'resume' ? '#059669' : '#0284c7',
-                    color: '#ffffff',
-                    cursor: isMutating ? 'not-allowed' : 'pointer',
-                  }}
                 >
-                  {isMutating ? 'Processando...' : 'Sim'}
+                  {isMutating ? '...' : 'Sim'}
                 </button>
                 <button
                   type="button"
-                  className="confirm-btn-no"
+                  className="v2-confirm-btn-no"
                   onClick={handleCancelAction}
                   disabled={isMutating}
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 500,
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    border: '1px solid #475569',
-                    backgroundColor: 'transparent',
-                    color: '#94a3b8',
-                    cursor: isMutating ? 'not-allowed' : 'pointer',
-                  }}
                 >
-                  Cancelar
+                  Não
                 </button>
               </div>
             )}
 
             {successFeedback && (
-              <span
-                className="factory-action-success"
-                style={{
-                  fontSize: '11px',
-                  color: '#34d399',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '3px',
-                }}
-              >
+              <span className="v2-header-toast success">
                 ✓ {successFeedback}
               </span>
             )}
 
             {errorMessage && (
-              <span
-                className="factory-action-error"
-                style={{
-                  fontSize: '11px',
-                  color: '#f87171',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '3px',
-                }}
-                title={errorMessage}
-              >
+              <span className="v2-header-toast error" title={errorMessage}>
                 ⚠️ {errorMessage}
               </span>
             )}
           </div>
 
-          {/* 2. Worker (Ativo / Parado inesperado) */}
-          <div className={`status-pill ${workerRunning ? 'pill-running' : 'pill-stopped'}`}>
-            <span className={`indicator-dot ${workerRunning ? 'active' : 'inactive'}`} />
-            <span>Worker: {workerRunning ? 'Ativo' : 'Parado'}</span>
-          </div>
+          {/* Sino de Notificacoes / Estoque Pendente */}
+          {unreviewedCount > 0 && (
+            <button
+              type="button"
+              className="v2-header-notif-btn"
+              onClick={() => onNavigate && onNavigate('review')}
+              title={`${unreviewedCount} vídeo(s) aguardando revisão humana`}
+            >
+              🔔 <span className="v2-notif-badge">{unreviewedCount}</span>
+            </button>
+          )}
 
-          {/* 3. Scheduler (Ativo / Parado inesperado) */}
-          <div className={`status-pill ${schedulerRunning ? 'pill-running' : 'pill-stopped'}`}>
-            <span className={`indicator-dot ${schedulerRunning ? 'active' : 'inactive'}`} />
-            <span>Scheduler: {schedulerRunning ? 'Ativo' : 'Parado'}</span>
-          </div>
-
-          {/* 4. Auto Publish (Ativo / Off intencional) */}
-          <div className={`status-pill ${autoPublish ? 'pill-running' : 'pill-off'}`}>
-            <span className={`indicator-dot ${autoPublish ? 'active' : 'neutral'}`} />
-            <span>Auto Publish: {autoPublish ? 'Ativo' : 'Off'}</span>
-          </div>
-
-          {/* 5. Dry Run (ON âmbar / OFF neutro) */}
-          <div className={`status-pill ${dryRun ? 'pill-warning' : 'pill-off'}`}>
-            <span className={`indicator-dot ${dryRun ? 'warning' : 'neutral'}`} />
-            <span>Dry Run: {dryRun ? 'ON' : 'OFF'}</span>
-          </div>
-        </div>
-
-        <div className="header-meta">
-          <span className="last-update-time">
-            {lastUpdated ? `Atualizado: ${lastUpdated.toLocaleTimeString()}` : 'Conectando...'}
-          </span>
-          <button className="refresh-btn" onClick={onRefresh} title="Atualizar agora">
-            ↻ Atualizar
+          {/* Botao Discreto de Atualizacao */}
+          <button
+            type="button"
+            className="v2-header-refresh-btn"
+            onClick={onRefresh}
+            title={lastUpdated ? `Atualizado: ${lastUpdated.toLocaleTimeString()}` : 'Atualizar'}
+          >
+            ↻
           </button>
         </div>
       </header>
 
       {!isApiOnline && (
-        <div className="api-offline-banner">
+        <div className="v2-offline-banner">
           <div>
-            <strong>🔴 API Indisponível</strong> — Exibindo último snapshot em memória da sessão.
+            <strong>🔴 Servidor Desconectado</strong> — Exibindo último snapshot em memória da sessão.
           </div>
           {lastUpdated && (
             <span>Última sincronização bem-sucedida: {lastUpdated.toLocaleTimeString()}</span>

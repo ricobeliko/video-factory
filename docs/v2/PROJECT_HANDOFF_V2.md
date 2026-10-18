@@ -77,3 +77,10 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   - `test_v2_isolation.py`: 3/3 PASS (bloqueio estrito de acesso ao PROD e DEV).
   - `test_v2_performance.py`: 3/3 PASS.
   - `test_web_ui_v2_api.py` (run-cycle active tasks & concurrency guards): PASS.
+
+## Estado da Interface Web (Redesign SaaS V2.10)
+- **Arquitetura Visual:** SaaS Minimalist Dark (`#0b0f17`, `#111827`, `#1f2937`), accent blue discreto (`#3b82f6`).
+- **Navegação (7 Seções Canônicas):** Dashboard, Meus Canais, Produção, Estoque & Revisão, Agendamentos, Analytics, Configurações.
+- **Telemetria Técnica e Diagnóstico:** Worker, Scheduler, Dry Run, Auto Publish e o Agent Ops Room estão consolidados em `Configurações > Diagnóstico & Telemetria` e no card compacto de Saúde do Sistema no Dashboard.
+- **Homologação:** Validado em 1920x1080 (Desktop), 1366x768 (Notebook) e 390x844 (Mobile) com Playwright/Edge.
+- **Performance:** Bundle JS comprimido de 143.39 kB (< 150 kB), tempo de carga ~2.1s, CLS zero.

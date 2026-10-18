@@ -119,3 +119,14 @@ Para viabilizar a avaliação completa das 7 abas do Workspace de Canais sem exp
 ehearse_v2_migration.py.
   - Refinamento do RTO medido e procedimento de avaliação de divergências em PRODUCTION_CUTOVER_PLAN.md e ROLLBACK_PLAN.md.
   - Relatório Canônico Mestre de Readiness registrado em docs/v2/V214_CUTOVER_READINESS.md.
+
+## Fase 15A — Preparação Final da Substituição (Concluída)
+- **Status:** CONCLUÍDO (Auditoria Passiva e Roteiro de Execução Homologados)
+- **Objetivo:** Preparar uma substituição única, segura e reversível da interface Streamlit pela Video Factory V2 React/FastAPI sem qualquer intervenção no PC Forte durante a fase de dev.
+- **Entregas:**
+  - Script oficial de auditoria passiva no PC Forte: `scripts/v2_pre_cutover_audit.ps1`.
+  - Manual de auditoria passiva: `docs/v2/V215A_PRE_CUTOVER_AUDIT.md`.
+  - Roteiro operacional de execução do deploy: `docs/v2/V215_DEPLOY_EXECUTION.md`.
+  - Atualização dos planos de cutover e rollback (`PRODUCTION_CUTOVER_PLAN.md` e `ROLLBACK_PLAN.md`).
+  - Estratégia de reconciliação do hotfix pontual de `autonomous_production.py` com preservação em backup isolado e sem comandos destrutivos.
+  - Validação estrita de isolamento e bloqueio de publicação externa não autorizada.

@@ -1,5 +1,5 @@
 # Video Factory V2 — Plano de Migração e Cutover para Produção (PC Forte)
-**Documento Operacional V2.14**
+**Documento Operacional V2.15A**
 **Data de Atualização:** 18/10/2026
 **Ambiente Alvo Futuro:** C:\Projetos\MoneyPrinterTurbo (PC Forte)
 **Ambiente Homologado:** C:\Projetos\MoneyPrinterTurbo-V2 (eat/video-factory-v2)
@@ -9,6 +9,17 @@
 > [!CRITICAL]
 > **ESTA MISSÃO NÃO EXECUTA DEPLOY EM PRODUÇÃO.**
 > Este documento é o plano rigoroso e homologado a ser executado exclusivamente em janela de manutenção programada pelo operador humano no PC Forte.
+
+---
+
+## 0. Pré-Requisito Mandatório: Auditoria Passiva Aprovada
+
+Antes de qualquer ação de parada ou modificação no PC Forte, o operador deve executar o script de auditoria 100% passivo:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File scripts\v2_pre_cutover_audit.ps1
+```
+Apenas prossiga com as fases abaixo se o resultado for **`STATUS AUDITORIA : PASS`**.
+Se houver bloqueios (`BLOCKED`), resolva-os antes de iniciar a janela.
 
 ---
 

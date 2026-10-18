@@ -140,3 +140,16 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   3. **Preparação de Produção:** isolation_guard.py adaptado para permitir execução legítima em C:\Projetos\MoneyPrinterTurbo quando MPT_ENVIRONMENT=PRODUCTION, mantendo bloqueio fail-closed em DEV.
   4. **Planejamento de Cutover e Rollback:** Planos de Cutover e Rollback refinados com estimativas de RTO medidas (10-15 min) e rotinas de detecção de divergência pré-restauração.
   5. **Próximo Gate:** PRODUCTION_CUTOVER_EXECUTED (Janela de Transição Programada no PC Forte por Operador Humano).
+
+---
+
+## 8. Preparação Final da Substituição V2.15A (18/10/2026)
+
+- **Status:** CONCLUÍDO (PRE_CUTOVER_READY = PASS)
+- **Ambiente:** Novo PC DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Implementações e Entregas:**
+  1. **Script de Auditoria Passiva Pré-Cutover:** Desenvolvido `scripts/v2_pre_cutover_audit.ps1` — 100% somente leitura, zero escritas, zero paradas de serviço, zero alteração de banco, zero vazamento de chaves ou credenciais. Emite verificação objetiva `STATUS AUDITORIA : PASS / BLOCKED`.
+  2. **Documentação Operacional de Cutover:** Criados `docs/v2/V215A_PRE_CUTOVER_AUDIT.md` (manual de auditoria) e `docs/v2/V215_DEPLOY_EXECUTION.md` (passo a passo minucioso para o operador humano no PC Forte).
+  3. **Reconciliação Segura do Hotfix Local:** Procedimento documentado para lidar com o hotfix de `app/services/autonomous_production.py` (`rejected_struct = None`) e arquivo `.bak` no PC Forte via backup isolado e `git restore`, proibindo estritamente `git reset --hard` e `git clean`.
+  4. **Segurança de Produção & Não-Concorrência:** Garantido que `MPT_ENVIRONMENT=PRODUCTION` não permita acesso fora da raiz, exija PRIMARY e autorização explícita para publicação, e impeça a execução simultânea do Streamlit e da V2 disputando workers.
+  5. **Próximo Gate:** Operador executar auditoria passiva no PC Forte (`powershell.exe -ExecutionPolicy Bypass -File scripts\v2_pre_cutover_audit.ps1`).

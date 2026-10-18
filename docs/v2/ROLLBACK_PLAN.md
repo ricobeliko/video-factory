@@ -1,5 +1,5 @@
 # Video Factory V2 — Plano de Rollback e Recuperação
-**Documento Operacional V2.14**
+**Documento Operacional V2.15A**
 **Data de Atualização:** 18/10/2026
 **Ambiente Alvo:** C:\Projetos\MoneyPrinterTurbo (PC Forte)
 

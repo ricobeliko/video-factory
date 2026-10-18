@@ -88,7 +88,7 @@
     - **Sintoma:** Geração completa do canal *Dose Diária de GTA VI* funcionou e foi aprovada, mas a voz utilizada no vídeo não correspondeu à voz selecionada e salva pelo operador no painel Channel Factory.
     - **Causa Raiz:** A Channel Factory expõe "Voz Global da Fábrica" com a garantia de ser a voz TTS única para todos os canais da fábrica (`config.ui["voice_name"]`). Porém, o onboarding gravava uma cópia da voz no `settings_json` do perfil e `get_generation_profile_context()` avaliava `profile_voice or global_voice`, fazendo com que a voz congelada na criação do canal sobrescrevesse a Voz Global selecionada e salva pelo operador.
     - **Correção:** Em `profile_manager.get_generation_profile_context()`, a precedência foi corrigida para `global_voice or profile_voice or fallback_voice`, garantindo que a Voz Global selecionada e salva em `config.ui['voice_name']` seja soberana para todas as próximas gerações da fábrica, com fallback gracioso para o perfil apenas quando a global estiver vazia. Teste direcionado com duas vozes diferentes confirmou a alternância imediata. Tarefas e vídeos já gerados preservados intactos.
-- **QUIZ_ENGINE_STATUS:** `DEV HOMOLOGATED / Q0-R FROZEN` (Padrão visual Q0-R oficialmente homologado e congelado como referência canônica; vídeo de referência: `storage/poc_quiz/quiz_gate_q0r_escolhas_impossiveis.mp4` [69.26s, 1080x1920]; template canônico versionado: `resource/quiz_templates/quiz_template_q0r_homologado.json`; narração direta sem ordinais, expectativa 2.0s sem contador 3,2,1 com Ken Burns contínuo, porcentagens simultâneas 1.0s com chime harmônico, penúltima religiosa e última seguir no mesmo layout dos cards, thumbnail 9:16 independente; 7 testes direcionados PASS; aguardando autorização humana para avanço ao Q4)
+- **QUIZ_ENGINE_STATUS:** `DEV INTEGRATED / Q4-B COMPLETE` (Integração concluída ao pipeline de tarefas `task.py` via `narrative_structure`, invocação direta de `QuizContentGenerator`, `QuizAssetManager` e `QuizEngine`, isolamento completo por task_id, Quality Gates de moderação e duração, bloqueio de factuais sem fontes comprovadas, promoção segura a READY_STOCK, 5/5 testes direcionados PASS em `test_quiz_integration.py`; aguardando autorização humana para avanço ao Q5)
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**
@@ -216,10 +216,19 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
     - `resource/quiz_templates/quiz_conhecimentos_animais_factual.json` (factual, 6 perguntas com checagem científica 6/6, gabarito e explicação).
     - Ambos 100% compatíveis e aceitos pelo `QuizConfig` da engine.
   - **Suíte de Testes:** 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (17.05s).
-- **Próximos Passos (Fases Q3–Q5):**
-  - **Fase Q3 (Próximo Passo):** Asset Ingestion & Image Pipeline Automation (Download automatizado, cache inteligente e validação de aspect ratio Pexels/Pixabay). **Aguardando aprovação humana explícita antes de iniciar.**
-  - **Fase Q4:** Integração no Channel Factory / task.py / Quality Gate.
-  - **Fase Q5:** Agendamento, Autonomia e Publicação via Post for Me com upload da thumbnail independente.
+- **Fase Q3 (Asset Ingestion & Image Pipeline Automation):** `COMPLETED / DEV VALIDATED` (Commit `97d9d7a`; `QuizAssetManager` em `app/services/quiz_assets.py`, deduplicação Pexels/Pixabay via `used_images.json`, redimensionamento 1200x1066, proveniência auditável e fallback estilizado).
+- **Fase Q0-R (Refinamento de Retenção Visual e Sonora):** `HOMOLOGADA / FROZEN VISUAL STANDARD` (Commit `6ed2af3`; padrão visual canônico congelado em `resource/quiz_templates/quiz_template_q0r_homologado.json` e `storage/poc_quiz/quiz_gate_q0r_escolhas_impossiveis.mp4`; ritmo ágil sem ordinais, expectativa 2.0s sem números 3,2,1 com Ken Burns contínuo, porcentagens simultâneas por 1.0s com chime harmônico, penúltima religiosa e última seguir no padrão de cards, thumbnail 9:16 independente).
+- **Fase Q4 (Integração à Video Factory & Channel Factory):** `COMPLETED (Q4-A & Q4-B) / DEV VALIDATED`
+  - **Q4-A:** Auditoria de integração concluída com mapeamento do menor ponto de integração sem novas dependências ou abstrações.
+  - **Q4-B:** Integração mínima implementada em `app/services/task.py` via `_run_quiz_pipeline` e branch limpo em `_run_pipeline` baseado em `narrative_structure` (prefixo `quiz_` ou `quiz`).
+  - Invocação direta e em processo de `QuizContentGenerator`, `QuizAssetManager` e `QuizEngine` (adicionado wrapper síncrono `render()`).
+  - Isolamento estrito de diretórios transitórios por tarefa (`temp_quiz/` e `images/` dentro de `storage/tasks/{task_id}/`).
+  - Integração aos Quality Gates existentes: moderação pré-TTS em `safety_gate`, conformidade de duração (> 60s) e inspeção FFprobe de integridade em `media_quality`.
+  - Bloqueio factual estrito: quizzes factuais sem fontes independentes verificadas são retidos e bloqueados em `factual_gate` (sem promoção a READY_STOCK).
+  - Promoção garantida a `READY_STOCK` com gravação atômica de `final-1.mp4`, `thumbnail.jpg`, `script.json` e proveniência.
+  - Preservação total do fluxo tradicional para canais convencionais.
+  - Suíte direcionada de testes: 5/5 testes PASS em `test/services/test_quiz_integration.py` (14.95s).
+- **Fase Q5 (Próximo Passo):** Agendamento, Autonomia e Publicação via Post for Me com upload da thumbnail independente. **Aguardando aprovação humana explícita antes de iniciar.**
 
 ### Recuperação de Tarefas Google Flow Legadas (CONCLUÍDA):
 - **Causa Raiz & Contexto de Produção:** O PR #95 implementou fallback automático a partir do `flow/manifest.json`, mas a validação real em produção revelou que as 4 tarefas candidatas eram **HÍBRIDAS** (6 clipes Google Flow premium + cenas stock legadas cujos arquivos e provedores não foram persistidos). Sem evidência suficiente para reconstrução determinística sem inventar dados, o operador revisou e aprovou manualmente os 4 artefatos finais completos via PR #96 (`approve_legacy_task_copyright_op`), vinculados ao SHA-256 do `final-1.mp4`.

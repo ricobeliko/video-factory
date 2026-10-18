@@ -2703,6 +2703,297 @@ def _check_cancellation(task_id: str, checkpoint: str, progress: int = 0) -> dic
     return None
 
 
+
+def _run_quiz_pipeline(
+    task_id: str,
+    params: VideoParams,
+    stop_at: str = "video",
+) -> dict:
+    """Execução do pipeline do Quiz Engine homologado (Q0-R).
+    
+    Isola artefatos por task_id, invoca QuizContentGenerator, QuizAssetManager e
+    QuizEngine em processo, aplica os Quality Gates (segurança, factual e mídia)
+    e promove para READY_STOCK somente após aprovação integral.
+    """
+    logger.info(f"[QUIZ_PIPELINE][START] task_id={task_id} structure={getattr(params, 'narrative_structure', None)}")
+    narrative_structure = getattr(params, "narrative_structure", "") or ""
+    format_type = "factual" if "factual" in narrative_structure else "subjective"
+    niche = getattr(params, "niche", None) or getattr(params, "video_subject", None) or "dilemas"
+    closing_type = getattr(params, "closing_type", None) or ("score_challenge" if format_type == "factual" else "quiz_choice_religious")
+    num_questions = getattr(params, "num_questions", None) or (6 if format_type == "factual" else 8)
+
+    task_dir = utils.task_dir(task_id)
+    temp_quiz_dir = os.path.join(task_dir, "temp_quiz")
+    images_dir = os.path.join(task_dir, "images")
+    final_video_path = os.path.join(task_dir, "final-1.mp4")
+    thumbnail_path = os.path.join(task_dir, "thumbnail.jpg")
+    quiz_config_path = os.path.join(task_dir, "quiz_config.json")
+
+    os.makedirs(task_dir, exist_ok=True)
+    os.makedirs(temp_quiz_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
+
+    # 1. Geração de Conteúdo Estruturado (QuizContentGenerator)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=10,
+        stage="SCRIPT",
+        profile_id=getattr(params, "profile_id", None),
+    )
+
+    try:
+        from app.services.quiz_generator import QuizContentGenerator
+        generator = QuizContentGenerator()
+        raw_quiz = generator.generate_quiz_structure(
+            niche=niche,
+            format_type=format_type,
+            num_questions=num_questions,
+            quiz_title=params.video_subject if params.video_subject and params.video_subject != "auto" else None,
+            closing_type=closing_type,
+        )
+    except Exception as exc:
+        logger.error(f"[QUIZ_GEN][ERROR] task_id={task_id}: {exc}")
+        return _mark_task_failed(task_id, "script", f"Quiz generation failed: {exc}")
+
+    questions = raw_quiz.get("questions", [])
+    if not questions:
+        return _mark_task_failed(task_id, "script", "No questions generated for quiz")
+
+    video_script = "\n\n".join(
+        f"[{q.get('id', f'q{i}')}] {q.get('header', '')} {q.get('narration', '')}"
+        for i, q in enumerate(questions, 1)
+    )
+    video_terms = [
+        q.get("top", {}).get("image_query", "")
+        for q in questions
+        if q.get("top", {}).get("image_query")
+    ]
+
+    save_script_data(task_id, video_script, video_terms, params)
+    task_artifacts.patch_script_data(task_id, quiz_data=raw_quiz)
+
+    # Quality Gate 1: Safety Gate (Moderação Prévia de Texto)
+    try:
+        from app.services import safety_gate
+        assessment = safety_gate.evaluate_script_safety(
+            task_id=task_id,
+            topic=params.video_subject or niche,
+            script=video_script,
+            preset=getattr(params, "monetization_preset", None),
+            narrative_structure=narrative_structure,
+            platform=getattr(params, "platform", None) or "youtube",
+        )
+        params.safety_status = assessment.get("safety_status")
+        params.safety_reasons = "; ".join(assessment.get("safety_reasons", []))
+        sm.state.update_task(
+            task_id,
+            safety_status=assessment.get("safety_status"),
+            safety_reasons=assessment.get("safety_reasons"),
+            narrative_structure=narrative_structure,
+        )
+        if params.safety_status == const.SAFETY_STATUS_BLOCK:
+            logger.error(f"[SAFETY][BLOCK_QUIZ] task_id={task_id} reasons={params.safety_reasons}")
+            return _mark_task_failed(
+                task_id,
+                "script",
+                f"Safety Gate blocked script: {params.safety_reasons}",
+                details={"safety_status": params.safety_status, "safety_reasons": assessment.get("safety_reasons", [])},
+            )
+    except Exception as exc:
+        logger.warning(f"[SafetyGate] Falha ao avaliar roteiro quiz para {task_id}: {exc}")
+
+    # Quality Gate 2: Factual Safety Check (Bloqueio sem fontes independentes)
+    if format_type == "factual":
+        unverified = [
+            q for q in questions
+            if not q.get("is_closing_choice") and (not q.get("verified") or q.get("publication_gate") == "BLOCKED_PENDING_EXTERNAL_AUDIT")
+        ]
+        if unverified:
+            logger.warning(f"[QUIZ_FACTUAL_GATE] {len(unverified)} perguntas factuais não verificadas na tarefa {task_id}")
+            task_artifacts.patch_script_data(
+                task_id,
+                factual_safety={
+                    "status": "BLOCKED",
+                    "unverified_count": len(unverified),
+                    "reason": "Perguntas factuais sem fontes independentes verificadas",
+                },
+            )
+            return _mark_task_failed(
+                task_id,
+                "factual_gate",
+                f"Factual quiz contains {len(unverified)} unverified questions without independent sources",
+                details={"unverified_questions": [q.get("id") for q in unverified]},
+            )
+
+    if stop_at == "script":
+        sm.state.update_task(task_id, state=const.TASK_STATE_COMPLETE, progress=100, script=video_script)
+        return {"script": video_script, "quiz_data": raw_quiz}
+
+    # Checkpoint de cancelamento
+    cancel_res = _check_cancellation(task_id, "after_script", progress=20)
+    if cancel_res:
+        return cancel_res
+
+    # 2. Resolução e Preparação de Imagens (QuizAssetManager)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=30,
+        stage="MATERIALS",
+    )
+
+    try:
+        from app.services.quiz_assets import QuizAssetManager
+        asset_mgr = QuizAssetManager()
+        processed_quiz = asset_mgr.process_quiz(
+            quiz_data=raw_quiz,
+            output_images_dir=images_dir,
+            output_video_path=final_video_path,
+            output_thumbnail_path=thumbnail_path,
+        )
+    except Exception as exc:
+        logger.error(f"[QUIZ_ASSETS][ERROR] task_id={task_id}: {exc}")
+        return _mark_task_failed(task_id, "materials", f"Quiz assets processing failed: {exc}")
+
+    task_artifacts.patch_script_data(
+        task_id,
+        asset_provenance=processed_quiz.get("asset_provenance", []),
+    )
+
+    if stop_at == "materials":
+        material_paths = [p.get("local_path") for p in processed_quiz.get("asset_provenance", [])]
+        sm.state.update_task(task_id, state=const.TASK_STATE_COMPLETE, progress=100, materials=material_paths)
+        return {"materials": material_paths}
+
+    # Checkpoint de cancelamento
+    cancel_res = _check_cancellation(task_id, "after_materials", progress=50)
+    if cancel_res:
+        return cancel_res
+
+    # 3. Renderização Completa (QuizEngine Q0-R)
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_PROCESSING,
+        progress=60,
+        stage="VIDEO",
+    )
+
+    try:
+        from scripts.poc_quiz_render import QuizConfig, QuizEngine
+        quiz_cfg = generator.export_to_quiz_config(
+            raw_quiz=processed_quiz,
+            output_json_path=quiz_config_path,
+            output_video_path=final_video_path,
+            output_thumbnail_path=thumbnail_path,
+            temp_dir=temp_quiz_dir,
+            images_dir=images_dir,
+        )
+        engine = QuizEngine(config=quiz_cfg)
+        render_result = engine.render()
+    except Exception as exc:
+        logger.error(f"[QUIZ_ENGINE][ERROR] task_id={task_id}: {exc}")
+        return _mark_task_failed(task_id, "video", f"Quiz render failed: {exc}")
+
+    actual_duration = float(render_result.get("duration", 0.0))
+
+    # Quality Gate 3: Duração
+    try:
+        from app.services import safety_gate
+        dur_assessment = safety_gate.evaluate_duration_safety(
+            task_id=task_id,
+            actual_duration=actual_duration,
+            preset=getattr(params, "monetization_preset", None),
+            platform=getattr(params, "platform", None) or "youtube",
+        )
+        if dur_assessment.get("safety_status") == const.SAFETY_STATUS_BLOCK:
+            reasons = "; ".join(dur_assessment.get("safety_reasons", []))
+            return _mark_task_failed(task_id, "duration_safety", f"Duration safety blocked: {reasons}", details=dur_assessment)
+    except Exception as exc:
+        logger.warning(f"[SafetyGate] Falha ao avaliar duração pós-render para {task_id}: {exc}")
+
+    # Quality Gate 4: Integridade de Mídia (Media Quality)
+    mq_report = {}
+    try:
+        from app.services import media_quality
+        is_media_quality_required = getattr(params, "final_media_quality_required", False)
+        mq_report = media_quality.evaluate_final_media_quality(
+            video_path=final_video_path,
+            params=params,
+            expected_audio_duration=actual_duration,
+            task_id=task_id,
+            required=is_media_quality_required,
+        )
+        if is_media_quality_required and mq_report.get("status") == "BLOCK":
+            block_reasons = "; ".join(mq_report.get("reasons", []))
+            return _mark_task_failed(task_id, "final_media_quality", f"Media quality blocked: {block_reasons}", details=mq_report)
+    except Exception as exc:
+        logger.warning(f"[MediaQuality] Falha na avaliação de qualidade de mídia para {task_id}: {exc}")
+
+    # 4. Promoção a READY_STOCK
+    task_artifacts.patch_script_data(
+        task_id,
+        final_media_quality=mq_report,
+        render_result=render_result,
+        thumbnail_path=thumbnail_path,
+    )
+
+    cross_post_enabled = (
+        upload_post.upload_post_service.is_configured()
+        and upload_post.upload_post_service.auto_upload
+    )
+    platforms = (
+        list(upload_post.upload_post_service.platforms) if cross_post_enabled else []
+    )
+    should_cross_post = cross_post_enabled and bool(platforms)
+    cross_post_state = const.CROSS_POST_STATE_PENDING if should_cross_post else None
+
+    kwargs = {
+        "videos": [final_video_path],
+        "combined_videos": [final_video_path],
+        "script": video_script,
+        "terms": video_terms,
+        "audio_duration": actual_duration,
+        "thumbnail_path": thumbnail_path,
+        "asset_provenance": processed_quiz.get("asset_provenance", []),
+        "final_media_quality_status": mq_report.get("status", "PASS"),
+        "final_media_quality_reasons": mq_report.get("reasons", []),
+        "final_media_quality_metrics": mq_report.get("metrics", {}),
+        "final_media_reports": [mq_report] if mq_report else [],
+        "cross_post_state": cross_post_state,
+        "cross_post_results": None,
+        "cross_post_error": None,
+        "cross_post_owner": _cross_post_process_owner if should_cross_post else None,
+    }
+
+    sm.state.update_task(
+        task_id,
+        state=const.TASK_STATE_COMPLETE,
+        progress=100,
+        stage="READY_STOCK",
+        provider="ffmpeg",
+        **kwargs,
+    )
+
+    if should_cross_post:
+        scheduling_error = _schedule_cross_post(
+            task_id=task_id,
+            video_paths=[final_video_path],
+            params=params,
+            video_script=video_script,
+            platforms=platforms,
+            youtube_privacy_status=upload_post.upload_post_service.youtube_privacy_status,
+            youtube_made_for_kids=upload_post.upload_post_service.youtube_made_for_kids,
+        )
+        if scheduling_error:
+            kwargs["cross_post_state"] = const.CROSS_POST_STATE_FAILED
+            kwargs["cross_post_error"] = scheduling_error
+            kwargs["cross_post_owner"] = None
+
+    logger.info(f"[QUIZ_PIPELINE][COMPLETE] task_id={task_id} video={final_video_path} duration={actual_duration:.1f}s")
+    return kwargs
+
+
 def _run_pipeline(
     task_id,
     params: VideoParams,
@@ -2824,6 +3115,11 @@ def _run_pipeline(
     cancel_res = _check_cancellation(task_id, "before_script", progress=5)
     if cancel_res:
         return cancel_res
+
+    # Branch: Quiz Engine (Fase Q4-B)
+    narrative_structure = getattr(params, "narrative_structure", None) or ""
+    if narrative_structure.startswith("quiz"):
+        return _run_quiz_pipeline(task_id=task_id, params=params, stop_at=stop_at)
 
     # 1. Generate script
     logger.info(f"[GEN][SCRIPT_START] task_id={task_id}")

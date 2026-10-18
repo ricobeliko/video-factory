@@ -113,7 +113,7 @@
 - **Agent Ops V1.1 — Live Agent Observability** = COMPLETED / DEV VALIDATED (Aba independente no Web UI V2 com telemetria real do AgentBridge MVP A10, feed sanitizado de atividades, 4 papéis de agentes, endpoint read-only e hotfix b20878c)
 - **AgentBridge MVP A10 Integration** = VERIFIED / FROZEN (Commit 3586364; ciclo completo Architect-Executor-Validator-Commit operando em DEV)
 - **V16.31 QG-V2.2 Safe Recovery of Held Videos** = DEV_VALIDATED (CLI `scripts/recover_held_quality_videos.py` com dry-run default, recuperação controlada via `app/services/quality_recovery.py` para tarefas com MP4 íntegro e Safety/Copyright PASS, histórico append-only, zero duplicação/regeneração/publicação espontânea, 10/10 testes direcionados PASS)
-- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada como Padrão Visual Oficial; Fase Q4 Próxima)
+- **QUIZ_ENGINE_TRACK** = ACTIVE (Fase Q0 Concluída; Fase Q1 Concluída e Commitada `132ae83`; Fase Q2 Concluída e Commitada `b4745ca`; Fase Q3 Concluída e Commitada `97d9d7a`; Fase Q0-R Homologada e Congelada `6ed2af3`; Fase Q4 Concluída e Validada; Fase Q5 Próxima)
 
 ---
 
@@ -174,12 +174,19 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
   - **Reutilização:** Regras homologadas integradas à arquitetura para reutilização automática em qualquer nicho temático, mantendo conteúdo editorial, imagens e encerramentos configuráveis por canal.
   - **Validação:** 7 testes unitários direcionados PASS (3/3 em `test_quiz_engine.py` e 4/4 em `test_quiz_generator.py`).
 
-- **Fase Q4 — Integração à Video Factory & Channel Factory:** `PLANNED (NEXT GATE)`
-  - Onboarding do novo tipo de vídeo ("Quiz") no `profile_manager` e criação de canal dedicado.
-  - Integração da renderização ao ciclo de execução de tarefas (`task.py`), gerando artefatos canônicos (`final-1.mp4`, thumbnail independente).
-  - Adaptação dos Quality Gate e Safety Gate para avaliar as métricas específicas de retenção e conformidade do Quiz.
+- **Fase Q4 — Integração à Video Factory & Channel Factory:** `COMPLETED (Q4-A & Q4-B) / DEV VALIDATED`
+  - **Q4-A (Auditoria de Integração):** Mapeamento do menor ponto de integração sem novas dependências, sem alterações de schema e com preservação absoluta dos canais existentes.
+  - **Q4-B (Integração Mínima):**
+    - Roteamento nativo e limpo no pipeline de tarefas (`app/services/task.py`) selecionado via `narrative_structure` (prefixo `quiz_` ou `quiz`).
+    - Invocação direta e em processo de `QuizContentGenerator`, `QuizAssetManager` e `QuizEngine` (zero subprocessos externos redundantes).
+    - Isolamento determinístico de todos os artefatos temporários e imagens por tarefa (`storage/tasks/{task_id}/temp_quiz/` e `storage/tasks/{task_id}/images/`).
+    - Integração aos Quality Gates obrigatórios existentes: `safety_gate` (moderação de roteiro e conformidade de duração > 60s) e `media_quality` (verificação FFprobe do MP4).
+    - Governança e bloqueio factual estrito: quizzes factuais sem fontes independentes verificadas são retidos e bloqueados em `factual_gate` (sem promoção a READY_STOCK).
+    - Promoção segura a `READY_STOCK` com artefatos canônicos (`final-1.mp4`, `thumbnail.jpg`, `script.json` e `asset_provenance`).
+    - Preservação integral do fluxo de tarefas tradicionais sem qualquer regressão.
+    - Suíte de testes direcionados da integração: 5/5 testes PASS em `test/services/test_quiz_integration.py`.
 
-- **Fase Q5 — Agendamento, Autonomia e Publicação:** `PLANNED`
+- **Fase Q5 — Agendamento, Autonomia e Publicação:** `PLANNED (NEXT GATE)`
   - Habilitação no Scheduler para produção autônoma com limites de quota.
   - Publicação automática via Post for Me com upload da thumbnail independente 9:16 via parâmetro `thumbnail_url`.
   - Telemetria de retenção e fechamento de ciclo de feedback analítico.

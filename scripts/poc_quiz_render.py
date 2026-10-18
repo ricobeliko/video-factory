@@ -843,6 +843,18 @@ class QuizEngine:
         }
         return result
 
+    def render(self) -> Dict[str, Any]:
+        """Wrapper síncrono para render_async."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    return executor.submit(asyncio.run, self.render_async()).result()
+            return loop.run_until_complete(self.render_async())
+        except RuntimeError:
+            return asyncio.run(self.render_async())
+
 
 # =============================================================================
 # Utilitários de Texto Pillow

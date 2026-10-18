@@ -13,8 +13,8 @@
 | Fase | Descrição | Gate de Saída | Status |
 | :--- | :--- | :--- | :--- |
 | **V2.0** | Isolamento e Baseline do Ambiente | `ISOLATION_PASS` | **CONCLUÍDO (6/6 PASS)** |
-| **V2.1** | Auditoria Funcional Completa & Mapeamento de Duplicações | `AUDIT_COMPLETE` | **EM ANDAMENTO** |
-| **V2.2** | Arquitetura Mínima, Fonte de Verdade e Contratos de API | `ARCHITECTURE_READY` | PENDENTE |
+| **V2.1** | Auditoria Funcional Completa & Mapeamento de Duplicações | `AUDIT_COMPLETE` | **CONCLUÍDO** |
+| **V2.2** | Arquitetura Mínima, Fonte de Verdade e Contratos de API | `ARCHITECTURE_READY` | **EM ANDAMENTO** |
 | **V2.3** | Design System Moderno, Navegação e Layout Base | `UI_FOUNDATION_READY` | PENDENTE |
 | **V2.4** | Canal como Centro da Aplicação (Channel Workspace) | `CHANNEL_WORKSPACE_READY` | PENDENTE |
 | **V2.5** | Formulários Inteligentes por Formato (Tradicional/Quiz) | `FORMAT_AWARE_UI_READY` | PENDENTE |

@@ -11,4 +11,14 @@
   - Implementada e executada suíte `test/test_v2_isolation.py` com 6/6 testes PASS.
   - Criados `docs/v2/ISOLATION_REPORT.md` e `docs/v2/ROADMAP_V2.md`.
 - **Checkpoint Gate:** `ISOLATION_PASS` atingido com sucesso.
-- **Próxima Fase:** FASE V2.1 — AUDITORIA FUNCIONAL COMPLETA.
+
+## [18/10/2026 - 04:10] FASE V2.1 CONCLUÍDA — AUDITORIA FUNCIONAL COMPLETA
+- **Atividades:**
+  - Mapeamento completo de telas, botões, modais e formulários do Streamlit (`webui/Main.py`, `operator_console.py`, `channel_factory.py`).
+  - Identificação de persistência, armazenamento e resolução das regras de precedência de voz (Template > Canal > Global).
+  - Mapeamento do roteamento multiprojeto Post for Me (`farme videos LABEL` vs `tiktok`).
+  - Mapeamento de controles conflitantes entre formatos (Tradicional vs Quiz Q0-R vs Quiz Paper P1.3).
+  - Criados os documentos: `docs/v2/FUNCTIONAL_INVENTORY.md`, `docs/v2/CONFIGURATION_AUDIT.md`, `docs/v2/DUPLICATION_MAP.md`.
+- **Checkpoint Gate:** `AUDIT_COMPLETE` atingido com sucesso.
+- **Próxima Fase:** FASE V2.2 — ARQUITETURA E CONTRATOS.
+

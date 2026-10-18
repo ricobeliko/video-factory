@@ -15,10 +15,10 @@
 | **V2.0** | Isolamento e Baseline do Ambiente | `ISOLATION_PASS` | **CONCLUÍDO (6/6 PASS)** |
 | **V2.1** | Auditoria Funcional Completa & Mapeamento de Duplicações | `AUDIT_COMPLETE` | **CONCLUÍDO** |
 | **V2.2** | Arquitetura Mínima, Fonte de Verdade e Contratos de API | `ARCHITECTURE_READY` | **CONCLUÍDO** |
-| **V2.3** | Design System Moderno, Navegação e Layout Base | `UI_FOUNDATION_READY` | **EM ANDAMENTO** |
-| **V2.4** | Canal como Centro da Aplicação (Channel Workspace) | `CHANNEL_WORKSPACE_READY` | PENDENTE |
-| **V2.5** | Formulários Inteligentes por Formato (Tradicional/Quiz) | `FORMAT_AWARE_UI_READY` | PENDENTE |
-| **V2.6** | Migração das Demais Funcionalidades & Matriz de Paridade | `FUNCTIONAL_PARITY_PASS` | PENDENTE |
+| **V2.3** | Design System Moderno, Navegação e Layout Base | `UI_FOUNDATION_READY` | **CONCLUÍDO** |
+| **V2.4** | Canal como Centro da Aplicação (Channel Workspace) | `CHANNEL_WORKSPACE_READY` | **CONCLUÍDO** |
+| **V2.5** | Formulários Inteligentes por Formato (Tradicional/Quiz) | `FORMAT_AWARE_UI_READY` | **CONCLUÍDO** |
+| **V2.6** | Migração das Demais Funcionalidades & Matriz de Paridade | `FUNCTIONAL_PARITY_PASS` | **EM ANDAMENTO** |
 | **V2.7** | Otimização de Desempenho e Tempos de Resposta | `PERFORMANCE_PASS` | PENDENTE |
 | **V2.8** | Homologação Integrada, Testes de Migração e Cutover Plan | `V2_DEV_HOMOLOGATED` | PENDENTE |
 

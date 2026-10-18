@@ -285,5 +285,20 @@ export async function discardReviewTask(taskId, options = {}) {
   });
 }
 
+export async function getChannelsOverview() {
+  return fetchJson('/api/v2/channels');
+}
 
+export async function createChannel(channelData) {
+  return fetchJson('/api/v2/channels', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(channelData),
+  });
+}
 
+export async function getVideoTemplates() {
+  return fetchJson('/api/v2/templates');
+}

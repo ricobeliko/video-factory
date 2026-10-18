@@ -30,6 +30,20 @@
   - Validada a importação e integridade do router FastAPI V2 (30 rotas operacionais ativas).
   - Criados os documentos: `docs/v2/ARCHITECTURE.md`, `docs/v2/API_CONTRACTS.md`, `docs/v2/SOURCE_OF_TRUTH.md`.
 - **Checkpoint Gate:** `ARCHITECTURE_READY` atingido com sucesso.
-- **Próxima Fase:** FASE V2.3 — DESIGN SYSTEM E NAVEGAÇÃO.
+
+## [18/10/2026 - 04:16] FASES V2.3, V2.4 e V2.5 CONCLUÍDAS — UI, CANAL CENTRAL E SMART FORMS
+- **Atividades:**
+  - Implementada Sidebar lateral moderna com navegação desacoplada (Dashboard, Meus Canais, Pipeline, Estoque & Revisão, Agent Ops, Configurações).
+  - Implementado Channel Workspace completo (`ChannelListView` e `ChannelDetailView`) com gestão unificada em 7 abas: Visão Geral, Editorial, Vídeo & Áudio, Publicação, Automação, Estoque e Logs.
+  - Implementado modal de criação inteligente de canais (`CreateChannelModal`) com seleção orientada a formato (Tradicional, Quiz Q0-R, Quiz Paper P1.3) e exibição de parâmetros congelados.
+  - Implementado `SettingsView` com visualização de isolamento `DEV_V2`, bloqueio de publicação externa e controle de pausa.
+  - Integrado layout completo em `App.jsx` com suporte a URLs hash e persistência de navegação.
+  - Executado build de produção Vite com 100% de sucesso (206 módulos transformados em 4.65s).
+- **Checkpoint Gates:**
+  - `UI_FOUNDATION_READY`: Atingido.
+  - `CHANNEL_WORKSPACE_READY`: Atingido.
+  - `FORMAT_AWARE_UI_READY`: Atingido.
+- **Próxima Fase:** FASE V2.6 — MIGRAÇÃO DAS DEMAIS FUNCIONALIDADES & MATRIZ DE PARIDADE.
+
 
 

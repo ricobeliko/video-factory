@@ -186,7 +186,7 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Preservação integral do fluxo de tarefas tradicionais sem qualquer regressão.
     - Suíte de testes direcionados da integração: 5/5 testes PASS em `test/services/test_quiz_integration.py`.
 
-- **Fase Q5 — Agendamento, Autonomia e Publicação:** `IN PROGRESS (Q5-A & Q5-B1 COMPLETED)`
+- **Fase Q5 — Agendamento, Autonomia e Publicação:** `IN PROGRESS (Q5-A, Q5-B1 & Q5-B2A.1 COMPLETED)`
   - **Q5-A (Auditoria de Agendamento e Publicação):** Mapeamento do isolamento do Scheduler (`auto_publish_enabled=0`, `dry_run=1`), contrato de upload Post for Me e tripla proteção de idempotência.
   - **Q5-B1 (Homologação Real em DEV):** `COMPLETED / DEV VALIDATED`
     - Execução de 1 ciclo real de geração via `task.start()` sem mocks (`homolog_q5b1_1792285986`).
@@ -196,7 +196,16 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
     - Isolamento de publicação confirmado: 0 registros em `publication_events` e 0 registros em `scheduled_posts`.
     - Preservação do pipeline tradicional verificada (1/1 teste direcionado PASS).
     - Tempo total de renderização: 229.03s.
-  - **Q5-B2 (Próximo Passo):** Cadastro controlado do canal de Quiz de Escolhas Impossíveis e planejamento no Scheduler em modo `dry_run` / `auto_publish=0` no PC Forte. **Aguardando aprovação humana explícita antes de iniciar.**
+  - **Q5-B2A (Preflight de Produção & Verificação de Isolamento):** `COMPLETED`
+    - Auditoria formal pré-deploy confirmando compatibilidade integral com o Safe Updater (`update_production.ps1` com parâmetro canônico `-TargetRef`).
+    - Resolução técnica da divergência de adoção do Scheduler: comprovado que o worker daemon em background nunca adota tarefas órfãs (a função `get_adoptable_tasks` atende unicamente à UI de adoção manual).
+    - Risco zero de publicação acidental em produção demonstrado via isolamento de perfil e ausência de destinos na criação de tarefas de teste.
+  - **Q5-B2A.1 (Exposição do Quiz Engine na Web UI):** `COMPLETED`
+    - Adicionado `STRUCTURE_QUIZ_DILEMMA = "quiz_dilemma"` em `app/models/const.py` e integrado à lista `NARRATIVE_STRUCTURES`.
+    - Adicionado rótulo visual `"Quiz / Escolhas Impossíveis"` ao seletor de Estrutura Narrativa em `webui/Main.py`.
+    - Especificação formal registrada em `safety_gate.NARRATIVE_STRUCTURE_SPECS`.
+    - Propagação direta confirmada para `VideoParams.narrative_structure` e despacho verificado para `_run_quiz_pipeline` sem afetar o fluxo tradicional (testes PASS).
+  - **Q5-B2B (Próximo Passo):** Push controlado para `origin/main`, deploy seguro via `update_production.ps1` no PC Forte e geração de 1 tarefa manual sem publicação para homologação final. **Aguardando aprovação humana explícita antes de iniciar.**
 
 ---
 

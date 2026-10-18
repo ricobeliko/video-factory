@@ -5274,6 +5274,7 @@ def _render_script_settings(panel, params):
                     const.STRUCTURE_FACT_CONTEXT: "Fato + Contexto",
                     const.STRUCTURE_MYTH_REALITY: "Mito vs Realidade",
                     const.STRUCTURE_SHORT_STORY: "História Curta",
+                    const.STRUCTURE_QUIZ_DILEMMA: "Quiz / Escolhas Impossíveis",
                 }
                 chosen_struct = stable_selectbox(
                     tr("Narrative Structure"),

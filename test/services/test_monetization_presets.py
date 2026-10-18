@@ -66,7 +66,7 @@ class TestMonetizationPresets(unittest.TestCase):
         self.assertIn("Monetization & Narrative Guidelines", prompt)
 
     def test_05_narrative_structures_vary(self):
-        self.assertEqual(len(const.NARRATIVE_STRUCTURES), 5)
+        self.assertEqual(len(const.NARRATIVE_STRUCTURES), 6)
         for s in const.NARRATIVE_STRUCTURES:
             spec = safety_gate.get_structure_spec(s)
             self.assertIsNotNone(spec)

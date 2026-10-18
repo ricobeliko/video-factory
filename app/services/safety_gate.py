@@ -134,6 +134,24 @@ NARRATIVE_STRUCTURE_SPECS: Dict[str, Dict[str, Any]] = {
             "5. Finalize com um fechamento reflexivo e marcante."
         ),
     },
+    const.STRUCTURE_QUIZ_DILEMMA: {
+        "id": const.STRUCTURE_QUIZ_DILEMMA,
+        "name": "Quiz / Escolhas Impossíveis",
+        "description": "Dilemas de escolha rápida -> Cronômetro -> Revelação -> Engajamento",
+        "steps": [
+            "Apresentação do dilema de escolha rápida",
+            "Opção 1 com apelo visual e dramático",
+            "Opção 2 com contraponto equivalente",
+            "Contagem regressiva e decisão",
+            "Revelação de porcentagens e engajamento",
+        ],
+        "prompt_pt": (
+            "ESTRUTURA NARRATIVA: Quiz / Escolhas Impossíveis\n"
+            "1. Apresente dilemas de escolha rápida entre duas opções marcantes.\n"
+            "2. Equilibre a tensão e o apelo de ambas as opções.\n"
+            "3. Estimule a decisão imediata e a discussão nos comentários."
+        ),
+    },
 }
 
 

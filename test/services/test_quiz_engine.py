@@ -89,3 +89,52 @@ def test_quiz_engine_instantiation():
     engine = QuizEngine(cfg)
     assert engine.ffmpeg_bin != ""
     assert os.path.exists(cfg.images_dir)
+
+
+def test_quiz_narrative_structure_constants_and_routing():
+    from unittest.mock import patch
+    from app.models import const, schema
+    from app.services import safety_gate, task
+
+    # 1. Constante e presença na lista de estruturas da UI
+    assert hasattr(const, "STRUCTURE_QUIZ_DILEMMA")
+    assert const.STRUCTURE_QUIZ_DILEMMA == "quiz_dilemma"
+    assert const.STRUCTURE_QUIZ_DILEMMA in const.NARRATIVE_STRUCTURES
+
+    # 2. Especificação no safety_gate
+    spec = safety_gate.get_structure_spec(const.STRUCTURE_QUIZ_DILEMMA)
+    assert spec is not None
+    assert spec["id"] == "quiz_dilemma"
+    assert len(spec["steps"]) >= 4
+
+    # 3. Propagação em VideoParams
+    params = schema.VideoParams(
+        video_subject="Dilemas Homologação",
+        narrative_structure=const.STRUCTURE_QUIZ_DILEMMA,
+    )
+    assert params.narrative_structure == "quiz_dilemma"
+
+    # 4. Roteamento de pipeline no task manager (Quiz vs Tradicional)
+    with patch("app.services.task._run_quiz_pipeline", return_value={"status": "mock_quiz_routed"}) as mock_quiz, \
+         patch("app.services.task.generate_script", return_value="Roteiro mock") as mock_script, \
+         patch("app.services.task._check_cancellation", return_value=None), \
+         patch("app.services.task.utils.check_ffmpeg_ready", return_value=True):
+
+        # 4a. Rota Quiz Engine
+        res_quiz = task._run_pipeline("test-task-quiz", params)
+        assert res_quiz == {"status": "mock_quiz_routed"}
+        mock_quiz.assert_called_once()
+        mock_script.assert_not_called()
+
+        # 4b. Rota Tradicional (preservada)
+        mock_quiz.reset_mock()
+        mock_script.reset_mock()
+        params_trad = schema.VideoParams(
+            video_subject="Mistério Tradicional",
+            narrative_structure=const.STRUCTURE_MYSTERY,
+        )
+        # stop_at="script" para validar que segue para generate_script sem executar render
+        task._run_pipeline("test-task-trad", params_trad, stop_at="script")
+        mock_quiz.assert_not_called()
+        mock_script.assert_called_once()
+

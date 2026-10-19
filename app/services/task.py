@@ -303,6 +303,15 @@ def _mark_task_failed(
         error=failure["error"],
         **failure_details,
     )
+    try:
+        from app.services import quiz_safety_gate
+        quiz_safety_gate.invalidate_quiz_safety_record(
+            task_id=task_id,
+            stage=stage,
+            error=message,
+        )
+    except Exception as exc:
+        logger.debug(f"[QuizSafetyGate] Erro ao registrar falha de tarefa {task_id}: {exc}")
     return failure
 
 
@@ -2806,7 +2815,13 @@ def _run_quiz_pipeline(
 
     # Quality Gate 1: Safety Gate (Moderação Prévia de Texto)
     try:
-        from app.services import quiz_safety_gate, safety_gate
+        from app.services import profile_manager, quiz_safety_gate, safety_gate
+        task_profile_id = getattr(params, "profile_id", None)
+        if not task_profile_id and task_id:
+            discovered_pid = profile_manager.get_task_profile_id(task_id)
+            if discovered_pid and discovered_pid != profile_manager.DEFAULT_PROFILE_ID:
+                task_profile_id = discovered_pid
+
         if quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
             assessment = quiz_safety_gate.evaluate_quiz_script_safety(
                 task_id=task_id,
@@ -2816,7 +2831,7 @@ def _run_quiz_pipeline(
                 preset=getattr(params, "monetization_preset", None),
                 narrative_structure=narrative_structure,
                 platform=getattr(params, "platform", None) or "youtube",
-                profile_id=getattr(params, "profile_id", None),
+                profile_id=task_profile_id,
             )
         else:
             assessment = safety_gate.evaluate_script_safety(
@@ -2984,14 +2999,20 @@ def _run_quiz_pipeline(
         )
 
     try:
-        from app.services import quiz_safety_gate, safety_gate
+        from app.services import profile_manager, quiz_safety_gate, safety_gate
+        task_profile_id = getattr(params, "profile_id", None)
+        if not task_profile_id and task_id:
+            discovered_pid = profile_manager.get_task_profile_id(task_id)
+            if discovered_pid and discovered_pid != profile_manager.DEFAULT_PROFILE_ID:
+                task_profile_id = discovered_pid
+
         if quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
             dur_assessment = quiz_safety_gate.evaluate_quiz_duration_safety(
                 task_id=task_id,
                 actual_duration=actual_duration,
                 preset=getattr(params, "monetization_preset", None),
                 platform=getattr(params, "platform", None) or "youtube",
-                profile_id=getattr(params, "profile_id", None),
+                profile_id=task_profile_id,
             )
         else:
             dur_assessment = safety_gate.evaluate_duration_safety(

@@ -67,6 +67,10 @@ def is_quiz_dilemma(params: Any = None, narrative_structure: Optional[str] = Non
 def init_quiz_safety_db(db_path: Optional[str] = None) -> None:
     """Cria a tabela quiz_safety_history se não existir, de forma idempotente."""
     init_safety_db(db_path)
+    try:
+        profile_manager.init_profile_db(db_path)
+    except Exception:
+        pass
     path = get_safety_db_path(db_path)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     conn = sqlite3.connect(path, timeout=15.0)
@@ -110,13 +114,19 @@ def save_quiz_safety_record(
     checked_at: Optional[str] = None,
 ) -> None:
     """Persiste os metadados estruturais do quiz para comparação histórica isolada."""
+    clean_pid = str(profile_id or "").strip()
+    if not clean_pid or clean_pid == profile_manager.DEFAULT_PROFILE_ID:
+        logger.warning(
+            f"[QuizSafetyGate] Ignorando persistência de histórico: profile_id inválido ou default ('{clean_pid}') para task {task_id}"
+        )
+        return
+
     init_quiz_safety_db(db_path)
     path = get_safety_db_path(db_path)
     conn = sqlite3.connect(path, timeout=15.0)
     try:
         now_iso = checked_at or datetime.now(timezone.utc).isoformat()
         reasons_str = "; ".join(safety_reasons) if isinstance(safety_reasons, list) else str(safety_reasons or "")
-        clean_pid = str(profile_id or profile_manager.DEFAULT_PROFILE_ID).strip()
         conn.execute(
             """
             INSERT INTO quiz_safety_history (
@@ -148,6 +158,45 @@ def save_quiz_safety_record(
         conn.commit()
     finally:
         conn.close()
+
+
+def invalidate_quiz_safety_record(
+    task_id: str,
+    stage: Optional[str] = None,
+    error: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    """
+    Invalida o registro em quiz_safety_history se a tarefa falhar antes de chegar ao estoque.
+    Evita que dilemas de vídeos que falharam no render/materiais impeçam futuras gerações legítimas.
+    """
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return
+    path = get_safety_db_path(db_path)
+    if not os.path.isfile(path):
+        return
+    try:
+        conn = sqlite3.connect(path, timeout=15.0)
+        try:
+            reason = f"Falha na etapa '{stage}': {error}" if stage or error else "Falha antes do estoque"
+            conn.execute(
+                """
+                UPDATE quiz_safety_history
+                SET safety_status = 'FAILED',
+                    safety_reasons = CASE
+                        WHEN safety_reasons IS NULL OR safety_reasons = '' THEN ?
+                        ELSE safety_reasons || '; ' || ?
+                    END
+                WHERE task_id = ?;
+                """,
+                (reason, reason, clean_tid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug(f"[QuizSafetyGate] Falha ao invalidar quiz_safety_history para {clean_tid}: {exc}")
 
 
 def clean_dilemma_text(text: str) -> str:
@@ -313,14 +362,17 @@ def get_isolated_quiz_history(
 ) -> List[Dict[str, Any]]:
     """
     Recupera histórico recente de quiz_dilemma estritamente isolado por perfil e canal.
-    Não compara contra conteúdos de outros canais/perfis.
+    Não compara contra conteúdos de outros canais/perfis nem perfil default.
     """
+    clean_pid = str(profile_id or "").strip()
+    if not clean_pid or clean_pid == profile_manager.DEFAULT_PROFILE_ID:
+        return []
+
     init_quiz_safety_db(db_path)
     path = get_safety_db_path(db_path)
     conn = sqlite3.connect(path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
-        clean_pid = str(profile_id or profile_manager.DEFAULT_PROFILE_ID).strip()
         clean_exclude = str(exclude_task_id or "").strip()
         clean_cid = str(channel_id or "").strip()
 
@@ -344,13 +396,24 @@ def get_isolated_quiz_history(
         results: List[Dict[str, Any]] = []
         seen_tids = set()
         for r in rows:
+            tid = r["task_id"]
+            # Auto-cura: se a tarefa está registrada como falha no estado global, invalida e descarta
+            try:
+                from app.services import state as sm
+                t_state = sm.state.get_task(tid)
+                if t_state and t_state.get("state") == const.TASK_STATE_FAILED:
+                    invalidate_quiz_safety_record(tid, db_path=db_path)
+                    continue
+            except Exception:
+                pass
+
             d = dict(r)
             try:
                 d["dilemmas"] = json.loads(d["dilemmas_json"]) if d.get("dilemmas_json") else []
             except Exception:
                 d["dilemmas"] = []
             results.append(d)
-            seen_tids.add(d["task_id"])
+            seen_tids.add(tid)
 
         # Complementa com tarefas de task_profiles do mesmo perfil se a tabela específica tiver poucos registros
         if len(results) < limit:
@@ -363,6 +426,7 @@ def get_isolated_quiz_history(
                     WHERE tp.profile_id = ?
                       AND ms.narrative_structure = 'quiz_dilemma'
                       AND ms.safety_status IN ('PASS', 'REVIEW')
+                      AND ms.actual_duration IS NOT NULL
                       AND ms.task_id <> ?
                     ORDER BY ms.checked_at DESC
                     LIMIT ?;
@@ -373,6 +437,13 @@ def get_isolated_quiz_history(
                     tid = tp_row["task_id"]
                     if tid in seen_tids:
                         continue
+                    try:
+                        from app.services import state as sm
+                        t_state = sm.state.get_task(tid)
+                        if t_state and t_state.get("state") == const.TASK_STATE_FAILED:
+                            continue
+                    except Exception:
+                        pass
                     dilemmas = _load_dilemmas_from_task_artifact(tid)
                     if dilemmas:
                         results.append({
@@ -506,10 +577,31 @@ def evaluate_quiz_script_safety(
 
     # 5. Resolução do perfil/canal para histórico isolado
     clean_pid = str(profile_id or "").strip()
-    if not clean_pid and task_id:
-        clean_pid = profile_manager.get_task_profile_id(task_id, db_path=db_path)
-    if not clean_pid:
-        clean_pid = profile_manager.DEFAULT_PROFILE_ID
+    if (not clean_pid or clean_pid == profile_manager.DEFAULT_PROFILE_ID) and task_id:
+        db_pid = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+        if db_pid and db_pid != profile_manager.DEFAULT_PROFILE_ID:
+            clean_pid = db_pid
+
+    if not clean_pid or clean_pid == profile_manager.DEFAULT_PROFILE_ID:
+        reasons.append("Perfil de canal obrigatório ausente ou inválido para Quiz (evita colisão de histórico)")
+        status = const.SAFETY_STATUS_BLOCK
+        assessment = {
+            "task_id": task_id,
+            "topic": clean_topic,
+            "preset": preset_id,
+            "narrative_structure": const.STRUCTURE_QUIZ_DILEMMA,
+            "word_count": word_count,
+            "estimated_duration": est_duration,
+            "actual_duration": None,
+            "safety_status": status,
+            "safety_reasons": reasons,
+            "hook_text": "[QUIZ_HOOK_STANDARDIZED]",
+            "cta_text": "[QUIZ_CTA_STANDARDIZED]",
+            "dilemma_count": len(active_dilemmas),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        save_safety_assessment(assessment, db_path=db_path)
+        return assessment
 
     # 6. Anti-repetição contra histórico isolado do perfil
     if history is None:
@@ -693,25 +785,26 @@ def evaluate_quiz_duration_safety(
 
     save_safety_assessment(assessment, db_path=db_path)
 
-    # Atualiza registro de histórico se disponível
+    # Atualiza registro de histórico se profile_id válido disponível
     clean_pid = str(profile_id or "").strip()
-    if not clean_pid and task_id:
-        clean_pid = profile_manager.get_task_profile_id(task_id, db_path=db_path)
-    if not clean_pid:
-        clean_pid = profile_manager.DEFAULT_PROFILE_ID
+    if (not clean_pid or clean_pid == profile_manager.DEFAULT_PROFILE_ID) and task_id:
+        db_pid = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+        if db_pid and db_pid != profile_manager.DEFAULT_PROFILE_ID:
+            clean_pid = db_pid
 
-    dilemmas = _load_dilemmas_from_task_artifact(task_id)
-    save_quiz_safety_record(
-        task_id=task_id,
-        profile_id=clean_pid,
-        channel_id=channel_id,
-        topic=assessment.get("topic") or "",
-        dilemmas=dilemmas,
-        safety_status=status,
-        safety_reasons=reasons,
-        db_path=db_path,
-        checked_at=now_iso,
-    )
+    if clean_pid and clean_pid != profile_manager.DEFAULT_PROFILE_ID:
+        dilemmas = _load_dilemmas_from_task_artifact(task_id)
+        save_quiz_safety_record(
+            task_id=task_id,
+            profile_id=clean_pid,
+            channel_id=channel_id,
+            topic=assessment.get("topic") or "",
+            dilemmas=dilemmas,
+            safety_status=status,
+            safety_reasons=reasons,
+            db_path=db_path,
+            checked_at=now_iso,
+        )
 
     return assessment
 

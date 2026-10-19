@@ -471,7 +471,99 @@ class TestQuizSafetyGate(unittest.TestCase):
         self.assertEqual(res_dup["safety_status"], const.SAFETY_STATUS_BLOCK)
         self.assertTrue(any("duplicado" in r.lower() for r in res_dup["safety_reasons"]))
 
+    def test_quiz_safety_blocks_when_profile_id_missing_or_default(self):
+        """12. Se profile_id obrigatório estiver ausente ou for default, avaliação bloqueia de forma segura."""
+        dilemmas = [
+            ("A1", "B1", "O que você prefere? A1... Ou B1?"),
+            ("A2", "B2", "O que você prefere? A2... Ou B2?"),
+            ("A3", "B3", "O que você prefere? A3... Ou B3?"),
+            ("A4", "B4", "O que você prefere? A4... Ou B4?"),
+        ]
+        qdata = self._build_quiz_data(dilemmas)
+        script = self._build_script_text(qdata)
+
+        # Sem profile_id (None)
+        res_none = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_no_prof",
+            topic="Dilemas Sem Perfil",
+            script=script,
+            quiz_data=qdata,
+            profile_id=None,
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_none["safety_status"], const.SAFETY_STATUS_BLOCK)
+        self.assertTrue(any("perfil" in r.lower() for r in res_none["safety_reasons"]))
+
+        # Com profile_id "default" (não permitido para quiz)
+        res_def = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_default_prof",
+            topic="Dilemas Default",
+            script=script,
+            quiz_data=qdata,
+            profile_id="default",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_def["safety_status"], const.SAFETY_STATUS_BLOCK)
+        self.assertTrue(any("perfil" in r.lower() for r in res_def["safety_reasons"]))
+
+        # Garante que nenhum histórico foi salvo sob 'default'
+        def_history = quiz_safety_gate.get_isolated_quiz_history(
+            profile_id="default",
+            db_path=self.db_path,
+        )
+        self.assertEqual(def_history, [])
+
+    def test_failed_quiz_task_does_not_block_subsequent_generations(self):
+        """13. Tarefa com PASS que posteriormente falha antes do estoque não impede novas gerações com mesmos dilemas."""
+        dilemmas = [
+            ("Dilema Alpha", "Dilema Beta", "O que você prefere? Alpha... Ou Beta?"),
+            ("Dilema Gama", "Dilema Delta", "O que você prefere? Gama... Ou Delta?"),
+            ("Dilema Epsilon", "Dilema Zeta", "O que você prefere? Epsilon... Ou Zeta?"),
+            ("Dilema Eta", "Dilema Teta", "O que você prefere? Eta... Ou Teta?"),
+        ]
+        qdata = self._build_quiz_data(dilemmas)
+        script = self._build_script_text(qdata)
+
+        # 1. Tarefa 1 passa na avaliação prévia de roteiro
+        res_1 = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_fail_01",
+            topic="Dilemas Gregos",
+            script=script,
+            quiz_data=qdata,
+            profile_id="profile-escolhas",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_1["safety_status"], const.SAFETY_STATUS_PASS)
+
+        # 2. Tarefa 1 falha na renderização de vídeo antes de chegar ao estoque
+        quiz_safety_gate.invalidate_quiz_safety_record(
+            task_id="task_fail_01",
+            stage="video",
+            error="MoviePy Render out-of-memory",
+            db_path=self.db_path,
+        )
+
+        # 3. Histórico ativo não deve listar task_fail_01
+        active_hist = quiz_safety_gate.get_isolated_quiz_history(
+            profile_id="profile-escolhas",
+            db_path=self.db_path,
+        )
+        self.assertEqual(len(active_hist), 0)
+
+        # 4. Nova geração (Tarefa 2) com os mesmos dilemas NÃO é bloqueada como duplicata
+        res_2 = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_success_02",
+            topic="Dilemas Gregos",
+            script=script,
+            quiz_data=qdata,
+            profile_id="profile-escolhas",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_2["safety_status"], const.SAFETY_STATUS_PASS)
+        self.assertEqual(res_2["safety_reasons"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -102,17 +102,19 @@
 - **QUIZ_SAFETY_GATE_HOTFIX_STATUS:** `DEV VALIDATED (19/10/2026)`
   - **Sintoma / Problema:** O canal *Dose Diária de Escolhas* utiliza o formato `quiz_dilemma` com layout Q0-R homologado. As gerações autônomas eram bloqueadas pelo Safety Gate tradicional por semelhança de Hook/abertura (98%), CTA (100%) e repetição consecutiva de estrutura narrativa (3+ vezes), características inerentes ao formato de Quiz.
   - **Causa Raiz:** O Safety Gate tradicional aplicava regras lineares de vídeos tradicionais contra uma tabela global `monetization_safety` sem isolamento por canal, tratando a abertura e encerramento padronizados do Quiz como plágio/duplicidade.
-  - **Solução Implementada:**
+  - **Solução Implementada & Auditada:**
     - Criado validador especializado `app/services/quiz_safety_gate.py` isolado exclusivamente para o formato `quiz_dilemma`.
     - Roteamento especializado em `app/services/task.py` nas duas chamadas de Safety Gate (`evaluate_quiz_script_safety` e `evaluate_quiz_duration_safety`), selecionando o validador puramente pelo formato real (`is_quiz_dilemma`), sem inspeção de mocks em produção e mantendo o pipeline tradicional 100% intocado.
+    - **Isolamento Estrito de Perfil (Etapa 1):** O `profile_id` é propagado a partir dos parâmetros da tarefa ou resolvido via `profile_manager.get_task_profile_id`. Se o perfil obrigatório estiver ausente ou for `DEFAULT_PROFILE_ID` ("default"), a avaliação bloqueia imediatamente com `SAFETY_STATUS_BLOCK` ("Perfil de canal obrigatório ausente ou inválido para Quiz"), impedindo qualquer fallback silencioso ou mistura de histórico com outros canais.
+    - **Prevenção de Falsos Bloqueios por Falhas (Etapa 2):** Tarefas com PASS ou REVIEW que posteriormente falham (em materiais, renderização MoviePy, limites de duração ou Media Quality) e nunca chegam ao estoque têm seus registros invalidados via `invalidate_quiz_safety_record` chamado em `_mark_task_failed`, alterando seu status para `FAILED`. Além disso, `get_isolated_quiz_history` realiza auto-cura verificando o estado da tarefa, garantindo que abortos anteriores não bloqueiem novas tentativas legítimas de geração.
     - Aceita abertura padronizada ("O que você prefere?"), CTA padronizado e estrutura narrativa consecutiva sem falso positivo.
     - Mantém bloqueio estrito para roteiro vazio, conteúdo insuficiente e duração fora dos limites técnicos.
     - Deduplicação real baseada nas alternativas (top/bottom) e narração dos dilemas com overlap de tokens Jaccard e verificação de sequência (streak de 3+ dilemas na mesma ordem).
     - Detecção e bloqueio de duplicatas internas no mesmo vídeo.
     - Isolamento de histórico estritamente por perfil e canal via tabela `quiz_safety_history` no SQLite, sem colisão entre canais.
-    - Tentativas rejeitadas (`safety_status = 'BLOCK'`) são gravadas para auditoria mas estritamente excluídas do histórico elegível de comparação (`safety_status IN ('PASS', 'REVIEW')`), impedindo poluição do histórico.
+    - Tentativas rejeitadas (`safety_status = 'BLOCK'` ou `'FAILED'`) são gravadas para auditoria mas estritamente excluídas do histórico elegível de comparação (`safety_status IN ('PASS', 'REVIEW')`).
     - Preservado o hotfix local existente em `app/services/autonomous_production.py` (`rejected_struct = None`).
-    - Validação: 11 testes direcionados em `test/services/test_quiz_safety_gate.py` (100% PASS) e 5 testes de integração em `test/services/test_quiz_integration.py` (100% PASS).
+    - Validação: 13 testes direcionados em `test/services/test_quiz_safety_gate.py` (100% PASS) e 5 testes de integração em `test/services/test_quiz_integration.py` (100% PASS) — Total 18/18 PASS.
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**

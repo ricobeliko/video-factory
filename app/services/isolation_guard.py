@@ -18,7 +18,7 @@ ENVIRONMENT_IDENTITY = os.getenv("MPT_ENVIRONMENT", "DEV_V2")
 
 DEFAULT_FORBIDDEN_PATHS = [
     r"c:\projetos\moneyprinterturbo",
-    r"d:\projetos\moneyprinterturbo\storageideo_factory.db",
+    r"d:\projetos\moneyprinterturbo\storage\\video_factory.db",
 ]
 
 

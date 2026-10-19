@@ -13,14 +13,14 @@ class TestV2IsolationGuard(unittest.TestCase):
     def test_blocks_production_paths(self):
         with self.assertRaises(isolation_guard.IsolationViolationError):
             isolation_guard.validate_path_isolation(
-                r"C:\Projetos\MoneyPrinterTurbo\storageideo_factory.db",
+                r"C:\Projetos\MoneyPrinterTurbo\storage\\video_factory.db",
                 purpose="test_prod_block"
             )
 
     def test_blocks_original_dev_database(self):
         with self.assertRaises(isolation_guard.IsolationViolationError):
             isolation_guard.validate_path_isolation(
-                r"D:\Projetos\MoneyPrinterTurbo\storageideo_factory.db",
+                r"D:\Projetos\MoneyPrinterTurbo\storage\\video_factory.db",
                 purpose="test_dev_db_block"
             )
 
@@ -42,7 +42,7 @@ class TestV2IsolationGuard(unittest.TestCase):
         try:
             os.environ["MPT_ENVIRONMENT"] = "PRODUCTION"
             # Em modo de produção, o caminho canônico do PC Forte é permitido sem exceção
-            prod_path = r"C:\Projetos\MoneyPrinterTurbo\storageideo_factory.db"
+            prod_path = r"C:\Projetos\MoneyPrinterTurbo\storage\\video_factory.db"
             res = isolation_guard.validate_path_isolation(
                 prod_path,
                 purpose="test_prod_execution"

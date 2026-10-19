@@ -2,7 +2,8 @@
 **Documento Operacional V2.15B**
 **Data de Atualização:** 18/10/2026
 **Ambiente Alvo Futuro:** C:\Projetos\MoneyPrinterTurbo (PC Forte)
-**Ambiente Homologado:** C:\Projetos\MoneyPrinterTurbo-V2 (eat/video-factory-v2)
+**Ambiente Homologado:** C:\Projetos\MoneyPrinterTurbo-V2 (
+eat/video-factory-v2)
 
 ---
 
@@ -59,9 +60,9 @@ Se houver bloqueios (`BLOCKED`), resolva-os antes de iniciar a janela.
 4. **Backup Consistente Físico (Banco e Configurações):**
    `powershell
     = Get-Date -Format 'yyyyMMdd_HHmmss'
-   Copy-Item "C:\Projetos\MoneyPrinterTurbo\storage\video_factory.db" 
+   Copy-Item "C:\Projetos\MoneyPrinterTurbo\storage\video_factory.db"
              "C:\Projetos\MoneyPrinterTurbo\storage\video_factory_backup_pre_v2_.db"
-   Copy-Item "C:\Projetos\MoneyPrinterTurbo\config.toml" 
+   Copy-Item "C:\Projetos\MoneyPrinterTurbo\config.toml"
              "C:\Projetos\MoneyPrinterTurbo\config_backup_pre_v2_.toml"
    `
 
@@ -107,10 +108,11 @@ Se houver bloqueios (`BLOCKED`), resolva-os antes de iniciar a janela.
    Start-ScheduledTask -TaskName "VideoFactory WebUI V2"
    `
 3. **Health Check Imediato:**
-   `powershell
+   ```powershell
+   Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/v2/health"
    Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/v2/system/status"
-   `
-   Confirmar: actory_state operacional, local_role: PRIMARY, zero erros críticos.
+   ```
+   Confirmar: status healthy, role: PRIMARY, is_primary: true, auto_publish: false, zero erros críticos.
 
 ### Fase 5: Validação Humana e Liberação Gradual
 1. Acessar http://127.0.0.1:8080 no navegador.

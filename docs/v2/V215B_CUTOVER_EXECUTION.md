@@ -86,12 +86,12 @@ powershell.exe -ExecutionPolicy Bypass -File C:\Projetos\v2_cutover.ps1 -RepoPat
 ```
 
 O script executará automaticamente os 6 Gates:
-- **GATE 1 (PREFLIGHT):** Checagem de SHA, validação precisa do diff de `rejected_struct = None`, integridade de `storage/video_factory.db`, ausência de posts em andamento e espaço em disco.
-- **GATE 2 (BACKUP):** Snapshot de `storage/video_factory.db`, `.env`, `config.toml`, arquivamento do hotfix e gravação de `manifest.json` com hashes SHA256.
-- **GATE 3 (STOP):** Pausa de novos despachos via `operator_console.pause_factory()`, encerramento dos processos nas portas 8501 e 8080 e desativação (`Disable-ScheduledTask`) da tarefa `VideoFactory Production` (Streamlit).
-- **GATE 4 (UPDATE):** Reconciliação não-destrutiva via `git restore app/services/autonomous_production.py`, checkout da branch V2 e aplicação de migrações idempotentes no banco real.
+- **GATE 1 (PREFLIGHT):** Checagem de SHA, validação precisa do diff de `rejected_struct = None`, integridade de `storage/video_factory.db`, ausência de renderizações FFmpeg ativas, ausência de posts em andamento (`status = 'processing'`) e espaço em disco (>5 GB).
+- **GATE 2 (BACKUP):** Snapshot transacional de `storage/video_factory.db` (incluindo WAL/SHM), `.env`, `config.toml`, arquivamento do hotfix e gravação de `manifest.json` com hashes SHA256.
+- **GATE 3 (STOP):** Pausa da fábrica via `operator_console.pause_factory()`, desativação explícita de auto-publish (`auto_publish_enabled = false`), encerramento gracioso dos processos nas portas 8501 e 8080, liberação auditada do lock stale de PRIMARY (`operator_console.release_stale_instance_lock`) e desativação (`Disable-ScheduledTask`) da tarefa `VideoFactory Production` (Streamlit).
+- **GATE 4 (UPDATE):** Reconciliação não-destrutiva via `git restore app/services/autonomous_production.py` (preservando arquivos não rastreados), checkout da branch V2 e aplicação de migrações canônicas idempotentes no banco real via serviços oficiais (`profile_manager`, `scheduler`, etc.), sem uso de scripts sintéticos.
 - **GATE 5 (START):** Configuração de `MPT_ENVIRONMENT=PRODUCTION`, inicialização da V2 na porta 8080 e garantia de autoridade PRIMARY única.
-- **GATE 6 (HEALTH):** Validação de `/health` (HTTP 200), carregamento de canais via API e confirmação de que a porta 8501 permanece desativada.
+- **GATE 6 (HEALTH):** Validação de `/health` (HTTP 200), `/api/v2/health` (confirmando `role: PRIMARY` e `is_primary: true`), carregamento de canais via `/api/v2/channels`, verificação de que `auto_publish_enabled` permanece `false` e confirmação de que a porta 8501 permanece desativada.
 
 ---
 

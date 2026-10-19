@@ -19,6 +19,11 @@ param(
 Set-StrictMode -Off
 $ErrorActionPreference = "Continue"
 
+# Sincronizar PATH da sessao com User e Machine (para garantir git, ffmpeg, node no PATH)
+$machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+$userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+$env:Path = "$machinePath;$userPath"
+
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "   VIDEO FACTORY V2.15B - AUDITORIA PASSIVA PRE-CUTOVER     " -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
@@ -36,6 +41,9 @@ if (-not (Test-Path $RepoPath)) {
     exit 2
 }
 
+$VenvPython = Join-Path $RepoPath ".venv\Scripts\python.exe"
+$PythonExe = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+
 Push-Location $RepoPath
 try {
     $sha = (git rev-parse HEAD 2>$null)
@@ -47,7 +55,7 @@ try {
     if ($status) {
         Write-Host "`n[GIT] Verificando modificacoes locais no working tree:" -ForegroundColor Cyan
         $status | ForEach-Object { Write-Host "      $_" }
-        
+
         $lines = $status | Where-Object { $_.Trim() -ne "" }
         foreach ($line in $lines) {
             $code = $line.Substring(0, 2).Trim()
@@ -153,7 +161,7 @@ if ($dbPath) {
     $pyDbCheck = @'
 import sqlite3, json, sys, os
 p = sys.argv[1]
-res = {'exists': os.path.exists(p), 'integrity': 'UNKNOWN', 'tables': {}, 'primary_holder': 'UNKNOWN', 'scheduled_count': 0}
+res = {'exists': os.path.exists(p), 'integrity': 'UNKNOWN', 'tables': {}, 'primary_holder': 'UNKNOWN', 'in_flight_count': 0, 'scheduled_count': 0, 'auto_publish_enabled': 'UNKNOWN'}
 try:
     conn = sqlite3.connect(p)
     cur = conn.cursor()
@@ -176,8 +184,16 @@ try:
     except Exception:
         pass
     try:
-        cur.execute("SELECT count(*) FROM scheduled_posts WHERE status IN ('scheduled', 'in_progress', 'publishing')")
+        cur.execute("SELECT count(*) FROM scheduled_posts WHERE status = 'processing'")
+        res['in_flight_count'] = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM scheduled_posts WHERE status IN ('planned', 'ready')")
         res['scheduled_count'] = cur.fetchone()[0]
+    except Exception:
+        pass
+    try:
+        cur.execute("SELECT value FROM autopilot_settings WHERE key = 'auto_publish_enabled'")
+        ap_row = cur.fetchone()
+        res['auto_publish_enabled'] = ap_row[0] if ap_row else 'false'
     except Exception:
         pass
     conn.close()
@@ -187,7 +203,7 @@ print(json.dumps(res))
 '@
     $tmpDbPy = Join-Path $env:TEMP "check_db_audit_v2.py"
     Set-Content -Path $tmpDbPy -Value $pyDbCheck -Encoding UTF8
-    $dbReportRaw = (python $tmpDbPy "$dbPath" 2>&1)
+    $dbReportRaw = (& $PythonExe $tmpDbPy "$dbPath" 2>&1)
     Remove-Item -Path $tmpDbPy -ErrorAction SilentlyContinue
 
     $jsonLine = ($dbReportRaw | Where-Object { $_ -like '*{*' }) | Select-Object -Last 1
@@ -201,9 +217,15 @@ print(json.dumps(res))
             }
             Write-Host "Tabelas Auditadas          : $(($dbReport.tables | ConvertTo-Json -Compress))"
             Write-Host "Detentor do Lock PRIMARY   : $($dbReport.primary_holder)" -ForegroundColor Cyan
-            Write-Host "Posts Agendados/Em Voo     : $($dbReport.scheduled_count)"
+            Write-Host "Auto Publish Configurado   : $($dbReport.auto_publish_enabled)" -ForegroundColor $(if ($dbReport.auto_publish_enabled -eq 'true') { 'Yellow' } else { 'Green' })
+            Write-Host "Posts em Publicacao (Voo)  : $($dbReport.in_flight_count)" -ForegroundColor $(if ($dbReport.in_flight_count -gt 0) { 'Red' } else { 'Green' })
+            Write-Host "Posts Agendados (Fila)     : $($dbReport.scheduled_count)"
+
+            if ($dbReport.in_flight_count -gt 0) {
+                $blockers.Add("Existem $($dbReport.in_flight_count) postagens em andamento ('processing'). Aguarde o termino antes do cutover.")
+            }
             if ($dbReport.scheduled_count -gt 0) {
-                $warnings.Add("Existem $($dbReport.scheduled_count) posts agendados/em andamento. Necessario quiescencia antes do cutover.")
+                $warnings.Add("Existem $($dbReport.scheduled_count) posts agendados na fila ('planned'/'ready').")
             }
         } catch {
             Write-Host "Aviso ao converter JSON do DB: $_" -ForegroundColor Yellow
@@ -228,15 +250,24 @@ if ($freeGb -lt 5) {
     $blockers.Add("Espaco em disco insuficiente: $freeGb GB disponiveis (< 5GB).")
 }
 
-# 6. Ferramentas Essenciais
-Write-Host "`n--- Ferramentas de Sistema ---" -ForegroundColor Cyan
-$pyVer = (python --version 2>&1)
-Write-Host "Python : $pyVer"
+# 6. Ferramentas Essenciais e Processos Ativos
+Write-Host "`n--- Ferramentas de Sistema e Processos Ativos ---" -ForegroundColor Cyan
+$pyVer = (& $PythonExe --version 2>&1)
+Write-Host "Python : $pyVer ($PythonExe)"
 $ffVer = (ffmpeg -version 2>&1)
 if ($ffVer -like '*ffmpeg version*') {
     Write-Host "FFmpeg : $(($ffVer -split "`n")[0])" -ForegroundColor Green
 } else {
     $blockers.Add("FFmpeg ausente do PATH.")
+}
+
+# Verificacao de Renderizacoes FFmpeg Ativas
+$activeFfmpeg = Get-Process ffmpeg -ErrorAction SilentlyContinue
+if ($activeFfmpeg) {
+    $blockers.Add("Processo FFmpeg em execucao (PID $($activeFfmpeg.Id)). Renderizacao em andamento: aguarde a conclusao antes do cutover.")
+    Write-Host "FFmpeg Ativo : Renderizacao em andamento (PID $($activeFfmpeg.Id))" -ForegroundColor Red
+} else {
+    Write-Host "FFmpeg Ativo : Nenhum processo em renderizacao." -ForegroundColor Green
 }
 
 # 7. Diagnostico Passivo de Credenciais
@@ -275,7 +306,7 @@ print(json.dumps(res))
 '@
 $tmpCredPy = Join-Path $env:TEMP "check_cred_audit_v2.py"
 Set-Content -Path $tmpCredPy -Value $pyCredCheck -Encoding UTF8
-$credReportRaw = (python $tmpCredPy "$envPath" "$credDir" 2>&1)
+$credReportRaw = (& $PythonExe $tmpCredPy "$envPath" "$credDir" 2>&1)
 Remove-Item -Path $tmpCredPy -ErrorAction SilentlyContinue
 
 try {

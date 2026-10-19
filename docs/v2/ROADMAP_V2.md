@@ -27,7 +27,8 @@
 | **V2.12** | Homologação Multicanal Sintética & Ajustes Operacionais do Workspace | `MULTICHANNEL_SYNTHETIC_HOMOLOGATED` | **CONCLUÍDO (43/43 PASS)** |
 | **V2.13** | Ensaio de Migração e Compatibilidade de Dados | MIGRATION_REHEARSAL_PASS | **CONCLUÍDO (4/4 PASS)** |
 | **V2.14** | Homologação Final e Readiness de Cutover | FINAL_CUTOVER_READY | **CONCLUÍDO (PASS)** |
-| **V2.15** | Janela de Cutover Programada no PC Forte | PRODUCTION_CUTOVER_EXECUTED | **PRÓXIMA FASE (OPERAÇÃO HUMANA)** |
+| **V2.15** | Preparação e Auditoria do Cutover no PC Forte | CUTOVER_READY = YES | **CONCLUÍDO (PASS)** |
+| **V2.16** | Janela de Cutover Autorizada no PC Forte | PRODUCTION_CUTOVER_EXECUTED | **PRÓXIMO GATE (OPERAÇÃO HUMANA)** |
 
 
 ---
@@ -140,3 +141,12 @@ ehearse_v2_migration.py.
   - Manual de execução detalhado: `docs/v2/V215B_CUTOVER_EXECUTION.md`.
   - Atualização dos planos de cutover e rollback para refletir processos 8080/8501, tarefas Windows e reconciliação do hotfix.
   - Testes e validações de preflight, backup e idempotência aprovados.
+
+## Fase 15C — Revisão Técnica Final de Segurança do Cutover (Concluída)
+- **Status:** CONCLUÍDO (CUTOVER_SAFETY_HARDENED = PASS / CUTOVER_READY = YES)
+- **Objetivo:** Auditar integralmente os scripts operacionais da V2.15B e sanar vulnerabilidades de concorrência, rollback destrutivo, vazamentos e importações inválidas.
+- **Entregas:**
+  - `scripts/v2_cutover.ps1` recalibrado: proteção contra sobrescrita de banco SQLite divergente, snapshot de contingência pré-rollback, eliminação de scripts sintéticos em produção em favor de migrações canônicas de serviços, garantia de `auto_publish_enabled = false` e liberação limpa de PRIMARY antigo.
+  - `scripts/v2_pre_cutover_audit.ps1` endurecido: identificação de status real de postagens em processamento (`processing`) e detecção de renderizações FFmpeg em voo.
+  - Correção de caractere vertical tab em `app/services/isolation_guard.py` e validação com teste direcionado (7/7 PASS).
+  - Atualização dos planos operacionais em `ROLLBACK_PLAN.md` (eliminação definitiva de `git reset --hard`) e `PRODUCTION_CUTOVER_PLAN.md`.

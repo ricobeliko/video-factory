@@ -176,3 +176,19 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
 - **Último Commit:** `2619d3d5e186e090d44fd8318dfed6fe07018777`
 - **Instruções Detalhadas de Setup:** Ver `docs/v2/DEV_MIGRATION_HANDOFF.md` (Seção 5).
 - **Produção Real (PC Forte):** Inalterada, segura e com Streamlit e Uvicorn operando normalmente.
+
+---
+
+## 11. Revisão Técnica Final de Segurança do Cutover V2.15C (18/10/2026)
+
+- **Status:** CONCLUÍDO (CUTOVER_SAFETY_HARDENED = PASS / READY_FOR_AUTHORIZED_CUTOVER)
+- **Ambiente:** Novo PC DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Bloqueadores Identificados e Resolvidos:**
+  1. **Rollback Não-Destrutivo:** Implementada avaliação automatizada de divergências antes de qualquer restauração de banco SQLite em `scripts/v2_cutover.ps1` (`divergence_detected`). Se novas publicações ou tarefas existirem no banco atual, a sobrescrita é abortada a menos que `-ForceOverwriteDb` seja explicitamente passado. Criado snapshot de contingência pré-rollback e limpeza preventiva de arquivos transitórios `.db-wal` e `.db-shm`.
+  2. **Eliminação de `git reset --hard`:** Removida menção de `git reset --hard` no `docs/v2/ROLLBACK_PLAN.md`, substituída por checkout limpo de branch e restauração não-destrutiva de hotfix.
+  3. **Migração Canônica no Banco Real:** Eliminada dependência e erro de importação de funções inexistentes de `scripts/rehearse_v2_migration.py`. A migração de produção agora executa exclusivamente as rotinas canônicas e idempotentes dos serviços oficiais (`profile_manager.init_profile_db`, `scheduler.init_db`, `quality_recovery.init_review_db`, `operator_console.init_operator_db`, `safety_gate.init_safety_db`, `quality_score.init_quality_db`) e inicialização segura de `settings_json` sem inventar IDs ou modificar dados de canais reais.
+  4. **Proteção Contra Publicação Automática Inesperada:** `scripts/v2_cutover.ps1` agora persiste compulsoriamente `auto_publish_enabled = false` e `scheduler_enabled = false` no SQLite durante a quiescência e valida no Gate 6 que o auto-publish permanece rigorosamente desativado.
+  5. **Quiescência e Liberação de PRIMARY:** Validação de ausência de renderizações FFmpeg ativas e de postagens em processamento (`status = 'processing'`). Encerramento limpo do lock stale de PRIMARY via `operator_console.release_stale_instance_lock` durante o Gate 3, permitindo assunção imediata e inequívoca do novo nó V2 como PRIMARY.
+  6. **Correção de Endpoints de Health e Canais:** Corrigido endpoint de canais para `/api/v2/channels` e adicionada validação de autoridade no `/api/v2/health` (`role == 'PRIMARY'` e `is_primary == true`).
+  7. **Guarda de Isolamento:** Corrigido caractere de escape vertical tab em `app/services/isolation_guard.py` e validada suíte direcionada (7/7 PASS).
+- **Próximo Gate:** Janela de Cutover Programada no PC Forte sob autorização do operador (CUTOVER_READY = YES).

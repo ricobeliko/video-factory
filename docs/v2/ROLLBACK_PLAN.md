@@ -40,15 +40,16 @@ O procedimento de rollback deve ser acionado caso ocorra algum dos seguintes eve
 
 3. **Restaurar Banco de Dados SQLite a partir do Backup Pré-V2:**
    `powershell
-   Copy-Item "C:\Projetos\MoneyPrinterTurbo\storage\video_factory_backup_pre_v2_*.db" 
+   Copy-Item "C:\Projetos\MoneyPrinterTurbo\storage\video_factory_backup_pre_v2_*.db"
              "C:\Projetos\MoneyPrinterTurbo\storage\video_factory.db" -Force
    `
 
 4. **Reverter o Código Git para o Commit Anterior:**
    `powershell
    cd C:\Projetos\MoneyPrinterTurbo
+   # Reverter para main de forma estritamente segura (proibido git reset --hard ou git clean)
    git checkout main
-   git reset --hard 047920307b3004cb3797fb90867c4405f8a9a4a6
+   Copy-Item "storage\backups\cutover_<TIMESTAMP>\hotfix\autonomous_production.py" "app\services\autonomous_production.py" -Force
    `
 
 5. **Restaurar Variável de Ambiente e Tarefa do Streamlit:**

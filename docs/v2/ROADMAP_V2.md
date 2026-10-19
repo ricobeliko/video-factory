@@ -164,3 +164,25 @@ ehearse_v2_migration.py.
   - Backend FastAPI V2: Endpoints `GET /api/v2/publishing-accounts` e `GET /api/v2/voices` implementados; expansão de `CreateChannelRequest` e `UpdateProfileSettingsRequest` com validação e persistência total.
   - Testes e Build: 100% de sucesso na compilação do frontend Vite e nos testes unitários direcionados.
 
+## Fase 17 — Refino Visual do Modern Command Deck (Concluída)
+- **Status:** CONCLUÍDO (Refino Estético, Pipeline Compacto e Padronização de Abas)
+- **Objetivo:** Refinar a interface da V2.16 preservando a identidade Modern Command Deck, eliminando a sobrecarga visual no grafo causal de 12 nós, padronizando os painéis das telas internas e conferindo profundidade em camadas.
+- **Entregas:**
+  - **Pipeline em Tempo Real Compacto:**
+    - `ExecutionNode.jsx`: Nós reduzidos de 180x98px para 152x56px, exibindo estritamente badge `#step`, pílula de estado resumida (Executando, Concluído, Bloqueado, Falhou, Aguardando), ícone temático e nome do estágio. Textos e papéis longos foram removidos dos cards e mantidos no Drawer lateral sob demanda de clique.
+    - `FactoryLiveGraph.jsx`: Geometria recalculada para grade 2x6 snake compacta (`START_X = 24`, `STEP_X = 172`, `row1Y = 74`, `row2Y = 152`, altura de canvas otimizada para 235px).
+    - `ProductionView.jsx`: Stepper horizontal conectado reativamente à telemetria factual (eliminada qualquer simulação indicativa artificial). Grafo causal interativo integrado sem vazios no layout.
+    - **Active Stage Glow:** Destaque vibrante para o nó em execução ativa com aura ciano (`#38bdf8`), borda iluminada pulsante e animação suave, com desativação automática sob `prefers-reduced-motion`.
+  - **Padronização das Telas Internas (`ChannelDetailView.jsx`):**
+    - Todas as 7 abas (Visão Geral, Diretrizes Editoriais, Áudio/Voz/Flow, Destinos Sociais, Quotas/Automação, Estoque do Canal, Diagnóstico) consolidadas sob a arquitetura de painel reutilizável `.v2-detail-panel`.
+    - Cada painel contém cabeçalho estruturado (título e descrição da seção), corpo com labels discretos e valores em alto contraste, e rodapé com área de ações unificada.
+    - Sub-painéis padronizados (`.v2-sub-panel`) para regras do Quiz Dilema, motores visuais Google Flow, sonorização BGM e Guardião de Autonomia.
+  - **Profundidade e Hierarquia Visual (`styles.css`):**
+    - Estruturação em camadas táteis de superfície: Fundo (`#080b11`) -> Cards (`#0f172a`) -> Sub-painéis (`#121c32`) -> Inputs/Controles (`#090e1a`).
+    - Sombras em camadas com relevo beveled sutil (`inset 0 1px 0 rgba(255, 255, 255, 0.05)`).
+    - Bordas consistentes de 1px com contraste e foco acessível (`#38bdf8`).
+  - **Validação Técnica e Isolamento:**
+    - Build frontend (`npm run build` via Vite): 100% concluído em 5.96s (zero erros).
+    - Teste direcionado backend (`test_create_channel_with_full_parity_fields`): PASS em 0.59s.
+    - Servidor Vite ativo e hot-reloading verificado localmente.
+

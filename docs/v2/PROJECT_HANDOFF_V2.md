@@ -260,3 +260,35 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   - Nenhuma publicação externa executada.
 - **Próximo Passo:** Inspeção visual e aprovação estética pelo operador no notebook DEV.
 
+---
+
+## 14. Refino Visual do Modern Command Deck V2.17 (19/10/2026)
+
+- **Status:** CONCLUÍDO (Refino Estético, Pipeline Compacto e Padronização de Abas)
+- **Ambiente:** Notebook DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Baseline SHA:** `362d5d8b818e62ec24180aaf5019b41faf1acd23`
+- **Objetivo da Missão:** Refinar a interface da V2.16 preservando a identidade Modern Command Deck, resolvendo a sobrecarga visual no grafo causal de 12 estágios, padronizando os painéis das telas internas e conferindo profundidade em camadas.
+- **Implementações Concluídas:**
+  1. **Pipeline em Tempo Real Compacto (`ProductionView.jsx`, `ExecutionNode.jsx`, `FactoryLiveGraph.jsx`):**
+     - `ExecutionNode.jsx`: Nós menores e compactos (redução de 180x98px para 152x56px), exibindo somente o badge `#step`, pílula de estado resumida em português (`Executando`, `Concluído`, `Bloqueado`, `Falhou`, `Aguardando`), ícone temático e nome do estágio. Textos longos e papéis de agentes foram removidos do card e centralizados no Drawer lateral (aberto ao clicar no nó).
+     - `FactoryLiveGraph.jsx`: Coordenadas recalculadas para grade 2x6 snake compacta (`START_X = 24`, `STEP_X = 172`, `row1Y = 74`, `row2Y = 152`, altura de canvas otimizada para 235px).
+     - `ProductionView.jsx`: Stepper horizontal conectado de forma 100% factual à telemetria real (eliminada simulação indicativa artificial). O grafo causal foi integrado perfeitamente no Command Deck sem vazios.
+     - **Active Stage Glow:** Destaque vibrante para o estágio ativo em execução com aura ciano (`#38bdf8`), borda iluminada e animação pulsante suave, desativada sob `prefers-reduced-motion`.
+  2. **Padronização das Telas Internas (`ChannelDetailView.jsx`):**
+     - Todas as 7 abas (*Visão Geral*, *Diretrizes Editoriais*, *Áudio, Voz & Flow*, *Destinos Sociais*, *Quotas & Automação*, *Estoque do Canal*, *Diagnóstico*) migradas para a arquitetura unificada `.v2-detail-panel`.
+     - Cada painel contém cabeçalho estruturado (título e descrição da seção), corpo com labels discretos e valores destacados, e rodapé com área de ações padronizada.
+     - Sub-painéis dedicados (`.v2-sub-panel`) para regras do Quiz Dilema, motores visuais Google Flow, sonorização BGM e Guardião de Autonomia.
+  3. **Profundidade e Hierarquia Visual (`styles.css`):**
+     - Camadas de superfície táteis com profundidade por contraste: Fundo (`#080b11`) -> Cards (`#0f172a`) -> Sub-painéis (`#121c32`) -> Inputs/Controles (`#090e1a`).
+     - Sombras suaves com relevo beveled sutil (`inset 0 1px 0 rgba(255, 255, 255, 0.05)`).
+     - Bordas consistentes de 1px com contraste e foco acessível (`#38bdf8`).
+- **Validação:**
+  - Build frontend Vite (`npm run build`): 100% concluído em 5.96s (zero erros).
+  - Teste unitário direcionado: `Ran 1 test in 0.591s - OK` (`test_create_channel_with_full_parity_fields`).
+  - Servidor Vite ativo e hot-reloading validado localmente.
+- **Salvaguardas de Produção:**
+  - Zero modificações no ambiente de produção (`C:\Projetos\MoneyPrinterTurbo`).
+  - Zero modificações na branch `main`.
+  - Nenhuma publicação externa executada.
+- **Próximo Passo:** Homologação estética final pelo operador no notebook DEV.
+

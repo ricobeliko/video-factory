@@ -84,6 +84,20 @@ export default function ProductionView({
     { id: 'ready', label: '5. Estoque Pronto', desc: 'Buffer Seguro' },
   ];
 
+  // Mapeamento factual dos 5 macro-estágios com base na telemetria real
+  const getActiveMacroIndex = (code) => {
+    if (!code) return -1;
+    const c = String(code).toUpperCase();
+    if (c === 'TOPIC' || c === 'SCRIPT') return 0;
+    if (c === 'NARRATION' || c === 'VOICE' || c === 'AUDIO_MIX') return 1;
+    if (c === 'VISUALS' || c === 'PROMPT_MEDIA' || c === 'FETCH_MEDIA') return 2;
+    if (c === 'RENDER' || c === 'SAFETY' || c === 'QUALITY' || c === 'COPYRIGHT') return 3;
+    if (c === 'READY_STOCK' || c === 'SCHEDULER' || c === 'PUBLISHER' || c === 'ANALYTICS') return 4;
+    return -1;
+  };
+
+  const activeMacroIdx = isRunning ? getActiveMacroIndex(currentChannel?.execution?.pipeline_stage) : -1;
+
   return (
     <div className="v2-command-center-container">
       {/* 1. Toolbar Superior */}
@@ -261,27 +275,34 @@ export default function ProductionView({
                 <div className="v2-stepper-header">
                   <span className="v2-stepper-title">Fluxo Operacional do Pipeline</span>
                   <span className="v2-stepper-status-text">
-                    {isRunning ? 'Pipeline em execução ativa' : 'Pronto para próximo ciclo'}
+                    {isRunning
+                      ? (activeMacroIdx >= 0
+                          ? `Executando: ${pipelineStages[activeMacroIdx]?.label}`
+                          : 'Processando em segundo plano')
+                      : 'Pronto para próximo ciclo'}
                   </span>
                 </div>
 
                 <div className="v2-pipeline-stepper">
                   {pipelineStages.map((st, sIdx) => {
-                    const isStepActive = isRunning && sIdx === 1; // Visualização indicativa
+                    const isStepActive = isRunning && sIdx === activeMacroIdx;
+                    const isStepCompleted = (isRunning && activeMacroIdx > sIdx) ||
+                      (!isRunning && sIdx === 4 && (currentChannel.ready_stock > 0 || currentChannel.stock > 0));
+
                     return (
                       <div
                         key={st.id}
-                        className={`v2-stepper-node ${isStepActive ? 'active' : ''}`}
+                        className={`v2-stepper-node ${isStepActive ? 'active' : ''} ${isStepCompleted ? 'completed' : ''}`}
                       >
                         <div className="v2-stepper-node-circle">
-                          {isStepActive ? '⚡' : sIdx + 1}
+                          {isStepActive ? '⚡' : (isStepCompleted ? '✓' : sIdx + 1)}
                         </div>
                         <div className="v2-stepper-node-text">
                           <strong className="v2-stepper-node-name">{st.label}</strong>
                           <span className="v2-stepper-node-desc">{st.desc}</span>
                         </div>
                         {sIdx < pipelineStages.length - 1 && (
-                          <div className="v2-stepper-connector" />
+                          <div className={`v2-stepper-connector ${isStepCompleted ? 'completed' : ''}`} />
                         )}
                       </div>
                     );

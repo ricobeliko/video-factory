@@ -1,7 +1,6 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { STAGE_BY_CODE, getStatusStyle } from '../utils/stageVisuals';
-import AgentAvatar from './AgentAvatar';
 
 /**
  * ExecutionNode — Custom node for the 2x6 snake pipeline (R6A.6).
@@ -18,8 +17,6 @@ export default function ExecutionNode({ data, selected }) {
     stageLabel,
     status = 'PENDING',
     progress = null,
-    isGap = false,
-    provider = null,
   } = data;
 
   const stageDef = STAGE_BY_CODE[stage] || {};
@@ -33,30 +30,58 @@ export default function ExecutionNode({ data, selected }) {
   const isBlocked = status === 'BLOCKED';
   const isFailed = status === 'FAILED';
 
+  const getSummarizedStatus = (st) => {
+    switch (st) {
+      case 'RUNNING':
+      case 'PROCESSING':
+        return 'Executando';
+      case 'SUCCESS':
+      case 'COMPLETE':
+        return 'Concluído';
+      case 'FAILED':
+        return 'Falhou';
+      case 'BLOCKED':
+        return 'Bloqueado';
+      case 'WAITING':
+        return 'Aguardando';
+      case 'SCHEDULED':
+        return 'Agendado';
+      case 'RETRY':
+      case 'RETRYING':
+        return 'Tentando';
+      case 'IDLE':
+      case 'PENDING':
+      default:
+        return 'Aguardando';
+    }
+  };
+
+  const summarizedStatus = getSummarizedStatus(status);
+
   return (
     <div
-      className={`execution-node node-status-${status} ${selected ? 'selected-node' : ''} ${isRunning ? 'is-running' : ''}`}
+      className={`execution-node node-compact node-status-${status} ${selected ? 'selected-node' : ''} ${isRunning ? 'is-running' : ''}`}
       style={{
         '--node-accent': accentColor,
         borderColor: isRunning
           ? accentColor
           : (isComplete
-              ? 'rgba(16, 185, 129, 0.55)'
+              ? 'rgba(16, 185, 129, 0.6)'
               : (isBlocked
-                  ? 'rgba(245, 158, 11, 0.5)'
+                  ? 'rgba(245, 158, 11, 0.6)'
                   : (isFailed
-                      ? 'rgba(239, 68, 68, 0.6)'
+                      ? 'rgba(239, 68, 68, 0.7)'
                       : statusTheme.borderColor))),
       }}
+      title={`Etapa #${stepNumber}: ${stageLabel} • ${summarizedStatus} • Agente: ${persona.code || stage} (Clique para detalhes no Drawer)`}
     >
-      {/* Category top accent line with subtle localized aura */}
+      {/* Category top accent line with glow when active */}
       <div
         className="node-category-pip"
         style={{
           backgroundColor: accentColor,
-          boxShadow: isRunning ? `0 0 8px ${accentColor}` : 'none',
+          boxShadow: isRunning ? `0 0 10px ${accentColor}` : 'none',
         }}
-        title={`Categoria: ${categoryLabel} • Agente: ${persona.code || stage}`}
       />
 
       {/* Target Handles for Snake routing */}
@@ -99,52 +124,35 @@ export default function ExecutionNode({ data, selected }) {
         className="node-handle handle-left"
       />
 
-      {/* Header: Step Number, Agent Persona Identity Chip, and Status Badge */}
-      <div className="node-header">
-        <div className="node-id-group">
-          <span className="node-step-badge">#{stepNumber}</span>
-          {persona.code && (
-            <div className="node-persona-chip" title={`${persona.name} — ${persona.role}: ${persona.bio}`}>
-              <span className="persona-code">{persona.code}</span>
-            </div>
-          )}
-        </div>
+      {/* Header: Step Number & Summarized State Badge */}
+      <div className="node-compact-header">
+        <span className="node-step-badge">#{stepNumber}</span>
         <span
-          className="node-status-badge"
+          className={`node-status-pill status-${status.toLowerCase()}`}
           style={{
             color: statusTheme.color,
-            backgroundColor: 'rgba(15, 23, 42, 0.75)',
             borderColor: isRunning ? accentColor : statusTheme.borderColor,
           }}
         >
           {isRunning && <span className="running-dot" />}
-          {status}
+          {isComplete && <span className="status-sym">✓</span>}
+          {isBlocked && <span className="status-sym">⚠</span>}
+          {isFailed && <span className="status-sym">✕</span>}
+          <span className="status-text">{summarizedStatus}</span>
         </span>
       </div>
 
-      {/* Stage Core Info with Integrated Tech-Factory AgentAvatar */}
-      <div className="node-stage-body">
-        <div className="node-stage-icon-row">
-          <AgentAvatar
-            persona={persona}
-            accentColor={accentColor}
-            isRunning={isRunning}
-            size="sm"
-          />
-          <div className="node-stage-titles">
-            <div className="node-stage-label" title={stageLabel}>
-              {stageLabel}
-            </div>
-            {persona.role && (
-              <div className="node-persona-role" title={persona.role}>
-                {persona.role}
-              </div>
-            )}
-          </div>
-        </div>
+      {/* Body: Stage Icon + Stage Name */}
+      <div className="node-compact-body">
+        <span className="node-compact-icon" style={{ borderColor: `${accentColor}40` }}>
+          {stageDef.icon || persona.avatar || '⚙️'}
+        </span>
+        <span className="node-compact-label" title={stageLabel}>
+          {stageLabel}
+        </span>
       </div>
 
-      {/* Progress Bar (When available) */}
+      {/* Progress Bar (when active with telemetry progress) */}
       {progress !== null && progress !== undefined && isRunning && (
         <div className="node-progress-bar">
           <div
@@ -154,17 +162,6 @@ export default function ExecutionNode({ data, selected }) {
               backgroundColor: accentColor,
             }}
           />
-        </div>
-      )}
-
-      {/* Operational hints */}
-      {isGap && isRunning && (
-        <div className="node-gap-hint">Sub-etapa em execução</div>
-      )}
-
-      {provider && (
-        <div className="node-provider-tag" title={`Provedor: ${provider}`}>
-          Provedor: <span>{provider}</span>
         </div>
       )}
     </div>

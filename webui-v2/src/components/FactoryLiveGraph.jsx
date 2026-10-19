@@ -36,12 +36,12 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
     const calculatedNodes = [];
     const calculatedEdges = [];
 
-    // Layout coordinates
-    const START_X = 40;
-    const STEP_X = 200; // 180px node + 20px gap
-    const headerY = 20;
-    const row1Y = 88;
-    const row2Y = 208;
+    // Layout coordinates (compact 2x6 snake grid)
+    const START_X = 24;
+    const STEP_X = 172; // 152px node + 20px gap
+    const headerY = 14;
+    const row1Y = 74;
+    const row2Y = 152;
 
     const channelId = channel.channel_id || channel.profile_id;
     const execution = channel.execution;
@@ -357,7 +357,7 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
 
   if (!channel) {
     return (
-      <div className="graph-container empty-graph" style={{ height: '340px' }}>
+      <div className="graph-container empty-graph" style={{ height: '235px' }}>
         <div className="graph-empty-message">
           <span>⚙️ Selecione um canal acima para inspecionar o pipeline em tempo real</span>
         </div>
@@ -366,7 +366,7 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
   }
 
   return (
-    <div className="graph-container" style={{ height: '335px' }}>
+    <div className="graph-container" style={{ height: '235px' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}

@@ -7,39 +7,28 @@ eat/video-factory-v2)
 
 ---
 
-> [!CRITICAL]
-> **ESTA MISSÃO NÃO EXECUTA DEPLOY EM PRODUÇÃO.**
-> Este documento é o plano rigoroso e homologado a ser executado exclusivamente em janela de manutenção programada pelo operador humano no PC Forte.
+> [!IMPORTANT]
+> **REVISÃO ARQUITETURAL V2.15C — OPERAÇÃO PARALELA ISOLADA:**
+> A fábrica antiga **NÃO será substituída diretamente**. O plano de cutover com interrupção imediata do Streamlit foi depreciado como procedimento padrão.
+> A transição adotada opera em dois estágios independentes:
+> - **Estágio A — Operação Paralela Isolada:** A fábrica antiga permanece produzindo normalmente no PC Forte (`C:\Projetos\MoneyPrinterTurbo` na porta 8501 com PRIMARY). A V2 é instalada e executada em diretório e banco isolados (`C:\Projetos\MoneyPrinterTurbo-V2`), sem credenciais reais e com auto-publish/scheduler desligados.
+> - **Estágio B — Transferência de Autoridade:** Somente após validação completa da interface React no notebook e homologação isolada no PC Forte, e **mediante autorização humana explícita**, a autoridade operacional será transferida, preservando a instalação antiga para retorno seguro em caso de falha.
 
 ---
 
-
-> [!NOTE]
-> **DIAGNÓSTICO REAL DO PC FORTE (V2.15B):**
-> - SHA da Produção: `cf7d64767e13f94eb710809057dbcbc6efc19a27` na branch `main`.
-> - Banco Real: `storage/video_factory.db` (~8.65 MB).
-> - Hotfix auditado: `app/services/autonomous_production.py` (1 linha: `rejected_struct = None`) e `.bak_20261018_110834`.
-> - Processos ativos: Streamlit 8501 (PID 13056) e Uvicorn 8080 (PID 9280).
-> - Script Oficial de Execução Única: `scripts/v2_cutover.ps1`.
-
-## 0. Pré-Requisito Mandatório: Auditoria Passiva Aprovada
-
-Antes de qualquer ação de parada ou modificação no PC Forte, o operador deve executar o script de auditoria 100% passivo:
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File scripts\v2_pre_cutover_audit.ps1
-```
-Apenas prossiga com as fases abaixo se o resultado for **`STATUS AUDITORIA : PASS`**.
-Se houver bloqueios (`BLOCKED`), resolva-os antes de iniciar a janela.
+> [!CRITICAL]
+> **ESTA MISSÃO NÃO EXECUTA DEPLOY EM PRODUÇÃO.**
+> Este documento é o plano operacional canônico que governa a futura homologação paralela (Estágio A) e eventual transferência autorizada (Estágio B).
 
 ---
 
 ## 1. Princípios de Segurança e Não-Concorrência
 
-1. **Substituição Definitiva do Streamlit:** A nova interface V2 (FastAPI na porta 8080 servindo a SPA React) **substitui** o Streamlit. Ela NÃO deve rodar concorrentemente como segunda instância operacional disputando tarefas.
-2. **Autoridade PRIMARY Única:** Apenas um processo deterá o instance_lock e executará o SchedulerExecutionWorker.
-3. **Guarda de Isolamento para Produção:** No PC Forte, definir a variável de ambiente MPT_ENVIRONMENT=PRODUCTION para desativar as travas exclusivas de DEV_V2 e habilitar o caminho canônico C:\Projetos\MoneyPrinterTurbo.
-4. **Preservação Absoluta de Dados:** Credenciais OAuth em storage/credentials/, perfis de navegador em storage/flow_browser_profiles/, vídeos em storage/tasks/ e config.toml jamais serão sobrescritos ou excluídos.
-5. **Estimativa Realista de Janela:** O tempo total estimado de cutover (RTO) medido em ensaio é de **10 a 15 minutos**, incluindo checagens de integridade e divergência.
+1. **Preservação da Fábrica Antiga:** O Streamlit na porta 8501 continua em execução e com autoridade PRIMARY durante todo o Estágio A. Nenhuma ação de teste na V2 deve parar, pausar ou alterar o ambiente legado.
+2. **Autoridade PRIMARY Única por Escopo:** Duas instâncias nunca compartilham o papel PRIMARY no mesmo banco. A concorrência SQLite garante atomicidade estrita: qualquer nó secundário assume compulsoriamente `ROLE_SECONDARY_VIEW_ONLY`.
+3. **Guarda de Isolamento Ativo:** O módulo `isolation_guard.py` bloqueia estritamente acessos cruzados aos arquivos e banco da fábrica antiga (`C:\Projetos\MoneyPrinterTurbo`).
+4. **Isolamento de Publicação Externa:** Em homologação e no Estágio A, publicações externas reais permanecem estritamente bloqueadas (`is_external_publication_allowed() == False`).
+5. **Preservação Absoluta de Dados:** Credenciais OAuth em storage/credentials/, perfis de navegador em storage/flow_browser_profiles/, vídeos em storage/tasks/ e config.toml jamais serão sobrescritos ou excluídos.
 
 ---
 

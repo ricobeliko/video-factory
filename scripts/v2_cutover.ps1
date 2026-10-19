@@ -42,17 +42,15 @@ param(
 
     [string]$BackupDirToRestore = "",
 
-    [switch]$ForceOverwriteDb = $false
+    [switch]$ForceOverwriteDb = $false,
+
+    [switch]$AuthorizeDirectCutover = $false
 
 )
-
-
 
 Set-StrictMode -Off
 
 $ErrorActionPreference = "Stop"
-
-
 
 # Sincronizar PATH da sessao com User e Machine (para garantir git, ffmpeg, node no PATH)
 
@@ -61,8 +59,6 @@ $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
 $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 $env:Path = "$machinePath;$userPath"
-
-
 
 function Write-CutoverLog {
 
@@ -82,8 +78,6 @@ function Write-CutoverLog {
 
 }
 
-
-
 Write-Host "============================================================" -ForegroundColor Cyan
 
 Write-Host "   VIDEO FACTORY V2.15B - SCRIPT DE CUTOVER CONTROLADO      " -ForegroundColor Cyan
@@ -97,6 +91,29 @@ Write-Host "Target Branch : $TargetBranch"
 Write-Host "Modo          : $(if ($Rollback) { 'ROLLBACK DE CONTINGENCIA' } else { 'CUTOVER REGULAR' })"
 
 Write-Host ""
+
+# ==============================================================================
+# SEGURANÇA OPERACIONAL V2.15C — GUARDA CONTRA CUTOVER DIRETO NÃO AUTORIZADO
+# ==============================================================================
+# A decisão arquitetural do operador na Fase V2.15C determina que a fábrica antiga
+# NÃO será substituída diretamente, preservando o Streamlit em execução contínua
+# no PC Forte e adotando a estratégia de Operação Paralela Isolada (Estágio A / Estágio B).
+if (-not $AuthorizeDirectCutover) {
+    Write-Host ""
+    Write-Host "==========================================================================" -ForegroundColor Red
+    Write-Host "[BLOQUEIO DE SEGURANÇA V2.15C] CUTOVER DIRETO NÃO AUTORIZADO" -ForegroundColor Red
+    Write-Host "==========================================================================" -ForegroundColor Red
+    Write-Host "O plano de substituição direta do Streamlit foi DEPRECIADO na Fase V2.15C." -ForegroundColor Yellow
+    Write-Host "A fábrica antiga (Streamlit na porta 8501) deve ser preservada em produção." -ForegroundColor Yellow
+    Write-Host "A Video Factory V2 deve ser operada e validada em OPERAÇÃO PARALELA ISOLADA." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Para executar este script legado em ambiente de homologação ou quando a" -ForegroundColor Yellow
+    Write-Host "transferência de autoridade (Estágio B) for formalmente autorizada," -ForegroundColor Yellow
+    Write-Host "forneça explicitamente o parâmetro: -AuthorizeDirectCutover" -ForegroundColor Yellow
+    Write-Host "==========================================================================" -ForegroundColor Red
+    Write-Host ""
+    throw "[V2.15C_ABORT] Execucao acidental do cutover direto bloqueada. A operacao antiga foi preservada."
+}
 
 
 

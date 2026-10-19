@@ -191,4 +191,35 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   5. **Quiescência e Liberação de PRIMARY:** Validação de ausência de renderizações FFmpeg ativas e de postagens em processamento (`status = 'processing'`). Encerramento limpo do lock stale de PRIMARY via `operator_console.release_stale_instance_lock` durante o Gate 3, permitindo assunção imediata e inequívoca do novo nó V2 como PRIMARY.
   6. **Correção de Endpoints de Health e Canais:** Corrigido endpoint de canais para `/api/v2/channels` e adicionada validação de autoridade no `/api/v2/health` (`role == 'PRIMARY'` e `is_primary == true`).
   7. **Guarda de Isolamento:** Corrigido caractere de escape vertical tab em `app/services/isolation_guard.py` e validada suíte direcionada (7/7 PASS).
-- **Próximo Gate:** Janela de Cutover Programada no PC Forte sob autorização do operador (CUTOVER_READY = YES).
+- **Próximo Gate:** Homologação Técnica de Segurança e Operação Paralela (Fase V2.15C).
+
+---
+
+## 12. Transição Arquitetural para Operação Paralela e Homologação Técnica V2.15C (18/10/2026)
+
+- **Status:** CONCLUÍDO (PARALLEL_TEST_READY = YES / PRODUCTION_TAKEOVER_READY = NO)
+- **Ambiente:** Novo PC DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Decisão Arquitetural Atualizada do Operador:**
+  - A fábrica antiga NÃO será substituída diretamente. O plano anterior de cutover com interrupção imediata do Streamlit deixou de ser o procedimento autorizado.
+  - Adoção da estratégia de transição em dois estágios independentes:
+    - **Estágio A — Operação Paralela Isolada:** A fábrica antiga permanece 100% ativa e intocada no PC Forte (Streamlit na porta 8501 com autoridade PRIMARY e workers de produção). A V2 opera em diretório isolado (`C:\Projetos\MoneyPrinterTurbo-V2`), utilizando banco SQLite isolado (`storage/video_factory_v2.db`), storage isolado, sem credenciais de publicação reais e com auto-publish e scheduler desligados. A interface React e fluxos de teste são verificados sem interferir em dados reais.
+    - **Estágio B — Transferência de Autoridade:** Somente após homologação completa da interface React e mediante autorização humana explícita: drenagem controlada de operações em andamento da fábrica antiga, pausa do scheduler legado (sem desinstalação), validação de integridade SQLite com preservação de backups, migração canônica e assunção progressiva do papel PRIMARY pela V2, mantendo caminho de retorno rápido à fábrica antiga.
+- **Implementações e Endurecimento Técnico:**
+  1. **Trava contra Execução Acidental do Cutover Direto:** Adicionado bloqueio compulsório em `scripts/v2_cutover.ps1` exigindo o switch explícito `-AuthorizeDirectCutover`. Sem esse parâmetro, qualquer tentativa de execução aborta imediatamente (`[V2.15C_ABORT]`), garantindo que o Streamlit nunca seja interrompido por engano.
+  2. **Suíte Canônica de Homologação de Segurança Paralela:** Desenvolvida `test/services/test_v2_15c_parallel_homologation.py` demonstrando 8/8 garantias aprovadas:
+     - **Garantia A (Isolamento de Caminhos):** `isolation_guard.py` bloqueia estritamente qualquer tentativa de leitura/escrita em `C:\Projetos\MoneyPrinterTurbo` em ambientes `DEV_V2`, `PARALLEL` e `PARALLEL_STAGE_A`.
+     - **Garantia B (Imunidade contra Usurpação de PRIMARY):** Com a fábrica antiga ativa e viva, qualquer processo concorrente é compulsoriamente rebaixado para `ROLE_SECONDARY_VIEW_ONLY`.
+     - **Garantia C (Proteção da Fila Real):** Processos secundários ou em homologação são impedidos de despachar ou criar agendamentos (`PermissionError`), e o banco V2 mantém auto-publish desligado por padrão.
+     - **Garantia D (Bloqueio de Publicação Externa):** `is_external_publication_allowed()` retorna categoricamente `False` fora de `PRODUCTION`.
+     - **Garantia E (Resiliência contra Falhas Intermediárias):** Falhas em transações SQLite revertem atomicamente sem corrupção ou perda silenciosa.
+     - **Garantia F (Preservação de Divergências pós-checkpoint):** O mecanismo de rollback inspeciona tabelas críticas (`publication_events`, `scheduled_posts`) e bloqueia sobrescrita de dados sem autorização forçada e contingência.
+     - **Garantia G (Exclusividade Estrita de Autoridade):** A concorrência atômica no SQLite impede que dois processos concorrentes assumam simultaneamente como PRIMARY.
+     - **Garantia H (Proteção do Script de Cutover):** O script de cutover direto aborta por padrão se executado sem o parâmetro de autorização.
+- **Resultados de Testes:**
+  - `test/services/test_v2_15c_parallel_homologation.py`: **8/8 PASS** em 5.65s.
+  - `test/test_v2_isolation.py`: **7/7 PASS** em 0.19s.
+  - `test/services/test_stale_primary_lock_recovery.py`: **8/8 PASS**.
+  - `test/services/test_v2_13_migration_rehearsal.py`: **4/4 PASS**.
+  - `test/services/test_v2_cutover_mock.py`: **4/4 PASS**.
+  - Total Homologado: **31/31 testes direcionados PASS**.
+- **Próximo Passo:** Homologação e correção visual da interface React (Frontend WebUI V2) no notebook DEV antes de qualquer estágio no PC Forte.

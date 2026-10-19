@@ -142,11 +142,11 @@ ehearse_v2_migration.py.
   - Atualização dos planos de cutover e rollback para refletir processos 8080/8501, tarefas Windows e reconciliação do hotfix.
   - Testes e validações de preflight, backup e idempotência aprovados.
 
-## Fase 15C — Revisão Técnica Final de Segurança do Cutover (Concluída)
-- **Status:** CONCLUÍDO (CUTOVER_SAFETY_HARDENED = PASS / CUTOVER_READY = YES)
-- **Objetivo:** Auditar integralmente os scripts operacionais da V2.15B e sanar vulnerabilidades de concorrência, rollback destrutivo, vazamentos e importações inválidas.
+## Fase 15C — Homologação de Segurança e Preparação para Operação Paralela (Concluída)
+- **Status:** CONCLUÍDO (PARALLEL_TEST_READY = YES / PRODUCTION_TAKEOVER_READY = NO)
+- **Objetivo:** Auditar a segurança operacional da Video Factory V2 e estruturar a nova estratégia arquitetural de Operação Paralela Isolada (Estágio A / Estágio B), preservando a fábrica antiga (Streamlit na porta 8501) em execução ininterrupta.
 - **Entregas:**
-  - `scripts/v2_cutover.ps1` recalibrado: proteção contra sobrescrita de banco SQLite divergente, snapshot de contingência pré-rollback, eliminação de scripts sintéticos em produção em favor de migrações canônicas de serviços, garantia de `auto_publish_enabled = false` e liberação limpa de PRIMARY antigo.
-  - `scripts/v2_pre_cutover_audit.ps1` endurecido: identificação de status real de postagens em processamento (`processing`) e detecção de renderizações FFmpeg em voo.
-  - Correção de caractere vertical tab em `app/services/isolation_guard.py` e validação com teste direcionado (7/7 PASS).
-  - Atualização dos planos operacionais em `ROLLBACK_PLAN.md` (eliminação definitiva de `git reset --hard`) e `PRODUCTION_CUTOVER_PLAN.md`.
+  - `scripts/v2_cutover.ps1` protegido contra execução acidental: inclusão do switch mandatório `-AuthorizeDirectCutover`, abortando por padrão qualquer tentativa de corte direto não autorizado (`[V2.15C_ABORT]`).
+  - Suíte de Homologação Técnica: `test/services/test_v2_15c_parallel_homologation.py` com 8/8 garantias aprovadas cobrindo isolamento de caminhos, bloqueio contra usurpação de PRIMARY, imunidade da fila real, bloqueio de publicações externas, atomicidade em falhas, proteção de divergência no rollback, concorrência atômica de locks e proteção de execução do script legado.
+  - Atualização dos planos operacionais em `PROJECT_HANDOFF_V2.md`, `ROADMAP_V2.md`, `PRODUCTION_CUTOVER_PLAN.md` e `ROLLBACK_PLAN.md`.
+  - Total de 31 testes direcionados aprovados sem tocar em produção.

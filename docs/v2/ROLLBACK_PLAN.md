@@ -5,13 +5,20 @@
 
 ---
 
+> [!IMPORTANT]
+> **REVISÃO ARQUITETURAL V2.15C — RECUPERAÇÃO E ROLLBACK EM DOIS ESTÁGIOS:**
+> - **No Estágio A (Operação Paralela Isolada):** A fábrica antiga continua operando normalmente. O "rollback" consiste unicamente em finalizar os processos da V2 no diretório isolado (`C:\Projetos\MoneyPrinterTurbo-V2`). O impacto sobre a produção real é **ZERO**, pois nenhuma porta, fila ou banco legado foi alterado.
+> - **No Estágio B (Transferência de Autoridade):** Caso haja qualquer anomalia após a futura transferência autorizada, a fábrica antiga permanece preservada no disco e pode reassumir a autoridade PRIMARY imediatamente mediante reativação do seu scheduler.
+
+---
+
 ## 1. Gatilhos de Rollback
 
-O procedimento de rollback deve ser acionado caso ocorra algum dos seguintes eventos durante ou imediatamente após a janela de cutover:
-1. Falha crítica na inicialização do serviço FastAPI na porta 8080 (ex: conflito irrecuperável de porta ou dependência).
-2. Erro de schema ou integridade SQLite (PRAGMA integrity_check diferente de ok).
-3. Perda de acesso aos canais ou metadados de produção.
-4. Falha na aquisição da autoridade PRIMARY pelo novo processo.
+O procedimento de rollback deve ser acionado caso ocorra algum dos seguintes eventos:
+1. Conflito operacional ou anomalia durante testes paralelos no PC Forte.
+2. Falha de integridade SQLite ou divergência não reconciliável.
+3. Perda de acesso a canais ou configurações operacionais.
+4. Falha na aquisição ou sustentação da autoridade PRIMARY.
 
 ---
 
@@ -19,7 +26,7 @@ O procedimento de rollback deve ser acionado caso ocorra algum dos seguintes eve
 
 > [!CAUTION]
 > **NÃO RESTAURAR BACKUP ANTIGO SOBRE DADOS NOVOS SEM AVALIAR DIVERGÊNCIAS.**
-> Se qualquer tarefa tiver sido concluída ou qualquer post tiver sido publicado durante o teste da V2, a restauração cega do backup anterior apagará esses eventos do histórico. Deve-se avaliar as divergências com o script de auditoria antes da substituição de arquivos.
+> Se qualquer tarefa tiver sido concluída ou qualquer evento registrado durante a janela operacional, a restauração cega do backup anterior apagará esses eventos do histórico. O `scripts/v2_cutover.ps1` bloqueia automaticamente restaurações divergentes, exigindo avaliação e contingência.
 
 ---
 

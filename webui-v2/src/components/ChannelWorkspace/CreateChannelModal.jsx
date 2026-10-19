@@ -45,13 +45,37 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
   const [dailyLimit, setDailyLimit] = useState(5);
   const [autonomousEnabled, setAutonomousEnabled] = useState(false);
 
+  const resetForm = () => {
+    setStep(1);
+    setError(null);
+    setIsSubmitting(false);
+    setName('');
+    setNiche('');
+    setTopicBrief('');
+    setLanguage('pt-BR');
+    setFormatType('traditional');
+    setClosingType('provocative');
+    setNumQuestions(5);
+    setSelectedYtAccountId('');
+    setSelectedTtAccountId('');
+    setVisualDirectorEnabled(true);
+    setStockFallbackEnabled(true);
+    setFlowEnabled(false);
+    setFlowSceneCount(3);
+    setMusicEnabled(false);
+    setMusicVolume(0.20);
+    setMusicMood('neutral');
+    setTargetStock(3);
+    setDailyLimit(5);
+    setAutonomousEnabled(false);
+  };
+
   // Carrega templates, contas conectadas e vozes ao abrir o modal
   useEffect(() => {
     if (!isOpen) return;
 
-    // Reseta estado para passo 1
-    setStep(1);
-    setError(null);
+    // Reseta integralmente os dados do formulário ao abrir o wizard
+    resetForm();
 
     // 1. Templates de Formato
     getVideoTemplates()
@@ -118,7 +142,11 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
 
   const currentTemplate = templates.find((t) => t.id === formatType) || templates[0];
 
-  const handleNextStep = () => {
+  const handleNextStep = (e) => {
+    if (e && e.preventDefault) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     if (step === 1) {
       if (!name.trim()) {
         setError('O nome do canal é obrigatório para avançar.');
@@ -129,15 +157,40 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
     setStep((prev) => Math.min(prev + 1, 5));
   };
 
-  const handlePrevStep = () => {
+  const handlePrevStep = (e) => {
+    if (e && e.preventDefault) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     setError(null);
     setStep((prev) => Math.max(prev - 1, 1));
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      if (step < 5) {
+        handleNextStep(e);
+      }
+    }
+  };
+
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    // Salvaguarda 1: NUNCA criar o canal se não estiver explicitamente na etapa 5
+    if (step !== 5) {
+      return;
+    }
+    // Salvaguarda 2: Bloqueio estrito contra submissões repetidas / duplo clique
+    if (isSubmitting) {
+      return;
+    }
     if (!name.trim()) {
       setError('Por favor, informe o nome do canal.');
+      setStep(1);
       return;
     }
 
@@ -215,7 +268,7 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
               key={st.number}
               className={`v2-wizard-step-node ${step === st.number ? 'active' : ''} ${step > st.number ? 'completed' : ''}`}
               onClick={() => {
-                if (st.number < step || (step === 1 && name.trim())) {
+                if (st.number < step) {
                   setStep(st.number);
                 }
               }}
@@ -231,7 +284,11 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
         {error && <div className="v2-alert-error">{error}</div>}
 
         {/* Corpo do Wizard */}
-        <form onSubmit={handleSubmit} className="v2-modal-form v2-wizard-body">
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={handleKeyDown}
+          className="v2-modal-form v2-wizard-body"
+        >
           {/* PASSO 1: IDENTIDADE & NICHO */}
           {step === 1 && (
             <div className="v2-wizard-step-content">
@@ -559,7 +616,20 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
                     min="1"
                     max="10"
                     value={targetStock}
-                    onChange={(e) => setTargetStock(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setTargetStock('');
+                      } else {
+                        const parsed = parseInt(val, 10);
+                        setTargetStock(isNaN(parsed) ? 1 : Math.max(1, Math.min(10, parsed)));
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!targetStock || Number(targetStock) < 1) {
+                        setTargetStock(3);
+                      }
+                    }}
                     required
                   />
                   <span className="v2-form-hint">A fábrica produzirá vídeos até atingir esta meta.</span>
@@ -573,7 +643,20 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
                     min="1"
                     max="30"
                     value={dailyLimit}
-                    onChange={(e) => setDailyLimit(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setDailyLimit('');
+                      } else {
+                        const parsed = parseInt(val, 10);
+                        setDailyLimit(isNaN(parsed) ? 1 : Math.max(1, Math.min(30, parsed)));
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!dailyLimit || Number(dailyLimit) < 1) {
+                        setDailyLimit(5);
+                      }
+                    }}
                     required
                   />
                   <span className="v2-form-hint">Limite de segurança contra consumo excessivo de cotas.</span>
@@ -631,13 +714,15 @@ export default function CreateChannelModal({ isOpen, onClose, onCreated }) {
                 type="button"
                 className="v2-btn-primary"
                 onClick={handleNextStep}
+                disabled={isSubmitting}
               >
                 Próximo Passo →
               </button>
             ) : (
               <button
-                type="submit"
+                type="button"
                 className="v2-btn-primary v2-btn-create-submit"
+                onClick={handleSubmit}
                 disabled={isSubmitting}
               >
                 {isSubmitting ? 'Criando Canal...' : '🚀 Concluir e Criar Canal'}

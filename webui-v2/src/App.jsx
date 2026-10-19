@@ -41,6 +41,9 @@ export default function App() {
   const [drawerTaskId, setDrawerTaskId] = useState(null);
   const [drawerStage, setDrawerStage] = useState(null);
 
+  // Barra lateral inicia recolhida por padrão na carga da aplicação
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+
   // Sincronização dinâmica de hash
   useEffect(() => {
     const handleHash = () => {
@@ -153,12 +156,14 @@ export default function App() {
 
   return (
     <div className="v2-app-layout">
-      {/* 1. Sidebar Lateral Moderna (7 Seções) */}
+      {/* 1. Sidebar Lateral Moderna (7 Seções, Recolhida por Padrão) */}
       <Sidebar
         activeNav={activeNav}
         onSelectNav={handleSelectNav}
         systemStatus={systemStatus}
         unreviewedCount={unreviewedCount}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
 
       {/* 2. Área de Conteúdo Principal */}

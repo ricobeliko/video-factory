@@ -4440,6 +4440,7 @@ body {
 
   /* Dimensões do Layout */
   --v2-sidebar-width: 240px;
+  --v2-sidebar-collapsed-width: 64px;
   --v2-header-height: 54px;
   --v2-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --v2-font-mono: "JetBrains Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
@@ -4508,18 +4509,70 @@ a:focus-visible {
   position: sticky;
   top: 0;
   z-index: 40;
+  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow-x: hidden;
+}
+
+.v2-sidebar.collapsed {
+  width: var(--v2-sidebar-collapsed-width);
 }
 
 .v2-sidebar-header {
   height: var(--v2-header-height);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 18px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--v2-border-subtle);
+  transition: padding 0.2s ease;
 }
 
-/* Logo Minimalista Shadcn (sem gradiente colorido chamativo) */
+.v2-sidebar-header.collapsed {
+  padding: 0 8px;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  height: 64px;
+}
+
+.v2-brand-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  user-select: none;
+}
+
+.v2-sidebar-toggle-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--v2-radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--v2-border-subtle);
+  color: var(--v2-text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.v2-sidebar-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--v2-text-primary);
+  border-color: var(--v2-border-strong);
+}
+
+.v2-sidebar.collapsed .v2-sidebar-toggle-btn {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+/* Logo Minimalista Shadcn */
 .v2-logo-icon {
   width: 28px;
   height: 28px;
@@ -4535,6 +4588,7 @@ a:focus-visible {
   letter-spacing: 0.5px;
   box-shadow: var(--v2-shadow-card);
   transition: border-color 0.15s ease, background-color 0.15s ease;
+  flex-shrink: 0;
 }
 
 .v2-logo-icon:hover {
@@ -4543,7 +4597,7 @@ a:focus-visible {
 }
 
 .v2-brand-text { display: flex; align-items: center; gap: 8px; }
-.v2-brand-title { font-size: 14px; font-weight: 600; color: var(--v2-text-primary); letter-spacing: -0.2px; }
+.v2-brand-title { font-size: 14px; font-weight: 600; color: var(--v2-text-primary); letter-spacing: -0.2px; white-space: nowrap; }
 
 .v2-brand-badge {
   font-size: 10px;
@@ -4565,6 +4619,16 @@ a:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.v2-factory-status-pill.collapsed {
+  margin: 10px auto 6px auto;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  justify-content: center;
+  border-radius: var(--v2-radius-md);
 }
 
 .v2-status-dot {
@@ -4586,6 +4650,7 @@ a:focus-visible {
   font-size: 11px;
   font-weight: 500;
   color: var(--v2-text-secondary);
+  white-space: nowrap;
 }
 
 /* Itens de Navegação com Microinterações de Hover e Active */
@@ -4596,6 +4661,12 @@ a:focus-visible {
   flex-direction: column;
   gap: 3px;
   overflow-y: auto;
+  transition: padding 0.2s ease;
+}
+
+.v2-sidebar.collapsed .v2-sidebar-nav {
+  padding: 8px 6px;
+  align-items: center;
 }
 
 .v2-nav-button {
@@ -4616,6 +4687,20 @@ a:focus-visible {
   user-select: none;
 }
 
+.v2-nav-button.collapsed {
+  justify-content: center;
+  padding: 10px 0;
+  width: 44px;
+  height: 40px;
+  border-radius: var(--v2-radius-md);
+  position: relative;
+}
+
+.v2-nav-button.collapsed .v2-nav-icon {
+  font-size: 17px;
+  margin: 0;
+}
+
 .v2-nav-button:hover:not(.active) {
   background-color: rgba(255, 255, 255, 0.04);
   color: var(--v2-text-primary);
@@ -4630,12 +4715,16 @@ a:focus-visible {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
+.v2-nav-button.collapsed.active {
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.08);
+}
+
 .v2-nav-button:active {
   transform: scale(0.985);
 }
 
-.v2-nav-icon { font-size: 15px; display: flex; align-items: center; justify-content: center; }
-.v2-nav-label { flex: 1; }
+.v2-nav-icon { font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.v2-nav-label { flex: 1; white-space: nowrap; }
 
 .v2-nav-badge {
   font-size: 10px;
@@ -4647,15 +4736,48 @@ a:focus-visible {
   border: 1px solid var(--v2-warning-border);
 }
 
+.v2-nav-button.collapsed .v2-nav-badge.badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  border-radius: 50%;
+  background-color: var(--v2-warning);
+  border: 1px solid #18181b;
+}
+
 .v2-sidebar-footer {
   padding: 14px 16px;
   border-top: 1px solid var(--v2-border-subtle);
   background-color: #0c0c0e;
+  transition: padding 0.2s ease;
+}
+
+.v2-sidebar-footer.collapsed {
+  padding: 10px 4px;
+  display: flex;
+  justify-content: center;
 }
 
 .v2-env-badge { display: flex; flex-direction: column; gap: 2px; }
 .v2-env-tag { font-family: var(--v2-font-mono); font-size: 10px; font-weight: 600; color: var(--v2-text-muted); }
-.v2-env-sub { color: var(--v2-success); font-size: 11px; font-weight: 500; }
+.v2-sidebar.collapsed .v2-env-tag { font-size: 9px; text-align: center; }
+.v2-env-sub { color: var(--v2-success); font-size: 11px; font-weight: 500; white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-sidebar,
+  .v2-nav-button,
+  .v2-sidebar-toggle-btn,
+  .v2-factory-status-pill,
+  .v2-sidebar-header,
+  .v2-sidebar-footer {
+    transition: none !important;
+  }
+}
 
 /* ==========================================================================
    2. HEADER GLOBAL REFINADO (Shadcn Clean Bar)
@@ -5463,10 +5585,23 @@ a:focus-visible {
     border-right: none;
     border-bottom: 1px solid var(--v2-border-subtle);
   }
+  .v2-sidebar.collapsed {
+    width: 100%;
+    height: auto;
+  }
   .v2-sidebar-header { padding: 10px 14px; gap: 8px; }
+  .v2-sidebar-header.collapsed {
+    height: auto;
+    flex-direction: row;
+    padding: 10px 14px;
+    justify-content: space-between;
+  }
   .v2-status-pill { display: none; }
+  .v2-factory-status-pill { display: none; }
   .v2-sidebar-nav { flex-direction: row; overflow-x: auto; padding: 6px 10px; gap: 6px; }
+  .v2-sidebar.collapsed .v2-sidebar-nav { flex-direction: row; width: 100%; }
   .v2-nav-button { padding: 6px 10px; font-size: 12px; white-space: nowrap; width: auto; }
+  .v2-nav-button.collapsed { width: auto; height: auto; padding: 6px 10px; }
   .v2-sidebar-footer { display: none; }
   .v2-header {
     height: auto;

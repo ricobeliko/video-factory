@@ -186,3 +186,27 @@ ehearse_v2_migration.py.
     - Teste direcionado backend (`test_create_channel_with_full_parity_fields`): PASS em 0.59s.
     - Servidor Vite ativo e hot-reloading verificado localmente.
 
+## Fase 17A — Correção do Wizard + Sidebar Recolhível (Concluída)
+- **Status:** CONCLUÍDO (Wizard Corrigido e Sidebar Recolhível por Padrão)
+- **Objetivo:** Corrigir a causa da submissão antecipada do canal no passo 4 do wizard e implementar a sidebar recolhível por padrão na carga da aplicação.
+- **Entregas:**
+  - **Correção do Wizard (`CreateChannelModal.jsx`):**
+    - `handleNextStep` no passo 4 avança estritamente para o passo 5 sem disparar criação de canal.
+    - Botão do passo 5 alterado para `type="button"` com `onClick={handleSubmit}` e proteção contra double-click (`disabled={isSubmitting}`).
+    - Salvaguarda rígida em `handleSubmit`: `if (step !== 5) return;` e bloqueio de cliques simultâneos.
+    - Prevenção de submissão via Enter em campos de texto/número (`onKeyDown`).
+    - Passo 5 expõe meta de estoque (`targetStock`) e teto diário (`dailyLimit`) editáveis com persistência integral na API.
+    - Switch de produção autônoma configurado com desligamento padrão seguro (`false`).
+    - Função `resetForm()` limpa todos os dados ao reabrir o wizard.
+    - Botões Voltar e Próximo preservam valores preenchidos.
+  - **Sidebar Recolhível (`Sidebar.jsx`, `App.jsx`, `styles.css`):**
+    - Estado no React iniciando recolhida por padrão (`isSidebarCollapsed = true`).
+    - Modo recolhido: largura 64px, trilho de ícones centralizados com tooltips nativos (`title`), destaque para página ativa e botão visível para expandir.
+    - Modo expandido: largura 240px com nomes completos e identidade visual preservada.
+    - Área principal fluida ajustando-se automaticamente ao espaço liberado (`flex: 1`).
+    - Suporte a `prefers-reduced-motion` e visualização responsiva para telas menores.
+  - **Validação e Build:**
+    - `npm run build` com 100% de sucesso.
+    - Teste unitário backend `test_create_channel_with_full_parity_fields`: PASS.
+
+

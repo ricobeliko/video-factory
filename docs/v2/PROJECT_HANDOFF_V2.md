@@ -292,3 +292,42 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   - Nenhuma publicação externa executada.
 - **Próximo Passo:** Homologação estética final pelo operador no notebook DEV.
 
+---
+
+## 15. Correção do Wizard + Sidebar Recolhível V2.17A (19/10/2026)
+
+- **Status:** CONCLUÍDO (Wizard Corrigido e Sidebar Recolhível por Padrão)
+- **Ambiente:** Notebook DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Baseline SHA:** `b779222a69cb23113c61d07f1f599366938b68b3`
+- **Objetivo da Missão:** Corrigir exclusivamente o fluxo do Wizard de criação de canais (impedindo a criação prematura ao avançar da etapa 4 para a 5) e implementar sidebar recolhível por padrão na carga da aplicação, preservando a identidade Modern Command Deck da V2.17.
+- **Implementações Concluídas:**
+  1. **Correção do Wizard de Criação de Canais (`CreateChannelModal.jsx`):**
+     - **Causa Raiz Identificada:** No formulário do wizard, o botão de submissão herdava disparo precoce por eventos de teclado (Enter) ou clique repetido/click-through ao transicionar de etapa, e `handleSubmit` não possuía salvaguarda contra chamadas fora do passo 5 (`if (step !== 5) return;`), além de ausência de reset de campos ao reabrir o modal.
+     - **Correção Implementada:** 
+       - Botão da Etapa 4 avança exclusivamente para a Etapa 5 (`handleNextStep`), com `type="button"`, sem qualquer chamada de criação de canal.
+       - Botão da Etapa 5 alterado para `type="button"` com `onClick={handleSubmit}` e `disabled={isSubmitting}`, eliminando submissões nativas acidentais.
+       - Salvaguardas em `handleSubmit`: `if (step !== 5) return;` e bloqueio estrito contra double submit (`if (isSubmitting) return;`).
+       - Salvaguarda no `<form>` via `onKeyDown`: a tecla Enter em inputs de texto/número avança de etapa em vez de submeter o formulário.
+       - A Etapa 5 é exibida integralmente, com campos de meta de estoque (`targetStock`, 1-10) e teto diário (`dailyLimit`, 1-30) editáveis e tolerantes a digitação.
+       - A opção de produção autônoma (`autonomousEnabled`) inicia rigorosamente desativada (`false`) por segurança.
+       - Resumo final reativo reflete os valores exatos de estoque e quotas antes de qualquer persistência.
+       - Função `resetForm()` limpa todos os dados de formulário ao abrir o modal, impedindo reutilização indevida de dados de canais anteriores.
+       - Navegação com botões "Voltar" e "Próximo" preserva integralmente os dados informados nas etapas.
+       - Tratamento de erro mantém os dados preenchidos no modal para correção pelo operador.
+  2. **Implementação de Sidebar Recolhível (`Sidebar.jsx`, `App.jsx`, `styles.css`):**
+     - **Estado Inicial:** Inicia **recolhida por padrão** (`isSidebarCollapsed = true`) sempre que a aplicação carrega.
+     - **Modo Recolhido:** Largura compactada para 64px (`--v2-sidebar-collapsed-width`), exibindo somente ícones de navegação centralizados com tooltips nativos (`title`), foco acessível e destaque para a página ativa. Status da fábrica exibido como pílula compacta de dot. Rodapé exibindo tag condensada `DEV`.
+     - **Modo Expandido:** Largura total de 240px com ícones, labels completos, badges e branding preservados.
+     - **Controles de Expansão/Recolhimento:** Botão de toggle visível no cabeçalho da sidebar (`◀` / `▶`) com `aria-label` e título acessíveis, além de interatividade ao clicar no bloco de logo/marca quando recolhida.
+     - **Responsividade e Acessibilidade:** Respeita `prefers-reduced-motion` (desativa transições), adapta-se a dispositivos móveis sem sobrepor conteúdo e permite navegação completa em ambos os modos. A área principal (`.v2-main-content`) ajusta-se fluidamente ao espaço liberado via `flex: 1`.
+- **Validação:**
+  - Build frontend Vite (`npm run build`): Concluído com sucesso (zero erros).
+  - Teste unitário direcionado: `test_create_channel_with_full_parity_fields` passou com sucesso (`OK`).
+  - Limitação de browser subagent automatizado (erro de download de driver externo Playwright no CDN) registrada conforme especificado na missão, com validação de código e servidores prontos para homologação visual pelo operador.
+- **Salvaguardas de Produção:**
+  - Zero modificações no ambiente de produção (`C:\Projetos\MoneyPrinterTurbo`).
+  - Zero modificações na branch `main`.
+  - Nenhuma publicação externa executada.
+- **Próximo Passo:** Homologação visual pelo operador no notebook DEV.
+
+

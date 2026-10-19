@@ -14,12 +14,13 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `16/10/2026`
+- **LAST_UPDATED:** `19/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `HOTFIX PLAYER FASTSTART & REMUX GOVERNANCE (NEW MP4 FASTSTART + WEB UI V2 SINGLE LOAD)`
+- **CURRENT_FOCUS:** `HOTFIX V1: QUIZ SAFETY GATE ISOLADO (Q0-R / QUIZ_DILEMMA)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
+- **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / PLAYER_FASTSTART_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / QUIZ_SAFETY_GATE_HOTFIX_VALIDATED`
 - **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
 - **CURRENT_MAIN_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
 - **DEV_BRANCH_HEAD_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
@@ -98,6 +99,19 @@
       - Proteção contra vazamento de segredos: `sanitize_secrets` redige `POST_FOR_ME_TIKTOK_API_KEY`, `POST_FOR_ME_API_KEY` e `POST_FOR_ME_QUICKSTART_API_KEY`.
       - Validação com mocks: 8 testes direcionados em `test/services/test_multiproject_post_for_me.py` (100% PASS) e 44 testes em `test/services/test_channel_factory.py` (100% PASS).
 - **QUIZ_ENGINE_STATUS:** `DEV HOMOLOGATED / Q5-B2A.1 COMPLETE` (Homologação real concluída com sucesso em DEV; preflight de produção Q5-B2A validado; Quiz Engine exposto na Web UI via STRUCTURE_QUIZ_DILEMMA em Q5-B2A.1; pipeline tradicional 100% preservado; aguardando autorização humana para Q5-B2B)
+- **QUIZ_SAFETY_GATE_HOTFIX_STATUS:** `DEV VALIDATED (19/10/2026)`
+  - **Sintoma / Problema:** O canal *Dose Diária de Escolhas* utiliza o formato `quiz_dilemma` com layout Q0-R homologado. As gerações autônomas eram bloqueadas pelo Safety Gate tradicional por semelhança de Hook/abertura (98%), CTA (100%) e repetição consecutiva de estrutura narrativa (3+ vezes), características inerentes ao formato de Quiz.
+  - **Causa Raiz:** O Safety Gate tradicional aplicava regras lineares de vídeos tradicionais contra uma tabela global `monetization_safety` sem isolamento por canal, tratando a abertura e encerramento padronizados do Quiz como plágio/duplicidade.
+  - **Solução Implementada:**
+    - Criado validador especializado `app/services/quiz_safety_gate.py` isolado exclusivamente para o formato `quiz_dilemma`.
+    - Roteamento especializado em `app/services/task.py` nas duas chamadas de Safety Gate (`evaluate_quiz_script_safety` e `evaluate_quiz_duration_safety`), preservando fallback para testes e mantendo o pipeline tradicional 100% intocado.
+    - Aceita abertura padronizada ("O que você prefere?"), CTA padronizado e estrutura narrativa consecutiva sem falso positivo.
+    - Mantém bloqueio estrito para roteiro vazio, conteúdo insuficiente e duração fora dos limites técnicos.
+    - Deduplicação real baseada nas alternativas (top/bottom) e narração dos dilemas com overlap de tokens Jaccard e verificação de sequência (streak de 3+ dilemas na mesma ordem).
+    - Detecção e bloqueio de duplicatas internas no mesmo vídeo.
+    - Isolamento de histórico estritamente por perfil e canal via tabela `quiz_safety_history` no SQLite, sem colisão entre canais.
+    - Preservado o hotfix local existente em `app/services/autonomous_production.py` (`rejected_struct = None`).
+    - Validação: 9 testes direcionados em `test/services/test_quiz_safety_gate.py` (100% PASS) e 5 testes de regressão em `test/services/test_quiz_integration.py` (100% PASS).
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**

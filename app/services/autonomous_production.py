@@ -2692,6 +2692,7 @@ def _run_autonomous_cycle(
     # Mas se o canal tiver formato fixo configurado (ex: quiz_dilemma), honra estritamente o formato (Fase Q5-C1)
     prof_ctx = profile_manager.get_generation_profile_context(profile_id=target_profile_id, db_path=db_path)
     fixed_format = prof_ctx.get("video_format") or prof_ctx.get("content_style")
+    rejected_struct = None
     if fixed_format and fixed_format not in ("traditional", "standard", "auto", ""):
         rec_struct = fixed_format
     else:
@@ -2838,6 +2839,7 @@ def _run_autonomous_cycle(
         closed_loop_decision_recorded = False
         closed_loop_meta = None
 
+    rejected_struct = None
     if fixed_format and fixed_format not in ("traditional", "standard", "auto", ""):
         rec_struct = fixed_format
 

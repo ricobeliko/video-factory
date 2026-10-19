@@ -104,14 +104,15 @@
   - **Causa Raiz:** O Safety Gate tradicional aplicava regras lineares de vídeos tradicionais contra uma tabela global `monetization_safety` sem isolamento por canal, tratando a abertura e encerramento padronizados do Quiz como plágio/duplicidade.
   - **Solução Implementada:**
     - Criado validador especializado `app/services/quiz_safety_gate.py` isolado exclusivamente para o formato `quiz_dilemma`.
-    - Roteamento especializado em `app/services/task.py` nas duas chamadas de Safety Gate (`evaluate_quiz_script_safety` e `evaluate_quiz_duration_safety`), preservando fallback para testes e mantendo o pipeline tradicional 100% intocado.
+    - Roteamento especializado em `app/services/task.py` nas duas chamadas de Safety Gate (`evaluate_quiz_script_safety` e `evaluate_quiz_duration_safety`), selecionando o validador puramente pelo formato real (`is_quiz_dilemma`), sem inspeção de mocks em produção e mantendo o pipeline tradicional 100% intocado.
     - Aceita abertura padronizada ("O que você prefere?"), CTA padronizado e estrutura narrativa consecutiva sem falso positivo.
     - Mantém bloqueio estrito para roteiro vazio, conteúdo insuficiente e duração fora dos limites técnicos.
     - Deduplicação real baseada nas alternativas (top/bottom) e narração dos dilemas com overlap de tokens Jaccard e verificação de sequência (streak de 3+ dilemas na mesma ordem).
     - Detecção e bloqueio de duplicatas internas no mesmo vídeo.
     - Isolamento de histórico estritamente por perfil e canal via tabela `quiz_safety_history` no SQLite, sem colisão entre canais.
+    - Tentativas rejeitadas (`safety_status = 'BLOCK'`) são gravadas para auditoria mas estritamente excluídas do histórico elegível de comparação (`safety_status IN ('PASS', 'REVIEW')`), impedindo poluição do histórico.
     - Preservado o hotfix local existente em `app/services/autonomous_production.py` (`rejected_struct = None`).
-    - Validação: 9 testes direcionados em `test/services/test_quiz_safety_gate.py` (100% PASS) e 5 testes de regressão em `test/services/test_quiz_integration.py` (100% PASS).
+    - Validação: 11 testes direcionados em `test/services/test_quiz_safety_gate.py` (100% PASS) e 5 testes de integração em `test/services/test_quiz_integration.py` (100% PASS).
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**

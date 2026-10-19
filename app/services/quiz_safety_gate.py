@@ -328,6 +328,7 @@ def get_isolated_quiz_history(
             SELECT task_id, profile_id, channel_id, topic, dilemmas_json, dilemma_count, safety_status, checked_at
             FROM quiz_safety_history
             WHERE profile_id = ?
+              AND safety_status IN ('PASS', 'REVIEW')
         """
         params_list: List[Any] = [clean_pid]
         if clean_exclude:
@@ -361,6 +362,7 @@ def get_isolated_quiz_history(
                     JOIN task_profiles tp ON tp.task_id = ms.task_id
                     WHERE tp.profile_id = ?
                       AND ms.narrative_structure = 'quiz_dilemma'
+                      AND ms.safety_status IN ('PASS', 'REVIEW')
                       AND ms.task_id <> ?
                     ORDER BY ms.checked_at DESC
                     LIMIT ?;

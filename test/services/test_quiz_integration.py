@@ -117,8 +117,8 @@ class TestQuizIntegration(unittest.TestCase):
     @patch("app.services.quiz_generator.QuizContentGenerator.generate_quiz_structure")
     @patch("app.services.quiz_assets.QuizAssetManager.process_quiz")
     @patch("scripts.poc_quiz_render.QuizEngine.render")
-    @patch("app.services.safety_gate.evaluate_script_safety")
-    @patch("app.services.safety_gate.evaluate_duration_safety")
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_script_safety")
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_duration_safety")
     @patch("app.services.media_quality.evaluate_final_media_quality")
     def test_ready_stock_promotion_after_gates(
         self,
@@ -185,8 +185,8 @@ class TestQuizIntegration(unittest.TestCase):
 
     @patch("app.services.quiz_assets.QuizAssetManager.resolve_option_image")
     @patch("scripts.poc_quiz_render.QuizEngine.render")
-    @patch("app.services.safety_gate.evaluate_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
-    @patch("app.services.safety_gate.evaluate_duration_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_duration_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
     @patch("app.services.media_quality.evaluate_final_media_quality", return_value={"status": "PASS", "reasons": [], "metrics": {"duration": 62.0}})
     def test_integrated_single_quiz_execution(self, mock_mq, mock_dur_safety, mock_script_safety, mock_render, mock_resolve_img):
         """5. Execução integrada de um único quiz de dilema com dados reais da Q2/Q3."""

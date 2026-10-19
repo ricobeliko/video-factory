@@ -2807,16 +2807,7 @@ def _run_quiz_pipeline(
     # Quality Gate 1: Safety Gate (Moderação Prévia de Texto)
     try:
         from app.services import quiz_safety_gate, safety_gate
-        if hasattr(safety_gate.evaluate_script_safety, "assert_called"):
-            assessment = safety_gate.evaluate_script_safety(
-                task_id=task_id,
-                topic=params.video_subject or niche,
-                script=video_script,
-                preset=getattr(params, "monetization_preset", None),
-                narrative_structure=narrative_structure,
-                platform=getattr(params, "platform", None) or "youtube",
-            )
-        elif quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
+        if quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
             assessment = quiz_safety_gate.evaluate_quiz_script_safety(
                 task_id=task_id,
                 topic=params.video_subject or niche,
@@ -2994,14 +2985,7 @@ def _run_quiz_pipeline(
 
     try:
         from app.services import quiz_safety_gate, safety_gate
-        if hasattr(safety_gate.evaluate_duration_safety, "assert_called"):
-            dur_assessment = safety_gate.evaluate_duration_safety(
-                task_id=task_id,
-                actual_duration=actual_duration,
-                preset=getattr(params, "monetization_preset", None),
-                platform=getattr(params, "platform", None) or "youtube",
-            )
-        elif quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
+        if quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
             dur_assessment = quiz_safety_gate.evaluate_quiz_duration_safety(
                 task_id=task_id,
                 actual_duration=actual_duration,

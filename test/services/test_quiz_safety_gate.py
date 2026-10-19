@@ -386,6 +386,92 @@ class TestQuizSafetyGate(unittest.TestCase):
         self.assertFalse(quiz_safety_gate.is_quiz_dilemma(params=params_trad))
         self.assertFalse(quiz_safety_gate.is_quiz_dilemma(params=params_empty))
 
+    def test_blocked_attempts_do_not_pollute_history_for_subsequent_tasks(self):
+        """10. Tentativas rejeitadas (BLOCK) não são salvas como histórico aprovado nem bloqueiam tentativas futuras."""
+        dilemmas = [
+            ("Opção X", "Opção Y", "Você prefere X ou Y?"),
+            ("Opção X", "Opção Y", "Você prefere X ou Y?"),  # Duplicação interna forçando BLOCK
+        ]
+        qdata_bad = self._build_quiz_data(dilemmas)
+        script_bad = self._build_script_text(qdata_bad)
+
+        res_bad = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_bad_attempt",
+            topic="Tentativa Ruim",
+            script=script_bad,
+            quiz_data=qdata_bad,
+            profile_id="profile-escolhas",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_bad["safety_status"], const.SAFETY_STATUS_BLOCK)
+
+        # Agora uma nova tentativa corrigida gera dilemas válidos incluindo uma das opções da tentativa rejeitada
+        dilemmas_good = [
+            ("Opção X", "Opção Y", "Você prefere a opção X ou a opção Y com contexto expandido?"),
+            ("Opção W", "Opção Z", "Você prefere a opção W ou a opção Z em um novo cenário?"),
+            ("Opção J", "Opção K", "Você prefere a opção J ou a opção K com consequências sérias?"),
+            ("Opção M", "Opção N", "Você prefere a opção M ou a opção N para o futuro?"),
+        ]
+        qdata_good = self._build_quiz_data(dilemmas_good)
+        script_good = self._build_script_text(qdata_good)
+
+        res_good = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_good_subsequent",
+            topic="Tentativa Boa",
+            script=script_good,
+            quiz_data=qdata_good,
+            profile_id="profile-escolhas",
+            db_path=self.db_path,
+        )
+        # A tentativa boa NÃO deve ser bloqueada pela tentativa rejeitada anterior
+        self.assertEqual(res_good["safety_status"], const.SAFETY_STATUS_PASS)
+        self.assertEqual(res_good["safety_reasons"], [])
+
+    def test_persistence_across_connection_close_and_reopen(self):
+        """11. A persistência no SQLite e verificação de duplicidade funcionam após fechamento e reabertura da conexão."""
+        fresh_db_path = os.path.join(self.test_dir, "reopen_test.db")
+        dilemmas = [
+            ("Dilema Alpha", "Dilema Beta", "O que você prefere? Viver no topo da montanha... Ou nas profundezas do vale?"),
+            ("Dilema Gamma", "Dilema Delta", "Saber todos os segredos do universo... Ou viver em paz sem nenhuma preocupação?"),
+            ("Dilema Epsilon", "Dilema Zeta", "Ter visão raio-X permanente... Ou audição ultra-sônica ininterrupta?"),
+            ("Dilema Eta", "Dilema Theta", "Viver sempre no ano 3000... Ou viajar de volta para a era medieval?"),
+        ]
+        qdata = self._build_quiz_data(dilemmas)
+        script = self._build_script_text(qdata)
+
+        # 1. Avalia e grava no banco
+        res_1 = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_persist_01",
+            topic="Dilemas Persistidos",
+            script=script,
+            quiz_data=qdata,
+            profile_id="profile-escolhas",
+            db_path=fresh_db_path,
+        )
+        self.assertEqual(res_1["safety_status"], const.SAFETY_STATUS_PASS)
+
+        # 2. Simula encerramento e nova conexão: consulta diretamente o histórico isolado
+        fresh_history = quiz_safety_gate.get_isolated_quiz_history(
+            profile_id="profile-escolhas",
+            db_path=fresh_db_path,
+        )
+        self.assertEqual(len(fresh_history), 1)
+        self.assertEqual(fresh_history[0]["task_id"], "task_persist_01")
+        self.assertEqual(len(fresh_history[0]["dilemmas"]), 5)  # 4 dilemas + 1 closing
+
+        # 3. Nova tarefa enviada com os mesmos dilemas deve ser barrada por duplicidade
+        res_dup = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_persist_02",
+            topic="Dilemas Persistidos",
+            script=script,
+            quiz_data=qdata,
+            profile_id="profile-escolhas",
+            db_path=fresh_db_path,
+        )
+        self.assertEqual(res_dup["safety_status"], const.SAFETY_STATUS_BLOCK)
+        self.assertTrue(any("duplicado" in r.lower() for r in res_dup["safety_reasons"]))
+
 
 if __name__ == "__main__":
     unittest.main()
+

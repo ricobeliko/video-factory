@@ -302,3 +302,14 @@ export async function createChannel(channelData) {
 export async function getVideoTemplates() {
   return fetchJson('/api/v2/templates');
 }
+
+export async function getPublishingAccounts(platform = null) {
+  const qs = platform ? `?platform=${encodeURIComponent(platform)}` : '';
+  return fetchJson(`/api/v2/publishing-accounts${qs}`);
+}
+
+export async function getVoices(language = 'pt-BR') {
+  const qs = language ? `?language=${encodeURIComponent(language)}` : '';
+  return fetchJson(`/api/v2/voices${qs}`);
+}
+

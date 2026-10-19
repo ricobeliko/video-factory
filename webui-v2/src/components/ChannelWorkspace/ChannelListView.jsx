@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { updateProfileAutonomousMode } from '../../api';
 
+/**
+ * ChannelListView — Listagem e Gerenciamento de Canais Operacionais (V2.16)
+ * Apresenta identificação clara, formato homologado, destinos vinculados,
+ * estoque pronto vs meta, e alternância rápida de modo autônomo.
+ */
 export default function ChannelListView({
   channels = [],
   onSelectChannel,
@@ -74,7 +79,7 @@ export default function ChannelListView({
             className={`v2-filter-chip ${formatFilter === 'all' ? 'active' : ''}`}
             onClick={() => setFormatFilter('all')}
           >
-            Todos os Formatos
+            Todos ({channels.length})
           </button>
           <button
             className={`v2-filter-chip ${formatFilter === 'traditional' ? 'active' : ''}`}
@@ -112,6 +117,8 @@ export default function ChannelListView({
             const readyStock = ch.ready_stock || 0;
             const targetStock = ch.target_stock || 3;
             const stockPct = Math.min(100, (readyStock / targetStock) * 100);
+            const isFlow = Boolean(ch.settings?.visual?.flow_enabled);
+            const connectedChannels = ch.channels || [];
 
             return (
               <div
@@ -127,40 +134,59 @@ export default function ChannelListView({
                     <h3 className="v2-card-title">{ch.name}</h3>
                     <span className="v2-card-niche">{ch.niche || 'Nicho Geral'}</span>
                   </div>
-                  <span
-                    className="v2-card-format-tag"
-                    style={{ backgroundColor: `${badge.color}20`, color: badge.color }}
-                  >
-                    {badge.label}
-                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                    <span
+                      className="v2-card-format-tag"
+                      style={{ backgroundColor: `${badge.color}20`, color: badge.color, border: `1px solid ${badge.color}40` }}
+                    >
+                      {badge.label}
+                    </span>
+                    {isFlow && (
+                      <span className="v2-card-flow-tag">
+                        ✨ Google Flow
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="v2-card-stock-section">
                   <div className="v2-stock-header">
                     <span className="v2-stock-title">Estoque Pronto</span>
-                    <span className="v2-stock-numbers">{readyStock} / {targetStock}</span>
+                    <span className="v2-stock-numbers">{readyStock} / {targetStock} vídeos</span>
                   </div>
                   <div className="v2-progress-track">
                     <div
                       className="v2-progress-bar-inner"
                       style={{
                         width: `${stockPct}%`,
-                        backgroundColor: stockPct >= 100 ? '#10b981' : '#3b82f6',
+                        backgroundColor: stockPct >= 100 ? '#10b981' : '#38bdf8',
                       }}
                     />
                   </div>
                 </div>
 
-                <div className="v2-card-destinations">
-                  <span className="v2-dest-count">
-                    {ch.channels?.length || 0} conta(s) social(is) vinculada(s)
-                  </span>
+                {/* Destinos Sociais Conectados */}
+                <div className="v2-card-destinations-row">
+                  {connectedChannels.length === 0 ? (
+                    <span className="v2-dest-chip-none">Buffer Local (Sem conta externa)</span>
+                  ) : (
+                    connectedChannels.map((acc, aIdx) => (
+                      <span
+                        key={aIdx}
+                        className={`v2-dest-chip ${acc.platform === 'youtube' ? 'yt' : 'tt'}`}
+                        title={acc.display_name || acc.platform}
+                      >
+                        {acc.platform === 'youtube' ? '▶ YouTube' : '🎵 TikTok'}
+                      </span>
+                    ))
+                  )}
                 </div>
 
                 <div className="v2-card-footer">
                   <div
                     className="v2-auto-toggle-wrapper"
                     onClick={(e) => handleToggleAuto(e, ch)}
+                    title="Alternar produção autônoma deste canal"
                   >
                     <span
                       className={`v2-auto-switch ${ch.autonomous_enabled ? 'checked' : ''}`}

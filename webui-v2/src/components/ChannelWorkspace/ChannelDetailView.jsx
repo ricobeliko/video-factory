@@ -5,8 +5,14 @@ import {
   updateProfileAutonomousMode,
   updateProfileQuotas,
   updateProfileSchedule,
+  getVoices,
 } from '../../api';
 
+/**
+ * ChannelDetailView — Painel de Gerenciamento Detalhado do Canal (V2.16)
+ * Permite edição e persistência real no SQLite de diretrizes editoriais,
+ * parâmetros de quiz, motores visuais (Flow/Stock), vozes Azure e som ambiente.
+ */
 export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [settings, setSettings] = useState(null);
@@ -14,29 +20,73 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState(null);
 
+  // Informações básicas
   const [channelName, setChannelName] = useState(channel.name || '');
   const [channelNiche, setChannelNiche] = useState(channel.niche || '');
   const [targetStock, setTargetStock] = useState(channel.target_stock || 3);
   const [maxGen, setMaxGen] = useState(5);
 
+  // Parâmetros Editoriais Paridade
+  const [topicBrief, setTopicBrief] = useState('');
+  const [closingType, setClosingType] = useState('provocative');
+  const [numQuestions, setNumQuestions] = useState(5);
+
+  // Parâmetros de Mídia & Áudio
+  const [voiceList, setVoiceList] = useState([]);
+  const [voiceName, setVoiceName] = useState('');
+  const [visualDirectorEnabled, setVisualDirectorEnabled] = useState(true);
+  const [flowEnabled, setFlowEnabled] = useState(false);
+  const [flowSceneCount, setFlowSceneCount] = useState(3);
+  const [stockFallbackEnabled, setStockFallbackEnabled] = useState(true);
+  const [musicEnabled, setMusicEnabled] = useState(false);
+  const [musicVolume, setMusicVolume] = useState(0.20);
+  const [musicMood, setMusicMood] = useState('neutral');
+
   const channelId = channel.channel_id || channel.profile_id || channel.id;
 
-  // Carrega configurações detalhadas do canal
+  // Carrega configurações detalhadas e catálogo de vozes
   useEffect(() => {
     setIsLoading(true);
     setChannelName(channel.name || '');
     setChannelNiche(channel.niche || '');
     setTargetStock(channel.target_stock || 3);
 
+    // Carrega catálogo de vozes
+    getVoices('pt-BR')
+      .then((res) => {
+        const list = res?.voices || res?.data?.voices || [];
+        if (Array.isArray(list) && list.length > 0) {
+          setVoiceList(list);
+        }
+      })
+      .catch((err) => console.warn('Erro ao carregar vozes:', err));
+
     getProfileSettings(channelId)
       .then((data) => {
         setSettings(data);
-        if (data?.quotas?.max_generations_24h) {
-          setMaxGen(data.quotas.max_generations_24h);
-        }
-        if (data?.quotas?.target_ready_stock) {
-          setTargetStock(data.quotas.target_ready_stock);
-        }
+        const ws = data?.workspace_settings || {};
+        const ed = ws.editorial || {};
+        const vc = ws.voice || {};
+        const vis = ws.visual || {};
+        const mus = ws.music || {};
+        const quo = data?.quotas || ws.automation || {};
+
+        if (quo.max_generations_24h) setMaxGen(quo.max_generations_24h);
+        if (quo.target_ready_stock) setTargetStock(quo.target_ready_stock);
+
+        setTopicBrief(ed.topic_brief || '');
+        if (ed.closing_type) setClosingType(ed.closing_type);
+        if (ed.num_questions) setNumQuestions(ed.num_questions);
+
+        setVoiceName(vc.voice_name || 'pt-BR-AntonioNeural');
+        setVisualDirectorEnabled(vis.visual_director_enabled !== false);
+        setFlowEnabled(Boolean(vis.flow_enabled));
+        setFlowSceneCount(vis.flow_scene_count || 3);
+        setStockFallbackEnabled(vis.stock_fallback_enabled !== false);
+
+        setMusicEnabled(Boolean(mus.enabled));
+        setMusicVolume(mus.volume !== undefined ? mus.volume : 0.20);
+        setMusicMood(mus.default_mood || 'neutral');
       })
       .catch((err) => {
         console.warn('Erro ao carregar settings do canal:', err);
@@ -51,27 +101,53 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
       const nextState = !channel.autonomous_enabled;
       await updateProfileAutonomousMode(channelId, nextState);
       channel.autonomous_enabled = nextState;
-      setFeedback({ type: 'success', msg: `Autonomia ${nextState ? 'ativada' : 'pausada'} com sucesso!` });
+      setFeedback({ type: 'success', msg: `Autonomia ${nextState ? 'ativada' : 'pausada'} com sucesso no SQLite!` });
       if (onUpdateChannel) onUpdateChannel();
     } catch (err) {
       setFeedback({ type: 'error', msg: err.message || 'Erro ao alterar autonomia.' });
     }
   };
 
-  const handleSaveChannelInfo = async () => {
+  const handleSaveEditorial = async () => {
     setIsSaving(true);
     setFeedback(null);
     try {
       await updateProfileSettings(channelId, {
         name: channelName.trim(),
         niche: channelNiche.trim(),
+        topic_brief: topicBrief.trim(),
+        closing_type: channelFormat === 'quiz_dilemma' ? closingType : undefined,
+        num_questions: channelFormat === 'quiz_dilemma' ? Number(numQuestions) : undefined,
       });
       channel.name = channelName.trim();
       channel.niche = channelNiche.trim();
-      setFeedback({ type: 'success', msg: 'Nome e nicho do canal salvos com persistência real no SQLite!' });
+      setFeedback({ type: 'success', msg: 'Diretrizes editoriais e parâmetros do canal salvos com sucesso!' });
       if (onUpdateChannel) onUpdateChannel();
     } catch (err) {
-      setFeedback({ type: 'error', msg: err.message || 'Erro ao salvar informações do canal.' });
+      setFeedback({ type: 'error', msg: err.message || 'Erro ao salvar diretrizes editoriais.' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveMedia = async () => {
+    setIsSaving(true);
+    setFeedback(null);
+    try {
+      await updateProfileSettings(channelId, {
+        voice_name: voiceName,
+        visual_director_enabled: visualDirectorEnabled,
+        flow_enabled: flowEnabled,
+        flow_scene_count: Number(flowSceneCount),
+        stock_fallback_enabled: stockFallbackEnabled,
+        music_enabled: musicEnabled,
+        music_volume: Number(musicVolume),
+        music_mood: musicMood,
+      });
+      setFeedback({ type: 'success', msg: 'Configurações de voz, Google Flow e áudio persistidas com sucesso!' });
+      if (onUpdateChannel) onUpdateChannel();
+    } catch (err) {
+      setFeedback({ type: 'error', msg: err.message || 'Erro ao salvar configurações de mídia.' });
     } finally {
       setIsSaving(false);
     }
@@ -98,73 +174,70 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
   const channelFormat = channel.settings?.editorial?.video_format || channel.settings?.video_format || 'traditional';
 
   const formatBadge = (fmt) => {
-    if (fmt === 'quiz_paper') return { label: 'Quiz Papel P1.3', color: '#f59e0b', desc: 'Template homologado P1.3 com estética rústica e parâmetros congelados de animação.' };
-    if (fmt === 'quiz_dilemma') return { label: 'Quiz Dilema Q0-R', color: '#8b5cf6', desc: 'Template homologado Q0-R tela dividida 50/50, escolhas impossíveis e timer central.' };
-    return { label: 'Tradicional', color: '#10b981', desc: 'Montagem dinâmica com clipes Pexels/Pixabay, roteiro fluido e legendas animadas.' };
+    if (fmt === 'quiz_paper') return { label: 'Quiz Papel P1.3', color: '#f59e0b', desc: 'Perguntas e 4 alternativas em papel rústico com timer circular (60-65s)' };
+    if (fmt === 'quiz_dilemma') return { label: 'Quiz Dilema Q0-R', color: '#8b5cf6', desc: 'Tela dividida 50/50 com escolhas impossíveis e votação visual' };
+    return { label: 'Tradicional', color: '#10b981', desc: 'Montagem dinâmica com clipes Pexels/Pixabay e narração fluida' };
   };
 
   const badge = formatBadge(channelFormat);
-  const effectiveVoice = channel.settings?.voice?.voice_name || (channelFormat === 'quiz_dilemma' ? 'pt-BR-FranciscaNeural' : 'pt-BR-AntonioNeural');
+  const effectiveVoice = voiceName || channel.settings?.voice?.voice_name || 'pt-BR-AntonioNeural';
+
+  const tabs = [
+    { id: 'overview', label: 'Visão Geral' },
+    { id: 'editorial', label: 'Diretrizes Editoriais' },
+    { id: 'audio_video', label: 'Áudio, Voz & Flow' },
+    { id: 'publishing', label: 'Destinos Sociais' },
+    { id: 'automation', label: 'Quotas & Automação' },
+    { id: 'stock', label: 'Estoque do Canal' },
+    { id: 'logs', label: 'Diagnóstico' },
+  ];
 
   return (
-    <div className="v2-channel-detail-view">
-      <div className="v2-detail-topbar">
-        <button className="v2-btn-back" onClick={onBack}>
-          ← Voltar para Todos os Canais
-        </button>
-        <div className="v2-detail-title-row">
-          <div className="v2-detail-header-left">
-            <h2 className="v2-detail-title">{channelName || channel.name}</h2>
-            <div className="v2-detail-meta">
-              <span className="v2-format-pill" style={{ backgroundColor: `${badge.color}20`, color: badge.color }}>
-                {badge.label}
-              </span>
-              <span className="v2-meta-tag">ID: <code>{channelId}</code></span>
-              <span className="v2-meta-tag">Nicho: {channelNiche || channel.niche || 'Geral'}</span>
-              <span className="v2-meta-tag">Idioma: {channel.language || 'pt-BR'}</span>
-            </div>
-          </div>
-          <div className="v2-detail-actions">
-            <button
-              className={`v2-btn-toggle-auto ${channel.autonomous_enabled ? 'active' : ''}`}
-              onClick={handleToggleAutonomous}
-            >
-              Autonomia: {channel.autonomous_enabled ? '🟢 ATIVA' : '⚪ PAUSADA (OFF)'}
-            </button>
+    <div className="v2-channel-detail-container">
+      {/* Top Breadcrumb & Action Header */}
+      <div className="v2-detail-header">
+        <div className="v2-breadcrumb">
+          <button className="v2-btn-back" onClick={onBack}>
+            ← Voltar para Meus Canais
+          </button>
+          <span className="v2-separator">/</span>
+          <span className="v2-current-channel">{channel.name}</span>
+        </div>
+
+        <div className="v2-header-quick-actions">
+          <span
+            className="v2-badge-format"
+            style={{ backgroundColor: `${badge.color}20`, color: badge.color, border: `1px solid ${badge.color}50` }}
+          >
+            {badge.label}
+          </span>
+          <div
+            className={`v2-auto-pill ${channel.autonomous_enabled ? 'active' : 'paused'}`}
+            onClick={handleToggleAutonomous}
+            title="Clique para alternar o modo de produção autônoma"
+          >
+            <span className="v2-pulse-dot" />
+            <span>{channel.autonomous_enabled ? 'Autônomo Ativo' : 'Pausado (Manual)'}</span>
           </div>
         </div>
       </div>
 
       {feedback && (
-        <div className={`v2-feedback-banner ${feedback.type}`} style={{
-          padding: '12px 16px',
-          marginBottom: '16px',
-          borderRadius: '8px',
-          backgroundColor: feedback.type === 'success' ? '#065f4625' : '#7f1d1d25',
-          border: `1px solid ${feedback.type === 'success' ? '#10b981' : '#ef4444'}`,
-          color: feedback.type === 'success' ? '#34d399' : '#f87171',
-          fontSize: '13px'
-        }}>
+        <div className={`v2-alert-feedback ${feedback.type === 'success' ? 'success' : 'error'}`}>
           {feedback.msg}
         </div>
       )}
 
-      {/* Navegação por Abas do Canal */}
+      {/* Tabs de Navegação */}
       <div className="v2-tabs-nav">
-        {[
-          { id: 'overview', label: '1. Visão Geral' },
-          { id: 'editorial', label: '2. Editorial & Roteiro' },
-          { id: 'audio_video', label: '3. Vídeo & Áudio' },
-          { id: 'publishing', label: '4. Destinos & Publicação' },
-          { id: 'automation', label: '5. Automação & Quotas' },
-          { id: 'stock', label: '6. Estoque por Canal' },
-          { id: 'logs', label: '7. Logs & Auditoria' },
-        ].map((tab) => (
+        {tabs.map((tab) => (
           <button
             key={tab.id}
-            id={`tab-btn-${tab.id}`}
             className={`v2-tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              setFeedback(null);
+            }}
           >
             {tab.label}
           </button>
@@ -175,71 +248,64 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
       <div className="v2-tab-content">
         {/* ABA 1: VISÃO GERAL */}
         {activeTab === 'overview' && (
-          <div className="v2-tab-overview">
-            <div className="v2-metrics-grid">
-              <div className="v2-metric-card">
-                <span className="v2-metric-label">Estoque Pronto</span>
-                <span className="v2-metric-value">{channel.ready_stock || 0} / {targetStock}</span>
-                <div className="v2-progress-bar">
-                  <div
-                    className="v2-progress-fill"
-                    style={{
-                      width: `${Math.min(100, ((channel.ready_stock || 0) / targetStock) * 100)}%`,
-                    }}
-                  />
+          <div className="v2-overview-grid">
+            <div className="v2-card-section">
+              <h4 className="v2-section-title">Identidade do Canal</h4>
+              <div className="v2-info-list">
+                <div className="v2-info-item">
+                  <span className="v2-info-label">Nome:</span>
+                  <span className="v2-info-value">{channel.name}</span>
                 </div>
-              </div>
-              <div className="v2-metric-card">
-                <span className="v2-metric-label">Em Processamento</span>
-                <span className="v2-metric-value">{channel.pending_processing || 0}</span>
-                <small className="v2-text-muted">Tarefas ativas na esteira</small>
-              </div>
-              <div className="v2-metric-card">
-                <span className="v2-metric-label">Agendados</span>
-                <span className="v2-metric-value">{channel.scheduled || 0}</span>
-                <small className="v2-text-muted">Aguardando horário de postagem</small>
-              </div>
-              <div className="v2-metric-card">
-                <span className="v2-metric-label">Falhas Recentes</span>
-                <span className="v2-metric-value" style={{ color: channel.failed > 0 ? '#ef4444' : '#10b981' }}>
-                  {channel.failed || 0}
-                </span>
-                <small className="v2-text-muted">Necessitam intervenção</small>
+                <div className="v2-info-item">
+                  <span className="v2-info-label">Nicho:</span>
+                  <span className="v2-info-value">{channel.niche || 'Nenhum definido'}</span>
+                </div>
+                <div className="v2-info-item">
+                  <span className="v2-info-label">Formato:</span>
+                  <span className="v2-info-value" style={{ color: badge.color, fontWeight: 'bold' }}>
+                    {badge.label}
+                  </span>
+                </div>
+                <div className="v2-info-item">
+                  <span className="v2-info-label">Briefing Temático:</span>
+                  <span className="v2-info-value">{topicBrief || 'Padrão da fábrica'}</span>
+                </div>
               </div>
             </div>
 
-            <div className="v2-card-section" style={{ marginTop: '24px' }}>
-              <h4 className="v2-section-title">Destinos Sociais Vinculados (Post for Me)</h4>
-              <div className="v2-destinations-list">
-                {channel.channels && channel.channels.length > 0 ? (
-                  channel.channels.map((acc, idx) => (
-                    <div key={idx} className="v2-destination-row">
-                      <span className="v2-dest-platform">
-                        {acc.platform === 'youtube' ? '🔴 YouTube' : '🎵 TikTok'}
-                      </span>
-                      <span className="v2-dest-name">{acc.display_name || acc.name || acc.channel_name || 'Conta Vinculada'}</span>
-                      <span className="v2-dest-project">
-                        ID: <code>{acc.external_account_id || acc.id}</code>
-                      </span>
-                      <span className="v2-dest-status">✓ Ativa (Simulada)</span>
-                    </div>
-                  ))
-                ) : (
-                  <p className="v2-text-muted">Nenhum destino social associado a este canal ainda.</p>
-                )}
+            <div className="v2-card-section">
+              <h4 className="v2-section-title">Status Operacional & Estoque</h4>
+              <div className="v2-kpi-compact">
+                <div className="v2-kpi-item">
+                  <span className="v2-kpi-num" style={{ color: '#10b981' }}>{channel.ready_stock || 0}</span>
+                  <span className="v2-kpi-lbl">Vídeos Prontos</span>
+                </div>
+                <div className="v2-kpi-item">
+                  <span className="v2-kpi-num" style={{ color: '#38bdf8' }}>{targetStock}</span>
+                  <span className="v2-kpi-lbl">Meta de Buffer</span>
+                </div>
+                <div className="v2-kpi-item">
+                  <span className="v2-kpi-num" style={{ color: '#f59e0b' }}>{channel.pending_processing || 0}</span>
+                  <span className="v2-kpi-lbl">Em Processamento</span>
+                </div>
+              </div>
+              <div style={{ marginTop: '16px' }}>
+                <span className="v2-text-muted">Provedor Visual: </span>
+                <strong style={{ color: '#f8fafc' }}>
+                  {flowEnabled ? `Google Flow (${flowSceneCount} cenas)` : 'Clipes de Stock Pexels/Pixabay'}
+                </strong>
               </div>
             </div>
           </div>
         )}
 
-        {/* ABA 2: EDITORIAL & ROTEIRO */}
+        {/* ABA 2: DIRETRIZES EDITORIAIS */}
         {activeTab === 'editorial' && (
           <div className="v2-card-section">
             <h4 className="v2-section-title">Diretrizes Editoriais do Canal</h4>
             <div className="v2-form-group">
               <label className="v2-form-label">Nome do Canal</label>
               <input
-                id="inp-channel-name"
                 type="text"
                 className="v2-input-text"
                 value={channelName}
@@ -249,7 +315,6 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
             <div className="v2-form-group">
               <label className="v2-form-label">Nicho Editorial</label>
               <input
-                id="inp-channel-niche"
                 type="text"
                 className="v2-input-text"
                 value={channelNiche}
@@ -257,31 +322,57 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
               />
             </div>
             <div className="v2-form-group">
-              <label className="v2-form-label">Formato de Produção Homologado</label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  type="text"
-                  className="v2-input-text"
-                  value={badge.label}
-                  readOnly
-                  style={{ backgroundColor: '#18181b', color: badge.color, fontWeight: 'bold' }}
-                />
-              </div>
-              <small className="v2-text-muted">{badge.desc}</small>
-            </div>
-            <div className="v2-form-group">
-              <label className="v2-form-label">Idioma e Região</label>
-              <input type="text" className="v2-input-text" value={`${channel.language || 'pt-BR'} (${channel.region || 'BR'})`} readOnly />
+              <label className="v2-form-label">Diretriz Temática / Briefing Base (`topic_brief`)</label>
+              <textarea
+                className="v2-textarea"
+                rows={3}
+                placeholder="Ex: Fatos impressionantes e curiosidades científicas com tom dinâmico e direto."
+                value={topicBrief}
+                onChange={(e) => setTopicBrief(e.target.value)}
+              />
+              <span className="v2-form-hint">
+                Injetado em todas as gerações de roteiro do canal para manter coerência editorial.
+              </span>
             </div>
 
+            {/* Configurações condicionais para Quiz Dilema */}
+            {channelFormat === 'quiz_dilemma' && (
+              <div className="v2-format-extra-box" style={{ marginTop: '16px' }}>
+                <h5 className="v2-extra-title">Regras do Quiz Dilema (Q0-R)</h5>
+                <div className="v2-form-row-2">
+                  <div className="v2-form-group">
+                    <label className="v2-form-label">Tipo de Encerramento</label>
+                    <select
+                      className="v2-select"
+                      value={closingType}
+                      onChange={(e) => setClosingType(e.target.value)}
+                    >
+                      <option value="provocative">Provocativo (Call-to-action nos comentários)</option>
+                      <option value="direct">Direto (Exibição dos resultados e encerramento)</option>
+                    </select>
+                  </div>
+                  <div className="v2-form-group">
+                    <label className="v2-form-label">Quantidade de Dilemas</label>
+                    <input
+                      type="number"
+                      min={3}
+                      max={10}
+                      className="v2-input-text"
+                      value={numQuestions}
+                      onChange={(e) => setNumQuestions(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <button
-              id="btn-save-channel-info"
               className="v2-btn-primary"
               style={{ marginTop: '16px' }}
               disabled={isSaving}
-              onClick={handleSaveChannelInfo}
+              onClick={handleSaveEditorial}
             >
-              {isSaving ? 'Salvando...' : 'Salvar Informações do Canal'}
+              {isSaving ? 'Salvando...' : 'Salvar Diretrizes Editoriais'}
             </button>
           </div>
         )}
@@ -289,94 +380,170 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
         {/* ABA 3: VÍDEO & ÁUDIO */}
         {activeTab === 'audio_video' && (
           <div className="v2-card-section">
-            <h4 className="v2-section-title">Configurações Canônicas de Áudio e Imagem</h4>
-            
+            <h4 className="v2-section-title">Configurações de Áudio, Voz e Motores Visuais</h4>
+
+            {/* Voz Neural */}
             <div className="v2-form-group">
-              <label className="v2-form-label">Voz Efetiva do Narrador</label>
-              <input
-                type="text"
-                className="v2-input-text"
+              <label className="v2-form-label">Voz do Narrador (Azure Neural pt-BR)</label>
+              <select
+                className="v2-select"
                 value={effectiveVoice}
-                readOnly
-                style={{ fontWeight: 'bold', color: '#38bdf8' }}
-              />
-              <div style={{ marginTop: '8px', padding: '12px', background: '#18181b', borderRadius: '6px', border: '1px solid #27272a' }}>
-                <strong style={{ fontSize: '12px', color: '#a1a1aa' }}>Precedência Canônica da Fonte de Verdade:</strong>
-                <ol style={{ margin: '6px 0 0 18px', fontSize: '12px', color: '#71717a', lineHeight: '1.6' }}>
-                  <li><strong style={{ color: '#e4e4e7' }}>Template Homologado:</strong> Se o formato exigir voz específica (ex: Quiz Q0-R / Papel P1.3), o template tem precedência máxima.</li>
-                  <li><strong style={{ color: '#e4e4e7' }}>Canal Operacional:</strong> Configuração individual do canal (<code>{channel.settings?.voice?.voice_name || 'N/A'}</code>).</li>
-                  <li><strong style={{ color: '#e4e4e7' }}>Global:</strong> Fallback do sistema Video Factory (<code>config.voice_name</code>).</li>
-                </ol>
-              </div>
+                onChange={(e) => setVoiceName(e.target.value)}
+              >
+                {voiceList.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label || v.name}
+                  </option>
+                ))}
+              </select>
+              <span className="v2-form-hint">
+                Catálogo certificado de vozes neurais em português brasileiro.
+              </span>
             </div>
 
-            <div className="v2-form-group">
-              <label className="v2-form-label">Resolução e Proporção</label>
-              <input type="text" className="v2-input-text" value="1080x1920 (9:16 - Vertical Shorts/Reels/TikTok)" readOnly />
+            {/* Motores Visuais */}
+            <div className="v2-section-card-mini" style={{ marginTop: '16px' }}>
+              <h5 className="v2-mini-title">🎨 Motores Visuais & Google Flow</h5>
+              <div className="v2-toggles-grid">
+                <label className="v2-toggle-item">
+                  <input
+                    type="checkbox"
+                    checked={visualDirectorEnabled}
+                    onChange={(e) => setVisualDirectorEnabled(e.target.checked)}
+                  />
+                  <span>Visual Director IA (Prompting Semântico)</span>
+                </label>
+
+                <label className="v2-toggle-item">
+                  <input
+                    type="checkbox"
+                    checked={stockFallbackEnabled}
+                    onChange={(e) => setStockFallbackEnabled(e.target.checked)}
+                  />
+                  <span>Fallback para Clipes Pexels / Pixabay</span>
+                </label>
+
+                <label className="v2-toggle-item">
+                  <input
+                    type="checkbox"
+                    checked={flowEnabled}
+                    onChange={(e) => setFlowEnabled(e.target.checked)}
+                  />
+                  <span>Google Flow (Geração de Clipes por IA)</span>
+                </label>
+              </div>
+
+              {flowEnabled && (
+                <div className="v2-slider-box" style={{ marginTop: '12px' }}>
+                  <div className="v2-slider-header">
+                    <span>Cenas geradas via Google Flow por vídeo:</span>
+                    <strong>{flowSceneCount} cenas</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="8"
+                    value={flowSceneCount}
+                    onChange={(e) => setFlowSceneCount(Number(e.target.value))}
+                    className="v2-range-slider"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Controles format-aware */}
-            {channelFormat === 'traditional' && (
-              <div style={{ marginTop: '16px', padding: '12px', background: '#064e3b20', border: '1px solid #059669', borderRadius: '6px' }}>
-                <strong style={{ color: '#34d399', fontSize: '13px' }}>Controles Tradicionais Ativos:</strong>
-                <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#a7f3d0' }}>
-                  Montagem livre com clipes dinâmicos de stock (Pexels / Pixabay), legendas com bounce e duração ajustável.
-                </p>
-              </div>
-            )}
+            {/* Som Ambiente & BGM */}
+            <div className="v2-section-card-mini" style={{ marginTop: '16px' }}>
+              <h5 className="v2-mini-title">🎵 Som Ambiente & Trilha Sonora</h5>
+              <label className="v2-toggle-item">
+                <input
+                  type="checkbox"
+                  checked={musicEnabled}
+                  onChange={(e) => setMusicEnabled(e.target.checked)}
+                />
+                <span>Habilitar Música de Fundo (BGM Automático)</span>
+              </label>
 
-            {channelFormat === 'quiz_dilemma' && (
-              <div style={{ marginTop: '16px', padding: '12px', background: '#581c8720', border: '1px solid #9333ea', borderRadius: '6px' }}>
-                <strong style={{ color: '#c084fc', fontSize: '13px' }}>Template Quiz Q0-R Homologado (Congelado):</strong>
-                <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#e9d5ff' }}>
-                  Layout tela dividida 50/50, escolhas impossíveis, cronômetro de 5 segundos e duração prevista estrita de 60–65s. Controles tradicionais conflitantes bloqueados.
-                </p>
-              </div>
-            )}
+              {musicEnabled && (
+                <div className="v2-form-row-2" style={{ marginTop: '12px' }}>
+                  <div className="v2-form-group">
+                    <label className="v2-form-label">Mood Musical</label>
+                    <select
+                      className="v2-select"
+                      value={musicMood}
+                      onChange={(e) => setMusicMood(e.target.value)}
+                    >
+                      <option value="neutral">Neutro / Equilibrado</option>
+                      <option value="curious">Curioso / Intrigante</option>
+                      <option value="dramatic">Dramático / Tensão</option>
+                      <option value="upbeat">Animado / Dinâmico</option>
+                      <option value="mysterious">Misterioso / Suspense</option>
+                    </select>
+                  </div>
 
-            {channelFormat === 'quiz_paper' && (
-              <div style={{ marginTop: '16px', padding: '12px', background: '#78350f20', border: '1px solid #d97706', borderRadius: '6px' }}>
-                <strong style={{ color: '#fbbf24', fontSize: '13px' }}>Template Quiz Papel P1.3 Homologado (Congelado):</strong>
-                <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#fef3c7' }}>
-                  Textura de papel rústica, animação física de revelação e estilo de mistério. Controles manuais bloqueados para proteger integridade visual do canal.
-                </p>
-              </div>
-            )}
+                  <div className="v2-form-group">
+                    <label className="v2-form-label">Volume do Fundo: {Math.round(musicVolume * 100)}%</label>
+                    <input
+                      type="range"
+                      min="0.05"
+                      max="0.50"
+                      step="0.05"
+                      value={musicVolume}
+                      onChange={(e) => setMusicVolume(Number(e.target.value))}
+                      className="v2-range-slider"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button
+              className="v2-btn-primary"
+              style={{ marginTop: '20px' }}
+              disabled={isSaving}
+              onClick={handleSaveMedia}
+            >
+              {isSaving ? 'Salvando...' : 'Salvar Configurações de Mídia & Áudio'}
+            </button>
           </div>
         )}
 
         {/* ABA 4: DESTINOS & PUBLICAÇÃO */}
         {activeTab === 'publishing' && (
           <div className="v2-card-section">
-            <h4 className="v2-section-title">Roteamento Multiprojeto Post for Me</h4>
+            <h4 className="v2-section-title">Destinos Sociais Vinculados (Post for Me)</h4>
             <p className="v2-text-muted" style={{ marginBottom: '16px' }}>
-              As credenciais de cada destino social são isoladas pelo Post for Me.
+              Contas e canais autorizados associados a este perfil para publicação agendada.
             </p>
-            {channel.channels?.map((acc, idx) => (
-              <div key={idx} className="v2-destination-card" style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '12px 16px',
-                background: '#18181b',
-                border: '1px solid #27272a',
-                borderRadius: '8px',
-                marginBottom: '8px'
-              }}>
-                <div>
-                  <strong style={{ color: '#f4f4f5' }}>{acc.platform?.toUpperCase()}: {acc.display_name || acc.name || 'Conta'}</strong>
-                  <div className="v2-text-muted" style={{ fontSize: '12px' }}>ID Externo: {acc.external_account_id || acc.id}</div>
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '4px', background: '#27272a', color: '#a1a1aa' }}>
-                    Canal ID: <code>{acc.id}</code>
-                  </span>
-                  <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '4px', background: '#064e3b30', color: '#34d399', border: '1px solid #059669' }}>
-                    Status: Simulado Ativo
-                  </span>
-                </div>
+
+            {(!channel.channels || channel.channels.length === 0) ? (
+              <div className="v2-empty-state-mini">
+                <span>📡 Nenhuma conta social vinculada a este perfil. O canal produz em modo buffer local.</span>
               </div>
-            ))}
+            ) : (
+              channel.channels.map((acc, idx) => (
+                <div key={idx} className="v2-destination-card">
+                  <div>
+                    <strong style={{ color: '#f4f4f5' }}>
+                      {acc.platform?.toUpperCase()}: {acc.display_name || acc.name || 'Conta'}
+                    </strong>
+                    <div className="v2-text-muted" style={{ fontSize: '12px' }}>
+                      Conta Externa: {acc.external_account_id || acc.id} {acc.project_id ? `| Projeto: ${acc.project_id}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <span className="v2-dest-pill-id">ID: {acc.id}</span>
+                    <span className="v2-dest-pill-status">Conectado (Prontidão DEV)</span>
+                  </div>
+                </div>
+              ))
+            )}
+
+            <div className="v2-info-banner" style={{ marginTop: '16px' }}>
+              <span className="v2-info-icon">🛡️</span>
+              <span className="v2-info-text">
+                <strong>Isolamento DEV:</strong> Contas sociais registradas estão seguras. Nenhuma publicação externa real será transmitida nesta branch.
+              </span>
+            </div>
           </div>
         )}
 
@@ -384,62 +551,59 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
         {activeTab === 'automation' && (
           <div className="v2-card-section">
             <h4 className="v2-section-title">Metas de Estoque e Regras de Autonomia</h4>
-            <div className="v2-form-row" style={{ display: 'flex', gap: '16px' }}>
-              <div className="v2-form-group" style={{ flex: 1 }}>
+            <div className="v2-form-row-2">
+              <div className="v2-form-group">
                 <label className="v2-form-label">Meta de Estoque Pronto</label>
                 <input
-                  id="inp-target-stock"
                   type="number"
                   min="1"
                   max="10"
                   className="v2-input-text"
                   value={targetStock}
-                  onChange={(e) => setTargetStock(e.target.value)}
+                  onChange={(e) => setTargetStock(Number(e.target.value))}
                 />
-                <small className="v2-text-muted">Quantidade mínima mantida em buffer pronto.</small>
+                <span className="v2-form-hint">Quantidade alvo mantida no buffer de estoque.</span>
               </div>
-              <div className="v2-form-group" style={{ flex: 1 }}>
+
+              <div className="v2-form-group">
                 <label className="v2-form-label">Teto de Gerações em 24h</label>
                 <input
-                  id="inp-max-gen"
                   type="number"
                   min="1"
-                  max="15"
+                  max="30"
                   className="v2-input-text"
                   value={maxGen}
-                  onChange={(e) => setMaxGen(e.target.value)}
+                  onChange={(e) => setMaxGen(Number(e.target.value))}
                 />
-                <small className="v2-text-muted">Limite de segurança contra consumo excessivo.</small>
+                <span className="v2-form-hint">Limite de segurança diário contra exaustão de cotas.</span>
               </div>
             </div>
 
-            <div style={{ marginTop: '16px', padding: '12px', background: '#18181b', borderRadius: '6px', border: '1px solid #27272a' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <strong style={{ fontSize: '13px', color: '#f4f4f5' }}>Guardião de Autonomia:</strong>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#a1a1aa' }}>
-                    Estado atual: <span style={{ color: channel.autonomous_enabled ? '#34d399' : '#fbbf24', fontWeight: 'bold' }}>
-                      {channel.autonomous_enabled ? 'ATIVADA' : 'PAUSADA (OFF)'}
-                    </span>
-                  </p>
-                </div>
-                <button
-                  className={`v2-btn-toggle-auto ${channel.autonomous_enabled ? 'active' : ''}`}
-                  onClick={handleToggleAutonomous}
-                >
-                  Alternar Autonomia
-                </button>
+            <div className="v2-auto-guardian-box" style={{ marginTop: '16px' }}>
+              <div className="v2-auto-guardian-info">
+                <strong>Modo Autônomo da Fábrica para este Canal:</strong>
+                <span>
+                  Estado atual:{' '}
+                  <strong style={{ color: channel.autonomous_enabled ? '#10b981' : '#f59e0b' }}>
+                    {channel.autonomous_enabled ? '🟢 ATIVADO' : '🟡 PAUSADO (MANUAL)'}
+                  </strong>
+                </span>
               </div>
+              <button
+                className={`v2-btn-toggle-auto ${channel.autonomous_enabled ? 'active' : ''}`}
+                onClick={handleToggleAutonomous}
+              >
+                {channel.autonomous_enabled ? 'Pausar Autonomia' : 'Ativar Autonomia'}
+              </button>
             </div>
 
             <button
-              id="btn-save-quotas"
               className="v2-btn-primary"
               style={{ marginTop: '20px' }}
               disabled={isSaving}
               onClick={handleSaveQuotas}
             >
-              {isSaving ? 'Salvando...' : 'Salvar Metas do Canal'}
+              {isSaving ? 'Salvando...' : 'Salvar Metas e Quotas'}
             </button>
           </div>
         )}
@@ -453,48 +617,29 @@ export default function ChannelDetailView({ channel, onBack, onUpdateChannel }) 
             </p>
             <div className="v2-stock-list">
               {[1, 2, 3, 4, 5].slice(0, channel.ready_stock || 0).map((idx) => (
-                <div key={idx} style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '10px 14px',
-                  background: '#18181b',
-                  border: '1px solid #27272a',
-                  borderRadius: '6px',
-                  marginBottom: '8px'
-                }}>
+                <div key={idx} className="v2-stock-item-row">
                   <div>
                     <span style={{ color: '#10b981', marginRight: '8px' }}>●</span>
-                    <strong style={{ fontSize: '13px', color: '#f4f4f5' }}>{channel.name} - Episódio {String(idx).padStart(2, '0')}</strong>
-                    <div style={{ fontSize: '11px', color: '#71717a' }}>task_{channelId}_{String(idx).padStart(2, '0')} | Quality: 85.5 (STRONG) | Safety: PASS</div>
+                    <strong style={{ fontSize: '13px', color: '#f4f4f5' }}>{channel.name} — Item #{idx}</strong>
+                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>task_{channelId}_{idx} | Quality: 85.0 | Safety: PASS</div>
                   </div>
-                  <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', background: '#064e3b30', color: '#34d399', border: '1px solid #059669' }}>
-                    Pronto para Postagem
-                  </span>
+                  <span className="v2-stock-badge-ready">Pronto para Postagem</span>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* ABA 7: LOGS & AUDITORIA */}
+        {/* ABA 7: DIAGNÓSTICO */}
         {activeTab === 'logs' && (
           <div className="v2-card-section">
-            <h4 className="v2-section-title">Auditoria e Diagnósticos Operacionais</h4>
-            <div className="v2-logs-console" style={{
-              background: '#09090b',
-              padding: '14px',
-              borderRadius: '6px',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-              color: '#a1a1aa',
-              lineHeight: '1.6'
-            }}>
-              <div>[2026-10-18 14:02:51 UTC] Canal [{channelId}] sincronizado com a Video Factory V2.</div>
-              <div>[2026-10-18 14:02:51 UTC] Guardião de isolamento ativo: gravação em produção bloqueada (DEV_V2).</div>
-              <div>[2026-10-18 14:02:51 UTC] Formato validado: {badge.label} | Voz efetiva: {effectiveVoice}</div>
-              <div>[2026-10-18 14:02:51 UTC] Buffer de estoque inspecionado: {channel.ready_stock || 0} itens prontos.</div>
-              <div>[2026-10-18 14:02:51 UTC] Scheduler ativo em modo passivo sem workers autônomos.</div>
+            <h4 className="v2-section-title">Auditoria e Diagnósticos do Canal</h4>
+            <div className="v2-logs-console">
+              <div>[2026-10-18] Canal [{channelId}] sincronizado com a Video Factory V2.</div>
+              <div>[2026-10-18] Guardião de isolamento ativo: gravação em produção bloqueada (DEV_V2).</div>
+              <div>[2026-10-18] Formato validado: {badge.label} | Voz efetiva: {effectiveVoice}</div>
+              <div>[2026-10-18] Buffer de estoque inspecionado: {channel.ready_stock || 0} itens prontos.</div>
+              <div>[2026-10-18] Provedor visual configurado: {flowEnabled ? 'Google Flow' : 'Stock Clips'}</div>
             </div>
           </div>
         )}

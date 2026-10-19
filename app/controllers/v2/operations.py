@@ -222,6 +222,70 @@ def get_channels_overview(request: Request):
     return utils.get_response(200, {"channels": channels_data, "total": len(channels_data)})
 
 
+from loguru import logger
+
+@router.get(
+    "/publishing-accounts",
+    summary="List connected publishing accounts for social destinations (Post for Me)",
+)
+def get_publishing_accounts(
+    request: Request,
+    platform: Optional[str] = Query(default=None, description="Optional platform filter: youtube | tiktok"),
+):
+    from app.services import post_for_me
+    accounts = []
+    platforms = [platform.lower()] if platform else ["youtube", "tiktok"]
+    for plat in platforms:
+        try:
+            plat_accounts = post_for_me.list_connected_publishing_accounts(platform=plat)
+            for acc in plat_accounts:
+                accounts.append({
+                    "platform": plat,
+                    "external_account_id": acc.get("external_account_id"),
+                    "display_name": acc.get("display_name"),
+                    "project_id": acc.get("project_id"),
+                    "project_name": acc.get("project_name"),
+                })
+        except Exception as exc:
+            logger.debug(f"[V2] Erro ao listar contas {plat}: {exc}")
+    return utils.get_response(200, {"accounts": accounts, "total": len(accounts)})
+
+
+@router.get(
+    "/voices",
+    summary="List certified voices available for channels",
+)
+def get_voices(
+    request: Request,
+    language: str = Query(default="pt-BR", description="Language code filter"),
+):
+    from app.services import voice
+    voice_items = []
+    try:
+        raw_voices = voice.get_all_azure_voices(filter_locals=[language])
+        for v in raw_voices:
+            parts = v.split("-")
+            clean_name = "-".join(parts[:-1]) if len(parts) > 1 and parts[-1] in ("Male", "Female") else v
+            gender = parts[-1] if len(parts) > 1 and parts[-1] in ("Male", "Female") else "Neutral"
+            gender_label = "Voz Masculina" if gender == "Male" else ("Voz Feminina" if gender == "Female" else "Neutro")
+            voice_items.append({
+                "id": clean_name,
+                "name": clean_name,
+                "gender": gender,
+                "label": f"{clean_name} ({gender_label})",
+            })
+    except Exception as exc:
+        logger.debug(f"[V2] Erro ao carregar vozes Azure: {exc}")
+    
+    if not voice_items:
+        voice_items = [
+            {"id": "pt-BR-AntonioNeural", "name": "pt-BR-AntonioNeural", "gender": "Male", "label": "pt-BR-AntonioNeural (Voz Masculina - Expressiva)"},
+            {"id": "pt-BR-FranciscaNeural", "name": "pt-BR-FranciscaNeural", "gender": "Female", "label": "pt-BR-FranciscaNeural (Voz Feminina - Padrão)"},
+            {"id": "pt-BR-ThalitaMultilingualNeural", "name": "pt-BR-ThalitaMultilingualNeural", "gender": "Female", "label": "pt-BR-ThalitaMultilingualNeural (Voz Feminina - Multilíngue)"},
+        ]
+    return utils.get_response(200, {"voices": voice_items, "total": len(voice_items)})
+
+
 class CreateChannelRequest(BaseModel):
     name: str = Field(..., description="Nome do canal")
     niche: Optional[str] = Field(None, description="Nicho editorial (ex: Curiosidades, Finanças, Quiz)")
@@ -230,6 +294,21 @@ class CreateChannelRequest(BaseModel):
     target_stock: int = Field(default=3, ge=1, le=10, description="Meta de vídeos no estoque")
     autonomous_enabled: bool = Field(default=False, description="Habilitar produção autônoma")
     voice_name: Optional[str] = Field(None, description="Voz do narrador para o canal")
+    topic_brief: Optional[str] = Field(None, description="Descrição temática ou diretriz do canal")
+    closing_type: Optional[str] = Field(default="provocative", description="Tipo de encerramento para Quiz Dilema")
+    num_questions: Optional[int] = Field(default=5, ge=3, le=10, description="Quantidade de dilemas/perguntas")
+    visual_director_enabled: bool = Field(default=True, description="Habilitar Visual Director")
+    stock_fallback_enabled: bool = Field(default=True, description="Fallback para stock quando necessário")
+    flow_enabled: bool = Field(default=False, description="Habilitar geração via Google Flow")
+    flow_scene_count: int = Field(default=3, ge=1, le=10, description="Cenas Flow por vídeo")
+    music_enabled: bool = Field(default=False, description="Habilitar música de fundo")
+    music_volume: float = Field(default=0.20, ge=0.0, le=1.0, description="Volume da música de fundo")
+    music_mood: str = Field(default="neutral", description="Mood da música de fundo")
+    daily_limit: int = Field(default=5, ge=1, le=50, description="Teto de gerações em 24h")
+    youtube_account_id: Optional[str] = Field(None, description="ID da conta conectada do YouTube")
+    youtube_project_id: Optional[str] = Field(None, description="Project ID da conta YouTube")
+    tiktok_account_id: Optional[str] = Field(None, description="ID da conta conectada do TikTok")
+    tiktok_project_id: Optional[str] = Field(None, description="Project ID da conta TikTok")
 
 
 @router.post(
@@ -255,18 +334,70 @@ def create_channel(request: Request, body: CreateChannelRequest):
         )
         pid = profile["id"]
 
-        # Atualiza configurações adicionais do canal
-        if body.voice_name:
-            ws_settings = profile_manager.get_profile_settings(pid)
-            ws_dict = ws_settings.model_dump()
-            if "voice" not in ws_dict or not isinstance(ws_dict["voice"], dict):
-                ws_dict["voice"] = {}
-            ws_dict["voice"]["voice_name"] = body.voice_name
-            ws_dict["video_format"] = body.format_type
-            profile_manager.update_profile_settings(pid, ws_dict)
+        # Atualiza configurações completas de workspace do canal
+        ws_settings = profile_manager.get_profile_settings(pid)
+        ws_dict = ws_settings.model_dump()
 
-        # Configura quota inicial
-        profile_manager.update_profile_quotas(pid, {"target_ready_stock": body.target_stock})
+        if "editorial" not in ws_dict or not isinstance(ws_dict["editorial"], dict):
+            ws_dict["editorial"] = {}
+        ws_dict["editorial"]["video_format"] = body.format_type
+        if body.topic_brief:
+            ws_dict["editorial"]["topic_brief"] = body.topic_brief
+        if body.closing_type:
+            ws_dict["editorial"]["closing_type"] = body.closing_type
+        if body.num_questions:
+            ws_dict["editorial"]["num_questions"] = body.num_questions
+
+        if "voice" not in ws_dict or not isinstance(ws_dict["voice"], dict):
+            ws_dict["voice"] = {}
+        if body.voice_name:
+            ws_dict["voice"]["voice_name"] = body.voice_name
+
+        if "visual" not in ws_dict or not isinstance(ws_dict["visual"], dict):
+            ws_dict["visual"] = {}
+        ws_dict["visual"]["visual_director_enabled"] = body.visual_director_enabled
+        ws_dict["visual"]["stock_fallback_enabled"] = body.stock_fallback_enabled
+        ws_dict["visual"]["flow_enabled"] = body.flow_enabled
+        ws_dict["visual"]["flow_scene_count"] = body.flow_scene_count
+
+        if "music" not in ws_dict or not isinstance(ws_dict["music"], dict):
+            ws_dict["music"] = {}
+        ws_dict["music"]["enabled"] = body.music_enabled
+        ws_dict["music"]["volume"] = body.music_volume
+        ws_dict["music"]["default_mood"] = body.music_mood
+
+        profile_manager.update_profile_settings(pid, ws_dict)
+
+        # Configura quota inicial e teto diário
+        profile_manager.update_profile_quotas(pid, {
+            "target_ready_stock": body.target_stock,
+            "max_generations_24h": body.daily_limit,
+        })
+
+        # Vincula canais sociais Post for Me se selecionados
+        if body.youtube_account_id:
+            try:
+                profile_manager.create_channel(
+                    profile_id=pid,
+                    platform="youtube",
+                    display_name=f"{body.name} (YouTube)",
+                    external_account_id=body.youtube_account_id,
+                    project_id=body.youtube_project_id,
+                )
+            except Exception as exc:
+                logger.warning(f"[V2] Aviso: falha ao vincular canal YouTube {body.youtube_account_id}: {exc}")
+
+        if body.tiktok_account_id:
+            try:
+                profile_manager.create_channel(
+                    profile_id=pid,
+                    platform="tiktok",
+                    display_name=f"{body.name} (TikTok)",
+                    external_account_id=body.tiktok_account_id,
+                    project_id=body.tiktok_project_id,
+                )
+            except Exception as exc:
+                logger.warning(f"[V2] Aviso: falha ao vincular canal TikTok {body.tiktok_account_id}: {exc}")
 
         # Configura autonomia
         if body.autonomous_enabled:
@@ -389,6 +520,17 @@ class UpdateProfileSettingsRequest(BaseModel):
     autonomous_enabled: Optional[bool] = Field(None, description="Status de autonomia operacional")
     quotas: Optional[UpdateQuotasRequest] = Field(None, description="Configurações de quotas e limites")
     schedule: Optional[UpdateScheduleRequest] = Field(None, description="Configurações de agendamento e janela")
+    # Paridade funcional com fábrica legada
+    topic_brief: Optional[str] = Field(None, description="Diretriz temática do canal")
+    closing_type: Optional[str] = Field(None, description="Encerramento de Quiz Dilema")
+    num_questions: Optional[int] = Field(None, ge=3, le=10, description="Qtd perguntas/dilemas")
+    visual_director_enabled: Optional[bool] = Field(None, description="Visual Director")
+    stock_fallback_enabled: Optional[bool] = Field(None, description="Fallback Stock")
+    flow_enabled: Optional[bool] = Field(None, description="Google Flow")
+    flow_scene_count: Optional[int] = Field(None, ge=1, le=10, description="Qtd cenas Flow")
+    music_enabled: Optional[bool] = Field(None, description="BGM ativado")
+    music_volume: Optional[float] = Field(None, ge=0.0, le=1.0, description="Volume do BGM")
+    music_mood: Optional[str] = Field(None, description="Mood musical")
 
 
 @router.patch(
@@ -603,12 +745,61 @@ def update_channel_settings(
                 growth_mode=clean_mode
             )
 
-        if payload.voice_name is not None:
+        # Atualiza configurações de workspace (editorial, voice, visual, music)
+        ws_fields_present = any(
+            v is not None
+            for v in (
+                payload.voice_name,
+                payload.topic_brief,
+                payload.closing_type,
+                payload.num_questions,
+                payload.visual_director_enabled,
+                payload.stock_fallback_enabled,
+                payload.flow_enabled,
+                payload.flow_scene_count,
+                payload.music_enabled,
+                payload.music_volume,
+                payload.music_mood,
+            )
+        )
+        if ws_fields_present:
             ws_settings = profile_manager.get_profile_settings(clean_p)
             ws_dict = ws_settings.model_dump()
-            if "voice" not in ws_dict or not isinstance(ws_dict["voice"], dict):
-                ws_dict["voice"] = {}
-            ws_dict["voice"]["voice_name"] = payload.voice_name
+
+            if payload.voice_name is not None:
+                if "voice" not in ws_dict or not isinstance(ws_dict["voice"], dict):
+                    ws_dict["voice"] = {}
+                ws_dict["voice"]["voice_name"] = payload.voice_name
+
+            if "editorial" not in ws_dict or not isinstance(ws_dict["editorial"], dict):
+                ws_dict["editorial"] = {}
+            if payload.topic_brief is not None:
+                ws_dict["editorial"]["topic_brief"] = payload.topic_brief
+            if payload.closing_type is not None:
+                ws_dict["editorial"]["closing_type"] = payload.closing_type
+            if payload.num_questions is not None:
+                ws_dict["editorial"]["num_questions"] = payload.num_questions
+
+            if "visual" not in ws_dict or not isinstance(ws_dict["visual"], dict):
+                ws_dict["visual"] = {}
+            if payload.visual_director_enabled is not None:
+                ws_dict["visual"]["visual_director_enabled"] = payload.visual_director_enabled
+            if payload.stock_fallback_enabled is not None:
+                ws_dict["visual"]["stock_fallback_enabled"] = payload.stock_fallback_enabled
+            if payload.flow_enabled is not None:
+                ws_dict["visual"]["flow_enabled"] = payload.flow_enabled
+            if payload.flow_scene_count is not None:
+                ws_dict["visual"]["flow_scene_count"] = payload.flow_scene_count
+
+            if "music" not in ws_dict or not isinstance(ws_dict["music"], dict):
+                ws_dict["music"] = {}
+            if payload.music_enabled is not None:
+                ws_dict["music"]["enabled"] = payload.music_enabled
+            if payload.music_volume is not None:
+                ws_dict["music"]["volume"] = payload.music_volume
+            if payload.music_mood is not None:
+                ws_dict["music"]["default_mood"] = payload.music_mood
+
             profile_manager.update_profile_settings(clean_p, ws_dict)
 
         if payload.autonomous_enabled is not None:

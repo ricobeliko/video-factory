@@ -150,3 +150,17 @@ ehearse_v2_migration.py.
   - Suíte de Homologação Técnica: `test/services/test_v2_15c_parallel_homologation.py` com 8/8 garantias aprovadas cobrindo isolamento de caminhos, bloqueio contra usurpação de PRIMARY, imunidade da fila real, bloqueio de publicações externas, atomicidade em falhas, proteção de divergência no rollback, concorrência atômica de locks e proteção de execução do script legado.
   - Atualização dos planos operacionais em `PROJECT_HANDOFF_V2.md`, `ROADMAP_V2.md`, `PRODUCTION_CUTOVER_PLAN.md` e `ROLLBACK_PLAN.md`.
   - Total de 31 testes direcionados aprovados sem tocar em produção.
+
+## Fase 16 — Resgate Funcional + Nova Identidade Visual (Concluída)
+- **Status:** CONCLUÍDO (Paridade Funcional e Nova Identidade Visual Homologadas)
+- **Objetivo:** Superar as limitações da interface inicial da V2, resgatando a densidade, elegância e paridade funcional com a fábrica real, estabelecendo um design system *Modern Command Deck* e eliminando lacunas de layout e formulários.
+- **Entregas:**
+  - Documentos canônicos de arquitetura visual e paridade: `docs/v2/AUDIT_UI_PARITY.md` e `docs/v2/UI_IDENTITY_SYSTEM_V2.md`.
+  - Fatia A — Design System e App Shell: Paleta semântica dark de central de comando (`#090d16`, `#0f172a`, `#1e293b`), tokens de acento e estado, Sidebar refinada e FactoryHeader contextual.
+  - Fatia B — Meus Canais e Gerenciamento: Cards ricos com chips de destinos conectados (YouTube/TikTok), badges de formato, tag Google Flow, barra de estoque e autonomia. Painel detalhado com abas para edição e persistência bidirecional no SQLite.
+  - Fatia C — Novo Canal (Wizard 5 Etapas): Formulário transformado em Wizard modular e guiado (Identidade, Formato Homologado com Quiz Dilema Q0-R, Destinos Sociais Post for Me, Vozes Azure pt-BR e Google Flow, Quotas e Lançamento Seguro).
+  - Fatia D — Esteira de Produção (Master-Detail Command Center): Fim do empilhamento vertical e do vazio lateral. Painel Master lateral com lista e indicadores de atividade em tempo real; Command Deck com pipeline stepper horizontal de 5 estágios, telemetria de tarefa ativa e grafo causal interativo de 12 estágios.
+  - Fatia E — Unificação das Demais Telas: Dashboard, Estoque, Agendamentos e Configurações integrados à nova identidade.
+  - Backend FastAPI V2: Endpoints `GET /api/v2/publishing-accounts` e `GET /api/v2/voices` implementados; expansão de `CreateChannelRequest` e `UpdateProfileSettingsRequest` com validação e persistência total.
+  - Testes e Build: 100% de sucesso na compilação do frontend Vite e nos testes unitários direcionados.
+

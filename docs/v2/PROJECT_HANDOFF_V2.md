@@ -223,3 +223,40 @@ Get-Process python, node -ErrorAction SilentlyContinue | Where-Object { $_.Path 
   - `test/services/test_v2_cutover_mock.py`: **4/4 PASS**.
   - Total Homologado: **31/31 testes direcionados PASS**.
 - **Próximo Passo:** Homologação e correção visual da interface React (Frontend WebUI V2) no notebook DEV antes de qualquer estágio no PC Forte.
+
+---
+
+## 13. Resgate Funcional e Nova Identidade Visual V2.16 (18/10/2026)
+
+- **Status:** CONCLUÍDO (V2.16 — RESGATE FUNCIONAL + NOVA IDENTIDADE VISUAL CONCLUÍDOS)
+- **Ambiente:** Notebook DEV em `C:\Projetos\MoneyPrinterTurbo-V2` (Branch `feat/video-factory-v2`)
+- **Objetivo da Missão:** Transformar a interface da V2 em uma central de comando moderna, dinâmica e com paridade funcional autêntica com a fábrica legada, eliminando leiautes quadrados, empilhamentos excessivos e lacunas em formulários.
+- **Entregáveis Documentais Canônicos Produzidos:**
+  1. `docs/v2/AUDIT_UI_PARITY.md`: Mapeamento minucioso de 20 recursos do Streamlit legado, identificação de gaps reais no backend e especificações de contratos FastAPI.
+  2. `docs/v2/UI_IDENTITY_SYSTEM_V2.md`: Sistema de identidade visual *Modern Command Deck*, paleta semântica dark (superfícies `#090d16`, `#0f172a`, `#1e293b`; acentos `#38bdf8`, `#10b981`, `#f59e0b`, `#8b5cf6`), tipografia hierarquizada e blueprints para todas as telas.
+- **Implementações por Fatias Verticais Concluídas:**
+  - **Fatia A (Design System & App Shell):** Tokens e regras de estilo unificados em `styles.css`. Sidebar compacta e moderna com pílula de status vivo da fábrica e identificador de isolamento `DEV_V2`. Header contextual limpo com título, subtítulo e ações imediatas.
+  - **Fatia B (Meus Canais & Detalhe de Canal):**
+    - `ChannelListView.jsx`: Cards com chips de destinos conectados (YouTube e TikTok), badges de formato homologado (Tradicional, Quiz Q0-R, Quiz Papel P1.3), tag Google Flow, barra de progresso de estoque (vídeos prontos vs meta) e toggle rápido de autonomia.
+    - `ChannelDetailView.jsx`: Permite edição e persistência real no SQLite de diretrizes editoriais (`topic_brief`, `closing_type`, `num_questions`), configurações de mídia (vozes neurais Azure pt-BR dinâmicas, Google Flow, cenas, som ambiente BGM e volume) e metas de estoque/teto diário.
+  - **Fatia C (Novo Canal — Wizard em 5 Etapas):**
+    - `CreateChannelModal.jsx`: Substituição do formulário monolítico por um Wizard intuitivo em 5 passos (1. Identidade e nicho; 2. Formato homologado com regras de quiz; 3. Destinos sociais integrados ao Post for Me; 4. IA, vozes Azure pt-BR, Google Flow e BGM; 5. Metas, salvaguardas de autonomia e revisão).
+    - Validação contra os modelos Pydantic e persistência integral no `profile_manager`.
+  - **Fatia D (Esteira de Produção — Master-Detail Command Center):**
+    - `ProductionView.jsx`: Redesenho completo para eliminar o espaço vazio e o empilhamento vertical.
+    - Trilha Master à esquerda (340px) com busca rápida e lista de canais com indicador de renderização em tempo real (bolinha pulsante verde para ativo / cinza para ocioso).
+    - Command Deck à direita com título, badge de formato, pipeline stepper horizontal (5 estágios), telemetria da tarefa ativa e grafo causal interativo de 12 estágios em largura total.
+  - **Fatia E (Dashboard, Estoque, Agendamentos e Configurações):** Aplicação coerente dos tokens e superfícies, mantendo a integridade dos dados e componentes já homologados.
+- **Contratos e Endpoints de API Adicionados em `app/controllers/v2/operations.py`:**
+  - `GET /api/v2/publishing-accounts`: Lista de contas sociais conectadas do Post for Me higienizadas sem vazamento de segredos.
+  - `GET /api/v2/voices`: Catálogo oficial de vozes neurais certificadas em português brasileiro (Azure Speech).
+  - Expansão de `CreateChannelRequest` e `UpdateProfileSettingsRequest`: Suporte bidirecional e persistência de `topic_brief`, `closing_type`, `num_questions`, `visual_director_enabled`, `flow_enabled`, `flow_scene_count`, `stock_fallback_enabled`, `music_enabled`, `music_volume`, `music_mood`, `daily_limit` e vinculação de canais sociais.
+- **Resultados de Testes e Compilação:**
+  - Teste unitário direcionado: `Ran 1 test in 0.931s - OK` (`test_create_channel_with_full_parity_fields`).
+  - Build de produção frontend: `vite build` gerou com sucesso os bundles em `webui-v2/dist/` (4.61s, zero erros).
+- **Salvaguardas de Produção:**
+  - Zero modificações no ambiente de produção (`C:\Projetos\MoneyPrinterTurbo`).
+  - Zero modificações na branch `main`.
+  - Nenhuma publicação externa executada.
+- **Próximo Passo:** Inspeção visual e aprovação estética pelo operador no notebook DEV.
+

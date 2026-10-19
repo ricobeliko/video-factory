@@ -664,4 +664,66 @@ class TestWebUiV2Api(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 200)
 
+    def test_publishing_accounts_endpoint(self):
+        """43. GET /api/v2/publishing-accounts retorna 200 e lista contas higienizadas."""
+        with patch("app.services.post_for_me.list_connected_publishing_accounts", return_value=[
+            {"platform": "youtube", "external_account_id": "UC1234567890", "display_name": "Canal Teste", "project_id": "p1", "project_name": "Proj1"}
+        ]):
+            resp = self.client.get("/api/v2/publishing-accounts")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+            self.assertIn("accounts", data)
+            self.assertEqual(len(data["accounts"]), 1)
+            self.assertEqual(data["accounts"][0]["external_account_id"], "UC1234567890")
+
+    def test_voices_endpoint(self):
+        """44. GET /api/v2/voices retorna catálogo de vozes certificado pt-BR."""
+        resp = self.client.get("/api/v2/voices?language=pt-BR")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json().get("data", {})
+        self.assertIn("voices", data)
+        self.assertGreaterEqual(len(data["voices"]), 1)
+
+    def test_create_channel_with_full_parity_fields(self):
+        """45. POST /api/v2/channels persiste topic_brief, flow_enabled, music_enabled e regras de quiz."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.require_primary_instance", return_value=None):
+            payload = {
+                "name": "Canal Paridade V2",
+                "niche": "Curiosidades",
+                "format_type": "quiz_dilemma",
+                "language": "pt-BR",
+                "target_stock": 4,
+                "autonomous_enabled": False,
+                "voice_name": "pt-BR-AntonioNeural",
+                "topic_brief": "Dilemas intrigantes e escolhas difíceis",
+                "closing_type": "provocative",
+                "num_questions": 5,
+                "visual_director_enabled": True,
+                "flow_enabled": True,
+                "flow_scene_count": 4,
+                "music_enabled": True,
+                "music_volume": 0.25,
+                "music_mood": "curious",
+                "daily_limit": 6
+            }
+            resp = self.client.post("/api/v2/channels", json=payload)
+            self.assertIn(resp.status_code, (200, 201))
+            data = resp.json().get("data", {})
+            pid = data.get("channel_id")
+            self.assertTrue(pid)
+
+            # Valida persistência no profile_manager
+            settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+            self.assertEqual(settings.editorial.video_format, "quiz_dilemma")
+            self.assertEqual(settings.editorial.topic_brief, "Dilemas intrigantes e escolhas difíceis")
+            self.assertEqual(settings.editorial.closing_type, "provocative")
+            self.assertEqual(settings.editorial.num_questions, 5)
+            self.assertEqual(settings.visual.flow_enabled, True)
+            self.assertEqual(settings.visual.flow_scene_count, 4)
+            self.assertEqual(settings.music.enabled, True)
+            self.assertEqual(settings.music.default_mood, "curious")
+
+
 

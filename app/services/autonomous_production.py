@@ -691,7 +691,7 @@ def get_autonomous_status(
                 waiting_task_id = None
 
     # Contagem de gerações nas últimas 24h
-    generated_today = count_generations_in_last_24h(db_path=db_path, profile_id=target_profile)
+    generated_today = count_generations_in_last_24h(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
     attempts_today = count_generation_attempts_in_last_24h(db_path=db_path, profile_id=target_profile)
     max_24h = get_max_generations_24h(profile_id=target_profile, db_path=db_path)
     max_att = get_max_attempts_24h(profile_id=target_profile, db_path=db_path)
@@ -781,23 +781,25 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                       AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
                       AND (
                           sp.channel_id = ?
-                          OR (o.metadata_json IS NOT NULL AND (
-                              o.metadata_json LIKE ?
-                              OR o.metadata_json LIKE ?
-                          ))
+                          OR (o.metadata_json IS NOT NULL AND json_extract(o.metadata_json, '$.channel_id') = ?)
                           OR (
                               sp.channel_id IS NULL
-                              AND tp.profile_id IN (
-                                  SELECT profile_id FROM publishing_channels WHERE id = ?
-                              )
+                              AND (o.metadata_json IS NULL OR json_extract(o.metadata_json, '$.channel_id') IS NULL)
+                              AND tp.profile_id = (SELECT pc.profile_id FROM publishing_channels pc WHERE pc.id = ? AND pc.is_enabled = 1)
+                              AND (
+                                  SELECT count(*)
+                                  FROM publishing_channels pc2
+                                  WHERE pc2.profile_id = tp.profile_id
+                                    AND pc2.platform = 'youtube'
+                                    AND pc2.is_enabled = 1
+                              ) = 1
                           )
                       )
                       AND o.timestamp >= ?;
                     """,
                     (
                         clean_channel,
-                        f'%"channel_id": "{clean_channel}"%',
-                        f'%"channel_id": {clean_channel}%',
+                        clean_channel,
                         clean_channel,
                         since_iso,
                     ),
@@ -1536,14 +1538,19 @@ def evaluate_completed_task_gates(
     )
 
     if q_score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS or q_label in (quality_score.LABEL_WEAK, quality_score.LABEL_REVIEW):
-        is_quality_review = bool(q_label == quality_score.LABEL_REVIEW or is_borderline or (55.0 <= q_score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS))
+        is_sub_55 = (isinstance(q_score, (int, float)) and math.isfinite(q_score) and q_score < 55.0)
+        is_quality_review = (not is_sub_55) and bool(
+            q_label == quality_score.LABEL_REVIEW or is_borderline or (55.0 <= q_score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS)
+        )
         metrics_ret = {
             "quality_score": q_score,
             "quality_label": q_label,
             "safety_status": clean_status,
-            "borderline_candidate": is_borderline,
+            "borderline_candidate": is_borderline if not is_sub_55 else False,
             "is_quality_review": is_quality_review,
             "reasons": q_eval.get("reasons", []),
+            "profile_id": profile_id,
+            "channel_id": channel_id,
         }
         return False, f"Quality Score insuficiente para produção autônoma ({q_score:.1f} - {q_label} < {MIN_QUALITY_SCORE_FOR_AUTONOMOUS})", metrics_ret
 
@@ -1601,6 +1608,8 @@ def evaluate_completed_task_gates(
         "safety_status": clean_status,
         "video_path": video_path,
         "copyright_provenance_gate": "PASS",
+        "profile_id": profile_id,
+        "channel_id": channel_id,
     }
 
 
@@ -2052,8 +2061,21 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         and quality
         and quality["quality_label"] in ("GOOD", "STRONG")
     )
-    if not is_auto_quality_approved and not human_review:
-        raise ValueError("waiting_quality_not_approved")
+    if not is_auto_quality_approved:
+        # CF-3B-01: Restringe aprovação humana estritamente à faixa 55.0 <= score < 70.0
+        is_human_eligible = (math.isfinite(score) and 55.0 <= score < MIN_QUALITY_SCORE_FOR_AUTONOMOUS)
+        if not (is_human_eligible and human_review):
+            raise ValueError("waiting_quality_not_approved")
+
+        # Validação centralizada fail-closed dos gates técnico, segurança e copyright
+        ts_ok, ts_reason, _ = scheduler.validate_candidate_technical_and_safety_gates(
+            task_id=task_id,
+            task_data=task,
+            db_path=db_path,
+            task_base_dir=task_base_dir,
+        )
+        if not ts_ok:
+            raise ValueError(f"waiting_technical_or_safety_failed: {ts_reason}")
     persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
     if "youtube" not in persisted_plats and "youtube" not in (task.get("planned_platforms") or []):
         raise ValueError("waiting_youtube_destination_missing")
@@ -2423,18 +2445,32 @@ def _run_autonomous_cycle(
                 }
         else:
             rejected_task_id = current_task_id
-            is_review_hold = bool(
-                metrics.get("is_safety_review")
-                or metrics.get("is_quality_review")
-                or metrics.get("safety_status") == const.SAFETY_STATUS_REVIEW
-                or metrics.get("quality_label") in ("REVIEW", quality_score.LABEL_REVIEW)
-                or metrics.get("borderline_candidate")
-                or (
-                    isinstance(metrics.get("quality_score"), (int, float))
-                    and 55.0 <= metrics.get("quality_score") < MIN_QUALITY_SCORE_FOR_AUTONOMOUS
-                    and metrics.get("safety_status") == const.SAFETY_STATUS_PASS
-                )
+            q_score_val = metrics.get("quality_score")
+            is_sub_55 = (
+                isinstance(q_score_val, (int, float))
+                and math.isfinite(q_score_val)
+                and q_score_val < 55.0
             )
+
+            is_review_hold = False
+            if not is_sub_55:
+                is_review_hold = bool(
+                    metrics.get("is_safety_review")
+                    or metrics.get("is_quality_review")
+                    or metrics.get("safety_status") == const.SAFETY_STATUS_REVIEW
+                    or metrics.get("quality_label") in ("REVIEW", quality_score.LABEL_REVIEW)
+                    or metrics.get("borderline_candidate")
+                    or (
+                        isinstance(q_score_val, (int, float))
+                        and 55.0 <= q_score_val < MIN_QUALITY_SCORE_FOR_AUTONOMOUS
+                        and metrics.get("safety_status") == const.SAFETY_STATUS_PASS
+                    )
+                )
+            else:
+                # CF-3B-03: q_score finito < 55.0 é rejeição definitiva.
+                # Só retém se houver motivo explícito de Safety Review:
+                if metrics.get("is_safety_review") or metrics.get("safety_status") == const.SAFETY_STATUS_REVIEW:
+                    is_review_hold = True
 
             if is_review_hold:
                 # RN-03: Vídeos em REVIEW ficam retidos para avaliação humana (HELD_FOR_REVIEW / HELD_SAFETY_REVIEW).
@@ -2454,6 +2490,18 @@ def _run_autonomous_cycle(
                     )
                 except Exception:
                     pass
+
+                # CF-3B-03: Persistir stage e gate_status de retenção em script.json via task_artifacts.patch_script_data
+                try:
+                    from app.services import task_artifacts
+                    task_artifacts.patch_script_data(
+                        rejected_task_id,
+                        stage=review_stage,
+                        gate_status="held_for_review",
+                        gate_reason=reason,
+                    )
+                except Exception as art_exc:
+                    logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao persistir retenção em script.json: {art_exc}")
 
                 operator_console.log_operational_event(
                     component="autonomous_production",

@@ -53,6 +53,7 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
     return {
         "profile": p,
         "settings": settings,
+        "channels": channels,
         "yt_channel": yt_channel,
         "tiktok_channel": tiktok_channel,
         "autonomous_enabled": is_auto_enabled,
@@ -373,16 +374,13 @@ else:
             _render_onboarding_form(is_primary=is_primary, db_path=db_path)
 
 
-def get_available_factory_voices(current_voice: Optional[str] = None) -> list[str]:
-    """Retorna opções de vozes aprovadas para a fábrica a partir do catálogo Azure/Edge.
+from functools import lru_cache
 
-    Inclui obrigatoriamente Brian (en-US-BrianMultilingualNeural) e vozes pt-BR nativas.
-    Todas as opções retornadas passam estritamente por autonomous_production.is_valid_pt_br_voice.
-    """
+
+@lru_cache(maxsize=1)
+def _get_base_approved_voices() -> list[str]:
+    """Catálogo em cache de vozes Azure/Edge aprovadas para pt-BR."""
     candidates = ["en-US-BrianMultilingualNeural"]
-    if current_voice and autonomous_production.is_valid_pt_br_voice(current_voice):
-        candidates.append(current_voice)
-
     try:
         from app.services import voice
         for v in voice.get_all_azure_voices():
@@ -412,6 +410,19 @@ def get_available_factory_voices(current_voice: Optional[str] = None) -> list[st
             seen.add(c)
             result.append(c)
     return result
+
+
+def get_available_factory_voices(current_voice: Optional[str] = None) -> list[str]:
+    """Retorna opções de vozes aprovadas para a fábrica a partir do catálogo Azure/Edge.
+
+    Inclui obrigatoriamente Brian (en-US-BrianMultilingualNeural) e vozes pt-BR nativas.
+    Todas as opções retornadas passam estritamente por autonomous_production.is_valid_pt_br_voice.
+    """
+    base = list(_get_base_approved_voices())
+    if current_voice and autonomous_production.is_valid_pt_br_voice(current_voice):
+        if current_voice not in base:
+            base.insert(1, current_voice)
+    return base
 
 
 def save_global_voice(voice_name: str) -> tuple[bool, str]:
@@ -479,6 +490,7 @@ def _render_global_voice_section(is_primary: bool):
                     st.error(msg)
 
 
+@st.fragment
 def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[str] = None):
     """Renderiza a experiência completa de Channel Factory."""
     if is_primary is None:
@@ -583,7 +595,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 if not is_primary:
                     st.caption("🔒 View Only — alterações devem ser feitas no nó PRIMARY.")
 
-                prof_channels = profile_manager.list_channels(profile_id=p_id, db_path=db_path)
+                prof_channels = card.get("channels") or profile_manager.list_channels(profile_id=p_id, db_path=db_path)
                 m_yt = next((c for c in prof_channels if c.get("platform") == "youtube"), None)
                 m_tiktok = next((c for c in prof_channels if c.get("platform") == "tiktok"), None)
 

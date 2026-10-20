@@ -1550,8 +1550,29 @@ def get_canonical_ready_stock(
 # 7. Saúde dos Provedores (Provider Health)
 # ---------------------------------------------------------------------------
 
-def get_provider_health_summary(db_path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+_PROVIDER_HEALTH_CACHE = {"data": None, "timestamp": 0.0, "db_path": None}
+_PROVIDER_HEALTH_TTL = 15.0  # 15 segundos
+
+
+def clear_provider_health_cache():
+    """Limpa o cache de saúde dos provedores."""
+    global _PROVIDER_HEALTH_CACHE
+    _PROVIDER_HEALTH_CACHE = {"data": None, "timestamp": 0.0, "db_path": None}
+
+
+def get_provider_health_summary(db_path: Optional[str] = None, force: bool = False) -> Dict[str, Dict[str, Any]]:
     """Avalia o status de saúde dos provedores de forma leve e estática (sem chamadas pagas)."""
+    global _PROVIDER_HEALTH_CACHE
+    import time
+    now_ts = time.monotonic()
+    if (
+        not force
+        and _PROVIDER_HEALTH_CACHE["data"] is not None
+        and _PROVIDER_HEALTH_CACHE["db_path"] == db_path
+        and (now_ts - _PROVIDER_HEALTH_CACHE["timestamp"] < _PROVIDER_HEALTH_TTL)
+    ):
+        return _PROVIDER_HEALTH_CACHE["data"]
+
     summary: Dict[str, Dict[str, Any]] = {}
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -1726,6 +1747,7 @@ def get_provider_health_summary(db_path: Optional[str] = None) -> Dict[str, Dict
             "last_checked": now_iso,
         }
 
+    _PROVIDER_HEALTH_CACHE = {"data": summary, "timestamp": now_ts, "db_path": db_path}
     return summary
 
 

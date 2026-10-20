@@ -103,7 +103,10 @@ def update_config_nonblocking(config_section, key, value):
     # 配置项时，写入队列的先后顺序就是最终顺序，不会出现较早线程在获取锁后
     # 把较新线程已经排队的值误删掉。
     with _pending_config_lock:
-        _pending_config_updates[_pending_update_key(config_section, key)] = (
+        pending_key = _pending_update_key(config_section, key)
+        if pending_key not in _pending_config_updates and config_section.get(key, _MISSING) == value:
+            return True
+        _pending_config_updates[pending_key] = (
             config_section,
             key,
             copy.deepcopy(value),
@@ -132,7 +135,10 @@ def delete_config_nonblocking(config_section, key):
     锁时，删除意图会覆盖同一配置项之前排队的更新，并在任务结束后执行。
     """
     with _pending_config_lock:
-        _pending_config_updates[_pending_update_key(config_section, key)] = (
+        pending_key = _pending_update_key(config_section, key)
+        if pending_key not in _pending_config_updates and key not in config_section:
+            return True
+        _pending_config_updates[pending_key] = (
             config_section,
             key,
             _DELETE,
@@ -152,9 +158,12 @@ def delete_config_nonblocking(config_section, key):
 
 def _apply_pending_config_updates_locked():
     """在持有配置写锁时应用 WebUI 暂存的最新配置值。"""
+    global _pending_config_save_requested
     with _pending_config_lock:
         updates = list(_pending_config_updates.values())
         _pending_config_updates.clear()
+        if updates:
+            _pending_config_save_requested = True
         # 应用配置时继续持有待更新锁。读取“当前值 + 待更新值”快照的线程由此
         # 只能看到应用前或应用后的完整状态，不会读到只更新了一半的配置集合。
         for config_section, key, value in updates:
@@ -247,17 +256,23 @@ def _schedule_deferred_config_flush():
     ).start()
 
 
-def try_save_config():
+def try_save_config(force: bool = False):
     """
     非阻塞保存 WebUI 配置，锁繁忙时交由当前长任务结束后保存。
 
     普通 API、CLI 和维护脚本仍可调用 ``save_config`` 获得原来的阻塞写入语义；
     只有 Streamlit rerun 使用本函数，避免页面为等待视频任务而长时间无响应。
+    当 force=False 时，仅在存在真实配置变更或显式保存请求时才写入磁盘。
     """
     global _pending_config_save_requested
 
     with _pending_config_lock:
-        _pending_config_save_requested = True
+        if force:
+            _pending_config_save_requested = True
+        has_pending = bool(_pending_config_updates or _pending_config_save_requested)
+
+    if not has_pending:
+        return True
 
     acquired = _config_save_lock.acquire(blocking=False)
     if not acquired:

@@ -130,24 +130,35 @@ class TestPublishingIdempotency(unittest.TestCase):
         self.assertTrue(exists)
 
     def test_existing_processing_blocks_second_flow(self):
-        """3. scheduled_post em 'processing' bloqueia novo agendamento e segundo fluxo concorrente."""
+        """3. scheduled_post em 'processing' bloqueia novo agendamento e segundo fluxo no mesmo canal (isolando outros canais)."""
         task_id = "task-proc-block"
         platform = "tiktok"
 
-        _proc_id = self._insert_scheduled_post(task_id, platform, status="processing")
-        sec_id = self._insert_scheduled_post(task_id, platform, status="ready", channel_id="channel-2")
+        # Post em processamento para channel-1
+        _proc_id = self._insert_scheduled_post(task_id, platform, status="processing", channel_id="channel-1")
+        # Segundo post concorrente para o mesmo channel-1
+        sec_id = self._insert_scheduled_post(task_id, platform, status="ready", channel_id="channel-1")
+        # Post para canal diferente (channel-2)
+        diff_id = self._insert_scheduled_post(task_id, platform, status="ready", channel_id="channel-2")
 
         can_sched, reason, _ = publishing_idempotency.can_schedule_task(
-            task_id=task_id, platform=platform, db_path=self.db_path
+            task_id=task_id, platform=platform, channel_id="channel-1", db_path=self.db_path
         )
         self.assertFalse(can_sched)
         self.assertEqual(reason, "already_processing")
 
+        # Concorrente no mesmo canal é bloqueado
         can_exec, exec_reason, _ = publishing_idempotency.can_execute_scheduled_post(
             task_id=task_id, platform=platform, post_id=sec_id, db_path=self.db_path
         )
         self.assertFalse(can_exec)
         self.assertEqual(exec_reason, "already_processing")
+
+        # Canal diferente não é bloqueado pelo processamento de channel-1
+        can_exec_diff, _, _ = publishing_idempotency.can_execute_scheduled_post(
+            task_id=task_id, platform=platform, post_id=diff_id, db_path=self.db_path
+        )
+        self.assertTrue(can_exec_diff)
 
     def test_existing_published_blocks_new_schedule(self):
         """4. scheduled_post em 'published' bloqueia criação de novo agendamento."""
@@ -233,19 +244,25 @@ class TestPublishingIdempotency(unittest.TestCase):
             self.assertIsNone(row["next_attempt_at"])
 
     def test_only_one_provider_call_for_same_tuple(self):
-        """7. Apenas uma chamada de provider é executada mesmo havendo duplicatas executáveis no banco."""
+        """7. Apenas uma chamada de provider é executada mesmo havendo duplicatas executáveis no mesmo canal."""
         task_id = "task-single-call"
         platform = "youtube"
+        chan_id = "channel-default-youtube"
 
         now_dt = datetime.now(timezone.utc)
         t1 = scheduler._to_iso(now_dt - timedelta(minutes=10))
         t2 = scheduler._to_iso(now_dt - timedelta(minutes=5))
 
-        _post1 = self._insert_scheduled_post(task_id, platform, status="ready", scheduled_at=t1, channel_id="channel-default-youtube")
-        post2 = self._insert_scheduled_post(task_id, platform, status="ready", scheduled_at=t2, channel_id="channel-historias-misterio-youtube")
+        # Desativa temporariamente o índice unique para simular duplicatas legadas inseridas para o mesmo canal
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute("DROP INDEX IF EXISTS idx_active_schedule_v2;")
+
+        _post1 = self._insert_scheduled_post(task_id, platform, status="ready", scheduled_at=t1, channel_id=chan_id)
+        post2 = self._insert_scheduled_post(task_id, platform, status="ready", scheduled_at=t2, channel_id=chan_id)
 
         with patch("app.services.profile_manager.get_profile", return_value={"is_active": True}), \
              patch("app.services.profile_manager.get_channel", return_value={"is_enabled": True}), \
+             patch("app.services.scheduler.is_channel_auto_publish_authorized", return_value=True), \
              patch("app.services.scheduler.get_task_platforms", return_value=[platform]), \
              patch("app.services.scheduler.get_task_final_video", return_value="fake.mp4"), \
              patch("os.path.isfile", return_value=True), \

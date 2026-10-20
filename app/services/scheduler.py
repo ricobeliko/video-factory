@@ -86,13 +86,279 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
 
     # Idempotência aprimorada por task_id + channel_id + platform
     conn.execute("DROP INDEX IF EXISTS idx_active_schedule;")
+    try:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
+            ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
+            WHERE status IN ('planned', 'ready', 'published');
+            """
+        )
+    except sqlite3.IntegrityError:
+        # Se existirem duplicatas ativas legadas, neutraliza para 'cancelled' antes de criar o índice único
+        conn.execute(
+            """
+            UPDATE scheduled_posts
+            SET status = 'cancelled',
+                next_attempt_at = NULL,
+                last_error = 'Neutralizado por migracao de schema (duplicata ativa pre-existente)'
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM scheduled_posts
+                WHERE status IN ('planned', 'ready', 'published')
+                GROUP BY task_id, COALESCE(channel_id, ''), platform
+            ) AND status IN ('planned', 'ready', 'published');
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
+            ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
+            WHERE status IN ('planned', 'ready', 'published');
+            """
+        )
+
+    # Migrações Lote 3A: autorização individual por canal e índice de eventos multicanal
+    cur_ch = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_channels';").fetchone()
+    if cur_ch:
+        ch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(publishing_channels);").fetchall()}
+        if "auto_publish_authorized" not in ch_cols:
+            conn.execute("ALTER TABLE publishing_channels ADD COLUMN auto_publish_authorized INTEGER NOT NULL DEFAULT 0;")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pub_channels_auth ON publishing_channels(id, is_enabled, auto_publish_authorized);")
+
     conn.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
-        ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
-        WHERE status IN ('planned', 'ready', 'published');
+        CREATE INDEX IF NOT EXISTS idx_pub_events_task_plat_chan
+        ON publication_events(task_id, platform, COALESCE(channel_id, ''));
         """
     )
+
+
+
+
+# ---------------------------------------------------------------------------
+# Autorização Canônica de Publicação Automática por Canal (Lote 3A)
+# ---------------------------------------------------------------------------
+
+def is_channel_auto_publish_authorized(
+    channel_id: Optional[str],
+    profile_id: Optional[str] = None,
+    platform: Optional[str] = None,
+    db_path: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
+) -> bool:
+    """Validação canônica Fail-Closed de autorização de publicação automática por canal (Lote 3A).
+
+    Regras canônicas:
+    1. channel_id obrigatório e não vazio (ou resolução estrita de canal único habilitado para profile_id + platform).
+    2. Canal deve existir na tabela publishing_channels.
+    3. publishing_channels.is_enabled deve ser 1.
+    4. publishing_channels.auto_publish_authorized deve ser 1.
+    5. Perfil vinculado (content_profiles) deve estar ativo (is_active == 1).
+    6. REGRA RÍGIDA DE SEGURANÇA: 'Dose Diária de Escolhas' (ou perfis/canais contendo 'escolhas')
+       é expressamente proibido de publicar automaticamente (retorna False sempre).
+    """
+    clean_chan = str(channel_id).strip() if channel_id else None
+
+    def _eval(c: sqlite3.Connection) -> bool:
+        tbl = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_channels';").fetchone()
+        if not tbl:
+            return False
+
+        target_cid = clean_chan
+        if not target_cid and profile_id and platform:
+            rows = c.execute(
+                "SELECT id FROM publishing_channels WHERE profile_id = ? AND platform = ? AND is_enabled = 1;",
+                (str(profile_id).strip(), str(platform).lower().strip()),
+            ).fetchall()
+            if len(rows) == 1:
+                target_cid = rows[0]["id"]
+            else:
+                return False
+
+        if not target_cid:
+            return False
+
+        row = c.execute(
+            """
+            SELECT id, profile_id, platform, display_name, is_enabled,
+                   COALESCE(auto_publish_authorized, 0) AS auto_publish_authorized
+            FROM publishing_channels
+            WHERE id = ?;
+            """,
+            (target_cid,),
+        ).fetchone()
+
+        if not row:
+            return False
+
+        disp_name = str(row["display_name"] or "").lower()
+        cid_str = str(row["id"] or "").lower()
+        pid_str = str(row["profile_id"] or "").lower()
+
+        # 6. Hard-coded safeguard: Dose Diária de Escolhas NUNCA pode ter auto-publish
+        if "escolhas" in disp_name or "escolhas" in cid_str or "escolhas" in pid_str:
+            return False
+
+        if int(row["is_enabled"] or 0) != 1:
+            return False
+
+        if int(row["auto_publish_authorized"] or 0) != 1:
+            return False
+
+        # 5. Verifica se o content_profile vinculado está ativo
+        cp_tbl = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_profiles';").fetchone()
+        if cp_tbl and row["profile_id"]:
+            p_row = c.execute(
+                "SELECT is_active FROM content_profiles WHERE id = ?;",
+                (row["profile_id"],),
+            ).fetchone()
+            if p_row and int(p_row["is_active"] or 0) != 1:
+                return False
+
+        return True
+
+    if conn is not None:
+        return _eval(conn)
+    with get_connection(db_path) as c:
+        return _eval(c)
+
+
+def set_channel_auto_publish_authorized(
+    channel_id: str,
+    authorized: bool,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Define a autorização de publicação automática para um canal específico (auditável)."""
+    clean_chan = str(channel_id).strip()
+    if not clean_chan:
+        raise ValueError("channel_id não pode ser vazio")
+
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, display_name, profile_id, platform FROM publishing_channels WHERE id = ?;",
+            (clean_chan,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Canal '{clean_chan}' não encontrado em publishing_channels")
+
+        disp_name = str(row["display_name"] or "").lower()
+        cid_str = str(row["id"] or "").lower()
+        pid_str = str(row["profile_id"] or "").lower()
+
+        if authorized and ("escolhas" in disp_name or "escolhas" in cid_str or "escolhas" in pid_str):
+            raise PermissionError("Canal 'Dose Diária de Escolhas' não pode ser autorizado para publicação automática.")
+
+        val = 1 if authorized else 0
+        conn.execute(
+            "UPDATE publishing_channels SET auto_publish_authorized = ? WHERE id = ?;",
+            (val, clean_chan),
+        )
+
+    from app.services import operator_console
+    operator_console.log_operational_event(
+        component="scheduler",
+        severity="INFO" if authorized else "WARNING",
+        event_type="CHANNEL_AUTO_PUBLISH_TOGGLED",
+        message=f"Canal '{clean_chan}' ({row['display_name']}) auto_publish_authorized={val}",
+        metadata={"channel_id": clean_chan, "authorized": bool(val), "platform": row["platform"]},
+        db_path=db_path,
+    )
+    return True
+
+
+def migrate_channel_auto_publish_authorizations(
+    db_path: Optional[str] = None,
+    allow_channels: Optional[List[str]] = None,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Migração explícita e auditável de canais existentes para publicação automática.
+
+    Por padrão (dry_run=True), apenas avalia e relata o que seria alterado sem modificar o banco.
+    Identifica canais elegíveis (habilitados e com histórico de sucesso comprovado ou lista explícita),
+    bloqueando estritamente 'Dose Diária de Escolhas'.
+    """
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        tbl = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_channels';").fetchone()
+        if not tbl:
+            return {"status": "skipped", "reason": "publishing_channels_table_not_found", "dry_run": dry_run}
+
+        channels = conn.execute(
+            """
+            SELECT c.id, c.display_name, c.profile_id, c.platform, c.is_enabled,
+                   COALESCE(c.auto_publish_authorized, 0) AS auto_publish_authorized,
+                   (SELECT COUNT(*) FROM publication_events pe WHERE pe.channel_id = c.id AND pe.status = 'success') AS success_count
+            FROM publishing_channels c;
+            """
+        ).fetchall()
+
+        eligible = []
+        blocked = []
+        already_authorized = []
+
+        for ch in channels:
+            cid = ch["id"]
+            dname = str(ch["display_name"] or "")
+            pid = str(ch["profile_id"] or "")
+            is_en = int(ch["is_enabled"] or 0)
+            cur_auth = int(ch["auto_publish_authorized"] or 0)
+            succ_cnt = int(ch["success_count"] or 0)
+
+            # Bloqueio estrito de Escolhas
+            if "escolhas" in dname.lower() or "escolhas" in cid.lower() or "escolhas" in pid.lower():
+                blocked.append({"channel_id": cid, "display_name": dname, "reason": "dose_escolhas_excluded"})
+                continue
+
+            if cur_auth == 1:
+                already_authorized.append({"channel_id": cid, "display_name": dname})
+                continue
+
+            if is_en != 1:
+                blocked.append({"channel_id": cid, "display_name": dname, "reason": "channel_disabled"})
+                continue
+
+            # Critério de autorização controlada:
+            # Ou está na lista explícita allow_channels, ou possui histórico prévio comprovado de sucesso em publicação
+            qualifies = False
+            if allow_channels is not None:
+                if cid in allow_channels:
+                    qualifies = True
+            elif succ_cnt > 0:
+                qualifies = True
+
+            if qualifies:
+                eligible.append({"channel_id": cid, "display_name": dname, "platform": ch["platform"], "previous_successes": succ_cnt})
+            else:
+                blocked.append({"channel_id": cid, "display_name": dname, "reason": "no_prior_success_or_not_whitelisted"})
+
+        if not dry_run and eligible:
+            for item in eligible:
+                conn.execute(
+                    "UPDATE publishing_channels SET auto_publish_authorized = 1 WHERE id = ?;",
+                    (item["channel_id"],),
+                )
+
+    if not dry_run and eligible:
+        from app.services import operator_console
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="INFO",
+            event_type="CHANNEL_MIGRATION_EXECUTED",
+            message=f"Migração de autorização executada para {len(eligible)} canais.",
+            metadata={"eligible_channels": [e["channel_id"] for e in eligible]},
+            db_path=db_path,
+        )
+
+    return {
+            "status": "dry_run" if dry_run else "executed",
+            "dry_run": dry_run,
+            "eligible_channels": eligible,
+            "blocked_channels": blocked,
+            "already_authorized": already_authorized,
+            "total_processed": len(channels),
+        }
 
 
 def init_db(db_path: Optional[str] = None) -> None:
@@ -943,7 +1209,7 @@ def has_existing_or_terminal_destination(
 
     def _execute(c: sqlite3.Connection) -> bool:
         if clean_channel:
-            # 1. Match moderno no mesmo canal específico
+            # 1. Match no mesmo canal específico
             row = c.execute(
                 """
                 SELECT id FROM scheduled_posts
@@ -966,32 +1232,6 @@ def has_existing_or_terminal_destination(
                 (task_id, clean_plat, clean_channel),
             ).fetchone()
             if pub_row:
-                return True
-
-            # 1.1 Verificação canônica da tupla (task_id, platform): sucesso prévio em qualquer canal
-            pub_any = c.execute(
-                """
-                SELECT id FROM publication_events
-                WHERE task_id = ? AND platform = ?
-                AND status = 'success'
-                LIMIT 1;
-                """,
-                (task_id, clean_plat),
-            ).fetchone()
-            if pub_any:
-                return True
-
-            # 1.2 Verificação canônica de post ativo/executável em qualquer canal para a mesma plataforma
-            active_any = c.execute(
-                """
-                SELECT id FROM scheduled_posts
-                WHERE task_id = ? AND platform = ?
-                AND status IN ('planned', 'ready', 'processing', 'published')
-                LIMIT 1;
-                """,
-                (task_id, clean_plat),
-            ).fetchone()
-            if active_any:
                 return True
 
             # 2. Tombstone legado: cancelamento pré-canais sem channel_id atua como wildcard
@@ -1256,6 +1496,19 @@ def plan_schedule(
 
         # Enfileira slots para os candidatos
         for task_id, task_data, task_profile_id, channel_id in candidates:
+            # Hotfix Lote 3A: Validação Fail-Closed de Autorização Individual por Canal
+            if channel_id and not is_channel_auto_publish_authorized(
+                channel_id=channel_id,
+                profile_id=task_profile_id,
+                platform=clean_plat,
+                db_path=db_path,
+            ):
+                logger.info(
+                    f"[SCHEDULER][PLAN] Canal {channel_id} não possui autorização explícita "
+                    f"de publicação automática (auto_publish_authorized != 1). Agendamento ignorado."
+                )
+                continue
+
             # 1. Verifica idempotência e terminalidade (Hotfix V12-D.2)
             with get_connection(db_path) as conn:
                 if has_existing_or_terminal_destination(
@@ -1415,12 +1668,13 @@ def plan_schedule(
             except Exception:
                 pass
 
-            # 3. Verificação final de idempotência antes da inserção (Camada 1 - V16.4.2B)
+            # 3. Verificação final de idempotência antes da inserção (Camada 1 - V16.4.2B / Lote 3A)
             from app.services import publishing_idempotency
             with get_connection(db_path) as conn:
                 can_sched, sched_block_reason, _ = publishing_idempotency.can_schedule_task(
                     task_id=task_id,
                     platform=clean_plat,
+                    channel_id=channel_id,
                     conn=conn,
                 )
             if not can_sched:
@@ -1779,13 +2033,14 @@ def run_scheduler_cycle(
 
     logger.info(f"[SCHEDULER][CYCLE] candidate id={post_id} task_id={task_id} platform={platform} profile_id={profile_id} channel_id={channel_id} scheduled_at={post['scheduled_at']}")
 
-    # 1.1 Guard Canônico de Publicação e Idempotência (Camada 2 - V16.4.2A / V16.4.2B):
+    # 1.1 Guard Canônico de Publicação e Idempotência (Camada 2 - V16.4.2A / V16.4.2B / Lote 3A):
     from app.services import publishing_idempotency
     with get_connection(db_path) as conn:
         can_exec, exec_reason, details = publishing_idempotency.can_execute_scheduled_post(
             task_id=task_id,
             platform=platform,
             post_id=post_id,
+            channel_id=channel_id,
             conn=conn,
         )
 
@@ -1800,6 +2055,7 @@ def run_scheduler_cycle(
                     task_id=task_id,
                     platform=platform,
                     canonical_post_id=post_id,
+                    channel_id=channel_id,
                     conn=conn,
                 )
             canon = details.get("details", {})
@@ -1825,12 +2081,13 @@ def run_scheduler_cycle(
                 "platform": platform,
             }
 
-    # Neutraliza proativamente eventuais duplicatas executáveis redundantes para a mesma tupla
+    # Neutraliza proativamente eventuais duplicatas executáveis redundantes para a mesma tupla (Lote 3A)
     with get_connection(db_path) as conn:
         publishing_idempotency.neutralize_duplicate_executable_posts(
             task_id=task_id,
             platform=platform,
             canonical_post_id=post_id,
+            channel_id=channel_id,
             conn=conn,
         )
 
@@ -1861,7 +2118,7 @@ def run_scheduler_cycle(
         logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: perfil '{profile_id}' desativado.")
         return {"status": "postponed", "reason": "profile_disabled", "profile_id": profile_id}
 
-    # 3. Revalidação: Canal de publicação ativo (se channel_id especificado)
+    # 3. Revalidação: Canal de publicação ativo e autorizado (se channel_id especificado - Lote 3A)
     if channel_id:
         ch = profile_manager.get_channel(channel_id, db_path=db_path)
         if not ch or not ch.get("is_enabled"):
@@ -1888,6 +2145,31 @@ def run_scheduler_cycle(
             )
             logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: canal '{channel_id}' desabilitado.")
             return {"status": "postponed", "reason": "channel_disabled", "channel_id": channel_id}
+
+        if not is_channel_auto_publish_authorized(channel_id, profile_id=profile_id, platform=platform, db_path=db_path):
+            postpone_time = current_time + timedelta(minutes=30)
+            with get_connection(db_path) as conn:
+                conn.execute(
+                    "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                    (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
+                )
+            operator_console.log_operational_event(
+                component="scheduler",
+                severity="WARNING",
+                event_type="CHANNEL_NOT_AUTHORIZED_FOR_AUTO_PUBLISH",
+                task_id=task_id,
+                message=f"Publicação bloqueada: canal '{channel_id}' não tem autorização individual de auto_publish.",
+                metadata={"channel_id": channel_id, "post_id": post_id, "profile_id": profile_id},
+                db_path=db_path,
+            )
+            _set_executor_status(
+                state="idle",
+                message=f"Post {post_id} postergado: canal {channel_id} não autorizado para publicação automática",
+                last_cycle_summary=f"Post {post_id} adiado: canal {channel_id} sem autorização individual",
+                db_path=db_path,
+            )
+            logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: canal '{channel_id}' sem auto_publish_authorized.")
+            return {"status": "postponed", "reason": "channel_not_authorized", "channel_id": channel_id}
 
     # 4. Revalidação: Plataforma habilitada nas configurações
     if platform == "tiktok" and not settings["tiktok_enabled"]:
@@ -2206,12 +2488,13 @@ def run_scheduler_cycle(
     )
     logger.info(f"[SCHEDULER][PUBLISH] Iniciando publicação automática para {task_id} no {platform}")
 
-    # 8.2 Just-In-Time Idempotency Gate (Camada 3 - V16.4.2B):
+    # 8.2 Just-In-Time Idempotency Gate (Camada 3 - V16.4.2B / Lote 3A):
     # Detecta se houve race condition ou se evento de sucesso foi registrado após o início do ciclo
     with get_connection(db_path) as conn:
         is_safe, canon_jit = publishing_idempotency.jit_provider_idempotency_guard(
             task_id=task_id,
             platform=platform,
+            channel_id=channel_id,
             conn=conn,
         )
 

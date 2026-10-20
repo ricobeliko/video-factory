@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.config import config
 from app.models import const
@@ -45,8 +45,20 @@ class EditorialSettings(BaseModel):
     topic_brief: Optional[str] = None
     content_style: Optional[str] = None
     video_format: Optional[str] = None
+    narrative_structure: Optional[str] = None
     closing_type: Optional[str] = None
     num_questions: Optional[int] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reconcile_editorial(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if data.get("content_style") and not data.get("narrative_structure"):
+            data["narrative_structure"] = data["content_style"]
+        if str(data.get("closing_type") or "").strip().lower() == "comments":
+            data["closing_type"] = "score_challenge"
+        return data
 
 
 class VoiceSettings(BaseModel):
@@ -1417,17 +1429,52 @@ def get_generation_profile_context(
     except (ValueError, TypeError):
         voice_volume = 1.0
 
-    # 2. Visual / Flow (canais legados com settings_json vazio NÃO habilitam Flow nem Visual Director implicitamente)
-    flow_enabled = bool(settings.visual.flow_enabled) if settings.visual.flow_enabled is not None else False
-    visual_director_enabled = bool(settings.visual.visual_director_enabled) if settings.visual.visual_director_enabled is not None else False
+    # 2. Resolução Canônica de Formato e Estrutura Narrativa
+    raw_fmt = str(settings.editorial.video_format or "").strip().lower()
+    raw_style = str(settings.editorial.narrative_structure or settings.editorial.content_style or "").strip().lower()
+
+    if raw_fmt in ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis") or raw_style in ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis"):
+        resolved_format = const.VIDEO_FORMAT_QUIZ_DILEMMA
+        resolved_narrative = None
+    elif raw_fmt in ("quiz_paper", "paper") or raw_style in ("quiz_paper", "paper"):
+        resolved_format = const.VIDEO_FORMAT_QUIZ_PAPER
+        resolved_narrative = None
+    else:
+        resolved_format = const.VIDEO_FORMAT_TRADITIONAL
+        resolved_narrative = raw_style if raw_style in const.NARRATIVE_STRUCTURES else None
+
+    # Normalização de closing_type e num_questions por formato
+    raw_closing = str(settings.editorial.closing_type or "").strip()
+    if raw_closing.lower() == "comments":
+        raw_closing = "score_challenge"
+
+    if settings.editorial.num_questions is not None:
+        try:
+            num_questions = int(settings.editorial.num_questions)
+        except (ValueError, TypeError):
+            num_questions = 5 if resolved_format == const.VIDEO_FORMAT_QUIZ_PAPER else 8
+    elif resolved_format == const.VIDEO_FORMAT_QUIZ_PAPER:
+        num_questions = 5
+    elif resolved_format == const.VIDEO_FORMAT_QUIZ_DILEMMA:
+        num_questions = 8
+    else:
+        num_questions = None
+
+    # 3. Visual / Flow (exclusivo para traditional; quiz desativa Flow/Director estritamente)
+    if resolved_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER):
+        flow_enabled = False
+        visual_director_enabled = False
+    else:
+        flow_enabled = bool(settings.visual.flow_enabled) if settings.visual.flow_enabled is not None else False
+        visual_director_enabled = bool(settings.visual.visual_director_enabled) if settings.visual.visual_director_enabled is not None else False
     flow_scene_count = int(settings.visual.flow_scene_count) if settings.visual.flow_scene_count is not None else DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
     stock_fallback_enabled = bool(settings.visual.stock_fallback_enabled) if settings.visual.stock_fallback_enabled is not None else True
 
-    # 3. Subtitles
+    # 4. Subtitles
     subtitle_position = settings.subtitle.position if settings.subtitle.position else (config.ui.get("subtitle_position") or "bottom")
     subtitle_font_size = settings.subtitle.font_size if settings.subtitle.font_size is not None else int(config.ui.get("font_size") or 16)
 
-    # 4. Automation (fonte canônica de status é autopilot_settings)
+    # 5. Automation (fonte canônica de status é autopilot_settings)
     from app.services import autonomous_production
     canonical_auto_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=db_path)
     canonical_target_stock = autonomous_production.get_target_ready_stock(pid, db_path=db_path)
@@ -1443,9 +1490,10 @@ def get_generation_profile_context(
         "growth_mode": profile.get("growth_mode") or fallback_growth,
         "topic_brief": settings.editorial.topic_brief or "",
         "content_style": settings.editorial.content_style or "",
-        "video_format": settings.editorial.video_format or settings.editorial.content_style or "traditional",
-        "closing_type": settings.editorial.closing_type or "",
-        "num_questions": settings.editorial.num_questions or 8,
+        "video_format": resolved_format,
+        "narrative_structure": resolved_narrative,
+        "closing_type": raw_closing,
+        "num_questions": num_questions,
         "voice_name": voice_name,
         "voice_rate": voice_rate,
         "voice_volume": voice_volume,

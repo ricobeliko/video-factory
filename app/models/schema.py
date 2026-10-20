@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, List, Literal, Optional, Union
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import config
 from app.models import const
@@ -178,6 +178,7 @@ class VideoParams(BaseModel):
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
     monetization_preset: Optional[str] = const.DEFAULT_MONETIZATION_PRESET
+    video_format: str = const.DEFAULT_VIDEO_FORMAT
     narrative_structure: Optional[str] = None
     safety_status: Optional[str] = None
     safety_reasons: Optional[str] = None
@@ -202,6 +203,58 @@ class VideoParams(BaseModel):
     avatar_position: str = Field(default=const.DEFAULT_AVATAR_POSITION)
     avatar_scale: float = Field(default=0.38, ge=0.1, le=1.0)
     avatar_opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reconcile_video_format_and_narrative(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        raw_format = data.get("video_format")
+        raw_narrative = data.get("narrative_structure")
+
+        # Se video_format não veio informado ou veio genérico/auto/traditional, mas narrative_structure veio com quiz:
+        if (not raw_format or raw_format in ("traditional", "standard", "auto")) and raw_narrative:
+            clean_narrative = str(raw_narrative).strip().lower()
+            if clean_narrative in ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis") or clean_narrative.startswith("quiz_dilemma"):
+                raw_format = const.VIDEO_FORMAT_QUIZ_DILEMMA
+            elif clean_narrative in ("quiz_paper", "paper") or clean_narrative.startswith("quiz_paper"):
+                raw_format = const.VIDEO_FORMAT_QUIZ_PAPER
+
+        # Normaliza o video_format canônico
+        if raw_format:
+            clean_fmt = str(raw_format).strip().lower()
+            if clean_fmt in ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis") or clean_fmt.startswith("quiz_dilemma"):
+                data["video_format"] = const.VIDEO_FORMAT_QUIZ_DILEMMA
+                # Retrocompatibilidade: preenche narrative_structure para chamadores legados
+                if not raw_narrative or raw_narrative in ("auto", "traditional"):
+                    data["narrative_structure"] = const.VIDEO_FORMAT_QUIZ_DILEMMA
+            elif clean_fmt in ("quiz_paper", "paper") or clean_fmt.startswith("quiz_paper"):
+                data["video_format"] = const.VIDEO_FORMAT_QUIZ_PAPER
+                if not raw_narrative or raw_narrative in ("auto", "traditional"):
+                    data["narrative_structure"] = const.VIDEO_FORMAT_QUIZ_PAPER
+            else:
+                data["video_format"] = const.VIDEO_FORMAT_TRADITIONAL
+        else:
+            data["video_format"] = const.DEFAULT_VIDEO_FORMAT
+
+        # Regra de Isenção de SRT e proteção Flow para formatos de Quiz
+        if data.get("video_format") in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER):
+            data["subtitle_required"] = False
+            data["subtitle_enabled"] = False
+            data["flow_enabled"] = False
+            data["visual_director_enabled"] = False
+
+        # Normalização de closing_type: 'comments' -> 'score_challenge'
+        raw_closing = data.get("closing_type")
+        if raw_closing and str(raw_closing).strip().lower() == "comments":
+            data["closing_type"] = "score_challenge"
+
+        # Default de num_questions para quiz_paper (Padrão P1.3: 5 perguntas)
+        if data.get("video_format") == const.VIDEO_FORMAT_QUIZ_PAPER and not data.get("num_questions"):
+            data["num_questions"] = 5
+
+        return data
 
     @field_validator("avatar_mode", mode="before")
     @classmethod

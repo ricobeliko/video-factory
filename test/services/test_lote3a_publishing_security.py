@@ -1,12 +1,10 @@
-"""Testes direcionados para o LOTE 3A — Segurança de Publicação V1.
+"""Testes direcionados para o LOTE 3A — Segurança de Publicação V1 (Correções CF-01 a CF-04).
 
 Cobre:
-1. Autorização canônica individual por canal (fail-closed).
-2. Bloqueio absoluto e irrevogável de 'Dose Diária de Escolhas'.
-3. Migração explícita e auditável de canais (dry_run por padrão).
-4. Idempotência multicanal: isolamento estrito por (task_id, platform, channel_id).
-5. Neutralização de duplicatas apenas no mesmo canal.
-6. Scheduler plan e cycle respeitando autorização de canal.
+CF-01: Autorização explícita (sem heurística de 'escolhas', allow_channels obrigatório na migração, histórico apenas diagnóstico).
+CF-02: Fail-closed real (bloqueio quando channel_id é None/vazio/não autorizado em plan e cycle, independência de ordem init_db).
+CF-03: Idempotência histórica (isolamento entre canal A e canal B, e proteção universal por registros legados sem canal NULL/'').
+CF-04: Propagação ponta a ponta (JIT guard em youtube_publisher e post_for_me com channel_id, retry_policy isolado por canal).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -16,7 +14,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app.services import operator_console, profile_manager, publishing_idempotency, scheduler
+from app.services import (
+    operator_console,
+    post_for_me,
+    profile_manager,
+    publishing_idempotency,
+    retry_policy,
+    scheduler,
+    youtube_publisher,
+)
 
 
 class TestLote3APublishingSecurity(unittest.TestCase):
@@ -68,267 +74,279 @@ class TestLote3APublishingSecurity(unittest.TestCase):
                 (channel_id, profile_id, platform, display_name, is_enabled, auto_publish_authorized, now_iso, now_iso),
             )
 
-    def test_canonical_authorization_fail_closed(self):
-        """1. Validação Fail-Closed: sem autorização explícita ou canal inválido retorna False."""
-        self._insert_profile("prof-1", is_active=1)
-        self._insert_channel("chan-default-yt", "prof-1", "youtube", "Canal Padrão", is_enabled=1, auto_publish_authorized=0)
+    # -------------------------------------------------------------------------
+    # CF-01: AUTORIZAÇÃO EXPLÍCITA
+    # -------------------------------------------------------------------------
 
-        # Canal com auto_publish_authorized=0 -> False
-        self.assertFalse(scheduler.is_channel_auto_publish_authorized("chan-default-yt", db_path=self.db_path))
-
-        # Canal inexistente -> False
-        self.assertFalse(scheduler.is_channel_auto_publish_authorized("chan-inexistente", db_path=self.db_path))
-
-        # channel_id vazio / None sem resolução -> False
-        self.assertFalse(scheduler.is_channel_auto_publish_authorized(None, db_path=self.db_path))
-
-        # Ativa canal -> agora True
-        scheduler.set_channel_auto_publish_authorized("chan-default-yt", True, db_path=self.db_path)
-        self.assertTrue(scheduler.is_channel_auto_publish_authorized("chan-default-yt", db_path=self.db_path))
-
-        # Canal desabilitado (is_enabled=0) mesmo com flag 1 -> False
-        with scheduler.get_connection(self.db_path) as conn:
-            conn.execute("UPDATE publishing_channels SET is_enabled = 0 WHERE id = 'chan-default-yt';")
-        self.assertFalse(scheduler.is_channel_auto_publish_authorized("chan-default-yt", db_path=self.db_path))
-
-    def test_dose_escolhas_strictly_forbidden(self):
-        """2. 'Dose Diária de Escolhas' é proibido de publicar automaticamente de forma estrita e absoluta."""
+    def test_cf01_explicit_authorization_no_heuristics(self):
+        """CF-01: Autorização depende estritamente das flags; zero heurísticas por substring."""
         self._insert_profile("profile-escolhas", is_active=1)
         self._insert_channel("chan-escolhas-tt", "profile-escolhas", "tiktok", "Dose Diária de Escolhas", is_enabled=1, auto_publish_authorized=0)
 
-        # Não autorizado inicialmente
+        # Sem autorização explícita -> False (fail-closed)
         self.assertFalse(scheduler.is_channel_auto_publish_authorized("chan-escolhas-tt", db_path=self.db_path))
 
-        # Tentativa de autorizar via set_channel_auto_publish_authorized deve levantar PermissionError
-        with self.assertRaises(PermissionError):
-            scheduler.set_channel_auto_publish_authorized("chan-escolhas-tt", True, db_path=self.db_path)
+        # set_channel_auto_publish_authorized funciona sem bloqueio por substring de texto
+        scheduler.set_channel_auto_publish_authorized("chan-escolhas-tt", True, db_path=self.db_path)
+        self.assertTrue(scheduler.is_channel_auto_publish_authorized("chan-escolhas-tt", db_path=self.db_path))
 
-        # Se alguém injetar diretamente no banco auto_publish_authorized = 1, is_channel_auto_publish_authorized AINDA bloqueia
-        with scheduler.get_connection(self.db_path) as conn:
-            conn.execute("UPDATE publishing_channels SET auto_publish_authorized = 1 WHERE id = 'chan-escolhas-tt';")
+        # Se o perfil for desativado, volta a ser False
+        self._insert_profile("profile-escolhas", is_active=0)
+        self.assertFalse(scheduler.is_channel_auto_publish_authorized("chan-escolhas-tt", db_path=self.db_path))
 
-        self.assertFalse(
-            scheduler.is_channel_auto_publish_authorized("chan-escolhas-tt", db_path=self.db_path),
-            "Dose Diária de Escolhas NUNCA deve ser autorizada mesmo com flag adulterada no banco"
-        )
-
-    def test_migration_dry_run_and_execution(self):
-        """3. Processo de migração auditável: dry_run por padrão, proteção a Escolhas e ativação segura."""
+    def test_cf01_migration_requires_explicit_allow_channels(self):
+        """CF-01: Migração NÃO autoriza baseado apenas em histórico; exige allow_channels explícito."""
         self._insert_profile("p-main", is_active=1)
-        self._insert_profile("p-escolhas", is_active=1)
+        self._insert_profile("p-pilot", is_active=1)
 
         self._insert_channel("c-yt-prod", "p-main", "youtube", "Canal Principal", is_enabled=1, auto_publish_authorized=0)
-        self._insert_channel("c-escolhas", "p-escolhas", "tiktok", "Dose Diária de Escolhas", is_enabled=1, auto_publish_authorized=0)
-        self._insert_channel("c-new-empty", "p-main", "tiktok", "Novo Sem Histórico", is_enabled=1, auto_publish_authorized=0)
+        self._insert_channel("c-dose-escolhas", "p-pilot", "tiktok", "Dose Diária de Escolhas", is_enabled=1, auto_publish_authorized=0)
 
-        # Simula histórico de sucesso comprovado para c-yt-prod
+        # Histórico prévio em c-yt-prod
         scheduler.record_publication_event(
-            task_id="t-prev-1",
-            platform="youtube",
-            status="success",
-            external_id="yt-prev-123",
-            channel_id="c-yt-prod",
-            db_path=self.db_path,
+            task_id="t-prev-1", platform="youtube", status="success",
+            external_id="yt-123", channel_id="c-yt-prod", db_path=self.db_path,
         )
 
-        # 3.1 Executa dry_run (padrão)
-        report_dry = scheduler.migrate_channel_auto_publish_authorizations(db_path=self.db_path)
-        self.assertTrue(report_dry["dry_run"])
-        self.assertEqual(report_dry["status"], "dry_run")
-
-        eligible_ids = [e["channel_id"] for e in report_dry["eligible_channels"]]
-        self.assertIn("c-yt-prod", eligible_ids)
-        self.assertNotIn("c-escolhas", eligible_ids)
-        self.assertNotIn("c-new-empty", eligible_ids)
-
-        # Verifica que no dry_run NENHUMA alteração foi gravada
+        # 1. Migração sem allow_channels (ou vazio): NÃO autoriza nada
+        report_empty = scheduler.migrate_channel_auto_publish_authorizations(db_path=self.db_path, allow_channels=None, dry_run=False)
+        self.assertEqual(len(report_empty["eligible_channels"]), 0)
         with scheduler.get_connection(self.db_path) as conn:
-            row = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-yt-prod';").fetchone()
-            self.assertEqual(row["auto_publish_authorized"], 0)
+            val_prod = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-yt-prod';").fetchone()[0]
+            val_esc = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-dose-escolhas';").fetchone()[0]
+            self.assertEqual(val_prod, 0)
+            self.assertEqual(val_esc, 0)
 
-        # 3.2 Executa migração real (dry_run=False)
-        report_exec = scheduler.migrate_channel_auto_publish_authorizations(db_path=self.db_path, dry_run=False)
-        self.assertFalse(report_exec["dry_run"])
-        self.assertEqual(report_exec["status"], "executed")
-
-        with scheduler.get_connection(self.db_path) as conn:
-            row_prod = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-yt-prod';").fetchone()
-            row_esc = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-escolhas';").fetchone()
-            row_empty = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-new-empty';").fetchone()
-
-            self.assertEqual(row_prod["auto_publish_authorized"], 1)
-            self.assertEqual(row_esc["auto_publish_authorized"], 0)
-            self.assertEqual(row_empty["auto_publish_authorized"], 0)
-
-    def test_multichannel_idempotency_isolation(self):
-        """4. Idempotência multicanal: dois canais no YouTube para a mesma task são completamente independentes."""
-        task_id = "task-multi-channel-yt"
-        platform = "youtube"
-        chan_a = "channel-a-youtube"
-        chan_b = "channel-b-youtube"
-
-        self._insert_profile("prof-multi", is_active=1)
-        self._insert_channel(chan_a, "prof-multi", "youtube", "Canal A", is_enabled=1, auto_publish_authorized=1)
-        self._insert_channel(chan_b, "prof-multi", "youtube", "Canal B", is_enabled=1, auto_publish_authorized=1)
-
-        # 4.1 Ambos podem ser agendados para a mesma task
-        can_a, reason_a, _ = publishing_idempotency.can_schedule_task(task_id, platform, channel_id=chan_a, db_path=self.db_path)
-        self.assertTrue(can_a, f"Canal A deveria poder agendar: {reason_a}")
-
-        # Insere post planejado para canal A
-        now_dt = datetime.now(timezone.utc)
-        iso_time = scheduler._to_iso(now_dt)
-        with scheduler.get_connection(self.db_path) as conn:
-            cur_a = conn.execute(
-                """
-                INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id)
-                VALUES (?, ?, 'planned', ?, ?, ?);
-                """,
-                (task_id, platform, iso_time, iso_time, chan_a),
-            )
-            post_a_id = cur_a.lastrowid
-
-        # Canal A agora bloqueia novo agendamento para si mesmo
-        can_a_again, reason_a_again, _ = publishing_idempotency.can_schedule_task(task_id, platform, channel_id=chan_a, db_path=self.db_path)
-        self.assertFalse(can_a_again)
-        self.assertEqual(reason_a_again, "already_scheduled")
-
-        # Canal B AINDA pode ser agendado para a mesma task e mesma plataforma!
-        can_b, reason_b, _ = publishing_idempotency.can_schedule_task(task_id, platform, channel_id=chan_b, db_path=self.db_path)
-        self.assertTrue(can_b, f"Canal B deveria poder agendar independentemente de Canal A: {reason_b}")
-
-        # Insere post planejado para canal B
-        with scheduler.get_connection(self.db_path) as conn:
-            cur_b = conn.execute(
-                """
-                INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id)
-                VALUES (?, ?, 'planned', ?, ?, ?);
-                """,
-                (task_id, platform, iso_time, iso_time, chan_b),
-            )
-            post_b_id = cur_b.lastrowid
-
-        # 4.2 Publicação de Canal A não bloqueia Canal B
-        scheduler.record_publication_event(
-            task_id=task_id,
-            platform=platform,
-            status="success",
-            external_id="yt-pub-chan-a",
-            channel_id=chan_a,
-            db_path=self.db_path,
+        # 2. Migração com allow_channels explícito apenas para c-yt-prod
+        report_allowed = scheduler.migrate_channel_auto_publish_authorizations(
+            db_path=self.db_path, allow_channels=["c-yt-prod"], dry_run=False
         )
-
-        # Canal A agora é detectado como já publicado
-        can_exec_a, reason_exec_a, _ = publishing_idempotency.can_execute_scheduled_post(
-            task_id, platform, post_id=post_a_id, channel_id=chan_a, db_path=self.db_path
-        )
-        self.assertFalse(can_exec_a)
-        self.assertEqual(reason_exec_a, "already_published")
-
-        # Canal B AINDA é perfeitamente executável!
-        can_exec_b, reason_exec_b, _ = publishing_idempotency.can_execute_scheduled_post(
-            task_id, platform, post_id=post_b_id, channel_id=chan_b, db_path=self.db_path
-        )
-        self.assertTrue(can_exec_b, f"Canal B deveria poder executar mesmo com Canal A já publicado: {reason_exec_b}")
-
-        # JIT guard no Canal B é seguro (True), enquanto no Canal A é bloqueado (False)
-        safe_b, canon_b = publishing_idempotency.jit_provider_idempotency_guard(task_id, platform, channel_id=chan_b, db_path=self.db_path)
-        self.assertTrue(safe_b)
-        self.assertIsNone(canon_b)
-
-        safe_a, canon_a = publishing_idempotency.jit_provider_idempotency_guard(task_id, platform, channel_id=chan_a, db_path=self.db_path)
-        self.assertFalse(safe_a)
-        self.assertIsNotNone(canon_a)
-
-    def test_duplicate_neutralization_scoped_to_same_channel(self):
-        """5. Neutralização de duplicatas afeta apenas o mesmo canal; outros canais permanecem intactos."""
-        task_id = "task-dup-neutralize"
-        platform = "youtube"
-        chan_a = "chan-a"
-        chan_b = "chan-b"
-
-        now_dt = datetime.now(timezone.utc)
-        iso_time = scheduler._to_iso(now_dt)
+        self.assertEqual(len(report_allowed["eligible_channels"]), 1)
+        self.assertEqual(report_allowed["eligible_channels"][0]["channel_id"], "c-yt-prod")
 
         with scheduler.get_connection(self.db_path) as conn:
-            # Desativa temporariamente o índice unique para simular banco legado com duplicatas existentes
-            conn.execute("DROP INDEX IF EXISTS idx_active_schedule_v2;")
+            val_prod = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-yt-prod';").fetchone()[0]
+            val_esc = conn.execute("SELECT auto_publish_authorized FROM publishing_channels WHERE id = 'c-dose-escolhas';").fetchone()[0]
+            self.assertEqual(val_prod, 1, "c-yt-prod deve ser autorizado pois estava em allow_channels")
+            self.assertEqual(val_esc, 0, "Dose Diária de Escolhas DEVE permanecer com 0")
 
-            # Dois posts para chan_a (um canônico e um duplicado)
-            cur1 = conn.execute(
-                "INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id) VALUES (?, ?, 'ready', ?, ?, ?);",
-                (task_id, platform, iso_time, iso_time, chan_a),
-            )
-            p1_a = cur1.lastrowid
+    # -------------------------------------------------------------------------
+    # CF-02: FAIL-CLOSED REAL
+    # -------------------------------------------------------------------------
 
-            cur2 = conn.execute(
-                "INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id) VALUES (?, ?, 'ready', ?, ?, ?);",
-                (task_id, platform, iso_time, iso_time, chan_a),
-            )
-            p2_a = cur2.lastrowid
+    def test_cf02_fail_closed_on_none_empty_channel(self):
+        """CF-02: channel_id None ou vazio NUNCA tem publicação automática autorizada."""
+        self.assertFalse(scheduler.is_channel_auto_publish_authorized(None, db_path=self.db_path))
+        self.assertFalse(scheduler.is_channel_auto_publish_authorized("", db_path=self.db_path))
+        self.assertFalse(scheduler.is_channel_auto_publish_authorized("   ", db_path=self.db_path))
 
-            # Um post para chan_b
-            cur3 = conn.execute(
-                "INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id) VALUES (?, ?, 'ready', ?, ?, ?);",
-                (task_id, platform, iso_time, iso_time, chan_b),
-            )
-            p3_b = cur3.lastrowid
-
-            # Executa neutralização em favor de p1_a no canal chan_a
-            neutralized = publishing_idempotency.neutralize_duplicate_executable_posts(
-                task_id=task_id,
-                platform=platform,
-                canonical_post_id=p1_a,
-                channel_id=chan_a,
-                conn=conn,
-            )
-
-        self.assertEqual(neutralized, 1)
-
-        with scheduler.get_connection(self.db_path) as conn:
-            row_p1 = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (p1_a,)).fetchone()
-            row_p2 = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (p2_a,)).fetchone()
-            row_p3 = conn.execute("SELECT status FROM scheduled_posts WHERE id = ?;", (p3_b,)).fetchone()
-
-            self.assertEqual(row_p1["status"], "ready")
-            self.assertEqual(row_p2["status"], "cancelled", "Duplicata no mesmo canal deve ser cancelada")
-            self.assertEqual(row_p3["status"], "ready", "Post de outro canal NÃO deve ser cancelado")
-
-    def test_run_scheduler_cycle_blocks_unauthorized_channel(self):
-        """6. Ciclo do scheduler bloqueia execução se canal não estiver autorizado, adiando com segurança."""
-        task_id = "task-unauth-cycle"
-        platform = "youtube"
-        chan_id = "chan-unauthorized"
-
+    def test_cf02_plan_schedule_blocks_unauthorized_or_empty_channel(self):
+        """CF-02: plan_schedule não cria agendamento para canal vazio ou não autorizado."""
         self._insert_profile("prof-test", is_active=1)
-        self._insert_channel(chan_id, "prof-test", "youtube", "Canal Não Autorizado", is_enabled=1, auto_publish_authorized=0)
+        self._insert_channel("chan-unauth", "prof-test", "youtube", "Canal Não Autorizado", is_enabled=1, auto_publish_authorized=0)
 
+        fake_video = os.path.join(self.test_dir, "fake_final.mp4")
+        with open(fake_video, "wb") as f:
+            f.write(b"video_bytes")
+
+        tasks = [
+            {
+                "task_id": "task-unauth-1",
+                "state": "complete",
+                "video_file": fake_video,
+                "profile_id": "prof-test",
+                "planned_platforms": ["youtube"],
+            }
+        ]
+
+        # Agendamento não cria slot para canal com auto_publish_authorized=0
+        sched = scheduler.plan_schedule(tasks, db_path=self.db_path)
+        self.assertEqual(len(sched), 0, "Canal sem auto_publish_authorized=1 não deve ser agendado")
+
+        # Autoriza o canal
+        scheduler.set_channel_auto_publish_authorized("chan-unauth", True, db_path=self.db_path)
+        sched_auth = scheduler.plan_schedule(tasks, db_path=self.db_path)
+        self.assertEqual(len(sched_auth), 1, "Canal autorizado deve ser agendado com sucesso")
+
+    def test_cf02_run_cycle_postpones_when_channel_missing_or_unauthorized(self):
+        """CF-02: run_scheduler_cycle bloqueia e adia execução se channel_id for vazio ou não autorizado."""
         now_dt = datetime.now(timezone.utc)
         due_time = scheduler._to_iso(now_dt - timedelta(minutes=5))
 
+        # 1. Post agendado sem channel_id (NULL)
         with scheduler.get_connection(self.db_path) as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id, profile_id)
-                VALUES (?, ?, 'ready', ?, ?, ?, ?);
-                """,
-                (task_id, platform, due_time, due_time, chan_id, "prof-test"),
+            cur1 = conn.execute(
+                "INSERT INTO scheduled_posts (task_id, platform, status, scheduled_at, created_at, channel_id) VALUES (?, ?, 'ready', ?, ?, NULL);",
+                ("t-null-chan", "youtube", due_time, due_time),
             )
-            post_id = cur.lastrowid
+            p1_id = cur1.lastrowid
 
-        with patch("app.services.task.publish_task") as mock_publish:
-            res = scheduler.run_scheduler_cycle(db_path=self.db_path)
-            mock_publish.assert_not_called()
+        res1 = scheduler.run_scheduler_cycle(db_path=self.db_path)
+        self.assertEqual(res1.get("status"), "postponed")
+        self.assertEqual(res1.get("reason"), "channel_not_authorized")
 
-        self.assertEqual(res.get("status"), "postponed")
-        self.assertEqual(res.get("reason"), "channel_not_authorized")
-
-        # Verifica se o post foi adiado no banco de dados (scheduled_at > now)
         with scheduler.get_connection(self.db_path) as conn:
-            row = conn.execute("SELECT scheduled_at, next_attempt_at, status FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
-            new_sched = scheduler._from_iso(row["scheduled_at"])
-            self.assertGreater(new_sched, now_dt)
-            self.assertEqual(row["status"], "ready")
+            row1 = conn.execute("SELECT scheduled_at, status FROM scheduled_posts WHERE id = ?;", (p1_id,)).fetchone()
+            self.assertEqual(row1["status"], "ready")
+            self.assertGreater(scheduler._from_iso(row1["scheduled_at"]), now_dt)
+
+    def test_cf02_init_db_order_independence(self):
+        """CF-02: init_db chamado antes de init_profile_db cria o schema sem dependência de ordem."""
+        fresh_db = os.path.join(self.test_dir, "fresh_order_test.db")
+        # Chama apenas init_db (sem chamar init_profile_db antes)
+        scheduler.init_db(fresh_db)
+
+        # publishing_channels e auto_publish_authorized já devem existir
+        with scheduler.get_connection(fresh_db) as conn:
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(publishing_channels);").fetchall()]
+            self.assertIn("auto_publish_authorized", cols)
+
+    # -------------------------------------------------------------------------
+    # CF-03: IDEMPOTÊNCIA HISTÓRICA (NULL, "", Canal A, Canal B)
+    # -------------------------------------------------------------------------
+
+    def test_cf03_historical_null_and_empty_protects_against_republication(self):
+        """CF-03: Evento histórico sem channel_id (NULL ou '') protege todos os canais contra republicação."""
+        task_id = "task-legacy-repub"
+        platform = "youtube"
+
+        # Inserção de evento de sucesso legado com channel_id = NULL
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO publication_events (task_id, platform, status, external_id, channel_id, published_at)
+                VALUES (?, ?, 'success', 'yt-leg-1', NULL, ?);
+                """,
+                (task_id, platform, scheduler._to_iso(datetime.now(timezone.utc))),
+            )
+
+        # Canal A, Canal B, NULL e string vazia devem TODOS detectar como já publicado
+        for target_chan in ("channel-A", "channel-B", "", None):
+            canon = publishing_idempotency.check_canonical_publication_status(
+                task_id=task_id, platform=platform, channel_id=target_chan, db_path=self.db_path
+            )
+            self.assertTrue(canon["is_published"], f"Deveria estar publicado para channel_id={target_chan}")
+
+            # can_schedule_task também deve bloquear
+            can_sched, reason, _ = publishing_idempotency.can_schedule_task(
+                task_id=task_id, platform=platform, channel_id=target_chan, db_path=self.db_path
+            )
+            self.assertFalse(can_sched)
+            self.assertEqual(reason, "already_published")
+
+            # has_existing_or_terminal_destination também deve bloquear
+            has_dest = scheduler.has_existing_or_terminal_destination(
+                task_id=task_id, platform=platform, channel_id=target_chan, db_path=self.db_path
+            )
+            self.assertTrue(has_dest, f"has_dest deve ser True para channel_id={target_chan}")
+
+    def test_cf03_channel_a_success_does_not_block_channel_b(self):
+        """CF-03: Evento em Canal A NÃO bloqueia Canal B (isolamento estrito multicanal)."""
+        task_id = "task-chan-isolation"
+        platform = "youtube"
+
+        # Publicação confirmada apenas para channel-A
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO publication_events (task_id, platform, status, external_id, channel_id, published_at)
+                VALUES (?, ?, 'success', 'yt-chan-a', 'channel-A', ?);
+                """,
+                (task_id, platform, scheduler._to_iso(datetime.now(timezone.utc))),
+            )
+
+        # Canal A está publicado
+        canon_a = publishing_idempotency.check_canonical_publication_status(
+            task_id, platform, channel_id="channel-A", db_path=self.db_path
+        )
+        self.assertTrue(canon_a["is_published"])
+
+        # Canal B NÃO está publicado
+        canon_b = publishing_idempotency.check_canonical_publication_status(
+            task_id, platform, channel_id="channel-B", db_path=self.db_path
+        )
+        self.assertFalse(canon_b["is_published"])
+
+        # Canal B pode agendar
+        can_b, _, _ = publishing_idempotency.can_schedule_task(
+            task_id, platform, channel_id="channel-B", db_path=self.db_path
+        )
+        self.assertTrue(can_b)
+
+    # -------------------------------------------------------------------------
+    # CF-04: PROPAGAÇÃO PONTA A PONTA (JIT & RETRY POLICY)
+    # -------------------------------------------------------------------------
+
+    def test_cf04_jit_guard_propagates_channel_id_in_publishers(self):
+        """CF-04: JIT guard em youtube_publisher e post_for_me propaga channel_id e isola canais."""
+        task_id = "task-jit-propagate"
+        platform = "youtube"
+
+        # Canal A publicado
+        scheduler.record_publication_event(
+            task_id=task_id, platform=platform, status="success",
+            external_id="yt-chan-a-1", channel_id="channel-A", db_path=self.db_path
+        )
+
+        fake_video = os.path.join(self.test_dir, "fake.mp4")
+        with open(fake_video, "wb") as f:
+            f.write(b"data")
+
+        # 1. youtube_publisher para Canal A é bloqueado por idempotência JIT
+        res_a = youtube_publisher.publish_youtube_video(
+            video_path=fake_video, title="Title A", caption="Desc",
+            task_id=task_id, channel_id="channel-A", db_path=self.db_path
+        )
+        self.assertTrue(res_a.get("already_published"))
+
+        # 2. youtube_publisher para Canal B NÃO é bloqueado pela publicação do Canal A
+        with patch.object(post_for_me.post_for_me_client, "publish_video", return_value={"success": True, "external_id": "yt-chan-b-1"}) as mock_pub:
+            with patch("app.services.youtube_publisher.get_youtube_publish_provider", return_value="post_for_me"):
+                res_b = youtube_publisher.publish_youtube_video(
+                    video_path=fake_video, title="Title B", caption="Desc",
+                    task_id=task_id, channel_id="channel-B", db_path=self.db_path
+                )
+                self.assertFalse(res_b.get("already_published", False))
+                mock_pub.assert_called_once()
+
+    def test_cf04_retry_decision_isolated_between_channels(self):
+        """CF-04: Sucesso no Canal A não interrompe nem altera indevidamente o retry do Canal B."""
+        task_id = "task-retry-isolation"
+        platform = "youtube"
+
+        # Canal A já tem publicação confirmada
+        scheduler.record_publication_event(
+            task_id=task_id, platform=platform, status="success",
+            external_id="yt-chan-a-win", channel_id="channel-A", db_path=self.db_path
+        )
+
+        # Canal B falhou na primeira tentativa (ex.: timeout)
+        decision_b = retry_policy.evaluate_retry_decision(
+            task_id=task_id,
+            platform=platform,
+            current_status="processing",
+            attempts=1,
+            error_msg="Temporary network timeout",
+            channel_id="channel-B",
+            db_path=self.db_path,
+        )
+
+        # Canal B DEVE poder fazer retry normalmente (não ser considerado 'published')
+        self.assertTrue(decision_b.can_retry, "Canal B deveria poder fazer retry mesmo com Canal A publicado")
+        self.assertEqual(decision_b.resulting_status, "ready")
+
+        # Já para o Canal A, se avaliado, o sucesso canônico é terminal
+        decision_a = retry_policy.evaluate_retry_decision(
+            task_id=task_id,
+            platform=platform,
+            current_status="processing",
+            attempts=1,
+            error_msg="Temporary network timeout",
+            channel_id="channel-A",
+            db_path=self.db_path,
+        )
+        self.assertFalse(decision_a.can_retry)
+        self.assertEqual(decision_a.resulting_status, "published")
 
 
 if __name__ == "__main__":

@@ -1550,7 +1550,7 @@ class PostForMeClient:
         # 0. Guard JIT pré-provider (Camada 3 - V16.4.2B)
         try:
             from app.services import publishing_idempotency
-            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube", db_path=db_path)
+            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "youtube", channel_id=channel_id, db_path=db_path)
             if not is_safe and canon:
                 logger.info(
                     f"[POST_FOR_ME][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "
@@ -1991,7 +1991,7 @@ class PostForMeClient:
         # 0. Guard JIT pré-provider (Camada 3 - V16.4.2B)
         try:
             from app.services import publishing_idempotency
-            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "tiktok")
+            is_safe, canon = publishing_idempotency.jit_provider_idempotency_guard(task_id, "tiktok", channel_id=channel_id)
             if not is_safe and canon:
                 logger.info(
                     f"[POST_FOR_ME_TIKTOK][IDEMPOTENCY] Chamada externa bloqueada: task {task_id} já possui "

@@ -1,106 +1,85 @@
-# RELATÓRIO DE EXECUÇÃO — LOTE 3A | SEGURANÇA DE PUBLICAÇÃO V1
+# RELATÓRIO DE EXECUÇÃO — LOTE 3A | SEGURANÇA DE PUBLICAÇÃO V1 (REVISÃO ARQUITETO)
 
 **Data:** 2026-10-20  
 **Agente Responsável:** Agente 3 — Operação e Publicação  
 **Worktree:** `C:\Projetos\MoneyPrinterTurbo-V1\.worktrees\lote3a-operacao`  
 **Branch:** `feat/v1-lote3a-operacao`  
 **Baseline Inicial:** `db42ae4`  
-**Commit de Entrega:** `43309d6`  
+**Status da Revisão:** CORREÇÕES CF-01 A CF-04 IMPLEMENTADAS E HOMOLOGADAS  
 
 ---
 
 ## STATUS
 **CONCLUÍDO COM SUCESSO.**  
-Todos os 10 objetivos da missão foram implementados e validados por suítes de testes direcionados, sem efeitos colaterais em outros lotes.
+Todas as quatro falhas apontadas pelo Arquiteto-Chefe (CF-01 a CF-04) foram corrigidas de forma definitiva, eliminando heurísticas de texto, estabelecendo fail-closed absoluto, garantindo proteção por registros legados sem canal e propagando o escopo multicanal ponta a ponta até os publicadores e a política de retry.
 
 ---
 
-## BRANCH_SHA
-`43309d6 feat(publishing): autorizacao individual fail-closed por canal e idempotencia multicanal (Lote 3A)`
+## CF01_RESULT — AUTORIZAÇÃO EXPLÍCITA
+- **Remoção de Heurística de Texto:** Eliminada qualquer correspondência ou filtro hardcoded baseado na substring `"escolhas"`. Zero regras por nome, substring ou rótulo.
+- **Exigência de `allow_channels` Explícito na Migração:** `migrate_channel_auto_publish_authorizations` agora exige obrigatoriamente a passagem de uma lista explícita `allow_channels`. Se `allow_channels` for omitido (`None`) ou vazio, nenhum canal é autorizado (`eligible = []`).
+- **Histórico como Diagnóstico Exclusivo:** O contador de publicações anteriores (`previous_successes`) é retornado unicamente para auditoria e diagnóstico do operador; o sucesso prévio não confere autorização automática.
+- **Fail-Closed Preservado:** Qualquer canal não listado explicitamente em `allow_channels` mantém `auto_publish_authorized = 0` (incluindo *Dose Diária de Escolhas* e novos canais).
 
 ---
 
-## ARQUIVOS_ALTERADOS
-1. `app/services/publishing_idempotency.py`  
-   - Escopo multicanal adicionado a todas as 6 funções canônicas: `(task_id, platform, COALESCE(channel_id, ''))`.
-   - Isolamento estrito de verificação de sucesso e estado de agendamentos entre canais distintos.
-   - Neutralização de duplicatas (`neutralize_duplicate_executable_posts`) restrita ao mesmo canal.
-
-2. `app/services/scheduler.py`  
-   - Migração aditiva em `_run_migrations`: adiciona coluna `auto_publish_authorized INTEGER NOT NULL DEFAULT 0` em `publishing_channels` (se a tabela existir) e índice único com auto-reconciliação de integridade.
-   - Índice otimizado `idx_pub_events_task_plat_chan` em `publication_events(task_id, platform, COALESCE(channel_id, ''))`.
-   - Adicionada função canônica `is_channel_auto_publish_authorized(...)` com política Fail-Closed e bloqueio irrestrito de "Dose Diária de Escolhas".
-   - Adicionada função de governança `set_channel_auto_publish_authorized(...)` com auditoria via `operational_events`.
-   - Adicionada função de migração controlada `migrate_channel_auto_publish_authorizations(...)` com `dry_run=True` por padrão.
-   - `has_existing_or_terminal_destination`: eliminada a checagem wildcard global `pub_any` / `active_any` quando um `channel_id` específico é fornecido, preservando tombstones legados sem channel_id.
-   - `plan_schedule`: inclusão da verificação canônica Fail-Closed de autorização por canal e passagem do `channel_id` para `can_schedule_task`.
-   - `run_scheduler_cycle`: inclusão da revalidação de canal autorizado antes da execução (postergando com segurança em 30 min se não autorizado), e passagem de `channel_id` para `can_execute_scheduled_post`, `neutralize_duplicate_executable_posts` e `jit_provider_idempotency_guard`.
-
-3. `test/services/test_publishing_idempotency.py`  
-   - Atualizados testes de processamento e neutralização de duplicatas para refletir o isolamento multicanal e a autorização de canais.
-
-4. `test/services/test_lote3a_publishing_security.py`  
-   - Suíte dedicada de 6 testes direcionados para o Lote 3A cobrindo fail-closed, bloqueio estrito de Escolhas, migração dry-run/execução, independência multicanal, neutralização de duplicatas e ciclo do scheduler.
+## CF02_RESULT — FAIL-CLOSED REAL
+- **Bloqueio Incondicional de Canais Vazios / NULL:**
+  - Em `plan_schedule`: substituído o condicional parcial por validação estrita `if not is_channel_auto_publish_authorized(...)`. Canais com `channel_id` nulo, vazio ou não autorizado são descartados imediatamente do agendamento automático.
+  - Em `run_scheduler_cycle`: substituído o bloco `if channel_id:` pelo guard obrigatório `if not is_channel_auto_publish_authorized(...)`. Postagens com `channel_id` nulo, vazio, inativo ou com `auto_publish_authorized = 0` são postergadas com segurança em 30 minutos e registradas com evento `CHANNEL_NOT_AUTHORIZED_FOR_AUTO_PUBLISH`.
+- **Independência de Ordem (`init_db` vs `init_profile_db`):** `init_db` aciona preventivamente `profile_manager.init_profile_db(db_path)` em bloco protegido, e `_run_migrations` garante a adição da coluna `auto_publish_authorized INTEGER NOT NULL DEFAULT 0` sem importar a ordem de chamada.
 
 ---
 
-## AUTORIZACAO_CANONICA
-A regra de autorização canônica é estritamente **Fail-Closed** e depende da tripla chave:
-1. `autopilot_settings.auto_publish_enabled == "true"` (Chave Global)
-2. `publishing_channels.is_enabled == 1` (Chave de Ativação do Destino)
-3. `publishing_channels.auto_publish_authorized == 1` (Chave Específica de Publicação Automática)
-
-### Regras Implementadas em `is_channel_auto_publish_authorized`:
-- Se `channel_id` for ausente/inválido: `False`.
-- Se canal não existir em `publishing_channels`: `False`.
-- Se `is_enabled != 1`: `False`.
-- Se `auto_publish_authorized != 1`: `False`.
-- Se o perfil vinculado (`content_profiles`) estiver inativo (`is_active != 1`): `False`.
-- **REGRA RÍGIDA DE SEGURANÇA (Hardcoded Safeguard):** Se `display_name`, `channel_id` ou `profile_id` contiver `"escolhas"`, a função retorna **`False` incondicionalmente**, impedindo publicação automática para *Dose Diária de Escolhas* mesmo diante de manipulações manuais no banco de dados.
-- Tentativas de habilitar via `set_channel_auto_publish_authorized` para canais com `"escolhas"` disparam `PermissionError`.
+## CF03_RESULT — IDEMPOTÊNCIA HISTÓRICA
+- **Proteção Universal por Registros Legados:** Registros históricos com `(channel_id IS NULL OR channel_id = '')` em `publication_events` e `scheduled_posts` atuam como salvaguarda contra republicação da tarefa, protegendo qualquer canal moderno (`channel-A`, `channel-B`, NULL ou `""`).
+- **Isolamento Multicanal Moderno:** Sucesso canônico registrado para um canal específico (`channel-A`) não bloqueia agendamento, execução ou Just-In-Time Guard para outro canal (`channel-B`).
+- **Alinhamento em Três Pontos:**
+  - `check_canonical_publication_status`: filtra `WHERE task_id = ? AND platform = ? AND status = 'success' AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')`.
+  - `check_scheduled_posts_state`: filtra `WHERE task_id = ? AND platform = ? AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')`.
+  - `has_existing_or_terminal_destination`: valida existência de post ou sucesso para o canal específico OU registro legado sem canal.
+- **Neutralização de Duplicatas:** `neutralize_duplicate_executable_posts` neutraliza apenas duplicatas do mesmo canal (ou legadas sem canal), mantendo canais distintos intactos.
 
 ---
 
-## MIGRACAO_PROPOSTA
-Para respeitar o princípio de que mudanças em produção devem ser explícitas e auditáveis:
-- A adição da coluna no SQLite define `DEFAULT 0` (nenhum canal ganha permissão automaticamente na inicialização).
-- Foi criada a função canônica auditável `migrate_channel_auto_publish_authorizations(db_path=None, allow_channels=None, dry_run=True)`:
-  - **`dry_run=True` (Comportamento Padrão):** Realiza a varredura e retorna relatório detalhado (`eligible_channels`, `blocked_channels`, `already_authorized`) sem modificar registros.
-  - **Critério de Elegibilidade:**
-    - Canal com `is_enabled == 1`.
-    - Histórico comprovado de sucesso prévio em `publication_events` (prova de publicação legítima prévia) OU presença em lista explícita `allow_channels`.
-    - Bloqueio estrito e permanente para qualquer canal relacionado a "Dose Diária de Escolhas".
-  - **`dry_run=False`:** Grava `auto_publish_authorized = 1` apenas nos canais elegíveis e registra o evento `CHANNEL_MIGRATION_EXECUTED` na tabela `operational_events`.
-
----
-
-## IDEMPOTENCIA_VALIDADA
-- **Escopo Canônico:** A tupla de proteção contra publicações duplicadas foi expandida de `(task_id, platform)` para `(task_id, platform, COALESCE(channel_id, ''))`.
-- **Isolamento Multicanal Comprovado:**
-  - A mesma tarefa `T` direcionada para `Canal A (YouTube)` e `Canal B (YouTube)` pode ser agendada e executada de forma 100% independente.
-  - O sucesso de publicação no `Canal A` não bloqueia o agendamento, execução ou Just-In-Time Guard no `Canal B`.
-  - A neutralização de duplicatas (`neutralize_duplicate_executable_posts`) neutraliza apenas posts redundantes direcionados para o mesmo canal, preservando agendamentos de outros canais da mesma plataforma.
-- **Tombstones Legados:** Mantida compatibilidade estrita com cancelamentos históricos sem `channel_id` (onde atuam como wildcard preventivo).
+## CF04_RESULT — PROPAGAÇÃO PONTA A PONTA
+- **Provedor YouTube (`youtube_publisher.py`):** `publish_youtube_video` agora propaga `channel_id=channel_id` para `jit_provider_idempotency_guard`.
+- **Provedor Post for Me (`post_for_me.py`):**
+  - `publish_video` (YouTube) propaga `channel_id=channel_id` para `jit_provider_idempotency_guard`.
+  - `publish_tiktok_video` propaga `channel_id=channel_id` para `jit_provider_idempotency_guard`.
+- **Política de Retry (`retry_policy.py`):**
+  - `evaluate_retry_decision` agora recebe `channel_id: Optional[str] = None` e o propaga para `check_canonical_publication_status`.
+  - Sucesso prévio no Canal A não interrompe nem converte indevidamente o retry de uma falha transitória no Canal B para `'published'`.
+- **Scheduler Runtime (`scheduler.py`):** Na falha de publicação de um post, `run_scheduler_cycle` propaga `channel_id=channel_id` para `retry_policy.evaluate_retry_decision`.
 
 ---
 
 ## TESTES
-Executados testes unitários e de integração locais direcionados via pytest:
-1. `test/services/test_lote3a_publishing_security.py` (6 testes) -> **6 PASSED** (100%)
-   - `test_canonical_authorization_fail_closed`: PASS
-   - `test_dose_escolhas_strictly_forbidden`: PASS
-   - `test_migration_dry_run_and_execution`: PASS
-   - `test_multichannel_idempotency_isolation`: PASS
-   - `test_duplicate_neutralization_scoped_to_same_channel`: PASS
-   - `test_run_scheduler_cycle_blocks_unauthorized_channel`: PASS
-2. `test/services/test_publishing_idempotency.py` (10 testes) -> **10 PASSED** (100%)
-   - Suíte completa de idempotência de 3 camadas validada em ambiente multicanal.
+Executados testes unitários e de integração locais direcionados via pytest no ambiente virtual:
+1. `test/services/test_lote3a_publishing_security.py` -> **10 PASSED** (100%)
+   - `test_cf01_explicit_authorization_no_heuristics`: PASS
+   - `test_cf01_migration_requires_explicit_allow_channels`: PASS
+   - `test_cf02_fail_closed_on_none_empty_channel`: PASS
+   - `test_cf02_plan_schedule_blocks_unauthorized_or_empty_channel`: PASS
+   - `test_cf02_run_cycle_postpones_when_channel_missing_or_unauthorized`: PASS
+   - `test_cf02_init_db_order_independence`: PASS
+   - `test_cf03_historical_null_and_empty_protects_against_republication`: PASS
+   - `test_cf03_channel_a_success_does_not_block_channel_b`: PASS
+   - `test_cf04_jit_guard_propagates_channel_id_in_publishers`: PASS
+   - `test_cf04_retry_decision_isolated_between_channels`: PASS
+2. `test/services/test_publishing_idempotency.py` -> **10 PASSED** (100%)
+   - Suíte de idempotência completa validada com isolamento multicanal e proteção histórica.
 
-**Total:** 16 testes direcionados executados, 16 aprovados (100% PASS).  
-Seguindo estritamente a política de testes: após aprovação da suíte direcionada, a execução de testes foi encerrada.
+**Total:** 20 testes direcionados executados, 20 aprovados (100% PASS).  
+Política de testes rigorosamente respeitada: após a aprovação de todos os casos direcionados, a execução foi encerrada.
 
 ---
 
 ## RISCOS_PENDENTES
-1. **Ativação em Produção (Gate Humano Necessário):** Como a migração de schema aplica `DEFAULT 0`, os canais existentes em produção não publicarão automaticamente até que `scheduler.migrate_channel_auto_publish_authorizations(dry_run=False)` seja executado pelo operador na implantação.
-2. **Integração com Lote 3B:** O Lote 3B implementará as regras de negócio aprovadas (`RN-01`, `RN-02`, `RN-03`), incluindo o teto de 2 vídeos em `WARMUP` e a aprovação humana de score 55–69 no scheduler.
+1. **Ativação Segura em Produção:** Como a coluna nasce com `DEFAULT 0` e a migração exige `allow_channels` explícito, o operador deverá fornecer expressamente a lista de IDs de canais autorizados ao executar a migração no ambiente de produção.
+2. **Lote 3B:** O Lote 3B implementará as regras de negócio de governança aprovadas (`RN-01`, `RN-02`, `RN-03`), mantendo a arquitetura de autorização e idempotência consolidada no Lote 3A.
+
+---
+
+## PROXIMO_GATE
+Submissão para reavaliação do Arquiteto-Chefe para homologação final do **Lote 3A** e autorização de início do **Lote 3B** (`feat/v1-lote3b-regras-negocio`).

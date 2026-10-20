@@ -7,6 +7,10 @@ Camadas de Proteção:
 1. Camada de Criação / Agendamento (plan_schedule e can_schedule_task)
 2. Camada de Scheduler Runtime (run_scheduler_cycle, seleção de candidatos e início de ciclo)
 3. Camada Imediatamente Pré-Provider (Just-In-Time Idempotency Gate antes de qualquer chamada externa)
+
+Regras CF-03:
+- Registros históricos sem channel_id (NULL ou '') protegem contra republicação.
+- Isolamento estrito entre canais distintos (Canal A != Canal B).
 """
 
 from __future__ import annotations
@@ -36,10 +40,17 @@ def check_canonical_publication_status(
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
-    """Consulta publication_events para verificar se a tupla (task_id, platform, channel_id) já possui sucesso canônico."""
+    """Consulta publication_events para verificar se a tupla (task_id, platform, channel_id) já possui sucesso canônico.
+
+    CF-03:
+    - Se channel_id for fornecido, busca match no mesmo channel_id OU em registros legados sem channel_id (NULL/'').
+    - Registros legados sem channel_id atuam como proteção universal contra republicação da task.
+    - Sucesso em canal distinto (Canal A != Canal B) NÃO bloqueia o outro canal.
+    - Se channel_id for omitido (None), busca qualquer sucesso canônico para (task_id, platform).
+    """
     clean_task = str(task_id).strip()
     clean_plat = str(platform).lower().strip()
-    clean_chan = str(channel_id).strip() if channel_id is not None else None
+    clean_chan = str(channel_id).strip() if channel_id else None
 
     def _query(c: sqlite3.Connection) -> Dict[str, Any]:
         if clean_chan is not None:
@@ -47,7 +58,8 @@ def check_canonical_publication_status(
                 SELECT id, external_id, external_url, published_at, provider_request_id,
                        channel_id, profile_id, privacy_status
                 FROM publication_events
-                WHERE task_id = ? AND platform = ? AND COALESCE(channel_id, '') = ? AND status = 'success'
+                WHERE task_id = ? AND platform = ? AND status = 'success'
+                  AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')
                 ORDER BY id ASC LIMIT 1;
             """
             params: Tuple[Any, ...] = (clean_task, clean_plat, clean_chan)
@@ -101,10 +113,15 @@ def check_scheduled_posts_state(
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
-    """Analisa o estado de todos os scheduled_posts para a tupla (task_id, platform, channel_id)."""
+    """Analisa o estado de todos os scheduled_posts para a tupla (task_id, platform, channel_id).
+
+    CF-03:
+    - Se channel_id for fornecido, filtra posts para o mesmo canal OU registros legados sem channel_id (NULL/'').
+    - Posts em canais distintos não interferem entre si.
+    """
     clean_task = str(task_id).strip()
     clean_plat = str(platform).lower().strip()
-    clean_chan = str(channel_id).strip() if channel_id is not None else None
+    clean_chan = str(channel_id).strip() if channel_id else None
 
     def _query(c: sqlite3.Connection) -> Dict[str, Any]:
         sql = """
@@ -114,7 +131,7 @@ def check_scheduled_posts_state(
         """
         params: List[Any] = [clean_task, clean_plat]
         if clean_chan is not None:
-            sql += " AND COALESCE(channel_id, '') = ?"
+            sql += " AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')"
             params.append(clean_chan)
         if exclude_post_id is not None:
             sql += " AND id != ?"
@@ -184,7 +201,7 @@ def can_schedule_task(
     """
     clean_task = str(task_id).strip()
     clean_plat = str(platform).lower().strip()
-    clean_chan = str(channel_id).strip() if channel_id is not None else None
+    clean_chan = str(channel_id).strip() if channel_id else None
 
     def _check(c: sqlite3.Connection) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         # 1. Checa sucesso canônico
@@ -224,22 +241,21 @@ def can_execute_scheduled_post(
     """Camada 2: Valida se o post específico pode ser executado no ciclo do scheduler.
 
     Garante que:
-    1. Não exista sucesso canônico já registrado para o mesmo destino.
-    2. Não exista outro post em 'processing' ativo para a mesma tupla (task_id, platform, channel_id).
-    3. Não exista outro post em 'published' para a mesma tupla.
+    1. Não exista sucesso canônico já registrado para o mesmo destino (ou legado global).
+    2. Não exista outro post em 'processing' ativo para o mesmo destino.
+    3. Não exista outro post em 'published' para o mesmo destino.
     """
     clean_task = str(task_id).strip()
     clean_plat = str(platform).lower().strip()
 
     def _check(c: sqlite3.Connection) -> Tuple[bool, Optional[str], Dict[str, Any]]:
-        # Resolução de canal: se não informado explicitamente, busca do próprio post
         resolved_chan = channel_id
         if resolved_chan is None:
             p_row = c.execute("SELECT channel_id FROM scheduled_posts WHERE id = ?;", (post_id,)).fetchone()
             if p_row and p_row["channel_id"]:
                 resolved_chan = p_row["channel_id"]
 
-        clean_chan = str(resolved_chan).strip() if resolved_chan is not None else None
+        clean_chan = str(resolved_chan).strip() if resolved_chan else None
 
         # 1. Checa sucesso canônico
         canon = check_canonical_publication_status(clean_task, clean_plat, channel_id=clean_chan, conn=c)
@@ -275,12 +291,12 @@ def jit_provider_idempotency_guard(
     """Camada 3: Just-In-Time Idempotency Gate imediatamente antes de qualquer provider externo.
 
     Retorna:
-    - (True, None): Seguro chamar o provider (nenhum sucesso prévio para a tupla).
+    - (True, None): Seguro chamar o provider (nenhum sucesso prévio para a tupla ou legado).
     - (False, canonical_info): BLOQUEAR chamada ao provider (já publicado).
     """
     clean_task = str(task_id).strip()
     clean_plat = str(platform).lower().strip()
-    clean_chan = str(channel_id).strip() if channel_id is not None else None
+    clean_chan = str(channel_id).strip() if channel_id else None
 
     canon = check_canonical_publication_status(
         clean_task, clean_plat, channel_id=clean_chan, db_path=db_path, conn=conn
@@ -305,26 +321,28 @@ def neutralize_duplicate_executable_posts(
 ) -> int:
     """Neutraliza posts agendados executáveis redundantes para a mesma tupla (task_id, platform, channel_id).
 
-    Mantém canonical_post_id e converte os demais para o mesmo canal em 'cancelled' com next_attempt_at = NULL,
-    preservando postagens em outros canais ou plataformas.
+    Mantém canonical_post_id e converte os demais para o mesmo canal (ou legados sem canal) em 'cancelled' com next_attempt_at = NULL,
+    preservando postagens em outros canais distintos.
     """
     clean_task = str(task_id).strip()
     clean_plat = str(platform).lower().strip()
 
     def _neutralize(c: sqlite3.Connection) -> int:
-        # Se channel_id não foi passado, tenta obter do canonical_post_id
         resolved_chan = channel_id
         if resolved_chan is None:
             p_row = c.execute("SELECT channel_id FROM scheduled_posts WHERE id = ?;", (canonical_post_id,)).fetchone()
             if p_row and p_row["channel_id"]:
                 resolved_chan = p_row["channel_id"]
 
-        if resolved_chan is not None:
-            clean_chan = str(resolved_chan).strip()
+        clean_chan = str(resolved_chan).strip() if resolved_chan else None
+
+        if clean_chan is not None:
             rows = c.execute(
                 """
                 SELECT id, status, channel_id FROM scheduled_posts
-                WHERE task_id = ? AND platform = ? AND COALESCE(channel_id, '') = ? AND id != ?
+                WHERE task_id = ? AND platform = ?
+                  AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')
+                  AND id != ?
                   AND status IN ('planned', 'ready');
                 """,
                 (clean_task, clean_plat, clean_chan, canonical_post_id),

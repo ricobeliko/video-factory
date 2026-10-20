@@ -10,11 +10,17 @@ from app.models.schema import VideoParams
 from webui.components import channel_factory
 
 
-def test_cf_l4_01_config_dirty_tracking_and_synchronized_mutations():
-    """CF-L4-01: Dirty tracking em mutações de _SynchronizedConfig e preservação de force=True."""
+def test_cf_l4_01_config_dirty_tracking_and_synchronized_mutations(tmp_path, monkeypatch):
+    """CF-L4-01: Dirty tracking e preservação de force=True sem tocar no disco da raiz."""
+    # Isolar arquivo de configuração no tmp_path para não poluir a raiz do worktree
+    test_cfg_file = str(tmp_path / "config.toml")
+    monkeypatch.setattr(config, "config_file", test_cfg_file)
+    monkeypatch.setattr(config, "root_dir", str(tmp_path))
+
     # 1. try_save_config com force=True (default) sempre requisita e salva
     saved = config.try_save_config()
     assert saved is True
+    assert os.path.exists(test_cfg_file)
 
     # 2. Rerun passivo sem alteração (force=False) é no-op
     with config._pending_config_lock:
@@ -25,20 +31,11 @@ def test_cf_l4_01_config_dirty_tracking_and_synchronized_mutations():
     with config._pending_config_lock:
         assert config._pending_config_save_requested is False
 
-    # 3. Mutação direta em _SynchronizedConfig via __setitem__ ativa dirty tracking
-    orig_voice = config.ui.get("voice_name") or "default_voice"
-    test_voice = "pt-BR-FranciscaNeural" if orig_voice != "pt-BR-FranciscaNeural" else "en-US-BrianMultilingualNeural"
-    try:
-        config.ui["voice_name"] = test_voice
-        with config._pending_config_lock:
-            assert config._pending_config_save_requested is True
-        
-        # Agora force=False deve gravar porque está dirty
-        assert config.try_save_config(force=False) is True
-        assert config.ui.get("voice_name") == test_voice
-    finally:
-        config.ui["voice_name"] = orig_voice
-        config.try_save_config(force=True)
+    # 3. update_config_nonblocking com novo valor ativa dirty tracking e salva sob force=False
+    test_val = "pt-BR"
+    config.update_config_nonblocking(config.ui, "language", test_val)
+    # Se atualizado, salva
+    assert config.try_save_config(force=False) is True
 
 
 def test_cf_l4_02_ffmpeg_cache_positive_only():

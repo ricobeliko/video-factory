@@ -261,7 +261,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
         submitted = st.button("🚀 Criar Canal", type="primary", use_container_width=True, key="cf_submit_onboard_btn")
 
-        if submitted:
+        if submitted is True:
             if not is_primary:
                 st.error("Apenas o nó PRIMARY pode cadastrar canais.")
                 return
@@ -499,14 +499,33 @@ def _render_global_voice_section(is_primary: bool):
                     st.error(msg)
 
 
-def _channel_factory_fragment(func):
-    """Aplica st.fragment se disponível, mantendo compatibilidade com bare mode de testes."""
-    if hasattr(st, "fragment"):
+def _get_current_script_run_ctx():
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx()
+    except Exception:
         try:
-            return st.fragment(func)
+            from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+            return get_script_run_ctx()
         except Exception:
-            return func
-    return func
+            return None
+
+
+def _channel_factory_fragment(func):
+    """Aplica st.fragment em tempo de chamada se em contexto Streamlit ativo; em bare mode executa direto."""
+    if not hasattr(st, "fragment"):
+        return func
+    try:
+        fragment_func = st.fragment(func)
+    except Exception:
+        return func
+
+    def wrapper(*args, **kwargs):
+        if _get_current_script_run_ctx() is None:
+            return func(*args, **kwargs)
+        return fragment_func(*args, **kwargs)
+
+    return wrapper
 
 
 @_channel_factory_fragment
@@ -811,4 +830,4 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                             )
 
                         st.toast(f"Canal '{clean_m_name}' atualizado com sucesso!")
-                        st.rerun()
+                        _safe_rerun_app()

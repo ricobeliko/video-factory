@@ -134,8 +134,6 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     )
 
 
-
-
 # ---------------------------------------------------------------------------
 # Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)
 # ---------------------------------------------------------------------------
@@ -1126,8 +1124,6 @@ def get_platform_rate_limits(
         "available_slots": available_slots,
     }
 
-
-
 # ---------------------------------------------------------------------------
 # Scheduler: Planejamento e Agenda
 # ---------------------------------------------------------------------------
@@ -1452,7 +1448,7 @@ def plan_schedule(
             logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={hold_reason}")
             continue
 
-        # Gate de Qualidade: se houver avaliação persistida, rejeita scores inadequados (< 70 ou WEAK/REVIEW/REJECTED)
+        # Gate de Qualidade e Aprovação Humana (RN-02)
         try:
             with get_connection(db_path) as conn:
                 q_row = conn.execute(
@@ -1463,11 +1459,84 @@ def plan_schedule(
                 if q_row:
                     q_score = float(q_row["quality_score"])
                     q_label = str(q_row["quality_label"]).upper()
-                    if (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED"):
-                        logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
-                        continue
-        except Exception:
-            pass
+                    is_sub_threshold = (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED")
+                    if is_sub_threshold:
+                        human_approved = False
+                        # RN-02: Permitir aprovação humana de vídeos com score entre 55 e 69 apenas quando
+                        # os gates técnico, segurança e copyright estiverem aprovados.
+                        if (math.isfinite(q_score) and 55.0 <= q_score < 70.0) or q_label == "REVIEW":
+                            has_rev_tbl = conn.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';"
+                            ).fetchone()
+                            if has_rev_tbl:
+                                h_row = conn.execute(
+                                    "SELECT decision, operator_id, approved_below_threshold FROM operator_video_reviews "
+                                    "WHERE task_id = ? AND decision = 'APPROVED' ORDER BY id DESC LIMIT 1;",
+                                    (task_id,),
+                                ).fetchone()
+                                if h_row:
+                                    # Gate Técnico: integridade física do vídeo MP4
+                                    tech_ok = bool(has_physical_video and final_video_file and os.path.isfile(final_video_file) and os.path.getsize(final_video_file) > 0)
+
+                                    # Gate de Segurança: Safety == PASS estrito
+                                    safety_ok = False
+                                    try:
+                                        from app.services import safety_gate
+                                        s_rec = safety_gate.get_safety_assessment(task_id, db_path=db_path)
+                                        if s_rec and str(s_rec.get("safety_status") or "").strip().upper() == const.SAFETY_STATUS_PASS:
+                                            safety_ok = True
+                                    except Exception:
+                                        pass
+                                    if not safety_ok:
+                                        try:
+                                            has_qsh = conn.execute(
+                                                "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
+                                            ).fetchone()
+                                            if has_qsh:
+                                                q_s_row = conn.execute(
+                                                    "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
+                                                    (task_id,),
+                                                ).fetchone()
+                                                if q_s_row and str(q_s_row["safety_status"] or "").strip().upper() == const.SAFETY_STATUS_PASS:
+                                                    safety_ok = True
+                                        except Exception:
+                                            pass
+                                    if not safety_ok and isinstance(t, dict):
+                                        if str(t.get("safety_status") or "").strip().upper() == const.SAFETY_STATUS_PASS:
+                                            safety_ok = True
+
+                                    # Gate de Copyright: Copyright == PASS
+                                    cp_ok = False
+                                    try:
+                                        from app.services import copyright_gate
+                                        c_pass, c_reason, _ = copyright_gate.evaluate_copyright_provenance_gate(
+                                            task_id=task_id,
+                                            task_data=t if isinstance(t, dict) else None,
+                                            task_base_dir=task_base_dir,
+                                            db_path=db_path,
+                                        )
+                                        cp_ok = bool(c_pass)
+                                    except Exception as exc:
+                                        logger.warning(f"[SCHEDULER][GATE] Erro ao avaliar copyright para task {task_id}: {exc}")
+                                        cp_ok = False
+
+                                    if tech_ok and safety_ok and cp_ok:
+                                        human_approved = True
+                                        logger.info(
+                                            f"[SCHEDULER][GATE] Tarefa {task_id} (score={q_score:.1f}, label={q_label}) liberada para agendamento "
+                                            f"via APROVAÇÃO HUMANA (operator={h_row['operator_id']}) com gates técnico, safety e copyright PASS."
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"[SCHEDULER][GATE] Tarefa {task_id} possui aprovação humana, mas falhou nos gates obrigatórios: "
+                                            f"tech={tech_ok}, safety={safety_ok}, copyright={cp_ok}. Agendamento bloqueado."
+                                        )
+
+                        if not human_approved:
+                            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
+                            continue
+        except Exception as exc:
+            logger.warning(f"[SCHEDULER][GATE] Erro ao consultar Quality/Review gates para {task_id}: {exc}")
 
         # Resolução do perfil da task
         task_profile_id = t.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)

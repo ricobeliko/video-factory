@@ -2411,7 +2411,7 @@ def _get_next_active_generation_task_id(current_task_id=None):
     return ""
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)
 def _render_running_generation_task(task_id):
     """只在任务运行期间轮询；结束后切回静态结果，停止不必要的定时刷新。"""
     try:
@@ -4279,7 +4279,7 @@ def _render_settings_dialog():
                         openai_image_prompt_template.strip(),
                     )
 
-    _save_runtime_config()
+    _save_runtime_config(force=False)
 
 
 # -----------------------------------------------------------------------------
@@ -10002,7 +10002,7 @@ def _render_application():
     # 生成分支在启动后台线程前已经请求过保存。普通控件交互继续请求非阻塞保存；
     # 如果后台任务正在使用配置，配置层会在任务结束时自动应用并落盘最新值。
     if not generation_submitted:
-        _save_runtime_config()
+        _save_runtime_config(force=False)
 
 
 if __name__ == "__main__":

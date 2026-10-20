@@ -520,6 +520,7 @@ def ensure_instance_initialized(
 def reset_instance_for_testing() -> None:
     """Reseta o estado da instância em memória (exclusivo para testes unitários)."""
     global _instance_initialized, _current_node_id, _current_role, _current_node_name, _current_started_at
+    clear_provider_health_cache()
     stop_instance_heartbeat()
     with _instance_state_lock:
         _instance_initialized = False
@@ -1056,7 +1057,12 @@ def log_operational_event(
             """,
             (now_iso, component, clean_sev, event_type, task_id, message[:1000], meta_str),
         )
-        return cur.lastrowid
+        row_id = cur.lastrowid
+
+    if clean_sev in (SEVERITY_WARNING, SEVERITY_ERROR, SEVERITY_CRITICAL):
+        clear_provider_health_cache()
+
+    return row_id
 
 
 def get_closed_feedback_loop_enabled_op(db_path: Optional[str] = None) -> bool:

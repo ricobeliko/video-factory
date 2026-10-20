@@ -1,3 +1,12 @@
+def _safe_rerun_app():
+    """Reexecuta a aplicação globalmente para propagar mutações estruturais."""
+    try:
+        st.rerun(scope="app")
+    except TypeError:
+        st.rerun()
+    except Exception:
+        pass
+
 """
 Channel Factory UI Component (Fase V1.5E-B — Generic Channel Onboarding).
 
@@ -86,7 +95,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
     if not yt_accounts and not tt_accounts:
         st.warning("⚠️ Nenhuma conta social (YouTube/TikTok) conectada encontrada no Post for Me. O canal pode ser criado apenas para geração de estoque (publicação desativada).")
 
-    with st.form("new_channel_onboarding_form"):
+    with st.container():
         # 1. Identidade e Formato do Canal
         st.markdown("##### 1. Identidade e Formato do Canal")
         c_name, c_niche = st.columns(2)
@@ -250,7 +259,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-        submitted = st.form_submit_button("🚀 Criar Canal", type="primary", use_container_width=True)
+        submitted = st.button("🚀 Criar Canal", type="primary", use_container_width=True, key="cf_submit_onboard_btn")
 
         if submitted:
             if not is_primary:
@@ -359,7 +368,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                     "message": f"Canal '{new_p.get('name')}' criado com sucesso! Status inicial: {'Produção Ativa' if autonomous_start else 'Pausado (Recomendado)'}.",
                     "profile_id": new_p.get("id"),
                 }
-                st.rerun()
+                _safe_rerun_app()
             except Exception as exc:
                 st.error(f"Falha ao cadastrar canal: {exc}")
 
@@ -435,8 +444,8 @@ def save_global_voice(voice_name: str) -> tuple[bool, str]:
     if not autonomous_production.is_valid_pt_br_voice(clean_voice):
         return False, f"Voz '{clean_voice}' não é permitida pelo contrato de conteúdo pt-BR."
 
-    config.ui["voice_name"] = clean_voice
-    config.try_save_config()
+    config.update_config_nonblocking(config.ui, "voice_name", clean_voice)
+    config.try_save_config(force=True)
     return True, f"Voz global atualizada para '{clean_voice}' com sucesso!"
 
 
@@ -485,12 +494,22 @@ def _render_global_voice_section(is_primary: bool):
                     active_voice_placeholder.markdown(f"**Voz Ativa:**\n`{selected_voice}`")
                     st.toast(msg)
                     st.success(msg)
-                    st.rerun()
+                    _safe_rerun_app()
                 else:
                     st.error(msg)
 
 
-@st.fragment
+def _channel_factory_fragment(func):
+    """Aplica st.fragment se disponível, mantendo compatibilidade com bare mode de testes."""
+    if hasattr(st, "fragment"):
+        try:
+            return st.fragment(func)
+        except Exception:
+            return func
+    return func
+
+
+@_channel_factory_fragment
 def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[str] = None):
     """Renderiza a experiência completa de Channel Factory."""
     if is_primary is None:
@@ -509,7 +528,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                     if st.button("▶️ Ativar Produção Deste Canal Agora", key=f"activate_new_{p_id}"):
                         autonomous_production.set_profile_autonomous_mode_enabled(p_id, True, db_path=db_path)
                         st.success("Produção ativada com sucesso!")
-                        st.rerun()
+                        _safe_rerun_app()
         else:
             st.error(feedback["message"])
 
@@ -583,12 +602,12 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                     if st.button("⏸️ Pausar", key=f"pause_prof_{p_id}", use_container_width=True, disabled=not is_primary):
                         autonomous_production.set_profile_autonomous_mode_enabled(p_id, False, db_path=db_path)
                         st.toast(f"Produção de '{p.get('name')}' pausada.")
-                        st.rerun()
+                        _safe_rerun_app()
                 else:
                     if st.button("▶️ Ativar", type="secondary", key=f"activate_prof_{p_id}", use_container_width=True, disabled=not is_primary):
                         autonomous_production.set_profile_autonomous_mode_enabled(p_id, True, db_path=db_path)
                         st.toast(f"Produção de '{p.get('name')}' ativada.")
-                        st.rerun()
+                        _safe_rerun_app()
 
             # Expander de Gestão do Canal
             with st.expander(f"⚙️ Gerenciar Canal: {p.get('name')}", expanded=False):

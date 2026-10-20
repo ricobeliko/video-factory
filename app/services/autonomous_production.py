@@ -1221,33 +1221,36 @@ def validate_autonomous_brazilian_content_contract(
     if not reg or str(reg).strip().upper() != "BR":
         reasons.append("invalid_region")
 
-    # 3. Legendas habilitadas
+    # 3, 4, 5. Validação de legendas externas (isenta para quiz_dilemma e quiz_paper - CF-L4-05)
+    v_format = _get("video_format") or _get("content_style") or "traditional"
+    is_quiz = v_format in ("quiz_dilemma", "quiz_paper")
+
     sub_enabled = _get("subtitle_enabled")
-    if sub_enabled is not True:
-        reasons.append("subtitle_disabled")
-
-    # 4. Cor do texto da legenda (deve ser branco #FFFFFF)
     text_color = _get("text_fore_color")
-    if not text_color or str(text_color).strip().upper() != "#FFFFFF":
-        reasons.append("invalid_subtitle_color")
-
-    # 5. Stroke da legenda (preto #000000 obrigatório e espessura >= 1.5)
     stroke_color = _get("stroke_color")
-    if not stroke_color or str(stroke_color).strip().upper() != "#000000":
-        reasons.append("invalid_stroke_color")
-
-    normalized_stroke_width: float = 0.0
     raw_stroke_width = _get("stroke_width")
-    try:
-        if raw_stroke_width is not None and str(raw_stroke_width).strip() != "":
-            parsed_width = float(raw_stroke_width)
-            normalized_stroke_width = parsed_width
-            if parsed_width < 1.5:
-                reasons.append("stroke_width_too_thin")
-        else:
+    normalized_stroke_width: float = 0.0
+
+    if not is_quiz:
+        if sub_enabled is not True:
+            reasons.append("subtitle_disabled")
+
+        if not text_color or str(text_color).strip().upper() != "#FFFFFF":
+            reasons.append("invalid_subtitle_color")
+
+        if not stroke_color or str(stroke_color).strip().upper() != "#000000":
+            reasons.append("invalid_stroke_color")
+
+        try:
+            if raw_stroke_width is not None and str(raw_stroke_width).strip() != "":
+                parsed_width = float(raw_stroke_width)
+                normalized_stroke_width = parsed_width
+                if parsed_width < 1.5:
+                    reasons.append("stroke_width_too_thin")
+            else:
+                reasons.append("invalid_stroke_width")
+        except (ValueError, TypeError):
             reasons.append("invalid_stroke_width")
-    except (ValueError, TypeError):
-        reasons.append("invalid_stroke_width")
 
     # 6. Validação independente de TTS / Voz
     voice_name = _get("voice_name")

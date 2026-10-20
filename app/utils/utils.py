@@ -227,11 +227,11 @@ def check_ffmpeg_ready(timeout: int = 10, force: bool = False) -> bool:
     now = time.monotonic()
     if (
         not force
-        and _FFMPEG_CHECK_CACHE["result"] is not None
+        and _FFMPEG_CHECK_CACHE["result"] is True
         and _FFMPEG_CHECK_CACHE["bin"] == ffmpeg_bin
         and (now - _FFMPEG_CHECK_CACHE["timestamp"] < _FFMPEG_CHECK_TTL)
     ):
-        return _FFMPEG_CHECK_CACHE["result"]
+        return True
 
     try:
         completed = subprocess.run(
@@ -245,13 +245,13 @@ def check_ffmpeg_ready(timeout: int = 10, force: bool = False) -> bool:
             f"no usable ffmpeg executable found (tried: {ffmpeg_bin}). "
             f"{_FFMPEG_INSTALL_HINT}"
         )
-        _FFMPEG_CHECK_CACHE = {"result": False, "timestamp": now, "bin": ffmpeg_bin}
+        _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
         return False
     except Exception as exc:
         logger.warning(
             f"failed to probe ffmpeg ({ffmpeg_bin}): {exc}. {_FFMPEG_INSTALL_HINT}"
         )
-        _FFMPEG_CHECK_CACHE = {"result": False, "timestamp": now, "bin": ffmpeg_bin}
+        _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
         return False
 
     if completed.returncode != 0:
@@ -259,7 +259,7 @@ def check_ffmpeg_ready(timeout: int = 10, force: bool = False) -> bool:
             f"ffmpeg ({ffmpeg_bin}) probe exited with status {completed.returncode}; "
             f"video generation may fail later. {_FFMPEG_INSTALL_HINT}"
         )
-        _FFMPEG_CHECK_CACHE = {"result": False, "timestamp": now, "bin": ffmpeg_bin}
+        _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
         return False
 
     logger.info(f"ffmpeg check passed, using: {ffmpeg_bin}")

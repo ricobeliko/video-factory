@@ -27,7 +27,7 @@ _UTF8_BOM = "\ufeff"
 
 
 class _SynchronizedConfig(dict):
-    """保持 dict 使用方式不变，同时让运行期配置写操作服从同一把锁。"""
+    """保持 dict 使用方式不变，同时让运行期配置写操作服从同一把锁，并同步 dirty tracking。"""
 
     def __setitem__(self, key, value):
         # Streamlit 每次整页 rerun 都会把当前控件值重新写回配置。视频任务持有
@@ -39,16 +39,27 @@ class _SynchronizedConfig(dict):
             return
         with _config_save_lock:
             super().__setitem__(key, value)
+            with _pending_config_lock:
+                global _pending_config_save_requested
+                _pending_config_save_requested = True
 
     def __delitem__(self, key):
+        if key not in self:
+            raise KeyError(key)
         with _config_save_lock:
             super().__delitem__(key)
+            with _pending_config_lock:
+                global _pending_config_save_requested
+                _pending_config_save_requested = True
 
     def clear(self):
         if not self:
             return
         with _config_save_lock:
             super().clear()
+            with _pending_config_lock:
+                global _pending_config_save_requested
+                _pending_config_save_requested = True
 
     def pop(self, key, default=_MISSING):
         # ``pop(key, default)`` 在 key 不存在时同样不会改变配置。WebUI 使用
@@ -58,9 +69,11 @@ class _SynchronizedConfig(dict):
                 raise KeyError(key)
             return default
         with _config_save_lock:
-            if default is _MISSING:
-                return super().pop(key)
-            return super().pop(key, default)
+            res = super().pop(key) if default is _MISSING else super().pop(key, default)
+            with _pending_config_lock:
+                global _pending_config_save_requested
+                _pending_config_save_requested = True
+            return res
 
     def setdefault(self, key, default=None):
         # 与 __setitem__ 相同，已存在 key 的 setdefault 是只读操作。提前返回
@@ -69,7 +82,11 @@ class _SynchronizedConfig(dict):
         if current is not _MISSING:
             return current
         with _config_save_lock:
-            return super().setdefault(key, default)
+            res = super().setdefault(key, default)
+            with _pending_config_lock:
+                global _pending_config_save_requested
+                _pending_config_save_requested = True
+            return res
 
     def update(self, *args, **kwargs):
         changes = dict(*args, **kwargs)
@@ -81,6 +98,9 @@ class _SynchronizedConfig(dict):
             return
         with _config_save_lock:
             super().update(changes)
+            with _pending_config_lock:
+                global _pending_config_save_requested
+                _pending_config_save_requested = True
 
 
 def _pending_update_key(config_section, key):
@@ -256,7 +276,7 @@ def _schedule_deferred_config_flush():
     ).start()
 
 
-def try_save_config(force: bool = False):
+def try_save_config(force: bool = True):
     """
     非阻塞保存 WebUI 配置，锁繁忙时交由当前长任务结束后保存。
 

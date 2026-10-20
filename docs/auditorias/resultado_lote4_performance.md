@@ -1,103 +1,97 @@
-# RESULTADO DA IMPLEMENTAÇÃO — LOTE 4 | OTIMIZAÇÃO DE DESEMPENHO STREAMLIT V1
+# RELATÓRIO DE IMPLEMENTAÇÃO E CORREÇÕES CIRÚRGICAS — LOTE 4 | STREAMLIT V1
 
 **Data:** 2026-10-20  
 **Worktree:** `C:\Projetos\MoneyPrinterTurbo-V1\.worktrees\lote4-performance`  
 **Branch:** `feat/v1-lote4-streamlit-performance`  
-**Baseline:** `4ea28dff219830714190e844b7bc985a3d39c153` (Merge Lote 3B homologado)
+**Baseline Integrado:** `4ea28dff219830714190e844b7bc985a3d39c153`  
+**Status:** **CORREÇÕES CIRÚRGICAS APLICADAS E VALIDADAS COM SUCESSO**
 
 ---
 
 ## 1. STATUS
-**IMPLEMENTADO E VALIDADO LOCALMENTE COM SUCESSO**
+Todas as correções cirúrgicas apontadas pelo Arquiteto-Chefe (**CF-L4-01 a CF-L4-05**) foram implementadas, validadas e testadas com 100% de aprovação na suíte direcionada, mantendo os ganhos de desempenho sem quebrar contratos legados nem introduzir deadlocks.
 
 ---
 
-## 2. WORKTREE E BRANCH
-- **Worktree:** `C:\Projetos\MoneyPrinterTurbo-V1\.worktrees\lote4-performance`
-- **Branch:** `feat/v1-lote4-streamlit-performance`
-- **HEAD Inicial:** `4ea28df`
+## 2. DETALHAMENTO DAS CORREÇÕES (CF-L4-01 A CF-L4-05)
+
+### CF-L4-01 — Persistência de Configurações
+- **Mutações em `_SynchronizedConfig`:** Métodos mutáveis (`__setitem__`, `__delitem__`, `clear`, `pop`, `setdefault`, `update`) agora ativam o dirty tracking (`_pending_config_save_requested = True`) de forma thread-safe na ordem canônica de locks (`_config_save_lock` -> `_pending_config_lock`), prevenindo deadlocks.
+- **Contrato de `try_save_config`:** Preservado o padrão `force: bool = True` como default, garantindo total compatibilidade retroativa para todas as chamadas diretas externas.
+- **Rerun Passivo:** No final de `_render_application()` e da coluna de configurações avançadas em `Main.py`, o fechamento passivo utiliza explicitamente `_save_runtime_config(force=False)`.
+- **`save_global_voice`:** Atualizado para utilizar `config.update_config_nonblocking(config.ui, "voice_name", clean_voice)` e persistência explícita via `config.try_save_config(force=True)`.
+
+### CF-L4-02 — Cache FFmpeg
+- **Cache Apenas para Verificações Positivas:** `check_ffmpeg_ready()` armazena o resultado em cache de 300 segundos apenas quando o teste for positivo (`completed.returncode == 0`).
+- **Falhas Temporárias:** Timeouts, `FileNotFoundError` ou códigos de erro adversos NÃO ficam retidos no cache, permitindo retentativa imediata sem retenção artificial.
+- **Invalidação Preservada:** Função `clear_ffmpeg_check_cache()` mantida para invalidação imediata e compatibilidade com mocks de teste.
+
+### CF-L4-03 — Fragmentos e Formulários
+- **Bare Mode de Testes:** Função `render_channel_factory` decorada através de wrapper resiliente que preserva execução transparente em bare mode (fora do contexto Streamlit).
+- **Propagação de Mutações Estruturais:** Criada a função `_safe_rerun_app()`, disparando `st.rerun(scope="app")` após ações estruturais (criação de canal, pausa, ativação, alteração de voz global), atualizando toda a árvore da aplicação.
+- **Onboarding e Re-render Condicional de Formato:** Removido o encapsulamento externo de `st.form` no diálogo de novo canal, permitindo que a troca entre *Tradicional*, *Quiz Dilema* e *Quiz Papel* re-renderize imediatamente os campos condicionais antes da submissão. Preservados `session_state` e chaves dos widgets.
+
+### CF-L4-04 — Cache Operacional
+- **Invalidação Reativa:** `clear_provider_health_cache()` é acionada automaticamente sempre que `log_operational_event()` registrar eventos relevantes com severidade `WARNING`, `ERROR` ou `CRITICAL`.
+- **Reset de Instância:** Inserida invalidação de cache dentro de `reset_instance_for_testing()`.
+- **Preservação de Desempenho:** Para chamadas sucessivas sem novos eventos anômalos, o cache de 15 segundos permanece ativo e responsivo (redução de 272ms para ~13ms).
+
+### CF-L4-05 — Contrato de Legendas Quiz
+- **Alinhamento com Lotes 1 e 2:** Em `validate_autonomous_brazilian_content_contract`, canais dos formatos `quiz_dilemma` e `quiz_paper` foram isentados da exigência de arquivo de legenda externa SRT (`subtitle_enabled`), uma vez que o Quiz Engine realiza a renderização de texto e cards diretamente nos frames visuais.
+- **Integridade Mantida:** As validações estritas de idioma (`pt-BR`), região (`BR`) e catálogo aprovado de voz TTS pt-BR permanecem 100% ativas para todos os formatos.
 
 ---
 
-## 3. BASELINE MEDIDO (TEMPOS ANTES)
-Instrumentação local com `time.perf_counter` executada antes das correções:
+## 3. CLASSIFICAÇÃO DAS REGRESSÕES ADICIONAIS
 
-1. **Gravação Síncrona de `config.toml` (`try_save_config`):**
-   - Média de **9.93 ms** por rerun, com picos de até **33.61 ms** no Windows.
-   - Ocorria incondicionalmente a cada clique ou interação de widget na página.
-2. **Subprocesso FFmpeg (`check_ffmpeg_ready`):**
-   - Média de **136.61 ms** por chamada (com baterias atingindo **656.37 ms** somadas).
-   - Executava `ffmpeg -version` via subprocess a cada checagem de saúde e no fluxo de renderização.
-3. **Catálogo de Vozes (`get_available_factory_voices`):**
-   - Média de **7.15 ms** a cada renderização da Channel Factory, varrendo catálogo de vozes Azure e executando regex repetidamente.
-4. **Provedores no Operator Console (`get_provider_health_summary`):**
-   - Média de **272.85 ms** (com picos de **451.84 ms**), combinando queries de eventos SQLite, checagem síncrona de FFmpeg e provedores de analytics.
-5. **Channel Factory e Consultas N+1:**
-   - Loop `_get_channel_card_data` disparava múltiplas queries SQLite por canal e repetia `list_channels` na abertura dos expanders de gerenciamento.
-6. **UI Dimming (Tela Escurecida):**
-   - Como qualquer clique forçava a reexecução do script monolítico de 10.025 linhas de `Main.py` somado aos custos acima, a tela ficava escurecida por longos segundos a cada interação.
+O Arquiteto identificou 3 grupos de falhas na bateria ampliada:
+
+1. **`test_webui_task.py: test_generation_log_fragment_refreshes_within_half_a_second`**
+   - **Origem:** Configuração em `webui/Main.py` definia fixamente `run_every="5s"` no log de geração.
+   - **Classificação:** **Pertencente ao escopo do Lote 4 / Streamlit V1**.
+   - **Resolução:** Corrigido cirurgicamente para `@st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)`. Teste agora passa com 100% de sucesso.
+2. **`test_webui_task.py: test_submit_generation_copies_params_before_starting_worker`**
+   - **Origem:** No baseline `4ea28df`, o Lote 1 implementou a hidratação canônica obrigatória de parâmetros (`profile_manager.hydrate_video_params`). O teste legado espera que parâmetros vazios permaneçam não-hidratados.
+   - **Classificação:** **Preexistente / Contrato do Lote 1**. Não modificado para evitar enfraquecimento de contratos já homologados.
+3. **`test_operator_console.py: test_canonical_ready_stock_matches_autonomous_production`**
+   - **Origem:** No baseline `4ea28df`, o Lote 3B instituiu o Copyright Gate (RN-02 / RN-03) como requisito mandatório de estoque autônomo. A fixture sintética legada de V8 não cria assessment de copyright.
+   - **Classificação:** **Preexistente / Contrato do Lote 3B**. Preservada sem alteração de regras de negócio.
 
 ---
 
-## 4. GARGALOS CORRIGIDOS
+## 4. MEDIÇÕES DE DESEMPENHO PRESERVADAS
 
-### A. Eliminação de Gravações Incondicionais de `config.toml` (`app/config/config.py`)
-- Em `update_config_nonblocking` e `delete_config_nonblocking`, foi implementada a detecção de *dirty state*: valores idênticos aos já existentes em memória são tratados como *no-op*, sem agendar saves nem marcar flags de pendência.
-- Em `try_save_config(force=False)`, o arquivo só é gravado no disco se houver alterações reais acumuladas ou se `force=True`.
-- Em `webui/Main.py`, o fechamento padrão do rerun (`_save_runtime_config(force=False)`) não toca mais o disco em navegação comum, enquanto ações explícitas (mudança de idioma, restauração de chaves, submissão de tarefas) salvam com `force=True`.
-- **Persistência preservada:** Ao modificar um valor de configuração, o dirty state é ativado, o arquivo é gravado no disco e os valores são mantidos normalmente após reinício.
-
-### B. Caching de Subprocesso FFmpeg (`app/utils/utils.py`)
-- Implementado cache in-memory com TTL de 300 segundos (5 minutos) em `check_ffmpeg_ready()`.
-- Chamadas subsequentes no intervalo de TTL retornam instantaneamente em memória (0.00 ms), sem disparar novos processos do sistema operacional.
-- Criada a função `clear_ffmpeg_check_cache()` para recarga forçada quando necessário.
-
-### C. Caching de Saúde dos Provedores (`app/services/operator_console.py`)
-- Adicionado cache in-memory com TTL de 15 segundos para `get_provider_health_summary()`, evitando consultas repetitivas de eventos no SQLite e checagens síncronas em cada rerun.
-- O botão "🔄 Atualizar agora" em `webui/components/operator_console.py` invalida o cache (`clear_provider_health_cache()`) e força atualização imediata sob demanda.
-
-### D. Otimização e Fragmentação da Channel Factory (`webui/components/channel_factory.py`)
-- O catálogo base de vozes aprovadas para pt-BR agora utiliza cache LRU (`@lru_cache(maxsize=1)`), reduzindo a varredura para quase zero.
-- `_get_channel_card_data` agora inclui a lista de canais já carregada, eliminando chamadas redundantes a `profile_manager.list_channels(p_id)`.
-- Decorada a função `render_channel_factory` com `@st.fragment`: interações internas de canais (ativar/pausar canal, salvar voz global) rodam isoladas em seu próprio fragmento, **sem reexecutar o script monolítico da página principal e sem escurecer a tela da aplicação**.
-
----
-
-## 5. TEMPOS ANTES / DEPOIS
-
-| Operação | Antes (Baseline) | Depois (Otimizado) | Redução / Ganho |
+| Bloco | Baseline Inicial | Pós-Correções Lote 4 | Ganho Efetivo |
 | :--- | :--- | :--- | :--- |
-| **`config.try_save_config()`** (Rerun sem alteração) | 9.93 ms (pico 33.61 ms) | **0.00 ms** (0.01 ms) | **> 99.9%** (elimina I/O síncrono) |
-| **`utils.check_ffmpeg_ready()`** (Chamadas em cache) | 136.61 ms (bateria 656 ms) | **0.00 ms** (1ª: ~87 ms) | **> 99.9%** (elimina subprocessos) |
-| **`get_available_factory_voices()`** | 7.15 ms | **1.43 ms** | **~80%** |
-| **`operator_console.get_provider_health_summary()`** | 272.85 ms (pico 451.84 ms) | **31.16 ms** | **~88% a 93%** |
-| **Interação interna em Channel Factory** | Rerun global 10k linhas + UI Dimming | **Fragmento isolado via `@st.fragment`** | Não trava nem escurece a tela principal |
+| `config.try_save_config(force=False)` | 9.93 ms (pico 33.6 ms) | **0.00 ms** | > 99.9% (zero I/O síncrono em reruns) |
+| `utils.check_ffmpeg_ready()` (em cache) | 136.61 ms | **0.00 ms** (1ª: 47 ms) | > 99.9% (elimina subprocessos contínuos) |
+| `get_available_factory_voices()` | 7.15 ms | **1.54 ms** | ~80% |
+| `operator_console.get_provider_health_summary()` | 272.85 ms | **13.38 ms** | ~95% |
+| Interações de Canal / Voz | Travamento / Dimming | **Fragmento isolado** | Fluidez imediata sem escurecer UI |
 
 ---
 
-## 6. TESTES EXECUTADOS
+## 5. TESTES EXECUTADOS
 
-Em estrito cumprimento à política de testes do projeto:
-- **Suíte direcionada criada:** `test/services/test_lote4_performance.py`
-- **Comando executado:**
-  ```powershell
-  python -m pytest test/services/test_lote4_performance.py
-  ```
-- **Resultado:** **4 passed in 20.14s (100% aprovado)**.
-- **Cenários cobertos:**
-  1. `test_config_dirty_detection_and_persistence`: valida que reruns sem alteração não marcam dirty nem tocam o disco, enquanto alterações reais são aplicadas e persistidas no arquivo `config.toml`.
-  2. `test_ffmpeg_check_caching`: valida que chamadas repetidas usam cache em memória com tempo ínfimo e suportam invalidação.
-  3. `test_provider_health_summary_caching`: valida caching do sumário de saúde com TTL e invalidação sob demanda.
-  4. `test_factory_voices_catalog`: valida consistência do catálogo de vozes aprovadas (Brian e pt-BR).
+1. **Suíte Direcionada do Lote 4 (`test/services/test_lote4_performance.py`):**
+   ```powershell
+   python -m pytest test/services/test_lote4_performance.py
+   ```
+   **Resultado:** **5 passed in 11.29s (100% de aprovação)**
+   - `test_cf_l4_01_config_dirty_tracking_and_synchronized_mutations`: PASS
+   - `test_cf_l4_02_ffmpeg_cache_positive_only`: PASS
+   - `test_cf_l4_03_channel_factory_bare_mode_and_onboarding`: PASS
+   - `test_cf_l4_04_provider_health_invalidation`: PASS
+   - `test_cf_l4_05_brazilian_content_contract_quiz_exemption`: PASS
 
----
-
-## 7. RISCOS PENDENTES
-- **Monolito de `webui/Main.py`:** Apesar das otimizações cirúrgicas de alto impacto no Lote 4, `Main.py` permanece com ~10.000 linhas. Futuras fases poderão considerar a migração das seções auxiliares para páginas nativas do Streamlit multipage (`st.navigation`).
-- **Padrão N+1 em dezenas de canais:** A Channel Factory teve sua query redundante eliminada e suas ações isoladas via fragmento. Caso o operador cadastre centenas de canais simultâneos, uma query SQL única agregada com `GROUP BY` poderá ser implementada em fase posterior.
+2. **Teste de Intervalo do Fragmento (`test/services/test_webui_task.py`):**
+   ```powershell
+   python -m pytest test/services/test_webui_task.py -k test_generation_log_fragment_refreshes_within_half_a_second
+   ```
+   **Resultado:** **1 passed in 8.81s (100% de aprovação)**
 
 ---
 
-## 8. PRÓXIMO GATE SEGURO
-- **Integração do Lote 4 na branch de integração:** `feat/v1-integracao-lotes-1-2-3a` (ou criação de branch de integração consolidada dos Lotes 1, 2, 3 e 4).
-- **Homologação visual assistida:** Submeter a interface à inspeção do operador para comprovação do fim dos escurecimentos visuais (UI dimming) e fluidez nas interações.
+## 6. RISCOS PENDENTES E PRÓXIMO GATE
+- **Riscos:** Zero deadlocks identificados; regras de Safety, Copyright e Publicação preservadas intactas.
+- **Próximo Gate Seguro:** Validação e homologação pelo Arquiteto-Chefe e subsequente integração na branch de consolidação.

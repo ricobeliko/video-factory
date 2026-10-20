@@ -1031,11 +1031,31 @@ def apply_human_review_decision(
     if cand["classification"] == CLASS_ALREADY_SCHEDULED:
         raise ValueError(f"Bloqueio: Tarefa '{clean_tid}' já está agendada no Scheduler.")
 
+    # CF-3B-01: Restringe aprovação humana estritamente à faixa 55.0 <= q_score < 70.0
+    import math
+    is_below_threshold = (cand["qg_v2_quality_score"] < 70.0)
+    if is_below_threshold:
+        score_val = float(cand["qg_v2_quality_score"])
+        if not (math.isfinite(score_val) and score_val >= 55.0):
+            raise ValueError(
+                f"Bloqueio: Tarefa '{clean_tid}' com score {score_val:.1f} abaixo do limiar mínimo de 55.0 "
+                f"para aprovação humana (rejeição definitiva)."
+            )
+
+    # CF-3B-01: Validação centralizada fail-closed de gates técnicos, safety e copyright
+    ts_ok, ts_reason, _ = scheduler.validate_candidate_technical_and_safety_gates(
+        task_id=clean_tid,
+        task_data=None,
+        db_path=effective_db,
+        task_base_dir=effective_task_dir,
+    )
+    if not ts_ok:
+        raise ValueError(f"Bloqueio técnico ou de segurança para a tarefa '{clean_tid}': {ts_reason}")
+
     # 3. Tratamento de score
     # Se QG-V2 >= 70.0, é uma recuperação normal QG-V2
     # Se QG-V2 < 70.0, é uma aprovação editorial humana abaixo do limiar (approved_below_threshold = 1)
     # Em NENHUM dos casos o score original é falsificado!
-    is_below_threshold = (cand["qg_v2_quality_score"] < 70.0)
 
     if not is_below_threshold:
         quality_score.evaluate_quality(

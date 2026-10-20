@@ -134,8 +134,6 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     )
 
 
-
-
 # ---------------------------------------------------------------------------
 # Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)
 # ---------------------------------------------------------------------------
@@ -415,6 +413,197 @@ def is_task_held_for_safety_review(
         pass
 
     return False, None
+
+
+def validate_candidate_technical_and_safety_gates(
+    task_id: str,
+    task_data: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Centraliza a validação fail-closed dos gates técnico, segurança e copyright.
+
+    Consumida canonicamente por:
+    - scheduler.plan_schedule
+    - autonomous_production._recover_waiting_task
+    - quality_recovery.apply_human_review_decision
+    """
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return False, "TASK_ID_MISSING", {"task_id": ""}
+
+    effective_task_base = task_base_dir or utils.task_dir()
+
+    # 1. Recupera metadados de script.json e sm.state para validação consolidada
+    script_data: Dict[str, Any] = {}
+    try:
+        script_file = os.path.join(effective_task_base, clean_tid, "script.json")
+        if os.path.isfile(script_file):
+            with open(script_file, "r", encoding="utf-8") as sf:
+                raw_s = json.load(sf)
+                if isinstance(raw_s, dict):
+                    script_data = raw_s
+    except Exception:
+        pass
+
+    state_data: Dict[str, Any] = {}
+    try:
+        from app.services import state as sm
+        st = sm.state.get_task(clean_tid)
+        if isinstance(st, dict):
+            state_data = st
+    except Exception:
+        pass
+
+    merged_data: Dict[str, Any] = {}
+    if isinstance(task_data, dict):
+        merged_data.update(task_data)
+    for k, v in state_data.items():
+        if k not in merged_data or merged_data[k] is None:
+            merged_data[k] = v
+    for k, v in script_data.items():
+        if k not in merged_data or merged_data[k] is None:
+            merged_data[k] = v
+
+    # 2. Gate Técnico: Estado da tarefa e estágios com falha
+    current_state = merged_data.get("state")
+    if current_state in (const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED) or merged_data.get("cancelled"):
+        return False, f"TECHNICAL_GATE_FAILED: state={current_state}", {"state": current_state}
+
+    failed_stage = merged_data.get("failed_stage") or script_data.get("failed_stage") or state_data.get("failed_stage")
+    if failed_stage:
+        return False, f"TECHNICAL_GATE_FAILED_STAGE: {failed_stage}", {"failed_stage": failed_stage}
+
+    # 3. Gate Técnico: Integridade do arquivo MP4
+    video_file = merged_data.get("video_file")
+    if not (video_file and os.path.isfile(video_file) and os.path.getsize(video_file) > 0):
+        disk_video = get_task_final_video(clean_tid, task_base_dir=effective_task_base)
+        if disk_video and os.path.isfile(disk_video) and os.path.getsize(disk_video) > 0:
+            video_file = disk_video
+        else:
+            return False, "TECHNICAL_GATE_VIDEO_MISSING_OR_EMPTY", {"mp4_exists": False}
+
+    try:
+        video_size = os.path.getsize(video_file)
+        if video_size <= 0:
+            return False, "TECHNICAL_GATE_VIDEO_EMPTY", {"file_size": 0}
+    except Exception as sz_exc:
+        return False, f"TECHNICAL_GATE_VIDEO_ACCESS_ERROR: {sz_exc}", {"mp4_exists": False}
+
+    # 4. Gate Técnico: Final Media Quality e Duração
+    fmq_status = (
+        merged_data.get("final_media_quality_status")
+        or script_data.get("final_media_quality_status")
+        or (merged_data.get("final_media_quality") or {}).get("status")
+        or (script_data.get("final_media_quality") or {}).get("status")
+    )
+    if fmq_status and str(fmq_status).upper().strip() in ("BLOCK", "BLOCKED", "FAIL", "FAILED"):
+        fmq_reasons = (
+            merged_data.get("final_media_quality_reasons")
+            or script_data.get("final_media_quality_reasons")
+            or (merged_data.get("final_media_quality") or {}).get("reasons")
+            or []
+        )
+        return False, f"TECHNICAL_GATE_FINAL_MEDIA_QUALITY_BLOCKED: {fmq_reasons}", {
+            "final_media_quality_status": "BLOCK",
+            "reasons": fmq_reasons,
+        }
+
+    duration_val = merged_data.get("duration") or script_data.get("duration")
+    if duration_val is not None:
+        try:
+            if float(duration_val) <= 0:
+                return False, "TECHNICAL_GATE_INVALID_DURATION", {"duration": duration_val}
+        except (ValueError, TypeError):
+            pass
+
+    # 5. Gate de Segurança: Fail-Closed e Prevalência de Registros Persistidos
+    # 5.1 Barreira canônica de retenção
+    is_held, hold_reason = is_task_held_for_safety_review(
+        clean_tid,
+        task_data=merged_data,
+        db_path=db_path,
+        task_base_dir=effective_task_base,
+    )
+    if is_held:
+        return False, f"SAFETY_GATE_HELD_FOR_REVIEW: {hold_reason}", {"safety_status": hold_reason}
+
+    # 5.2 Consulta persistida no banco SQLite: monetization_safety e quiz_safety_history
+    persisted_safety_status = None
+    try:
+        from app.services import safety_gate
+        s_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
+        if s_rec and s_rec.get("safety_status"):
+            persisted_safety_status = str(s_rec.get("safety_status")).upper().strip()
+    except Exception:
+        pass
+
+    persisted_quiz_safety = None
+    try:
+        with get_connection(db_path) as conn:
+            has_qsh = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
+            ).fetchone()
+            if has_qsh:
+                q_row = conn.execute(
+                    "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if q_row and q_row["safety_status"]:
+                    persisted_quiz_safety = str(q_row["safety_status"]).upper().strip()
+    except Exception:
+        pass
+
+    # Prevalência estrita de registros adversos persistidos
+    if persisted_safety_status and persisted_safety_status != const.SAFETY_STATUS_PASS:
+        return False, f"SAFETY_GATE_PERSISTED_NOT_PASS: monetization_safety={persisted_safety_status}", {
+            "safety_status": persisted_safety_status
+        }
+    if persisted_quiz_safety and persisted_quiz_safety != const.SAFETY_STATUS_PASS:
+        return False, f"SAFETY_GATE_PERSISTED_NOT_PASS: quiz_safety_history={persisted_quiz_safety}", {
+            "safety_status": persisted_quiz_safety
+        }
+
+    effective_safety = (
+        persisted_safety_status
+        or persisted_quiz_safety
+        or str(merged_data.get("safety_status") or "").upper().strip()
+    )
+    if effective_safety != const.SAFETY_STATUS_PASS:
+        return False, f"SAFETY_GATE_NOT_PASS: {effective_safety or 'MISSING'}", {
+            "safety_status": effective_safety or "MISSING"
+        }
+
+    # 6. Gate de Copyright
+    cp_ok = False
+    cp_reason = ""
+    try:
+        from app.services import copyright_gate
+        c_pass, c_reason, _ = copyright_gate.evaluate_copyright_provenance_gate(
+            task_id=clean_tid,
+            task_data=merged_data,
+            task_base_dir=effective_task_base,
+            db_path=db_path,
+        )
+        cp_ok = bool(c_pass)
+        cp_reason = str(c_reason or "")
+    except Exception as cp_exc:
+        cp_ok = False
+        cp_reason = f"Exceção ao avaliar copyright: {cp_exc}"
+
+    if not cp_ok:
+        return False, f"COPYRIGHT_GATE_FAILED: {cp_reason}", {
+            "copyright_status": "BLOCK",
+            "copyright_reason": cp_reason,
+        }
+
+    return True, "TECHNICAL_SAFETY_AND_COPYRIGHT_PASS", {
+        "mp4_exists": True,
+        "video_file": video_file,
+        "safety_status": const.SAFETY_STATUS_PASS,
+        "copyright_status": "PASS",
+    }
+
 
 
 # ---------------------------------------------------------------------------
@@ -1126,8 +1315,6 @@ def get_platform_rate_limits(
         "available_slots": available_slots,
     }
 
-
-
 # ---------------------------------------------------------------------------
 # Scheduler: Planejamento e Agenda
 # ---------------------------------------------------------------------------
@@ -1452,7 +1639,7 @@ def plan_schedule(
             logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={hold_reason}")
             continue
 
-        # Gate de Qualidade: se houver avaliação persistida, rejeita scores inadequados (< 70 ou WEAK/REVIEW/REJECTED)
+        # Gate de Qualidade e Aprovação Humana (RN-02)
         try:
             with get_connection(db_path) as conn:
                 q_row = conn.execute(
@@ -1463,11 +1650,45 @@ def plan_schedule(
                 if q_row:
                     q_score = float(q_row["quality_score"])
                     q_label = str(q_row["quality_label"]).upper()
-                    if (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED"):
-                        logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
-                        continue
-        except Exception:
-            pass
+                    is_sub_threshold = (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED")
+                    if is_sub_threshold:
+                        human_approved = False
+                        # CF-3B-01: Restringir aprovação humana estritamente à faixa numérica 55.0 <= q_score < 70.0 (sem exceção por label REVIEW)
+                        if math.isfinite(q_score) and 55.0 <= q_score < 70.0:
+                            has_rev_tbl = conn.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';"
+                            ).fetchone()
+                            if has_rev_tbl:
+                                h_row = conn.execute(
+                                    "SELECT decision, operator_id, approved_below_threshold FROM operator_video_reviews "
+                                    "WHERE task_id = ? AND decision = 'APPROVED' ORDER BY id DESC LIMIT 1;",
+                                    (task_id,),
+                                ).fetchone()
+                                if h_row:
+                                    # Validação centralizada fail-closed dos gates técnico, segurança e copyright
+                                    tech_safety_ok, ts_reason, _ = validate_candidate_technical_and_safety_gates(
+                                        task_id=task_id,
+                                        task_data=t,
+                                        db_path=db_path,
+                                        task_base_dir=task_base_dir,
+                                    )
+                                    if tech_safety_ok:
+                                        human_approved = True
+                                        logger.info(
+                                            f"[SCHEDULER][GATE] Tarefa {task_id} (score={q_score:.1f}, label={q_label}) liberada para agendamento "
+                                            f"via APROVAÇÃO HUMANA (operator={h_row['operator_id']}) com gates técnico, safety e copyright PASS."
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"[SCHEDULER][GATE] Tarefa {task_id} possui aprovação humana, mas falhou nos gates técnicos/safety: "
+                                            f"{ts_reason}. Agendamento bloqueado."
+                                        )
+
+                        if not human_approved:
+                            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
+                            continue
+        except Exception as exc:
+            logger.warning(f"[SCHEDULER][GATE] Erro ao consultar Quality/Review gates para {task_id}: {exc}")
 
         # Resolução do perfil da task
         task_profile_id = t.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)

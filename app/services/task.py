@@ -2822,26 +2822,17 @@ def _run_quiz_pipeline(
             if discovered_pid and discovered_pid != profile_manager.DEFAULT_PROFILE_ID:
                 task_profile_id = discovered_pid
 
-        if quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
-            assessment = quiz_safety_gate.evaluate_quiz_script_safety(
-                task_id=task_id,
-                topic=params.video_subject or niche,
-                script=video_script,
-                quiz_data=raw_quiz,
-                preset=getattr(params, "monetization_preset", None),
-                narrative_structure=narrative_structure,
-                platform=getattr(params, "platform", None) or "youtube",
-                profile_id=task_profile_id,
-            )
-        else:
-            assessment = safety_gate.evaluate_script_safety(
-                task_id=task_id,
-                topic=params.video_subject or niche,
-                script=video_script,
-                preset=getattr(params, "monetization_preset", None),
-                narrative_structure=narrative_structure,
-                platform=getattr(params, "platform", None) or "youtube",
-            )
+        # No pipeline de quiz, avalia estritamente via Quiz Safety Gate (evita falso-positivo no Hook/CTA padronizados)
+        assessment = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id=task_id,
+            topic=params.video_subject or niche,
+            script=video_script,
+            quiz_data=raw_quiz,
+            preset=getattr(params, "monetization_preset", None),
+            narrative_structure=narrative_structure or const.STRUCTURE_QUIZ_DILEMMA,
+            platform=getattr(params, "platform", None) or "youtube",
+            profile_id=task_profile_id,
+        )
         params.safety_status = assessment.get("safety_status")
         params.safety_reasons = "; ".join(assessment.get("safety_reasons", []))
         sm.state.update_task(
@@ -3006,21 +2997,13 @@ def _run_quiz_pipeline(
             if discovered_pid and discovered_pid != profile_manager.DEFAULT_PROFILE_ID:
                 task_profile_id = discovered_pid
 
-        if quiz_safety_gate.is_quiz_dilemma(params=params, narrative_structure=narrative_structure):
-            dur_assessment = quiz_safety_gate.evaluate_quiz_duration_safety(
-                task_id=task_id,
-                actual_duration=actual_duration,
-                preset=getattr(params, "monetization_preset", None),
-                platform=getattr(params, "platform", None) or "youtube",
-                profile_id=task_profile_id,
-            )
-        else:
-            dur_assessment = safety_gate.evaluate_duration_safety(
-                task_id=task_id,
-                actual_duration=actual_duration,
-                preset=getattr(params, "monetization_preset", None),
-                platform=getattr(params, "platform", None) or "youtube",
-            )
+        dur_assessment = quiz_safety_gate.evaluate_quiz_duration_safety(
+            task_id=task_id,
+            actual_duration=actual_duration,
+            preset=getattr(params, "monetization_preset", None),
+            platform=getattr(params, "platform", None) or "youtube",
+            profile_id=task_profile_id,
+        )
         if dur_assessment.get("safety_status") == const.SAFETY_STATUS_BLOCK:
             reasons = "; ".join(dur_assessment.get("safety_reasons", []))
             return _mark_task_failed(task_id, "duration_safety", f"Duration safety blocked: {reasons}", details=dur_assessment)
@@ -3231,9 +3214,38 @@ def _run_pipeline(
     if cancel_res:
         return cancel_res
 
-    # Branch: Quiz Engine (Fase Q4-B)
+    # Branch: Quiz Engine (Fase Q4-B / Roteamento V1)
     narrative_structure = getattr(params, "narrative_structure", None) or ""
-    if narrative_structure.startswith("quiz"):
+    task_profile_id = getattr(params, "profile_id", None)
+    if not task_profile_id and task_id:
+        try:
+            from app.services import profile_manager
+            db_pid = profile_manager.get_task_profile_id(task_id)
+            if db_pid and db_pid != profile_manager.DEFAULT_PROFILE_ID:
+                task_profile_id = db_pid
+        except Exception:
+            pass
+
+    if (not narrative_structure or narrative_structure == "auto") and task_profile_id:
+        try:
+            from app.services import profile_manager
+            prof_ctx = profile_manager.get_generation_profile_context(task_profile_id)
+            p_format = prof_ctx.get("video_format") or prof_ctx.get("content_style")
+            if p_format and p_format not in ("traditional", "standard", "auto", ""):
+                narrative_structure = p_format
+                params.narrative_structure = p_format
+        except Exception:
+            pass
+
+    from app.services import quiz_safety_gate
+    if str(narrative_structure).startswith("quiz") or quiz_safety_gate.is_quiz_dilemma(
+        params=params,
+        narrative_structure=narrative_structure,
+        profile_id=task_profile_id,
+        task_id=task_id,
+    ):
+        if not getattr(params, "narrative_structure", None) and narrative_structure:
+            params.narrative_structure = narrative_structure
         return _run_quiz_pipeline(task_id=task_id, params=params, stop_at=stop_at)
 
     # 1. Generate script

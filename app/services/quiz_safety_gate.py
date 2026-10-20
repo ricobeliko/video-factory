@@ -53,15 +53,88 @@ _DILEMMA_PREFIXES = [
 ]
 
 
-def is_quiz_dilemma(params: Any = None, narrative_structure: Optional[str] = None) -> bool:
-    """Verifica se a tarefa é identificada como quiz_dilemma."""
+def is_quiz_dilemma(
+    params: Any = None,
+    narrative_structure: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Verifica se a tarefa é identificada como quiz_dilemma.
+
+    Considera:
+    1. narrative_structure explícito
+    2. params.narrative_structure
+    3. Formato do perfil associado (via profile_id, params.profile_id ou task_id)
+    4. Reconhece formatos canônicos e variantes de dilema (ex: 'quiz', 'quiz_dilemma',
+       'quiz_escolhas_impossiveis', 'quiz_dilemmas'), excluindo quiz factual ('quiz_paper').
+    """
     struct = (
         narrative_structure
         or getattr(params, "narrative_structure", None)
-        or getattr(params, "video_format", None)
+        or (params.get("narrative_structure") if isinstance(params, dict) else None)
         or ""
     )
-    return str(struct).strip().lower() in (const.STRUCTURE_QUIZ_DILEMMA, "quiz_dilemma")
+
+    clean_struct = str(struct or "").strip().lower()
+
+    # Se a estrutura não foi informada explicitamente, busca no perfil do canal
+    if not clean_struct or clean_struct == "auto":
+        pid = (
+            profile_id
+            or getattr(params, "profile_id", None)
+            or (params.get("profile_id") if isinstance(params, dict) else None)
+        )
+        if (not pid or pid == profile_manager.DEFAULT_PROFILE_ID) and task_id:
+            try:
+                db_pid = profile_manager.get_task_profile_id(task_id, db_path=db_path)
+                if db_pid and db_pid != profile_manager.DEFAULT_PROFILE_ID:
+                    pid = db_pid
+            except Exception:
+                pass
+
+        if pid and pid != profile_manager.DEFAULT_PROFILE_ID:
+            try:
+                ctx = profile_manager.get_generation_profile_context(pid, db_path=db_path)
+                p_format = ctx.get("video_format") or ctx.get("content_style") or ""
+                clean_struct = str(p_format).strip().lower()
+            except Exception:
+                pass
+
+    if not clean_struct:
+        return False
+
+    # Formatos tradicionais explicitamente não são quiz
+    if clean_struct in (
+        "traditional",
+        "standard",
+        const.STRUCTURE_MYSTERY,
+        const.STRUCTURE_EXPLAINER,
+        const.STRUCTURE_FACT_CONTEXT,
+        const.STRUCTURE_MYTH_REALITY,
+        const.STRUCTURE_SHORT_STORY,
+    ):
+        return False
+
+    # Quiz factual/paper não é quiz de dilema
+    if "paper" in clean_struct or "factual" in clean_struct or clean_struct == const.STRUCTURE_QUIZ_PAPER:
+        return False
+
+    # Formatos canônicos e variantes de dilema / escolhas
+    if clean_struct in (
+        const.STRUCTURE_QUIZ_DILEMMA,
+        "quiz_dilemma",
+        "quiz",
+        "quiz_escolhas_impossiveis",
+        "quiz_dilemmas",
+    ):
+        return True
+
+    # Qualquer variante de quiz que comece com 'quiz' (e não seja paper)
+    if clean_struct.startswith("quiz"):
+        return True
+
+    return False
 
 
 def init_quiz_safety_db(db_path: Optional[str] = None) -> None:

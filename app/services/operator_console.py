@@ -13,6 +13,7 @@ Centraliza o monitoramento, governança e resiliência operacional da Video Fact
 """
 
 import atexit
+import contextlib
 import json
 import os
 import platform
@@ -91,6 +92,40 @@ _cancel_requested_tasks: Set[str] = set()
 # Telemetria do Generation Worker
 _gen_heartbeat_lock = threading.RLock()
 _last_gen_heartbeat: Optional[datetime] = None
+
+# Escopo efêmero de reutilização por passe de renderização (Thread-Local, ZERO cache persistente)
+_render_pass_local = threading.local()
+
+
+def get_render_pass_cache() -> Optional[Dict[str, Any]]:
+    """Retorna o dicionário de cache efêmero da renderização atual, ou None se fora de escopo."""
+    cache = getattr(_render_pass_local, "cache", None)
+    return cache if isinstance(cache, dict) else None
+
+
+def invalidate_render_pass_cache() -> None:
+    """Limpa as entradas do cache efêmero da renderização atual se ativo."""
+    cache = getattr(_render_pass_local, "cache", None)
+    if isinstance(cache, dict):
+        cache.clear()
+
+
+@contextlib.contextmanager
+def render_pass_scope():
+    """Escopo efêmero por passe de renderização (thread-local).
+
+    Reutiliza leituras idênticas durante uma única renderização da página
+    e destrói o dicionário no bloco finally, garantindo ZERO cache persistente.
+    """
+    existing = getattr(_render_pass_local, "cache", None)
+    if isinstance(existing, dict):
+        yield existing
+        return
+    _render_pass_local.cache = {}
+    try:
+        yield _render_pass_local.cache
+    finally:
+        _render_pass_local.cache = None
 
 
 
@@ -520,6 +555,7 @@ def ensure_instance_initialized(
 def reset_instance_for_testing() -> None:
     """Reseta o estado da instância em memória (exclusivo para testes unitários)."""
     global _instance_initialized, _current_node_id, _current_role, _current_node_name, _current_started_at
+    invalidate_render_pass_cache()
     clear_provider_health_cache()
     stop_instance_heartbeat()
     with _instance_state_lock:
@@ -911,6 +947,7 @@ def set_factory_state(state: str, db_path: Optional[str] = None) -> None:
 
     from app.services import scheduler
     scheduler.set_setting("factory_state", clean_state, db_path=db_path)
+    invalidate_render_pass_cache()
     log_operational_event(
         component="factory",
         severity=SEVERITY_INFO,
@@ -1059,6 +1096,7 @@ def log_operational_event(
         )
         row_id = cur.lastrowid
 
+    invalidate_render_pass_cache()
     if clean_sev in (SEVERITY_WARNING, SEVERITY_ERROR, SEVERITY_CRITICAL):
         clear_provider_health_cache()
 
@@ -1225,6 +1263,11 @@ def get_recent_errors(
 
 def get_generation_queue_summary() -> Dict[str, Any]:
     """Retorna o resumo das tarefas de geração ativas, pendentes, concluídas e canceladas."""
+    rp_cache = get_render_pass_cache()
+    cache_key = ("gen_queue_summary",)
+    if rp_cache is not None and cache_key in rp_cache:
+        return rp_cache[cache_key]
+
     from app.services import state as sm
     tasks, _ = sm.state.get_all_tasks(1, 1000)
 
@@ -1258,6 +1301,8 @@ def get_generation_queue_summary() -> Dict[str, Any]:
         reverse=True,
     )
     summary["recent_tasks"] = sorted_tasks[:10]
+    if rp_cache is not None:
+        rp_cache[cache_key] = summary
     return summary
 
 
@@ -1563,6 +1608,7 @@ _PROVIDER_HEALTH_TTL = 15.0  # 15 segundos
 def clear_provider_health_cache():
     """Limpa o cache de saúde dos provedores."""
     global _PROVIDER_HEALTH_CACHE
+    invalidate_render_pass_cache()
     _PROVIDER_HEALTH_CACHE = {"data": None, "timestamp": 0.0, "db_path": None}
 
 
@@ -1925,6 +1971,10 @@ def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] =
     from app.services import profile_manager
 
     target_prof = profile_id if profile_id is not None else profile_manager.get_active_profile_id(db_path=db_path)
+    rp_cache = get_render_pass_cache()
+    cache_key = ("system_status", db_path, target_prof)
+    if rp_cache is not None and cache_key in rp_cache:
+        return rp_cache[cache_key]
     active_prof = profile_manager.get_profile(target_prof, db_path=db_path) if target_prof else None
 
     factory_state = get_factory_state(db_path=db_path)
@@ -1992,7 +2042,7 @@ def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] =
     if not inst_info.get("is_primary"):
         alerts.append(f"ℹ️ Instância secundária em modo VIEW ONLY (Primário: {inst_info.get('primary_node_name')})")
 
-    return {
+    result = {
         "factory_state": consolidated_factory,
         "is_paused": factory_state == FACTORY_STATE_PAUSED,
         "generation_worker": gen_worker_state,
@@ -2009,6 +2059,9 @@ def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] =
         "alerts": alerts,
         "instance": inst_info,
     }
+    if rp_cache is not None:
+        rp_cache[cache_key] = result
+    return result
 
 
 # ---------------------------------------------------------------------------

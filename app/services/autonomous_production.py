@@ -600,33 +600,49 @@ def get_autonomous_ready_stock(
     - Readiness de TikTok NÃO infle o estoque utilizado pelo loop YouTube.
     - Isolamento estrito por perfil e canal se especificados.
     """
-    scheduler.init_db(db_path)
-    quality_score.init_quality_db(db_path)
-    with scheduler.get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT task_id FROM monetization_safety WHERE safety_status = 'PASS' "
-            "ORDER BY checked_at, task_id"
-        ).fetchall()
-        excluded = {r["task_id"] for r in conn.execute(
-            "SELECT task_id FROM publication_events WHERE platform='youtube' AND status='success' "
-            "UNION SELECT task_id FROM scheduled_posts WHERE platform='youtube' "
-            "AND status IN ('published', 'cancelled')"
-        )}
+    from app.services import operator_console
+    rp_cache = operator_console.get_render_pass_cache()
+    base_cache_key = (
+        "autonomous_ready_stock_base",
+        os.path.abspath(task_base_dir or utils.task_dir()),
+        os.path.abspath(scheduler.get_db_path(db_path)),
+    )
+    if rp_cache is not None and base_cache_key in rp_cache:
+        base_eligible = rp_cache[base_cache_key]
+    else:
+        scheduler.init_db(db_path)
+        quality_score.init_quality_db(db_path)
+        with scheduler.get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT task_id FROM monetization_safety WHERE safety_status = 'PASS' "
+                "ORDER BY checked_at, task_id"
+            ).fetchall()
+            excluded = {r["task_id"] for r in conn.execute(
+                "SELECT task_id FROM publication_events WHERE platform='youtube' AND status='success' "
+                "UNION SELECT task_id FROM scheduled_posts WHERE platform='youtube' "
+                "AND status IN ('published', 'cancelled')"
+            )}
+        base_eligible = []
+        for row in rows:
+            if row["task_id"] in excluded:
+                continue
+            try:
+                t = _recover_waiting_task(row["task_id"], db_path, task_base_dir)
+                base_eligible.append(t)
+            except (ValueError, TypeError, OSError):
+                continue
+        if rp_cache is not None:
+            rp_cache[base_cache_key] = base_eligible
+
     eligible = []
     clean_profile = str(profile_id or "").strip()
     clean_channel = str(channel_id or "").strip()
-    for row in rows:
-        if row["task_id"] in excluded:
+    for t in base_eligible:
+        if clean_profile and t.get("profile_id") != clean_profile:
             continue
-        try:
-            t = _recover_waiting_task(row["task_id"], db_path, task_base_dir)
-            if clean_profile and t.get("profile_id") != clean_profile:
-                continue
-            if clean_channel and t.get("channel_id") != clean_channel:
-                continue
-            eligible.append(t)
-        except (ValueError, TypeError, OSError):
+        if clean_channel and t.get("channel_id") != clean_channel:
             continue
+        eligible.append(dict(t))
     target = get_target_ready_stock(profile_id=clean_profile, db_path=db_path)
     tt_count = 0
     if scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true":

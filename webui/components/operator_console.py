@@ -2809,6 +2809,9 @@ def render_operator_console():
     with c_refresh:
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
         if st.button("🔄 Atualizar agora", key="op_btn_manual_refresh", use_container_width=True, help="Recarrega todos os dados do Operator Console imediatamente"):
+            operator_console.clear_provider_health_cache()
+            from app.utils import utils
+            utils.clear_ffmpeg_check_cache()
             st.toast("Console operacional atualizado.", icon="🔄")
             st.rerun()
 

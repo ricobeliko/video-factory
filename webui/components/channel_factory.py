@@ -1,3 +1,12 @@
+def _safe_rerun_app():
+    """Reexecuta a aplicação globalmente para propagar mutações estruturais."""
+    try:
+        st.rerun(scope="app")
+    except TypeError:
+        st.rerun()
+    except Exception:
+        pass
+
 """
 Channel Factory UI Component (Fase V1.5E-B — Generic Channel Onboarding).
 
@@ -53,6 +62,7 @@ def _get_channel_card_data(p: Dict[str, Any], db_path: Optional[str] = None) -> 
     return {
         "profile": p,
         "settings": settings,
+        "channels": channels,
         "yt_channel": yt_channel,
         "tiktok_channel": tiktok_channel,
         "autonomous_enabled": is_auto_enabled,
@@ -85,7 +95,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
     if not yt_accounts and not tt_accounts:
         st.warning("⚠️ Nenhuma conta social (YouTube/TikTok) conectada encontrada no Post for Me. O canal pode ser criado apenas para geração de estoque (publicação desativada).")
 
-    with st.form("new_channel_onboarding_form"):
+    with st.container():
         # 1. Identidade e Formato do Canal
         st.markdown("##### 1. Identidade e Formato do Canal")
         c_name, c_niche = st.columns(2)
@@ -249,9 +259,9 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
 
         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-        submitted = st.form_submit_button("🚀 Criar Canal", type="primary", use_container_width=True)
+        submitted = st.button("🚀 Criar Canal", type="primary", use_container_width=True, key="cf_submit_onboard_btn")
 
-        if submitted:
+        if submitted is True:
             if not is_primary:
                 st.error("Apenas o nó PRIMARY pode cadastrar canais.")
                 return
@@ -358,7 +368,7 @@ def _render_onboarding_form(is_primary: bool, db_path: Optional[str] = None):
                     "message": f"Canal '{new_p.get('name')}' criado com sucesso! Status inicial: {'Produção Ativa' if autonomous_start else 'Pausado (Recomendado)'}.",
                     "profile_id": new_p.get("id"),
                 }
-                st.rerun()
+                _safe_rerun_app()
             except Exception as exc:
                 st.error(f"Falha ao cadastrar canal: {exc}")
 
@@ -373,16 +383,13 @@ else:
             _render_onboarding_form(is_primary=is_primary, db_path=db_path)
 
 
-def get_available_factory_voices(current_voice: Optional[str] = None) -> list[str]:
-    """Retorna opções de vozes aprovadas para a fábrica a partir do catálogo Azure/Edge.
+from functools import lru_cache
 
-    Inclui obrigatoriamente Brian (en-US-BrianMultilingualNeural) e vozes pt-BR nativas.
-    Todas as opções retornadas passam estritamente por autonomous_production.is_valid_pt_br_voice.
-    """
+
+@lru_cache(maxsize=1)
+def _get_base_approved_voices() -> list[str]:
+    """Catálogo em cache de vozes Azure/Edge aprovadas para pt-BR."""
     candidates = ["en-US-BrianMultilingualNeural"]
-    if current_voice and autonomous_production.is_valid_pt_br_voice(current_voice):
-        candidates.append(current_voice)
-
     try:
         from app.services import voice
         for v in voice.get_all_azure_voices():
@@ -414,6 +421,19 @@ def get_available_factory_voices(current_voice: Optional[str] = None) -> list[st
     return result
 
 
+def get_available_factory_voices(current_voice: Optional[str] = None) -> list[str]:
+    """Retorna opções de vozes aprovadas para a fábrica a partir do catálogo Azure/Edge.
+
+    Inclui obrigatoriamente Brian (en-US-BrianMultilingualNeural) e vozes pt-BR nativas.
+    Todas as opções retornadas passam estritamente por autonomous_production.is_valid_pt_br_voice.
+    """
+    base = list(_get_base_approved_voices())
+    if current_voice and autonomous_production.is_valid_pt_br_voice(current_voice):
+        if current_voice not in base:
+            base.insert(1, current_voice)
+    return base
+
+
 def save_global_voice(voice_name: str) -> tuple[bool, str]:
     """Valida e persiste a nova voz global em config.ui['voice_name'].
 
@@ -424,8 +444,8 @@ def save_global_voice(voice_name: str) -> tuple[bool, str]:
     if not autonomous_production.is_valid_pt_br_voice(clean_voice):
         return False, f"Voz '{clean_voice}' não é permitida pelo contrato de conteúdo pt-BR."
 
-    config.ui["voice_name"] = clean_voice
-    config.try_save_config()
+    config.update_config_nonblocking(config.ui, "voice_name", clean_voice)
+    config.try_save_config(force=True)
     return True, f"Voz global atualizada para '{clean_voice}' com sucesso!"
 
 
@@ -474,11 +494,41 @@ def _render_global_voice_section(is_primary: bool):
                     active_voice_placeholder.markdown(f"**Voz Ativa:**\n`{selected_voice}`")
                     st.toast(msg)
                     st.success(msg)
-                    st.rerun()
+                    _safe_rerun_app()
                 else:
                     st.error(msg)
 
 
+def _get_current_script_run_ctx():
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx()
+    except Exception:
+        try:
+            from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+            return get_script_run_ctx()
+        except Exception:
+            return None
+
+
+def _channel_factory_fragment(func):
+    """Aplica st.fragment em tempo de chamada se em contexto Streamlit ativo; em bare mode executa direto."""
+    if not hasattr(st, "fragment"):
+        return func
+    try:
+        fragment_func = st.fragment(func)
+    except Exception:
+        return func
+
+    def wrapper(*args, **kwargs):
+        if _get_current_script_run_ctx() is None:
+            return func(*args, **kwargs)
+        return fragment_func(*args, **kwargs)
+
+    return wrapper
+
+
+@_channel_factory_fragment
 def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[str] = None):
     """Renderiza a experiência completa de Channel Factory."""
     if is_primary is None:
@@ -497,7 +547,7 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                     if st.button("▶️ Ativar Produção Deste Canal Agora", key=f"activate_new_{p_id}"):
                         autonomous_production.set_profile_autonomous_mode_enabled(p_id, True, db_path=db_path)
                         st.success("Produção ativada com sucesso!")
-                        st.rerun()
+                        _safe_rerun_app()
         else:
             st.error(feedback["message"])
 
@@ -571,19 +621,19 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                     if st.button("⏸️ Pausar", key=f"pause_prof_{p_id}", use_container_width=True, disabled=not is_primary):
                         autonomous_production.set_profile_autonomous_mode_enabled(p_id, False, db_path=db_path)
                         st.toast(f"Produção de '{p.get('name')}' pausada.")
-                        st.rerun()
+                        _safe_rerun_app()
                 else:
                     if st.button("▶️ Ativar", type="secondary", key=f"activate_prof_{p_id}", use_container_width=True, disabled=not is_primary):
                         autonomous_production.set_profile_autonomous_mode_enabled(p_id, True, db_path=db_path)
                         st.toast(f"Produção de '{p.get('name')}' ativada.")
-                        st.rerun()
+                        _safe_rerun_app()
 
             # Expander de Gestão do Canal
             with st.expander(f"⚙️ Gerenciar Canal: {p.get('name')}", expanded=False):
                 if not is_primary:
                     st.caption("🔒 View Only — alterações devem ser feitas no nó PRIMARY.")
 
-                prof_channels = profile_manager.list_channels(profile_id=p_id, db_path=db_path)
+                prof_channels = card.get("channels") or profile_manager.list_channels(profile_id=p_id, db_path=db_path)
                 m_yt = next((c for c in prof_channels if c.get("platform") == "youtube"), None)
                 m_tiktok = next((c for c in prof_channels if c.get("platform") == "tiktok"), None)
 
@@ -780,4 +830,4 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                             )
 
                         st.toast(f"Canal '{clean_m_name}' atualizado com sucesso!")
-                        st.rerun()
+                        _safe_rerun_app()

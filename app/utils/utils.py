@@ -7,6 +7,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 import threading
+import time
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -193,7 +194,17 @@ _FFMPEG_INSTALL_HINT = (
 )
 
 
-def check_ffmpeg_ready(timeout: int = 10) -> bool:
+_FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
+_FFMPEG_CHECK_TTL = 300.0  # 5 minutos de cache em memória
+
+
+def clear_ffmpeg_check_cache():
+    """Limpa o cache de verificação do FFmpeg para forçar nova sondagem."""
+    global _FFMPEG_CHECK_CACHE
+    _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
+
+
+def check_ffmpeg_ready(timeout: int = 10, force: bool = False) -> bool:
     """
     在真正开始生成视频之前提前探测 FFmpeg 是否可用。
 
@@ -211,7 +222,17 @@ def check_ffmpeg_ready(timeout: int = 10) -> bool:
     并不会在真正使用时自动补下载一个可用的二进制，因此检测失败必须让
     需要 FFmpeg 的阶段直接终止，而不是继续跑到视频合成才失败。
     """
+    global _FFMPEG_CHECK_CACHE
     ffmpeg_bin = get_ffmpeg_binary()
+    now = time.monotonic()
+    if (
+        not force
+        and _FFMPEG_CHECK_CACHE["result"] is True
+        and _FFMPEG_CHECK_CACHE["bin"] == ffmpeg_bin
+        and (now - _FFMPEG_CHECK_CACHE["timestamp"] < _FFMPEG_CHECK_TTL)
+    ):
+        return True
+
     try:
         completed = subprocess.run(
             [ffmpeg_bin, "-version"],
@@ -224,11 +245,13 @@ def check_ffmpeg_ready(timeout: int = 10) -> bool:
             f"no usable ffmpeg executable found (tried: {ffmpeg_bin}). "
             f"{_FFMPEG_INSTALL_HINT}"
         )
+        _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
         return False
     except Exception as exc:
         logger.warning(
             f"failed to probe ffmpeg ({ffmpeg_bin}): {exc}. {_FFMPEG_INSTALL_HINT}"
         )
+        _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
         return False
 
     if completed.returncode != 0:
@@ -236,9 +259,11 @@ def check_ffmpeg_ready(timeout: int = 10) -> bool:
             f"ffmpeg ({ffmpeg_bin}) probe exited with status {completed.returncode}; "
             f"video generation may fail later. {_FFMPEG_INSTALL_HINT}"
         )
+        _FFMPEG_CHECK_CACHE = {"result": None, "timestamp": 0.0, "bin": None}
         return False
 
     logger.info(f"ffmpeg check passed, using: {ffmpeg_bin}")
+    _FFMPEG_CHECK_CACHE = {"result": True, "timestamp": now, "bin": ffmpeg_bin}
     return True
 
 

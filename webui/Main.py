@@ -328,9 +328,9 @@ def _delete_runtime_config(section_name, key):
     return deleted
 
 
-def _save_runtime_config():
+def _save_runtime_config(force: bool = False):
     """请求保存 WebUI 配置；后台任务占用配置时立即返回。"""
-    saved = config.try_save_config()
+    saved = config.try_save_config(force=force)
     if not saved:
         logger.debug("deferred WebUI config save until active task completes")
     return saved
@@ -2102,7 +2102,7 @@ def _render_top_bar():
                     # 浏览器自动识别只影响当前会话；只有用户主动切换下拉框时才
                     # 写入 config.toml，后续新会话将优先使用该明确选择。
                     _set_runtime_config("ui", "language", selected_language_code)
-                    _save_runtime_config()
+                    _save_runtime_config(force=True)
                     # 切换语言后强制刷新，避免 selectbox 继续展示旧语言文案。
                     st.rerun()
 
@@ -2411,7 +2411,7 @@ def _get_next_active_generation_task_id(current_task_id=None):
     return ""
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)
 def _render_running_generation_task(task_id):
     """只在任务运行期间轮询；结束后切回静态结果，停止不必要的定时刷新。"""
     try:
@@ -3439,7 +3439,7 @@ def _render_key_backup_settings(panel):
             )
         else:
             restored_count = _apply_key_backup(restored_keys)
-            _save_runtime_config()
+            _save_runtime_config(force=True)
             logger.info(f"restored keys from backup file: count={restored_count}")
             st.session_state["key_backup_message"] = (
                 "success",
@@ -4279,7 +4279,7 @@ def _render_settings_dialog():
                         openai_image_prompt_template.strip(),
                     )
 
-    _save_runtime_config()
+    _save_runtime_config(force=False)
 
 
 # -----------------------------------------------------------------------------
@@ -9450,7 +9450,7 @@ def _render_generation_controls(
                 )
             )
             st.stop()
-        _save_runtime_config()
+        _save_runtime_config(force=True)
         task_id = pending_task_id or str(uuid4())
         _add_active_generation_task(
             task_id,
@@ -10002,7 +10002,7 @@ def _render_application():
     # 生成分支在启动后台线程前已经请求过保存。普通控件交互继续请求非阻塞保存；
     # 如果后台任务正在使用配置，配置层会在任务结束时自动应用并落盘最新值。
     if not generation_submitted:
-        _save_runtime_config()
+        _save_runtime_config(force=False)
 
 
 if __name__ == "__main__":

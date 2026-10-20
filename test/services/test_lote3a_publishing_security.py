@@ -348,6 +348,71 @@ class TestLote3APublishingSecurity(unittest.TestCase):
         self.assertFalse(decision_a.can_retry)
         self.assertEqual(decision_a.resulting_status, "published")
 
+    def test_held_safety_review_never_auto_published_with_authorized_channel_and_old_schedule(self):
+        """Gate Final: HELD_SAFETY_REVIEW nunca é publicado automaticamente, inclusive com canal autorizado e agendamento antigo."""
+        from app.models import const
+        from app.services import quiz_safety_gate
+
+        pid = "prof-held-review"
+        cid = "chan-held-auth"
+        self._insert_profile(pid, is_active=1)
+        self._insert_channel(cid, pid, "youtube", "Canal Autorizado Quiz", is_enabled=1, auto_publish_authorized=1)
+        scheduler.set_setting("scheduler_enabled", True, db_path=self.db_path)
+        scheduler.set_setting("auto_publish_enabled", True, db_path=self.db_path)
+
+        # Persiste registro REVIEW no quiz_safety_history para simular tarefa Quiz retida em HELD_SAFETY_REVIEW
+        quiz_safety_gate.init_quiz_safety_db(self.db_path)
+        quiz_safety_gate.save_quiz_safety_record(
+            task_id="task-held-quiz-1",
+            profile_id=pid,
+            channel_id=cid,
+            topic="Dilema em Revisão",
+            dilemmas=[{"option_a": "A", "option_b": "B"}],
+            safety_status="REVIEW",
+            safety_reasons=["Similaridade na faixa de revisão humana"],
+            db_path=self.db_path,
+        )
+
+        # 1. plan_schedule NUNCA agenda tarefa retida em HELD_SAFETY_REVIEW / REVIEW mesmo com canal autorizado
+        tasks = [{
+            "task_id": "task-held-quiz-1",
+            "state": const.TASK_STATE_COMPLETE,
+            "stage": "HELD_SAFETY_REVIEW",
+            "profile_id": pid,
+            "planned_platforms": ["youtube"],
+            "video_file": "fake.mp4",
+        }]
+        planned = scheduler.plan_schedule(tasks, db_path=self.db_path)
+        self.assertEqual(len(planned), 0, "Tarefa em HELD_SAFETY_REVIEW jamais deve ser agendada por plan_schedule")
+
+        # 2. Mesmo sem stage no dict (ex.: pós-restart lendo apenas SQLite quiz_safety_history), plan_schedule bloqueia
+        tasks_after_restart = [{
+            "task_id": "task-held-quiz-1",
+            "state": const.TASK_STATE_COMPLETE,
+            "profile_id": pid,
+            "planned_platforms": ["youtube"],
+            "video_file": "fake.mp4",
+        }]
+        planned_restart = scheduler.plan_schedule(tasks_after_restart, db_path=self.db_path)
+        self.assertEqual(len(planned_restart), 0, "Tarefa com REVIEW em quiz_safety_history jamais deve ser agendada pós-restart")
+
+        # 3. Se existir um agendamento antigo (planned/ready) para a task em HELD_SAFETY_REVIEW em canal autorizado,
+        # run_scheduler_cycle bloqueia/posterga com reason='held_safety_review' e NUNCA chama publish_task
+        now = datetime.now(timezone.utc)
+        past = (now - timedelta(minutes=10)).isoformat()
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at, profile_id, channel_id) "
+                "VALUES (?, 'youtube', ?, 'ready', ?, ?, ?);",
+                ("task-held-quiz-1", past, past, pid, cid),
+            )
+
+        with patch("app.services.task.publish_task") as mock_pub:
+            res_cycle = scheduler.run_scheduler_cycle(now=now, db_path=self.db_path)
+            self.assertEqual(res_cycle["status"], "postponed")
+            self.assertEqual(res_cycle["reason"], "held_safety_review")
+            mock_pub.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

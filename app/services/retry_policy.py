@@ -304,6 +304,13 @@ def cleanup_residual_retries(
                 WHERE pe.task_id = sp.task_id
                   AND pe.platform = sp.platform
                   AND pe.status = 'success'
+                  AND (
+                    sp.channel_id IS NULL
+                    OR sp.channel_id = ''
+                    OR pe.channel_id = sp.channel_id
+                    OR pe.channel_id IS NULL
+                    OR pe.channel_id = ''
+                  )
               );
             """
         ).fetchall()
@@ -378,6 +385,13 @@ def cleanup_residual_retries(
                     WHERE pe.task_id = scheduled_posts.task_id
                       AND pe.platform = scheduled_posts.platform
                       AND pe.status = 'success'
+                      AND (
+                        scheduled_posts.channel_id IS NULL
+                        OR scheduled_posts.channel_id = ''
+                        OR pe.channel_id = scheduled_posts.channel_id
+                        OR pe.channel_id IS NULL
+                        OR pe.channel_id = ''
+                      )
                   );
                 """
             )

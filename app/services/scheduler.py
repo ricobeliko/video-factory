@@ -332,6 +332,91 @@ def migrate_channel_auto_publish_authorizations(
         "total_processed": len(channels),
     }
 
+def is_task_held_for_safety_review(
+    task_id: str,
+    task_data: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Tuple[bool, Optional[str]]:
+    """Verifica de forma canônica e fail-closed se uma task está retida em HELD_SAFETY_REVIEW / REVIEW / BLOCK.
+    Consulta em memória (task_data / sm.state), tabelas SQLite (monetization_safety e quiz_safety_history) e script.json.
+    """
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return False, None
+
+    # 1. Payload em memória (task_data)
+    if isinstance(task_data, dict):
+        stage_val = str(task_data.get("stage") or "").strip().upper()
+        if stage_val == "HELD_SAFETY_REVIEW":
+            return True, "HELD_SAFETY_REVIEW"
+        s_status = str(task_data.get("safety_status") or "").strip().upper()
+        if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+            return True, s_status
+
+    # 2. State Manager em memória
+    try:
+        from app.controllers.manager import memory_manager as sm
+        st_task = sm.state.get_task(clean_tid) or {}
+        if isinstance(st_task, dict):
+            stage_val = str(st_task.get("stage") or "").strip().upper()
+            if stage_val == "HELD_SAFETY_REVIEW":
+                return True, "HELD_SAFETY_REVIEW"
+            s_status = str(st_task.get("safety_status") or "").strip().upper()
+            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                return True, s_status
+    except Exception:
+        pass
+
+    # 3. Tabela monetization_safety (Safety Gate tradicional)
+    try:
+        from app.services import safety_gate
+        safety_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
+        if safety_rec:
+            s_status = str(safety_rec.get("safety_status") or "").strip().upper()
+            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                return True, s_status
+    except Exception:
+        pass
+
+    # 4. Tabela quiz_safety_history (Quiz Safety Gate)
+    try:
+        with get_connection(db_path) as conn:
+            has_qsh = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
+            ).fetchone()
+            if has_qsh:
+                q_row = conn.execute(
+                    "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if q_row:
+                    s_status = str(q_row["safety_status"] or "").strip().upper()
+                    if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                        return True, s_status
+    except Exception:
+        pass
+
+    # 5. Artefato persistido script.json em disco
+    try:
+        base_dir = task_base_dir or utils.task_dir()
+        script_file = os.path.join(base_dir, clean_tid, "script.json")
+        if os.path.isfile(script_file):
+            with open(script_file, "r", encoding="utf-8") as sf:
+                s_data = json.load(sf)
+            if isinstance(s_data, dict):
+                stage_val = str(s_data.get("stage") or "").strip().upper()
+                if stage_val == "HELD_SAFETY_REVIEW":
+                    return True, "HELD_SAFETY_REVIEW"
+                s_status = str(s_data.get("safety_status") or "").strip().upper()
+                if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                    return True, s_status
+    except Exception:
+        pass
+
+    return False, None
+
+
 # ---------------------------------------------------------------------------
 def init_db(db_path: Optional[str] = None) -> None:
     """Inicializa o schema do banco SQLite de forma idempotente."""
@@ -1355,19 +1440,16 @@ def plan_schedule(
         if not platforms:
             continue
 
-        # Gate de Monetização: tarefas com safety_status BLOCK ou REVIEW não entram automaticamente no Scheduler
-        safety_status = t.get("safety_status")
-        if not safety_status:
-            try:
-                from app.services import safety_gate
-                safety_rec = safety_gate.get_safety_assessment(task_id, db_path=db_path)
-                if safety_rec:
-                    safety_status = safety_rec.get("safety_status")
-            except Exception:
-                safety_status = None
-
-        if safety_status and str(safety_status).upper() in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
-            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={safety_status}")
+        # Gate de Monetização / Revisão Humana (HELD_SAFETY_REVIEW / REVIEW / BLOCK):
+        # tarefas retidas nunca entram automaticamente no Scheduler
+        is_held, hold_reason = is_task_held_for_safety_review(
+            task_id,
+            task_data=t,
+            db_path=db_path,
+            task_base_dir=task_base_dir,
+        )
+        if is_held:
+            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={hold_reason}")
             continue
 
         # Gate de Qualidade: se houver avaliação persistida, rejeita scores inadequados (< 70 ou WEAK/REVIEW/REJECTED)
@@ -2111,6 +2193,38 @@ def run_scheduler_cycle(
         )
         logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: canal '{channel_id}' sem auto_publish_authorized.")
         return {"status": "postponed", "reason": "channel_not_authorized", "channel_id": channel_id}
+
+    # 3.1 Revalidação Fail-Closed: Tarefa em HELD_SAFETY_REVIEW / REVIEW / BLOCK nunca é publicada automaticamente,
+    # inclusive com canal autorizado e agendamentos antigos pré-existentes.
+    is_held, hold_reason = is_task_held_for_safety_review(
+        task_id,
+        db_path=db_path,
+        task_base_dir=task_base_dir,
+    )
+    if is_held:
+        postpone_time = current_time + timedelta(minutes=30)
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
+            )
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="WARNING",
+            event_type="HELD_SAFETY_REVIEW_AUTO_PUBLISH_BLOCK",
+            task_id=task_id,
+            message=f"Publicação automática bloqueada: task '{task_id}' retida para revisão humana ({hold_reason}).",
+            metadata={"channel_id": channel_id, "post_id": post_id, "profile_id": profile_id, "hold_reason": hold_reason},
+            db_path=db_path,
+        )
+        _set_executor_status(
+            state="idle",
+            message=f"Post {post_id} postergado: task {task_id} retida em {hold_reason}",
+            last_cycle_summary=f"Post {post_id} retido por Safety Gate ({hold_reason})",
+            db_path=db_path,
+        )
+        logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} retido: task '{task_id}' em {hold_reason} não pode publicar automaticamente.")
+        return {"status": "postponed", "reason": "held_safety_review", "hold_reason": hold_reason, "task_id": task_id}
 
     # 4. Revalidação: Plataforma habilitada nas configurações
     if platform == "tiktok" and not settings["tiktok_enabled"]:

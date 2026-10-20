@@ -2213,7 +2213,7 @@ def publish_task(
         for p in target_platforms:
             if resolved_channel_id:
                 pub_row = conn.execute(
-                    "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND channel_id = ? AND status = 'success';",
+                    "SELECT id FROM publication_events WHERE task_id = ? AND platform = ? AND (channel_id = ? OR channel_id IS NULL OR channel_id = '') AND status = 'success';",
                     (task_id, p, resolved_channel_id),
                 ).fetchone()
             else:
@@ -2387,19 +2387,25 @@ def publish_task(
 
                 # 1. Execução YouTube (se solicitado)
                 if "youtube" in norm_target_set:
+                    yt_chan = resolved_channel_id
+                    if not yt_chan or yt_chan == "channel-default-tiktok":
+                        yt_ch_list = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
+                        yt_chan = yt_ch_list[0]["id"] if yt_ch_list else "channel-default-youtube"
+
                     existing_yt_pub = None
                     try:
                         from app.services import scheduler
                         with scheduler.get_connection(db_path) as conn:
                             existing_yt_pub = conn.execute(
-                                "SELECT external_id, external_url, provider_request_id, privacy_status FROM publication_events WHERE task_id = ? AND platform = 'youtube' AND status = 'success';",
-                                (task_id,),
+                                "SELECT external_id, external_url, provider_request_id, privacy_status FROM publication_events "
+                                "WHERE task_id = ? AND platform = 'youtube' AND (channel_id = ? OR channel_id IS NULL OR channel_id = '') AND status = 'success';",
+                                (task_id, yt_chan),
                             ).fetchone()
                     except Exception:
                         existing_yt_pub = None
 
                     if existing_yt_pub:
-                        logger.info(f"[PUBLISH_TASK] YouTube já publicado com sucesso para task {task_id}. Reutilizando evento local.")
+                        logger.info(f"[PUBLISH_TASK] YouTube já publicado com sucesso para task {task_id} (channel={yt_chan}). Reutilizando evento local.")
                         yt_post_id = existing_yt_pub["external_id"]
                         yt_url = existing_yt_pub["external_url"]
                         yt_req = existing_yt_pub["provider_request_id"]
@@ -2417,10 +2423,6 @@ def publish_task(
                         if not first_ext_url:
                             first_ext_url = yt_url
                     else:
-                        yt_chan = resolved_channel_id
-                        if not yt_chan or yt_chan == "channel-default-tiktok":
-                            yt_ch_list = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
-                            yt_chan = yt_ch_list[0]["id"] if yt_ch_list else "channel-default-youtube"
 
                         yt_res = youtube_publisher.publish_youtube_video(
                             video_path=video_path,
@@ -2480,19 +2482,32 @@ def publish_task(
 
                 # 2. Execução TikTok (se solicitado)
                 if "tiktok" in norm_target_set:
+                    tt_chan = resolved_channel_id
+                    if not tt_chan or tt_chan == "channel-default-youtube":
+                        tt_ch_list = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
+                        tt_chan = tt_ch_list[0]["id"] if tt_ch_list else None
+
                     existing_tt_pub = None
                     try:
                         from app.services import scheduler
                         with scheduler.get_connection(db_path) as conn:
-                            existing_tt_pub = conn.execute(
-                                "SELECT external_id, external_url, provider_request_id, privacy_status FROM publication_events WHERE task_id = ? AND platform = 'tiktok' AND status = 'success';",
-                                (task_id,),
-                            ).fetchone()
+                            if tt_chan:
+                                existing_tt_pub = conn.execute(
+                                    "SELECT external_id, external_url, provider_request_id, privacy_status FROM publication_events "
+                                    "WHERE task_id = ? AND platform = 'tiktok' AND (channel_id = ? OR channel_id IS NULL OR channel_id = '') AND status = 'success';",
+                                    (task_id, tt_chan),
+                                ).fetchone()
+                            else:
+                                existing_tt_pub = conn.execute(
+                                    "SELECT external_id, external_url, provider_request_id, privacy_status FROM publication_events "
+                                    "WHERE task_id = ? AND platform = 'tiktok' AND status = 'success';",
+                                    (task_id,),
+                                ).fetchone()
                     except Exception:
                         existing_tt_pub = None
 
                     if existing_tt_pub:
-                        logger.info(f"[PUBLISH_TASK] TikTok já publicado com sucesso para task {task_id}. Reutilizando evento local.")
+                        logger.info(f"[PUBLISH_TASK] TikTok já publicado com sucesso para task {task_id} (channel={tt_chan}). Reutilizando evento local.")
                         tt_post_id = existing_tt_pub["external_id"]
                         tt_url = existing_tt_pub["external_url"]
                         tt_req = existing_tt_pub["provider_request_id"]
@@ -2510,10 +2525,6 @@ def publish_task(
                         if not first_ext_url:
                             first_ext_url = tt_url
                     else:
-                        tt_chan = resolved_channel_id
-                        if not tt_chan or tt_chan == "channel-default-youtube":
-                            tt_ch_list = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
-                            tt_chan = tt_ch_list[0]["id"] if tt_ch_list else None
 
                         if not tt_chan:
                             err_msg = f"Perfil '{task_profile_id}' não possui canal TikTok habilitado nesta fase."
@@ -3052,15 +3063,17 @@ def _run_quiz_pipeline(
     except Exception as exc:
         logger.warning(f"[MediaQuality] Falha na avaliação de qualidade de mídia para {task_id}: {exc}")
 
-    # 4. Promoção a READY_STOCK
+    # 4. Promoção a READY_STOCK (ou retenção em HELD_SAFETY_REVIEW)
+    final_stage = "HELD_SAFETY_REVIEW" if getattr(params, "safety_status", None) == const.SAFETY_STATUS_REVIEW else "READY_STOCK"
+
     task_artifacts.patch_script_data(
         task_id,
         final_media_quality=mq_report,
         render_result=render_result,
         thumbnail_path=thumbnail_path,
+        stage=final_stage,
+        safety_status=getattr(params, "safety_status", None),
     )
-
-    final_stage = "HELD_SAFETY_REVIEW" if getattr(params, "safety_status", None) == const.SAFETY_STATUS_REVIEW else "READY_STOCK"
 
     cross_post_enabled = (
         upload_post.upload_post_service.is_configured()
@@ -3805,7 +3818,12 @@ def _run_pipeline(
     platforms = (
         list(upload_post.upload_post_service.platforms) if cross_post_enabled else []
     )
-    should_cross_post = cross_post_enabled and bool(platforms)
+    final_stage = (
+        "HELD_SAFETY_REVIEW"
+        if getattr(params, "safety_status", None) == const.SAFETY_STATUS_REVIEW
+        else "READY_STOCK"
+    )
+    should_cross_post = cross_post_enabled and bool(platforms) and final_stage == "READY_STOCK"
     if cross_post_enabled and not platforms:
         logger.warning(
             f"skip cross-post because no platforms are configured, task_id: {task_id}"
@@ -3841,6 +3859,8 @@ def _run_pipeline(
     try:
         task_artifacts.patch_script_data(
             task_id,
+            stage=final_stage,
+            safety_status=getattr(params, "safety_status", None),
             final_media_quality={
                 "status": "BLOCK" if has_media_defect else "PASS",
                 "reasons": all_media_reasons,
@@ -3876,7 +3896,7 @@ def _run_pipeline(
         task_id,
         state=const.TASK_STATE_COMPLETE,
         progress=100,
-        stage="READY_STOCK",
+        stage=final_stage,
         provider="ffmpeg",
         **kwargs,
     )

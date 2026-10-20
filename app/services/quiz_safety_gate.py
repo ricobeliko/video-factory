@@ -69,6 +69,15 @@ def is_quiz_dilemma(
     4. Reconhece formatos canônicos e variantes de dilema (ex: 'quiz', 'quiz_dilemma',
        'quiz_escolhas_impossiveis', 'quiz_dilemmas'), excluindo quiz factual ('quiz_paper').
     """
+    # 1. Checagem direta pelo contrato canônico video_format (quando diferente do default tradicional)
+    v_format = getattr(params, "video_format", None) or (params.get("video_format") if isinstance(params, dict) else None)
+    if v_format and v_format != const.VIDEO_FORMAT_TRADITIONAL:
+        clean_format = str(v_format).strip().lower()
+        if clean_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, "quiz_dilemma", "quiz_escolhas_impossiveis"):
+            return True
+        if clean_format in (const.VIDEO_FORMAT_QUIZ_PAPER, "quiz_paper"):
+            return False
+
     struct = (
         narrative_structure
         or getattr(params, "narrative_structure", None)
@@ -368,10 +377,10 @@ def extract_quiz_dilemmas(
             bottom = q.get("bottom") if isinstance(q.get("bottom"), dict) else {}
             top_title = str(top.get("title") or "").strip()
             bottom_title = str(bottom.get("title") or "").strip()
-            is_closing = bool(q.get("is_closing_choice") or False)
+            is_closing = bool(q.get("is_closing_choice") or q.get("role") == "editorial_closing" or False)
 
             # Cues textuais de CTA/encerramento que caracterizam tela de fechamento
-            closing_keywords = ("comentários", "inscreva", "pontuação", "desafio", "fechamento", "comente")
+            closing_keywords = ("comentários", "inscreva", "pontuação", "desafio", "fechamento", "comente", "comentar")
             if not is_closing and any(k in header.lower() or k in narration.lower() for k in closing_keywords):
                 is_closing = True
 
@@ -402,7 +411,7 @@ def extract_quiz_dilemmas(
             header = lines[0] if lines else ""
             narration = " ".join(lines[1:]) if len(lines) > 1 else header
 
-            closing_keywords = ("comentários", "inscreva", "pontuação", "desafio", "fechamento", "comente")
+            closing_keywords = ("comentários", "inscreva", "pontuação", "desafio", "fechamento", "comente", "comentar")
             is_closing = any(k in b_text.lower() for k in closing_keywords)
 
             # Tenta extrair opções se o padrão "A... Ou B..." estiver presente

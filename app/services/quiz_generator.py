@@ -177,6 +177,7 @@ class QuizContentGenerator:
         num_questions: int = 8,
         quiz_title: Optional[str] = None,
         closing_type: str = "engagement_cta",
+        topic_brief: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Gera conteúdo completo de quiz com perguntas, alternativas e metadados.
@@ -184,7 +185,14 @@ class QuizContentGenerator:
         """
         logger.info(f"[QUIZ_GEN] Gerando quiz: nicho='{niche}', formato='{format_type}', perguntas={num_questions}")
 
-        prompt = self._build_generation_prompt(niche, format_type, num_questions, quiz_title, closing_type)
+        prompt = self._build_generation_prompt(
+            niche=niche,
+            format_type=format_type,
+            num_questions=num_questions,
+            quiz_title=quiz_title,
+            closing_type=closing_type,
+            topic_brief=topic_brief,
+        )
         raw_response = ""
         parsed_data = None
 
@@ -288,11 +296,16 @@ class QuizContentGenerator:
         num_questions: int,
         quiz_title: Optional[str],
         closing_type: str,
+        topic_brief: Optional[str] = None,
     ) -> str:
         recent_questions = [x.get("question_text", "") for x in self.question_history[-15:] if x.get("question_text")]
         avoid_clause = ""
         if recent_questions:
             avoid_clause = f"\nEvite expressamente repetir ou criar variações das seguintes perguntas já usadas recentemente:\n" + "\n".join([f"- {q}" for q in recent_questions[:8]])
+
+        brief_clause = ""
+        if topic_brief and str(topic_brief).strip():
+            brief_clause = f"\nDIRETRIZ EDITORIAL DO CANAL (SIGA RIGOROSAMENTE):\n{str(topic_brief).strip()}\n"
 
         if format_type == "factual":
             return f"""Você é um roteirista sênior e checador de fatos especialista em quizzes virais educativos (YouTube Shorts / TikTok).
@@ -307,7 +320,7 @@ REGRAS ESTRITAS DE VERIFICAÇÃO FACTUAL E RETENÇÃO:
 6. As queries de imagem ('image_query') devem ser em inglês, altamente descritivas e cinematográficas.
 7. NARRAÇÃO DIRETA: Da 2ª pergunta em diante, NÃO anuncie 'segunda pergunta', 'terceira escolha'. Vá direto às alternativas!
 8. Adicione 'percentage_top' e 'percentage_bottom' somando 100.
-{avoid_clause}
+{brief_clause}{avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
 {{
@@ -356,7 +369,7 @@ REGRAS DE RETENÇÃO ABSOLUTA (Q0-R):
 5. Textos curtos e chamativos para os cards (máximo 4 a 5 palavras).
 6. Queries de imagens ('image_query') em inglês para busca no Pexels.
 7. Adicione 'percentage_top' e 'percentage_bottom' somando 100 (simulação de votação popular).
-{avoid_clause}
+{brief_clause}{avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
 {{
@@ -429,9 +442,11 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             return
 
         if closing_type == "quiz_choice_religious":
-            # Q0-R Item E: Penúltima escolha — Engajamento religioso
+            # Q0-R Item E: Penúltima escolha — Engajamento religioso (editorial_closing)
             if len(questions) >= 2:
                 penult_q = questions[-2]
+                penult_q["is_closing_choice"] = True
+                penult_q["role"] = "editorial_closing"
                 penult_q["header"] = "ESCOLHA RÁPIDO:"
                 penult_q["narration"] = "Ficar dois dias sem internet e sem Wi-Fi... Ou curtir e comentar: Jesus te ama?"
                 penult_q["top"] = {
@@ -455,6 +470,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             # Q0-R Item F: Última escolha — Seguir o perfil
             last_q = questions[-1]
             last_q["is_closing_choice"] = True
+            last_q["role"] = "editorial_closing"
             last_q["header"] = "QUAL O SEU DESTINO:"
             last_q["narration"] = "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?"
             last_q["top"] = {
@@ -474,9 +490,10 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             last_q["percentage_top"] = 9
             last_q["percentage_bottom"] = 91
             last_q["countdown_sec"] = 3.0
-        elif closing_type == "score_challenge" or format_type == "factual":
+        elif closing_type in ("score_challenge", "comments") or format_type == "factual":
             last_q = questions[-1]
             last_q["is_closing_choice"] = True
+            last_q["role"] = "editorial_closing"
             last_q["header"] = "DESAFIO FINAL:"
             if not last_q.get("narration"):
                 last_q["narration"] = "Desafio final: Comente quantas você acertou! Opção A: Acertei todas... Ou Opção B: Errei alguma?"
@@ -501,6 +518,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             # engagement_cta padrão neutro (Q0-R Seguir)
             last_q = questions[-1]
             last_q["is_closing_choice"] = True
+            last_q["role"] = "editorial_closing"
             last_q["header"] = "QUAL O SEU DESTINO:"
             last_q["narration"] = "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?"
             last_q["top"] = {
@@ -820,23 +838,23 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q7",
                         "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Ficar dois dias sem internet e sem Wi-Fi... Ou curtir e comentar: Jesus te ama?",
+                        "narration": "Viver sem música pelo resto da sua vida... Ou nunca mais poder assistir a nenhum filme ou série?",
                         "top": {
-                            "title": "FICAR DOIS DIAS SEM WI-FI",
+                            "title": "VIVER SEM MÚSICA",
                             "tag": "OPÇÃO A",
-                            "image_query": "broken wifi smartphone internet disconnect",
+                            "image_query": "headphones silence acoustic quiet",
                             "image_name": "q7_top_v2.jpg",
                             "theme": "red",
                         },
                         "bottom": {
-                            "title": "CURTIR E COMENTAR: JESUS TE AMA",
+                            "title": "NUNCA MAIS VER FILMES",
                             "tag": "OPÇÃO B",
-                            "image_query": "jesus christ cross heavenly light sunset",
+                            "image_query": "cinema movie theater screen dark",
                             "image_name": "q7_bot_v2.jpg",
-                            "theme": "gold_red",
+                            "theme": "blue",
                         },
-                        "percentage_top": 14,
-                        "percentage_bottom": 86,
+                        "percentage_top": 35,
+                        "percentage_bottom": 65,
                         "countdown_sec": 3.0,
                     },
                     {
@@ -876,6 +894,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
         output_thumbnail_path: Optional[str] = None,
         temp_dir: Optional[str] = None,
         images_dir: Optional[str] = None,
+        voice_name: Optional[str] = None,
+        voice_rate: Optional[str] = "+12%",
     ) -> QuizConfig:
         """Monta a estrutura compatível com a Quiz Engine e exporta para JSON."""
         niche = raw_quiz.get("niche", "curiosidades")
@@ -911,7 +931,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             "temp_dir": t_dir,
             "images_dir": img_dir,
             "min_target_duration_sec": 60.0,
-            "target_duration_range": [62.0, 66.0],
+            "target_duration_range": [60.0, 65.0],
             "video_settings": {
                 "width": 1080,
                 "height": 1920,
@@ -921,8 +941,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 "bgm_volume": 0.14,
             },
             "voice_settings": {
-                "voice_name": "pt-BR-AntonioNeural",
-                "voice_rate": "+12%",
+                "voice_name": voice_name or "pt-BR-AntonioNeural",
+                "voice_rate": voice_rate or "+12%",
             },
             "countdown_settings": {
                 "default_sec": 3.0,
@@ -991,9 +1011,10 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
     def generate_paper_quiz_structure(
         self,
         niche: str = "conhecimentos_gerais",
-        num_questions: int = 10,
+        num_questions: int = 5,
         quiz_title: Optional[str] = None,
         closing_type: str = "score_challenge",
+        topic_brief: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gera ou carrega estrutura canônica para o Quiz de Papel (multiple_choice_paper)."""
         logger.info(f"[QUIZ_GEN] Gerando quiz de papel: nicho='{niche}', perguntas={num_questions}")

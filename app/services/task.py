@@ -327,6 +327,7 @@ def generate_script(task_id, params):
             custom_system_prompt=params.custom_system_prompt,
             monetization_preset=getattr(params, "monetization_preset", ""),
             narrative_structure=getattr(params, "narrative_structure", ""),
+            topic_brief=getattr(params, "topic_brief", None),
         )
     else:
         logger.debug(f"video script: \n{video_script}")
@@ -2738,21 +2739,25 @@ def _run_quiz_pipeline(
     QuizEngine em processo, aplica os Quality Gates (segurança, factual e mídia)
     e promove para READY_STOCK somente após aprovação integral.
     """
-    logger.info(f"[QUIZ_PIPELINE][START] task_id={task_id} structure={getattr(params, 'narrative_structure', None)}")
+    logger.info(f"[QUIZ_PIPELINE][START] task_id={task_id} format={getattr(params, 'video_format', None)} structure={getattr(params, 'narrative_structure', None)}")
+    video_format = getattr(params, "video_format", None) or const.DEFAULT_VIDEO_FORMAT
     narrative_structure = getattr(params, "narrative_structure", "") or ""
-    is_paper_quiz = (narrative_structure == const.STRUCTURE_QUIZ_PAPER)
+    is_paper_quiz = (video_format == const.VIDEO_FORMAT_QUIZ_PAPER or narrative_structure == const.STRUCTURE_QUIZ_PAPER)
     format_type = "factual" if ("factual" in narrative_structure or is_paper_quiz) else "subjective"
     niche = getattr(params, "niche", None) or getattr(params, "video_subject", None) or "dilemas"
+    topic_brief = getattr(params, "topic_brief", None)
     closing_type = getattr(params, "closing_type", None)
     if not closing_type or closing_type == "auto":
         niche_clean = str(niche).lower()
         if any(w in niche_clean for w in ("religi", "bibli", "jesus", "deus", "fe", "evangel")):
             closing_type = "quiz_choice_religious"
-        elif format_type == "factual":
+        elif format_type == "factual" or is_paper_quiz:
             closing_type = "score_challenge"
         else:
             closing_type = "engagement_cta"
-    num_questions = getattr(params, "num_questions", None) or (10 if is_paper_quiz else (6 if format_type == "factual" else 8))
+    elif closing_type == "comments":
+        closing_type = "score_challenge"
+    num_questions = getattr(params, "num_questions", None) or (5 if is_paper_quiz else (6 if format_type == "factual" else 8))
 
     task_dir = utils.task_dir(task_id)
     temp_quiz_dir = os.path.join(task_dir, "temp_quiz")
@@ -2783,6 +2788,7 @@ def _run_quiz_pipeline(
                 num_questions=num_questions,
                 quiz_title=params.video_subject if params.video_subject and params.video_subject != "auto" else None,
                 closing_type=closing_type,
+                topic_brief=topic_brief,
             )
         else:
             raw_quiz = generator.generate_quiz_structure(
@@ -2791,6 +2797,7 @@ def _run_quiz_pipeline(
                 num_questions=num_questions,
                 quiz_title=params.video_subject if params.video_subject and params.video_subject != "auto" else None,
                 closing_type=closing_type,
+                topic_brief=topic_brief,
             )
     except Exception as exc:
         logger.error(f"[QUIZ_GEN][ERROR] task_id={task_id}: {exc}")
@@ -2858,6 +2865,7 @@ def _run_quiz_pipeline(
             q for q in questions
             if not q.get("is_closing_choice") and (not q.get("verified") or q.get("publication_gate") == "BLOCKED_PENDING_EXTERNAL_AUDIT")
         ]
+        content_questions = [q for q in questions if not q.get("is_closing_choice")]
         if unverified:
             logger.warning(f"[QUIZ_FACTUAL_GATE] {len(unverified)} perguntas factuais não verificadas na tarefa {task_id}")
             task_artifacts.patch_script_data(
@@ -2873,6 +2881,13 @@ def _run_quiz_pipeline(
                 "factual_gate",
                 f"Factual quiz contains {len(unverified)} unverified questions without independent sources",
                 details={"unverified_questions": [q.get("id") for q in unverified]},
+            )
+        if not content_questions:
+            logger.warning(f"[QUIZ_FACTUAL_GATE] Nenhuma pergunta de conteúdo encontrada para {task_id}")
+            return _mark_task_failed(
+                task_id,
+                "factual_gate",
+                "Factual quiz does not contain any content questions",
             )
 
     if stop_at == "script":
@@ -2943,6 +2958,8 @@ def _run_quiz_pipeline(
     if is_paper_quiz:
         try:
             from scripts.poc_quiz_paper_render import PaperQuizEngine, DurationGateError
+            raw_rate = getattr(params, "voice_rate", None)
+            v_rate_str = (f"+{int(round((raw_rate - 1.0) * 100))}%" if isinstance(raw_rate, (int, float)) and raw_rate != 1.0 else (str(raw_rate) if isinstance(raw_rate, str) and "%" in raw_rate else "+20%"))
             paper_cfg = generator.export_to_paper_quiz_config(
                 raw_quiz=processed_quiz,
                 output_json_path=quiz_config_path,
@@ -2950,7 +2967,7 @@ def _run_quiz_pipeline(
                 output_thumbnail_path=thumbnail_path,
                 temp_dir=temp_quiz_dir,
                 voice_name=getattr(params, "voice_name", None),
-                voice_rate="+20%",
+                voice_rate=v_rate_str,
             )
             engine = PaperQuizEngine(config=paper_cfg)
             render_result = engine.render()
@@ -2963,6 +2980,8 @@ def _run_quiz_pipeline(
     else:
         try:
             from scripts.poc_quiz_render import QuizConfig, QuizEngine
+            raw_rate = getattr(params, "voice_rate", None)
+            v_rate_str = (f"+{int(round((raw_rate - 1.0) * 100))}%" if isinstance(raw_rate, (int, float)) and raw_rate != 1.0 else (str(raw_rate) if isinstance(raw_rate, str) and "%" in raw_rate else "+12%"))
             quiz_cfg = generator.export_to_quiz_config(
                 raw_quiz=processed_quiz,
                 output_json_path=quiz_config_path,
@@ -2970,6 +2989,8 @@ def _run_quiz_pipeline(
                 output_thumbnail_path=thumbnail_path,
                 temp_dir=temp_quiz_dir,
                 images_dir=images_dir,
+                voice_name=getattr(params, "voice_name", None),
+                voice_rate=v_rate_str,
             )
             engine = QuizEngine(config=quiz_cfg)
             render_result = engine.render()
@@ -3014,6 +3035,9 @@ def _run_quiz_pipeline(
     mq_report = {}
     try:
         from app.services import media_quality
+        # Isenção explícita de SRT para Quiz (cards visuais procedurais embutidos)
+        params.subtitle_required = False
+        params.subtitle_enabled = False
         is_media_quality_required = getattr(params, "final_media_quality_required", False)
         mq_report = media_quality.evaluate_final_media_quality(
             video_path=final_video_path,
@@ -3036,6 +3060,8 @@ def _run_quiz_pipeline(
         thumbnail_path=thumbnail_path,
     )
 
+    final_stage = "HELD_SAFETY_REVIEW" if getattr(params, "safety_status", None) == const.SAFETY_STATUS_REVIEW else "READY_STOCK"
+
     cross_post_enabled = (
         upload_post.upload_post_service.is_configured()
         and upload_post.upload_post_service.auto_upload
@@ -3043,7 +3069,7 @@ def _run_quiz_pipeline(
     platforms = (
         list(upload_post.upload_post_service.platforms) if cross_post_enabled else []
     )
-    should_cross_post = cross_post_enabled and bool(platforms)
+    should_cross_post = cross_post_enabled and bool(platforms) and final_stage == "READY_STOCK"
     cross_post_state = const.CROSS_POST_STATE_PENDING if should_cross_post else None
 
     kwargs = {
@@ -3068,7 +3094,7 @@ def _run_quiz_pipeline(
         task_id,
         state=const.TASK_STATE_COMPLETE,
         progress=100,
-        stage="READY_STOCK",
+        stage=final_stage,
         provider="ffmpeg",
         **kwargs,
     )
@@ -3214,8 +3240,8 @@ def _run_pipeline(
     if cancel_res:
         return cancel_res
 
-    # Branch: Quiz Engine (Fase Q4-B / Roteamento V1)
-    narrative_structure = getattr(params, "narrative_structure", None) or ""
+    # Branch: Quiz Engine (Roteamento Canônico por video_format)
+    v_format = getattr(params, "video_format", None)
     task_profile_id = getattr(params, "profile_id", None)
     if not task_profile_id and task_id:
         try:
@@ -3226,26 +3252,26 @@ def _run_pipeline(
         except Exception:
             pass
 
-    if (not narrative_structure or narrative_structure == "auto") and task_profile_id:
-        try:
-            from app.services import profile_manager
-            prof_ctx = profile_manager.get_generation_profile_context(task_profile_id)
-            p_format = prof_ctx.get("video_format") or prof_ctx.get("content_style")
-            if p_format and p_format not in ("traditional", "standard", "auto", ""):
-                narrative_structure = p_format
-                params.narrative_structure = p_format
-        except Exception:
-            pass
+    if not v_format or v_format == const.VIDEO_FORMAT_TRADITIONAL:
+        # Se associado a perfil de quiz, herda video_format e narrative_structure
+        if task_profile_id and task_profile_id != "default":
+            try:
+                from app.services import profile_manager
+                prof_ctx = profile_manager.get_generation_profile_context(task_profile_id)
+                p_format = prof_ctx.get("video_format") or prof_ctx.get("content_style")
+                if p_format and p_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER, "quiz_dilemma", "quiz_paper"):
+                    v_format = p_format
+                    params.video_format = p_format
+                    params.narrative_structure = p_format
+            except Exception:
+                pass
 
-    from app.services import quiz_safety_gate
-    if str(narrative_structure).startswith("quiz") or quiz_safety_gate.is_quiz_dilemma(
-        params=params,
-        narrative_structure=narrative_structure,
-        profile_id=task_profile_id,
-        task_id=task_id,
-    ):
-        if not getattr(params, "narrative_structure", None) and narrative_structure:
-            params.narrative_structure = narrative_structure
+        legacy_struct = getattr(params, "narrative_structure", None) or ""
+        if legacy_struct in (const.STRUCTURE_QUIZ_DILEMMA, const.STRUCTURE_QUIZ_PAPER, "quiz_dilemma", "quiz_paper"):
+            v_format = legacy_struct
+            params.video_format = legacy_struct
+
+    if v_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER, "quiz_dilemma", "quiz_paper"):
         return _run_quiz_pipeline(task_id=task_id, params=params, stop_at=stop_at)
 
     # 1. Generate script

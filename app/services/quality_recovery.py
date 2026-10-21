@@ -267,36 +267,40 @@ def inspect_single_held_task(
                     if has_manual_appr:
                         cp_status = "PASS"
                     else:
-                        # 4.2. Obtém ou reconstrói proveniência via build_asset_provenance
-                        prov = script_data.get("asset_provenance") if isinstance(script_data, dict) else None
-                        if not prov:
-                            mat_sources = script_data.get("material_sources")
-                            if not mat_sources and script_data.get("scene_materials"):
-                                mat_sources = [
-                                    {
-                                        "provider": sm.get("provider"),
-                                        "asset_id": sm.get("asset_id"),
-                                        "local_file": sm.get("material_path"),
-                                        "source_page": sm.get("source_url") or "",
-                                        "search_term": sm.get("search_term_used") or "",
-                                        "duration": sm.get("duration", 0),
-                                        "used_duration_sec": sm.get("duration", 0),
-                                        "scene_index": sm.get("scene_index"),
-                                        "visual_source_type": sm.get("visual_source_type", "stock"),
-                                    }
-                                    for sm in script_data.get("scene_materials", [])
-                                ]
-                            prov = copyright_gate.build_asset_provenance(
-                                task_id=clean_tid,
-                                params=params_data,
-                                material_sources=mat_sources,
-                                task_base_dir=effective_task_dir,
-                            )
+                        # 4.2. Obtém ou reconstrói proveniência normalizada via normalize_asset_provenance
+                        raw_prov = copyright_gate._extract_raw_asset_provenance(script_data if isinstance(script_data, dict) else None)
+                        mat_sources = script_data.get("material_sources") if isinstance(script_data, dict) else None
+                        if not mat_sources and isinstance(script_data, dict) and script_data.get("scene_materials"):
+                            mat_sources = [
+                                {
+                                    "provider": sm.get("provider"),
+                                    "asset_id": sm.get("asset_id"),
+                                    "local_file": sm.get("material_path"),
+                                    "source_page": sm.get("source_url") or "",
+                                    "search_term": sm.get("search_term_used") or "",
+                                    "duration": sm.get("duration", 0),
+                                    "used_duration_sec": sm.get("duration", 0),
+                                    "scene_index": sm.get("scene_index"),
+                                    "visual_source_type": sm.get("visual_source_type", "stock"),
+                                }
+                                for sm in script_data.get("scene_materials", [])
+                                if isinstance(sm, dict)
+                            ]
+                        prov = copyright_gate.normalize_asset_provenance(
+                            raw_prov=raw_prov,
+                            task_id=clean_tid,
+                            params=params_data,
+                            material_sources=mat_sources,
+                            task_base_dir=effective_task_dir,
+                        )
 
                         # 4.3. Avalia proveniência respeitando o contrato real do Copyright Gate
                         # Não declara PASS simplesmente porque BGM está off ou parece stock:
                         # exige conformidade de BGM E conformidade de todos os clips visuais.
-                        if prov and isinstance(prov, dict):
+                        if isinstance(prov, dict) and prov.get("malformed_provenance"):
+                            cp_status = "BLOCK"
+                            copyright_reason = "Proveniência de ativos malformada ou em formato desconhecido."
+                        elif prov and isinstance(prov, dict):
                             bgm = prov.get("bgm") or {}
                             bgm_enabled = bgm.get("enabled", False)
                             bgm_source = str(bgm.get("source", "")).lower()

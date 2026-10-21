@@ -9981,6 +9981,8 @@ def _render_generation_controls(
     _render_channel_factory_section()
     _render_operator_console_section()
     _render_publication_schedule_section()
+    _render_trend_radar_section()
+    _render_analytics_section()
     _render_autopilot_section(
         params=params,
         voice_mode=voice_mode,
@@ -9988,8 +9990,6 @@ def _render_generation_controls(
         uploaded_bgm_file=uploaded_bgm_file,
         has_local_materials=has_local_materials,
     )
-    _render_trend_radar_section()
-    _render_analytics_section()
 
     _render_current_generation_task()
     return start_button

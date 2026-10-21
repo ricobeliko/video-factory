@@ -16,17 +16,18 @@
 
 - **LAST_UPDATED:** `21/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `HOTFIX CIRÚRGICO V1: INTERFACE STREAMLIT, SEGURANÇA EM PAUSED E CARREGAMENTO (PRONTO PARA DEPLOY SUPERVISIONADO)`
+- **CURRENT_FOCUS:** `HOTFIX V1 COPYRIGHT + RENDERIZAÇÃO COMPLETA (PRONTO PARA DEPLOY SUPERVISIONADO)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / V1_UI_SAFETY_LOADING_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / V1_COPYRIGHT_FULL_RENDER_HOTFIX_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
 - **CURRENT_MAIN_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `feat/v1-integracao-lotes-1-2-3a` (integrada com Lotes 1, 2, 3A, 3B, 4, A5 + Hotfix UI/Segurança/Carregamento sobre base `4c4c3b8188895154c3760429425a3d11391bd9f7`)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `4c4c3b8188895154c3760429425a3d11391bd9f7` (deployado no PC Forte em 20/10/2026; Fábrica em `PAUSED`, Scheduler/Auto Publish/Autonomia `OFF`, migração CA-03 concluída com 4 destinos tradicionais autorizados e 2 canais Quiz bloqueados)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Bundle Git do Hotfix V1 UI/Segurança/Carregamento validado em DEV com 24/24 testes direcionados PASS)`
+- **DEV_BRANCH_HEAD_SHA:** `feat/v1-integracao-lotes-1-2-3a` (integrada com Lotes 1, 2, 3A, 3B, 4, A5 + Hotfix UI/Segurança/Carregamento `b7280ef` + Hotfix Copyright/Renderização Completa sobre base `4c4c3b8188895154c3760429425a3d11391bd9f7`)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `b7280ef1a3cb2cc99d144d366ad3bd364d189ac6` (deployado no PC Forte; Fábrica em `PAUSED`, Scheduler/Auto Publish/Autonomia `OFF`, migração CA-03 ativa com 4 destinos tradicionais autorizados e 2 canais Quiz bloqueados)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Bundle Git do Hotfix V1 Copyright + Renderização Completa validado em DEV com 33/33 testes direcionados PASS)`
 - **V1_UI_SAFETY_LOADING_HOTFIX_STATUS:** `DEV VALIDATED (Correção de indentação/UnboundLocalError no Autopilot em webui/Main.py, seção explícita '📅 Agenda de Publicação — Scheduler & Auto Publish' com proteção PRIMARY/SECONDARY, bloqueio de partida incondicional de start_scheduler_worker e de polling em PAUSED, persist=False no render passivo do Autopilot, e render_pass_scope eliminando 11x varreduras redundantes de estoque e 3x de histórico sem cache persistente; 24/24 testes direcionados PASS)`
+- **V1_COPYRIGHT_FULL_RENDER_HOTFIX_STATUS:** `DEV VALIDATED (Normalização segura fail-closed de asset_provenance em app/services/copyright_gate.py, operator_console.py e quality_recovery.py suportando dict canônico, list legítima do pipeline Quiz sem perda de evidências, lista vazia [], None e dados malformados sem nunca assumir PASS automático; alinhamento da sequência de renderização 1->2->3->4->5 em webui/Main.py até o Autopilot; 33/33 testes direcionados PASS)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`

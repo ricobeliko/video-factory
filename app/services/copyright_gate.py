@@ -415,7 +415,8 @@ def build_asset_provenance(
         if os.path.isfile(script_file):
             try:
                 with open(script_file, "r", encoding="utf-8") as f:
-                    script_data = json.load(f)
+                    loaded = json.load(f)
+                    script_data = loaded if isinstance(loaded, dict) else {}
             except Exception as exc:
                 logger.debug(f"[COPYRIGHT] Não foi possível ler script.json para task {task_id}: {exc}")
         else:
@@ -424,7 +425,8 @@ def build_asset_provenance(
                 target = task_artifacts._script_file(task_id)
                 if target.is_file():
                     with target.open("r", encoding="utf-8") as f:
-                        script_data = json.load(f)
+                        loaded = json.load(f)
+                        script_data = loaded if isinstance(loaded, dict) else {}
             except Exception:
                 pass
         material_sources = script_data.get("material_sources")
@@ -569,6 +571,239 @@ def build_asset_provenance(
         "presenter": presenter_prov,
         "provenance_status": prov_status,
     }
+
+
+_RECOGNIZED_CLIP_KEYS = (
+    "provider",
+    "local_file",
+    "local_path",
+    "material_path",
+    "asset_id",
+    "external_id",
+    "source_url",
+    "source_page",
+    "provider_url",
+)
+
+_RECOGNIZED_PROVENANCE_DICT_KEYS = (
+    "bgm",
+    "visual_clips",
+    "presenter",
+    "provenance_status",
+)
+
+
+def _extract_raw_asset_provenance(
+    script_data: Optional[Dict[str, Any]],
+    task_mem: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Extrai o valor bruto de asset_provenance preservando valores falsy malformados (ex: '', 0, False, [])."""
+    if isinstance(script_data, dict) and "asset_provenance" in script_data and script_data["asset_provenance"] is not None:
+        return script_data["asset_provenance"]
+    if isinstance(task_mem, dict) and "asset_provenance" in task_mem and task_mem["asset_provenance"] is not None:
+        return task_mem["asset_provenance"]
+    return None
+
+
+def _build_malformed_provenance_dict(reason: str) -> Dict[str, Any]:
+    return {
+        "bgm": {
+            "enabled": False,
+            "filename": None,
+            "source": "unknown",
+            "license_type": "unknown",
+            "provenance_status": "MALFORMED_PROVENANCE",
+        },
+        "visual_clips": [],
+        "presenter": {
+            "enabled": False,
+            "mode": "none",
+        },
+        "provenance_status": "MALFORMED_PROVENANCE",
+        "malformed_provenance": True,
+        "malformed_reason": reason,
+    }
+
+
+def _is_valid_clip_item_dict(item: Any) -> bool:
+    if not isinstance(item, dict) or not item:
+        return False
+    has_identity = any(
+        k in item and item.get(k) not in (None, "", [], {})
+        for k in _RECOGNIZED_CLIP_KEYS
+    )
+    if not has_identity:
+        return False
+    if "provider" in item and item["provider"] is not None and not isinstance(item["provider"], str):
+        return False
+    for path_key in ("local_file", "local_path", "material_path"):
+        if path_key in item and item[path_key] is not None and not isinstance(item[path_key], str):
+            return False
+    return True
+
+
+def normalize_asset_provenance(
+    raw_prov: Any,
+    task_id: str,
+    params: Any = None,
+    material_sources: Optional[List[Dict[str, Any]]] = None,
+    task_base_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Normaliza asset_provenance para o formato canônico dict sem perder evidências.
+
+    Suporta:
+    - None (ausente), [] (lista vazia), {} (dict vazio): reconstrói via build_asset_provenance.
+    - list legítima de dicts (formato Quiz ImageProvenance / Paper Quiz / material_sources):
+      converte para a estrutura canônica {"bgm": ..., "visual_clips": [...], "presenter": ..., "provenance_status": ...}
+      preservando todos os campos originais de cada clipe.
+    - dict canônico válido: garante chaves bgm, visual_clips, presenter e provenance_status.
+    - dados malformados ou formatos desconhecidos: retorna estrutura segura fail-closed
+      com malformed_provenance=True e provenance_status='MALFORMED_PROVENANCE', sem nunca assumir PASS.
+    """
+    if raw_prov is None:
+        return build_asset_provenance(
+            task_id=task_id,
+            params=params,
+            material_sources=material_sources,
+            task_base_dir=task_base_dir,
+        )
+
+    if isinstance(raw_prov, bool) or not isinstance(raw_prov, (dict, list)):
+        logger.warning(
+            f"[COPYRIGHT_GATE] asset_provenance em formato escalar inválido na task '{task_id}': "
+            f"type={type(raw_prov).__name__}"
+        )
+        return _build_malformed_provenance_dict(f"invalid_type:{type(raw_prov).__name__}")
+
+    if isinstance(raw_prov, list):
+        if len(raw_prov) == 0:
+            built = build_asset_provenance(
+                task_id=task_id,
+                params=params,
+                material_sources=material_sources,
+                task_base_dir=task_base_dir,
+            )
+            built["raw_format"] = "empty_list"
+            return built
+
+        normalized_sources: List[Dict[str, Any]] = []
+        for idx, item in enumerate(raw_prov):
+            if not _is_valid_clip_item_dict(item):
+                logger.warning(
+                    f"[COPYRIGHT_GATE] Item #{idx} malformado em lista asset_provenance na task '{task_id}': "
+                    f"type={type(item).__name__}"
+                )
+                return _build_malformed_provenance_dict(f"invalid_list_item_at_{idx}")
+
+            norm_item = dict(item)
+            if not norm_item.get("local_file"):
+                norm_item["local_file"] = str(
+                    item.get("local_path") or item.get("material_path") or ""
+                )
+            if not norm_item.get("source_page"):
+                norm_item["source_page"] = (
+                    item.get("source_url") or item.get("provider_url") or ""
+                )
+            if not norm_item.get("search_term"):
+                norm_item["search_term"] = (
+                    item.get("query") or item.get("search_term_used") or ""
+                )
+            if not norm_item.get("asset_id") and item.get("external_id"):
+                norm_item["asset_id"] = item.get("external_id")
+            normalized_sources.append(norm_item)
+
+        built = build_asset_provenance(
+            task_id=task_id,
+            params=params,
+            material_sources=normalized_sources,
+            task_base_dir=task_base_dir,
+        )
+        visual_clips = built.get("visual_clips", [])
+        for idx, clip_dict in enumerate(visual_clips):
+            if idx < len(raw_prov) and isinstance(raw_prov[idx], dict):
+                for k, v in raw_prov[idx].items():
+                    if k not in clip_dict:
+                        clip_dict[k] = v
+        built["raw_format"] = "list"
+        return built
+
+    # isinstance(raw_prov, dict)
+    if len(raw_prov) == 0:
+        return build_asset_provenance(
+            task_id=task_id,
+            params=params,
+            material_sources=material_sources,
+            task_base_dir=task_base_dir,
+        )
+
+    if not any(k in raw_prov for k in _RECOGNIZED_PROVENANCE_DICT_KEYS):
+        logger.warning(
+            f"[COPYRIGHT_GATE] dict asset_provenance sem chaves reconhecidas na task '{task_id}': "
+            f"keys={list(raw_prov.keys())}"
+        )
+        return _build_malformed_provenance_dict("unrecognized_dict_keys")
+
+    bgm_val = raw_prov.get("bgm")
+    if bgm_val is not None and not isinstance(bgm_val, dict):
+        logger.warning(f"[COPYRIGHT_GATE] asset_provenance.bgm inválido na task '{task_id}'")
+        return _build_malformed_provenance_dict("invalid_bgm_field")
+
+    presenter_val = raw_prov.get("presenter")
+    if presenter_val is not None and not isinstance(presenter_val, dict):
+        logger.warning(f"[COPYRIGHT_GATE] asset_provenance.presenter inválido na task '{task_id}'")
+        return _build_malformed_provenance_dict("invalid_presenter_field")
+
+    clips_val = raw_prov.get("visual_clips")
+    if clips_val is not None and not isinstance(clips_val, list):
+        logger.warning(f"[COPYRIGHT_GATE] asset_provenance.visual_clips inválido na task '{task_id}'")
+        return _build_malformed_provenance_dict("invalid_visual_clips_field")
+
+    norm_clips: List[Dict[str, Any]] = []
+    for idx, c in enumerate(clips_val or []):
+        if not _is_valid_clip_item_dict(c):
+            logger.warning(
+                f"[COPYRIGHT_GATE] visual_clips[{idx}] inválido em dict asset_provenance na task '{task_id}'"
+            )
+            return _build_malformed_provenance_dict(f"invalid_visual_clip_at_{idx}")
+        c_copy = dict(c)
+        if not c_copy.get("local_file") and c_copy.get("local_path"):
+            c_copy["local_file"] = str(c_copy["local_path"])
+        norm_clips.append(c_copy)
+
+    if bgm_val is None or presenter_val is None:
+        base_built = build_asset_provenance(
+            task_id=task_id,
+            params=params,
+            material_sources=material_sources if clips_val is None else [],
+            task_base_dir=task_base_dir,
+        )
+        bgm_dict = dict(bgm_val) if isinstance(bgm_val, dict) else base_built["bgm"]
+        presenter_dict = dict(presenter_val) if isinstance(presenter_val, dict) else base_built["presenter"]
+        if clips_val is None:
+            norm_clips = base_built["visual_clips"]
+    else:
+        bgm_dict = dict(bgm_val)
+        presenter_dict = dict(presenter_val)
+
+    prov_status = raw_prov.get("provenance_status")
+    if not isinstance(prov_status, str) or not prov_status.strip():
+        bgm_enabled = bool(bgm_dict.get("enabled"))
+        prov_status = (
+            "SAFE_NO_BGM"
+            if not bgm_enabled and norm_clips
+            else (
+                "SAFE_PROCEDURAL"
+                if bgm_enabled and bgm_dict.get("provenance_status") == "SAFE_PROCEDURAL" and norm_clips
+                else ("UNVERIFIED_BGM" if bgm_enabled else "INCOMPLETE_ASSETS")
+            )
+        )
+
+    result = dict(raw_prov)
+    result["bgm"] = bgm_dict
+    result["visual_clips"] = norm_clips
+    result["presenter"] = presenter_dict
+    result["provenance_status"] = prov_status
+    return result
 
 
 def get_legacy_task_copyright_approval(
@@ -866,7 +1101,8 @@ def evaluate_copyright_provenance_gate(
     if os.path.isfile(script_file):
         try:
             with open(script_file, "r", encoding="utf-8") as f:
-                script_data = json.load(f)
+                loaded = json.load(f)
+                script_data = loaded if isinstance(loaded, dict) else {"asset_provenance": loaded}
         except Exception as exc:
             logger.warning(f"[COPYRIGHT_GATE] Falha ao ler script.json para {task_id}: {exc}")
     else:
@@ -874,23 +1110,40 @@ def evaluate_copyright_provenance_gate(
             target = task_artifacts._script_file(task_id)
             if target.is_file():
                 with target.open("r", encoding="utf-8") as f:
-                    script_data = json.load(f)
+                    loaded = json.load(f)
+                    script_data = loaded if isinstance(loaded, dict) else {"asset_provenance": loaded}
         except Exception:
             pass
 
-    params_data = script_data.get("params") or task_mem.get("params") or {}
-    asset_prov = script_data.get("asset_provenance") or task_mem.get("asset_provenance")
+    if not isinstance(task_mem, dict):
+        task_mem = {}
 
+    params_data = script_data.get("params") or task_mem.get("params") or {}
+    raw_asset_prov = _extract_raw_asset_provenance(script_data, task_mem)
     mat_sources_input = script_data.get("material_sources") or task_mem.get("material_sources")
-    if not asset_prov:
-        # Reconstrói a partir dos metadados existentes
-        asset_prov = build_asset_provenance(
-            task_id=task_id,
-            params=params_data,
-            material_sources=mat_sources_input,
-            task_base_dir=task_base_dir,
+
+    asset_prov = normalize_asset_provenance(
+        raw_prov=raw_asset_prov,
+        task_id=task_id,
+        params=params_data,
+        material_sources=mat_sources_input,
+        task_base_dir=task_base_dir,
+    )
+
+    if asset_prov.get("malformed_provenance"):
+        reason_detail = asset_prov.get("malformed_reason", "invalid_format")
+        return (
+            False,
+            f"Proveniência de ativos malformada ou em formato desconhecido ({reason_detail})",
+            {
+                "copyright_provenance_gate": "FAIL",
+                "provenance_status": "MALFORMED_PROVENANCE",
+                "visual_status": "MALFORMED_PROVENANCE",
+                "malformed_reason": reason_detail,
+            },
         )
-    elif not asset_prov.get("visual_clips"):
+
+    if not asset_prov.get("visual_clips") and asset_prov.get("raw_format") not in ("list", "empty_list"):
         # V1.5E: Se asset_provenance já existia persistido mas visual_clips está vazio
         # (caso de tasks legadas Flow sem material_sources/scene_materials no script.json),
         # tenta reconstrução estrita a partir do Flow manifest.
@@ -1207,22 +1460,28 @@ def get_copyright_provenance_summary(
     if os.path.isfile(script_file):
         try:
             with open(script_file, "r", encoding="utf-8") as f:
-                script_data = json.load(f)
+                loaded = json.load(f)
+                script_data = loaded if isinstance(loaded, dict) else {"asset_provenance": loaded}
         except Exception:
             pass
 
-    asset_prov = script_data.get("asset_provenance") or task_mem.get("asset_provenance")
-    if not asset_prov:
-        asset_prov = build_asset_provenance(
-            task_id=resolved_task_id,
-            params=script_data.get("params") or task_mem.get("params") or {},
-            material_sources=script_data.get("material_sources"),
-            task_base_dir=task_base_dir,
-        )
+    if not isinstance(task_mem, dict):
+        task_mem = {}
 
-    bgm_info = asset_prov.get("bgm", {})
-    visual_clips = asset_prov.get("visual_clips", [])
-    providers = list(sorted({c.get("provider", "").title() for c in visual_clips if c.get("provider")}))
+    raw_asset_prov = _extract_raw_asset_provenance(script_data, task_mem)
+    asset_prov = normalize_asset_provenance(
+        raw_prov=raw_asset_prov,
+        task_id=resolved_task_id,
+        params=script_data.get("params") or task_mem.get("params") or {},
+        material_sources=script_data.get("material_sources") or task_mem.get("material_sources"),
+        task_base_dir=task_base_dir,
+    )
+
+    is_malformed = bool(asset_prov.get("malformed_provenance"))
+    bgm_info = asset_prov.get("bgm") if isinstance(asset_prov.get("bgm"), dict) else {}
+    raw_clips = asset_prov.get("visual_clips")
+    visual_clips = [c for c in raw_clips if isinstance(c, dict)] if isinstance(raw_clips, list) else []
+    providers = list(sorted({str(c.get("provider", "")).title() for c in visual_clips if c.get("provider")}))
 
     gate_pass, _, _ = evaluate_copyright_provenance_gate(
         task_id=resolved_task_id,
@@ -1230,8 +1489,10 @@ def get_copyright_provenance_summary(
         task_base_dir=task_base_dir,
         db_path=db_path,
     )
+    if is_malformed:
+        gate_pass = False
 
-    presenter_info = asset_prov.get("presenter", {})
+    presenter_info = asset_prov.get("presenter") if isinstance(asset_prov.get("presenter"), dict) else {}
     presenter_mode = presenter_info.get("mode", "none")
     presenter_enabled = presenter_info.get("enabled", False)
     presenter_provider = presenter_info.get("provider", "local")
@@ -1248,20 +1509,20 @@ def get_copyright_provenance_summary(
     c_status = c_info.get("copyright_status") or COPYRIGHT_STATUS_UNKNOWN
     c_source = c_info.get("source") or "—"
     c_note = c_info.get("note")
-    if c_status == COPYRIGHT_STATUS_UNKNOWN:
+    if c_status == COPYRIGHT_STATUS_UNKNOWN and not is_malformed:
         legacy_appr = get_legacy_task_copyright_approval(task_id=resolved_task_id, db_path=db_path)
         if legacy_appr:
             c_status = legacy_appr.get("copyright_status") or COPYRIGHT_STATUS_CLEAN_MANUAL
             c_source = legacy_appr.get("source") or COPYRIGHT_SOURCE_OPERATOR
             c_note = legacy_appr.get("note")
-    feedback_eligible = (c_status == COPYRIGHT_STATUS_CLEAN_MANUAL)
+    feedback_eligible = bool(c_status == COPYRIGHT_STATUS_CLEAN_MANUAL and not is_malformed)
 
     return {
         "task_id": resolved_task_id,
         "bgm_mode": "none" if not bgm_info.get("enabled") else ("procedural" if bgm_info.get("source") == "procedural" else "custom"),
-        "bgm_filename": bgm_info.get("filename") or "Nenhuma (SAFE_NO_BGM)",
+        "bgm_filename": bgm_info.get("filename") or ("Desconhecida (MALFORMED_PROVENANCE)" if is_malformed else "Nenhuma (SAFE_NO_BGM)"),
         "bgm_provenance": bgm_info.get("provenance_status", "SAFE_NO_BGM"),
-        "visual_providers": providers or ["Pexels", "Pixabay", "Coverr"],
+        "visual_providers": providers if (providers or is_malformed or not gate_pass) else ["Pexels", "Pixabay", "Coverr"],
         "clips_count": len(visual_clips),
         "provenance_status": asset_prov.get("provenance_status", "SAFE_NO_BGM"),
         "copyright_gate_status": "PASS" if gate_pass else "FAIL",

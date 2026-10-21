@@ -2480,13 +2480,18 @@ def approve_legacy_task_copyright_op(
             raise ValueError(f"Falha ao ler script.json da task '{clean_task_id}': {exc}")
 
     params_data = script_data.get("params") or {}
-    asset_prov = script_data.get("asset_provenance")
-    if not asset_prov:
-        asset_prov = copyright_gate.build_asset_provenance(
-            task_id=clean_task_id,
-            params=params_data,
-            material_sources=script_data.get("material_sources"),
-            task_base_dir=task_base_dir,
+    raw_asset_prov = copyright_gate._extract_raw_asset_provenance(script_data)
+    asset_prov = copyright_gate.normalize_asset_provenance(
+        raw_prov=raw_asset_prov,
+        task_id=clean_task_id,
+        params=params_data,
+        material_sources=script_data.get("material_sources"),
+        task_base_dir=task_base_dir,
+    )
+    if asset_prov.get("malformed_provenance"):
+        raise ValueError(
+            f"Proveniência de ativos malformada na task '{clean_task_id}' "
+            f"({asset_prov.get('malformed_reason', 'invalid_format')})."
         )
 
     bgm_info = asset_prov.get("bgm") or {}

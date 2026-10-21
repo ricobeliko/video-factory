@@ -14,17 +14,20 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `18/10/2026`
-- **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop) / `WEB_UI_V2`
-- **CURRENT_FOCUS:** `HOTFIX CONSOLIDADO DE PRODUÇÃO AUTÔNOMA (BUSY REASON/MESSAGE + REJECTED_STRUCT)`
+- **LAST_UPDATED:** `21/10/2026`
+- **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
+- **CURRENT_FOCUS:** `HOTFIX V1 COPYRIGHT + RENDERIZAÇÃO COMPLETA (PRONTO PARA DEPLOY SUPERVISIONADO)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
+- **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / AUTONOMOUS_PRODUCTION_HOTFIX_VALIDATED`
-- **DEV_PATH:** `D:\Projetos\MoneyPrinterTurbo` (Notebook de desenvolvimento — onde alterações de código são feitas com o agente)
-- **CURRENT_MAIN_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
-- **DEV_BRANCH_HEAD_SHA:** `041200d854cf43bb717e7ff2e2873f7e5017ec3b` (origin/main)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `2d89b6e8dfb1bc1bac595e5bccc056d66ce83ba0` (deployado no PC Forte em 16/10/2026; VideoFactory e Web UI V2 ativos; auditoria read-only concluída)
-- **CURRENT_GATE:** `AUTONOMOUS_PRODUCTION_HOTFIX_LOCAL_COMMIT_GATE (NO PUSH / NO PROD DEPLOY)`
+- **PROJECT_STATUS:** `ACTIVE_DEV / V1_COPYRIGHT_FULL_RENDER_HOTFIX_VALIDATED`
+- **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
+- **CURRENT_MAIN_SHA:** `047920307b3004cb3797fb90867c4405f8a9a4a6` (origin/main pre-merge V1 aaf2975fd946c81ba377d9e1dccb573eee88f5ee)
+- **DEV_BRANCH_HEAD_SHA:** `feat/v1-integracao-lotes-1-2-3a` (integrada com Lotes 1, 2, 3A, 3B, 4, A5 + Hotfix UI/Segurança/Carregamento `b7280ef` + Hotfix Copyright/Renderização Completa sobre base `4c4c3b8188895154c3760429425a3d11391bd9f7`)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `b7280ef1a3cb2cc99d144d366ad3bd364d189ac6` (deployado no PC Forte; Fábrica em `PAUSED`, Scheduler/Auto Publish/Autonomia `OFF`, migração CA-03 ativa com 4 destinos tradicionais autorizados e 2 canais Quiz bloqueados)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Bundle Git do Hotfix V1 Copyright + Renderização Completa validado em DEV com 33/33 testes direcionados PASS)`
+- **V1_UI_SAFETY_LOADING_HOTFIX_STATUS:** `DEV VALIDATED (Correção de indentação/UnboundLocalError no Autopilot em webui/Main.py, seção explícita '📅 Agenda de Publicação — Scheduler & Auto Publish' com proteção PRIMARY/SECONDARY, bloqueio de partida incondicional de start_scheduler_worker e de polling em PAUSED, persist=False no render passivo do Autopilot, e render_pass_scope eliminando 11x varreduras redundantes de estoque e 3x de histórico sem cache persistente; 24/24 testes direcionados PASS)`
+- **V1_COPYRIGHT_FULL_RENDER_HOTFIX_STATUS:** `DEV VALIDATED (Normalização segura fail-closed de asset_provenance em app/services/copyright_gate.py, operator_console.py e quality_recovery.py suportando dict canônico, list legítima do pipeline Quiz sem perda de evidências, lista vazia [], None e dados malformados sem nunca assumir PASS automático; alinhamento da sequência de renderização 1->2->3->4->5 em webui/Main.py até o Autopilot; 33/33 testes direcionados PASS)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
 - **R9_2_STATUS:** `DEV VALIDATED (Multi-Channel Operations & UX: foco manual persistente com toggle dinâmico, sanitização anti-HTML bruto via sanitizeDisplayText, cards factuais de gates no drawer, estados SCHEDULED/RETRY)`
 - **R9_3_STATUS:** `COMPLETED / DEV VALIDATED (Homologação Integrada R9.3: Cenários A..F aprovados, correção da precedência de profile_id na descoberta de tarefas ativas multicanal, eliminação de defaults sintéticos em gates completos, 27 testes direcionados PASS, build Vite 7.22s PASS)`
@@ -112,6 +115,17 @@
         - Tratamento explícito para `res.get("status") == "busy"` com `st.toast(display_msg, icon="⏳")` e `st.warning(display_msg)`.
     - **Validação Local:** 4 testes unitários isolados em `test/services/test_hotfix_autonomous_cycle_busy.py` (100% PASS).
 - **QUIZ_ENGINE_STATUS:** `DEV HOMOLOGATED / Q5-B2A.1 COMPLETE` (Homologação real concluída com sucesso em DEV; preflight de produção Q5-B2A validado; Quiz Engine exposto na Web UI via STRUCTURE_QUIZ_DILEMMA em Q5-B2A.1; pipeline tradicional 100% preservado; aguardando autorização humana para Q5-B2B)
+- **QUIZ_SAFETY_GATE_HOTFIX_STATUS:** `DEV VALIDATED / ROUTING HOTFIX COMPLETE (19/10/2026)`
+  - **Sintoma / Problema:** O canal *Dose Diária de Escolhas* utiliza o formato `quiz_dilemma` com layout Q0-R homologado. Mesmo após a instalação inicial do hotfix `d6937c4`, o ciclo autônomo permaneceu bloqueado (ex.: TASK_ID `61143861-a0ab-4b56-ac67-ae55cf27ba37`) com a mensagem: `Safety Gate blocked script: Hook/abertura muito semelhante a vídeo recente (100%); CTA muito semelhante ao vídeo recente (100%); Mesma estrutura narrativa usada 3+ vezes consecutivas.`, revelando que tarefas reais de quiz ainda estavam sendo avaliadas pelo Safety Gate tradicional.
+  - **Causa Raiz Comprovada (Tríplice Falha de Roteamento):**
+    1. *Checagem Rígida e Atributo Morto em `is_quiz_dilemma`:* `is_quiz_dilemma` realizava correspondência estrita contra apenas a literal `"quiz_dilemma"` (rejeitando variantes como `"quiz"`, `"quiz_escolhas_impossiveis"`, etc.) e tentava `getattr(params, "video_format", None)`, um campo inexistente em `VideoParams` (pertencente apenas a `content_profiles`/`settings_json`). Se `narrative_structure` viesse nulo nos parâmetros, a função falhava em consultar o perfil do canal.
+    2. *Desvio de Entrada no Pipeline (`_run_pipeline`):* Em `app/services/task.py` (linha 3236), a verificação avaliava apenas `getattr(params, "narrative_structure", None) or ""`. Se uma tarefa entrasse com estrutura vazia/None, ela não consultava o perfil do canal (`params.profile_id` ou `task_id`), ignorando `_run_quiz_pipeline` e caindo no gerador de roteiro tradicional e no Safety Gate tradicional.
+    3. *Fallback Inadequado Dentro de `_run_quiz_pipeline`:* Nas linhas 2837 e 3018 de `task.py`, caso `is_quiz_dilemma` retornasse `False`, o fluxo caía no `else:` invocando o Safety Gate tradicional. Como roteiros gerados pelo Quiz Engine possuem Hook e CTA padronizados do layout Q0-R ("O que você prefere?", "Passar direto..."), a validação tradicional os comparava com o histórico global e gerava bloqueio por 100% de similaridade de Hook/CTA e estrutura repetida 3+ vezes.
+  - **Solução Implementada & Auditada:**
+    - `app/services/quiz_safety_gate.py`: `is_quiz_dilemma` expandida para consultar o perfil do canal (`profile_manager.get_generation_profile_context`) via `profile_id` ou `task_id` quando `narrative_structure` não for explícito, e reconhecer variantes de quiz dilema (`quiz`, `quiz_dilemma`, `quiz_escolhas_impossiveis`), preservando a exclusão de formatos tradicionais e `quiz_paper`.
+    - `app/services/task.py`: Em `_run_pipeline`, se `narrative_structure` for nulo ou `"auto"`, o formato é herdado do perfil do canal e a tarefa é roteada para `_run_quiz_pipeline`. Dentro de `_run_quiz_pipeline`, a avaliação de roteiro e de duração utiliza estritamente o `quiz_safety_gate` (`evaluate_quiz_script_safety` e `evaluate_quiz_duration_safety`), eliminando qualquer fallback para o validador tradicional de texto contínuo.
+    - O pipeline e o Safety Gate tradicional permanecem 100% preservados e inalterados para todos os formatos tradicionais.
+    - **Validação:** 4 testes direcionados em `test/services/test_quiz_safety_routing.py` reproduzindo a configuração real de *Dose Diária de Escolhas* e canais tradicionais (100% PASS). Total acumulado da suíte quiz safety: 22 testes PASS.
 - **WEB_UI_V2_STATUS:** `GATE FINAL PRÉ-DEPLOY APROVADO / READY FOR CONTROLLED PRODUCTION DEPLOY`
 - **BLOCKERS:** `NONE` (em DEV); Push autorizado para origin/main e deploy controlado no PC Forte
 - **DEFERRED_ITEMS:**
@@ -1916,11 +1930,15 @@ Entregas V16.4.1A:
 
 ### V16.13 — Google Flow Video Mode Detection Resiliency (Homologada em DEV)
 - **Status:** DEV_HOMOLOGATED / PENDING_ARCHITECT_APPROVAL (14/10/2026)
-- **Branch:** ix/flow-video-mode-detection
+- **Branch:** 
+ix/flow-video-mode-detection
 - **Componentes e Arquitetura:**
   - scripts/flow_playwright.py (ensure_video_generation_mode):
-    - Ampliação dos seletores de busca por gatilho de modo/configurações (suporte a eo, modelo, modo, configurações, settings, ria-label).
-    - Fallback de superfície por sinais positivos de vídeo quando o gatilho antigo não estiver presente (badges Veo/Veo 2, chips de parâmetros de vídeo 720p, 1080p, 4s, 5s, 8s, 24fps, 30fps, componentes low-video-hotbar, ícones ideocam).
+    - Ampliação dos seletores de busca por gatilho de modo/configurações (suporte a 
+eo, modelo, modo, configurações, settings, ria-label).
+    - Fallback de superfície por sinais positivos de vídeo quando o gatilho antigo não estiver presente (badges Veo/Veo 2, chips de parâmetros de vídeo 720p, 1080p, 4s, 5s, 8s, 24fps, 30fps, componentes 
+low-video-hotbar, ícones 
+ideocam).
     - Detecção fail-closed estrita para sinais conflitantes de imagem (Nano Banana, Imagen 3, 	ext to image), abortando antes de qualquer clique em Generate.
     - Telemetria de diagnóstico estruturada (diagnostics com 	ried_triggers, positive_video_signals, conflicting_image_signals).
     - Helper _safe_locator_count(loc) para compatibilidade total entre Playwright nativo e mocks de teste MagicMock.

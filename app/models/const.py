@@ -49,14 +49,35 @@ MONETIZATION_PRESET_CHOICES = [
     PRESET_YOUTUBE_ORIGINAL,
 ]
 
-# Narrative Structures
+# Video Formats (Motor de Produção / Pipeline - Fase V1 Consolidação)
+VIDEO_FORMAT_TRADITIONAL = "traditional"
+VIDEO_FORMAT_QUIZ_DILEMMA = "quiz_dilemma"
+VIDEO_FORMAT_QUIZ_PAPER = "quiz_paper"
+VIDEO_FORMATS = [
+    VIDEO_FORMAT_TRADITIONAL,
+    VIDEO_FORMAT_QUIZ_DILEMMA,
+    VIDEO_FORMAT_QUIZ_PAPER,
+]
+DEFAULT_VIDEO_FORMAT = VIDEO_FORMAT_TRADITIONAL
+
+# Narrative Structures (Estruturas Retóricas de Roteiro Tradicional)
 STRUCTURE_MYSTERY = "investigative_mystery"
 STRUCTURE_EXPLAINER = "explainer"
 STRUCTURE_FACT_CONTEXT = "fact_context"
 STRUCTURE_MYTH_REALITY = "myth_vs_reality"
 STRUCTURE_SHORT_STORY = "short_story"
+
+# Subestruturas e legado retrocompatível
 STRUCTURE_QUIZ_DILEMMA = "quiz_dilemma"
 STRUCTURE_QUIZ_PAPER = "quiz_paper"
+
+TRADITIONAL_NARRATIVE_STRUCTURES = [
+    STRUCTURE_MYSTERY,
+    STRUCTURE_EXPLAINER,
+    STRUCTURE_FACT_CONTEXT,
+    STRUCTURE_MYTH_REALITY,
+    STRUCTURE_SHORT_STORY,
+]
 
 NARRATIVE_STRUCTURES = [
     STRUCTURE_MYSTERY,

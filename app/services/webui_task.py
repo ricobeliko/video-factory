@@ -186,6 +186,71 @@ def submit_generation(
     if "monetization_preset" not in explicit_fields or not task_params.monetization_preset:
         task_params.monetization_preset = ctx.get("default_preset")
 
+    # 5. Formato de Vídeo (Motor de Produção)
+    if "video_format" in explicit_fields and getattr(params, "video_format", None):
+        task_params.video_format = params.video_format
+    else:
+        task_params.video_format = ctx.get("video_format") or const.VIDEO_FORMAT_TRADITIONAL
+
+    # 6. Estrutura Narrativa (Retórica do Roteiro Tradicional)
+    if "narrative_structure" in explicit_fields and params.narrative_structure not in (None, "", "auto"):
+        task_params.narrative_structure = params.narrative_structure
+    else:
+        if task_params.video_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER):
+            task_params.narrative_structure = task_params.video_format
+        else:
+            task_params.narrative_structure = ctx.get("narrative_structure") or None
+
+    # 7. Diretriz Temática Editorial (topic_brief)
+    if "topic_brief" not in explicit_fields or not getattr(task_params, "topic_brief", None):
+        task_params.topic_brief = ctx.get("topic_brief") or None
+
+    # 8. Encerramento e Quantidade de Questões (Quiz)
+    if "closing_type" not in explicit_fields or getattr(task_params, "closing_type", None) in (None, "", "auto"):
+        task_params.closing_type = ctx.get("closing_type") or None
+    if "num_questions" not in explicit_fields or not getattr(task_params, "num_questions", None):
+        task_params.num_questions = ctx.get("num_questions") or None
+
+    # 9. Voz e Narração
+    if "voice_name" not in explicit_fields or not getattr(task_params, "voice_name", None):
+        task_params.voice_name = ctx.get("voice_name") or ""
+    if "voice_rate" not in explicit_fields or getattr(task_params, "voice_rate", None) is None:
+        task_params.voice_rate = ctx.get("voice_rate", 1.0)
+    if "voice_volume" not in explicit_fields or getattr(task_params, "voice_volume", None) is None:
+        task_params.voice_volume = ctx.get("voice_volume", 1.0)
+
+    # 10. Direção Visual & Google Flow (exclusivo para traditional; desativado em quiz)
+    if task_params.video_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER):
+        task_params.flow_enabled = False
+        task_params.visual_director_enabled = False
+    else:
+        if "flow_enabled" not in explicit_fields:
+            task_params.flow_enabled = bool(ctx.get("flow_enabled", False))
+        if "visual_director_enabled" not in explicit_fields:
+            task_params.visual_director_enabled = bool(ctx.get("visual_director_enabled", False))
+        if "visual_style_brief" not in explicit_fields or not getattr(task_params, "visual_style_brief", None):
+            task_params.visual_style_brief = str(ctx.get("visual_style_brief") or "")
+        if "flow_scene_count" not in explicit_fields or not getattr(task_params, "flow_scene_count", None):
+            task_params.flow_scene_count = int(ctx.get("flow_scene_count", 6))
+        if "stock_fallback_enabled" not in explicit_fields:
+            task_params.stock_fallback_enabled = bool(ctx.get("stock_fallback_enabled", True))
+
+    # 11. Legendas e Isenção de SRT
+    if task_params.video_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER):
+        task_params.subtitle_required = False
+        task_params.subtitle_enabled = False
+    else:
+        if "subtitle_position" not in explicit_fields or not getattr(task_params, "subtitle_position", None):
+            task_params.subtitle_position = ctx.get("subtitle_position", "bottom")
+        if "font_size" not in explicit_fields or not getattr(task_params, "font_size", None):
+            task_params.font_size = ctx.get("subtitle_font_size", 60)
+
+    # 12. Trilha Sonora (BGM)
+    if "bgm_type" not in explicit_fields or not getattr(task_params, "bgm_type", None):
+        if ctx.get("music_enabled"):
+            task_params.bgm_volume = ctx.get("music_volume", 0.20)
+            task_params.bgm_default_mood = ctx.get("music_default_mood", "neutral")
+
     # Persistência imutável da associação task <-> profile
     profile_manager.save_task_profile(task_id, assigned_profile_id, db_path=db_path)
 

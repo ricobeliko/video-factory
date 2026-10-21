@@ -142,6 +142,7 @@ def evaluate_retry_decision(
     has_canonical_success: Optional[bool] = None,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
     current_time: Optional[datetime] = None,
+    channel_id: Optional[str] = None,
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> RetryDecision:
@@ -160,7 +161,9 @@ def evaluate_retry_decision(
     # 1. Sucesso canônico em publication_events (Verdade definitiva - V16.4.2A / V16.4.2B)
     if has_canonical_success is None:
         from app.services import publishing_idempotency
-        canon = publishing_idempotency.check_canonical_publication_status(clean_task, clean_plat, db_path=db_path, conn=conn)
+        canon = publishing_idempotency.check_canonical_publication_status(
+            clean_task, clean_plat, channel_id=channel_id, db_path=db_path, conn=conn
+        )
         has_canonical_success = bool(canon.get("is_published"))
 
     if has_canonical_success:
@@ -301,6 +304,13 @@ def cleanup_residual_retries(
                 WHERE pe.task_id = sp.task_id
                   AND pe.platform = sp.platform
                   AND pe.status = 'success'
+                  AND (
+                    sp.channel_id IS NULL
+                    OR sp.channel_id = ''
+                    OR pe.channel_id = sp.channel_id
+                    OR pe.channel_id IS NULL
+                    OR pe.channel_id = ''
+                  )
               );
             """
         ).fetchall()
@@ -375,6 +385,13 @@ def cleanup_residual_retries(
                     WHERE pe.task_id = scheduled_posts.task_id
                       AND pe.platform = scheduled_posts.platform
                       AND pe.status = 'success'
+                      AND (
+                        scheduled_posts.channel_id IS NULL
+                        OR scheduled_posts.channel_id = ''
+                        OR pe.channel_id = scheduled_posts.channel_id
+                        OR pe.channel_id IS NULL
+                        OR pe.channel_id = ''
+                      )
                   );
                 """
             )

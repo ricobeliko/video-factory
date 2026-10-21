@@ -86,17 +86,536 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
 
     # Idempotência aprimorada por task_id + channel_id + platform
     conn.execute("DROP INDEX IF EXISTS idx_active_schedule;")
+    try:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
+            ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
+            WHERE status IN ('planned', 'ready', 'published');
+            """
+        )
+    except sqlite3.IntegrityError:
+        # Se existirem duplicatas ativas legadas, neutraliza para 'cancelled' antes de criar o índice único
+        conn.execute(
+            """
+            UPDATE scheduled_posts
+            SET status = 'cancelled',
+                next_attempt_at = NULL,
+                last_error = 'Neutralizado por migracao de schema (duplicata ativa pre-existente)'
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM scheduled_posts
+                WHERE status IN ('planned', 'ready', 'published')
+                GROUP BY task_id, COALESCE(channel_id, ''), platform
+            ) AND status IN ('planned', 'ready', 'published');
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
+            ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
+            WHERE status IN ('planned', 'ready', 'published');
+            """
+        )
+
+    # Migrações Lote 3A: autorização individual por canal e índice de eventos multicanal
+    cur_ch = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_channels';").fetchone()
+    if cur_ch:
+        ch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(publishing_channels);").fetchall()}
+        if "auto_publish_authorized" not in ch_cols:
+            conn.execute("ALTER TABLE publishing_channels ADD COLUMN auto_publish_authorized INTEGER NOT NULL DEFAULT 0;")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pub_channels_auth ON publishing_channels(id, is_enabled, auto_publish_authorized);")
+
     conn.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_active_schedule_v2
-        ON scheduled_posts(task_id, COALESCE(channel_id, ''), platform)
-        WHERE status IN ('planned', 'ready', 'published');
+        CREATE INDEX IF NOT EXISTS idx_pub_events_task_plat_chan
+        ON publication_events(task_id, platform, COALESCE(channel_id, ''));
         """
     )
 
 
+# ---------------------------------------------------------------------------
+# Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)
+# ---------------------------------------------------------------------------
+
+def is_channel_auto_publish_authorized(
+    channel_id: Optional[str],
+    profile_id: Optional[str] = None,
+    platform: Optional[str] = None,
+    db_path: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
+) -> bool:
+    """Validação canônica Fail-Closed estrita de autorização de publicação automática por canal (CF-01, CF-02).
+
+    Regras canônicas:
+    1. channel_id obrigatório e não vazio. Se ausente, vazio ou ambíguo -> FAIL-CLOSED (retorna False).
+    2. Tabela publishing_channels deve existir no banco de dados.
+    3. O canal com id == channel_id deve existir na tabela publishing_channels.
+    4. publishing_channels.is_enabled deve ser estritamente 1.
+    5. publishing_channels.auto_publish_authorized deve ser estritamente 1 (DEFAULT 0).
+    6. Perfil vinculado (content_profiles) deve estar ativo (is_active == 1), se existir.
+    7. ZERO heurísticas de texto ou exceções implícitas por nome/substring.
+    """
+    clean_chan = str(channel_id).strip() if channel_id else None
+    if not clean_chan:
+        # CF-02: Ausência de canal é estritamente fail-closed
+        return False
+
+    def _eval(c: sqlite3.Connection) -> bool:
+        tbl = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_channels';").fetchone()
+        if not tbl:
+            return False
+
+        row = c.execute(
+            """
+            SELECT id, profile_id, platform, is_enabled,
+                   COALESCE(auto_publish_authorized, 0) AS auto_publish_authorized
+            FROM publishing_channels
+            WHERE id = ?;
+            """,
+            (clean_chan,),
+        ).fetchone()
+
+        if not row:
+            return False
+
+        if int(row["is_enabled"] or 0) != 1:
+            return False
+
+        if int(row["auto_publish_authorized"] or 0) != 1:
+            return False
+
+        # Verifica se o content_profile vinculado está ativo
+        cp_tbl = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_profiles';").fetchone()
+        if cp_tbl and row["profile_id"]:
+            p_row = c.execute(
+                "SELECT is_active FROM content_profiles WHERE id = ?;",
+                (row["profile_id"],),
+            ).fetchone()
+            if p_row and int(p_row["is_active"] or 0) != 1:
+                return False
+
+        return True
+
+    if conn is not None:
+        return _eval(conn)
+    with get_connection(db_path) as c:
+        return _eval(c)
+
+
+def set_channel_auto_publish_authorized(
+    channel_id: str,
+    authorized: bool,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Define a autorização de publicação automática para um canal específico (CF-01)."""
+    clean_chan = str(channel_id).strip()
+    if not clean_chan:
+        raise ValueError("channel_id não pode ser vazio")
+
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, display_name, profile_id, platform FROM publishing_channels WHERE id = ?;",
+            (clean_chan,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Canal '{clean_chan}' não encontrado em publishing_channels")
+
+        val = 1 if authorized else 0
+        conn.execute(
+            "UPDATE publishing_channels SET auto_publish_authorized = ? WHERE id = ?;",
+            (val, clean_chan),
+        )
+
+    from app.services import operator_console
+    operator_console.log_operational_event(
+        component="scheduler",
+        severity="INFO" if authorized else "WARNING",
+        event_type="CHANNEL_AUTO_PUBLISH_TOGGLED",
+        message=f"Canal '{clean_chan}' ({row['display_name']}) auto_publish_authorized={val}",
+        metadata={"channel_id": clean_chan, "authorized": bool(val), "platform": row["platform"]},
+        db_path=db_path,
+    )
+    return True
+
+
+def migrate_channel_auto_publish_authorizations(
+    db_path: Optional[str] = None,
+    allow_channels: Optional[List[str]] = None,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Migração explícita e auditável de canais para publicação automática (CF-01).
+
+    Regras CF-01:
+    - Exige lista explícita allow_channels para qualquer concessão de auto_publish_authorized = 1.
+    - Se allow_channels for None ou vazio, NENHUM canal é autorizado.
+    - Histórico de publicações em publication_events é puramente diagnóstico (não autoriza).
+    - Preserva auto_publish_authorized = 0 para canais não contidos em allow_channels.
+    - Por padrão (dry_run=True), apenas avalia e emite relatório sem alterar o banco.
+    """
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        tbl = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_channels';").fetchone()
+        if not tbl:
+            return {"status": "skipped", "reason": "publishing_channels_table_not_found", "dry_run": dry_run}
+
+        channels = conn.execute(
+            """
+            SELECT c.id, c.display_name, c.profile_id, c.platform, c.is_enabled,
+                   COALESCE(c.auto_publish_authorized, 0) AS auto_publish_authorized,
+                   (SELECT COUNT(*) FROM publication_events pe WHERE pe.channel_id = c.id AND pe.status = 'success') AS success_count
+            FROM publishing_channels c;
+            """
+        ).fetchall()
+
+        eligible = []
+        blocked = []
+        already_authorized = []
+
+        allowed_set = set(str(c).strip() for c in allow_channels) if allow_channels else set()
+
+        for ch in channels:
+            cid = ch["id"]
+            dname = str(ch["display_name"] or "")
+            is_en = int(ch["is_enabled"] or 0)
+            cur_auth = int(ch["auto_publish_authorized"] or 0)
+            succ_cnt = int(ch["success_count"] or 0)
+
+            diag = {
+                "channel_id": cid,
+                "display_name": dname,
+                "platform": ch["platform"],
+                "previous_successes": succ_cnt,
+            }
+
+            if cur_auth == 1:
+                already_authorized.append(diag)
+                continue
+
+            if is_en != 1:
+                blocked.append({**diag, "reason": "channel_disabled"})
+                continue
+
+            # CF-01: Exige allow_channels explícito para qualquer autorização
+            if allowed_set and cid in allowed_set:
+                eligible.append(diag)
+            else:
+                blocked.append({**diag, "reason": "not_in_allow_channels"})
+
+        if not dry_run and eligible:
+            for item in eligible:
+                conn.execute(
+                    "UPDATE publishing_channels SET auto_publish_authorized = 1 WHERE id = ?;",
+                    (item["channel_id"],),
+                )
+
+    if not dry_run and eligible:
+        from app.services import operator_console
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="INFO",
+            event_type="CHANNEL_MIGRATION_EXECUTED",
+            message=f"Migração de autorização executada para {len(eligible)} canais.",
+            metadata={"eligible_channels": [e["channel_id"] for e in eligible]},
+            db_path=db_path,
+        )
+
+    return {
+        "status": "dry_run" if dry_run else "executed",
+        "dry_run": dry_run,
+        "eligible_channels": eligible,
+        "blocked_channels": blocked,
+        "already_authorized": already_authorized,
+        "total_processed": len(channels),
+    }
+
+def is_task_held_for_safety_review(
+    task_id: str,
+    task_data: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Tuple[bool, Optional[str]]:
+    """Verifica de forma canônica e fail-closed se uma task está retida em HELD_SAFETY_REVIEW / REVIEW / BLOCK.
+    Consulta em memória (task_data / sm.state), tabelas SQLite (monetization_safety e quiz_safety_history) e script.json.
+    """
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return False, None
+
+    # 1. Payload em memória (task_data)
+    if isinstance(task_data, dict):
+        stage_val = str(task_data.get("stage") or "").strip().upper()
+        if stage_val == "HELD_SAFETY_REVIEW":
+            return True, "HELD_SAFETY_REVIEW"
+        s_status = str(task_data.get("safety_status") or "").strip().upper()
+        if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+            return True, s_status
+
+    # 2. State Manager em memória
+    try:
+        from app.controllers.manager import memory_manager as sm
+        st_task = sm.state.get_task(clean_tid) or {}
+        if isinstance(st_task, dict):
+            stage_val = str(st_task.get("stage") or "").strip().upper()
+            if stage_val == "HELD_SAFETY_REVIEW":
+                return True, "HELD_SAFETY_REVIEW"
+            s_status = str(st_task.get("safety_status") or "").strip().upper()
+            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                return True, s_status
+    except Exception:
+        pass
+
+    # 3. Tabela monetization_safety (Safety Gate tradicional)
+    try:
+        from app.services import safety_gate
+        safety_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
+        if safety_rec:
+            s_status = str(safety_rec.get("safety_status") or "").strip().upper()
+            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                return True, s_status
+    except Exception:
+        pass
+
+    # 4. Tabela quiz_safety_history (Quiz Safety Gate)
+    try:
+        with get_connection(db_path) as conn:
+            has_qsh = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
+            ).fetchone()
+            if has_qsh:
+                q_row = conn.execute(
+                    "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if q_row:
+                    s_status = str(q_row["safety_status"] or "").strip().upper()
+                    if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                        return True, s_status
+    except Exception:
+        pass
+
+    # 5. Artefato persistido script.json em disco
+    try:
+        base_dir = task_base_dir or utils.task_dir()
+        script_file = os.path.join(base_dir, clean_tid, "script.json")
+        if os.path.isfile(script_file):
+            with open(script_file, "r", encoding="utf-8") as sf:
+                s_data = json.load(sf)
+            if isinstance(s_data, dict):
+                stage_val = str(s_data.get("stage") or "").strip().upper()
+                if stage_val == "HELD_SAFETY_REVIEW":
+                    return True, "HELD_SAFETY_REVIEW"
+                s_status = str(s_data.get("safety_status") or "").strip().upper()
+                if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                    return True, s_status
+    except Exception:
+        pass
+
+    return False, None
+
+
+def validate_candidate_technical_and_safety_gates(
+    task_id: str,
+    task_data: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Centraliza a validação fail-closed dos gates técnico, segurança e copyright.
+
+    Consumida canonicamente por:
+    - scheduler.plan_schedule
+    - autonomous_production._recover_waiting_task
+    - quality_recovery.apply_human_review_decision
+    """
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return False, "TASK_ID_MISSING", {"task_id": ""}
+
+    effective_task_base = task_base_dir or utils.task_dir()
+
+    # 1. Recupera metadados de script.json e sm.state para validação consolidada
+    script_data: Dict[str, Any] = {}
+    try:
+        script_file = os.path.join(effective_task_base, clean_tid, "script.json")
+        if os.path.isfile(script_file):
+            with open(script_file, "r", encoding="utf-8") as sf:
+                raw_s = json.load(sf)
+                if isinstance(raw_s, dict):
+                    script_data = raw_s
+    except Exception:
+        pass
+
+    state_data: Dict[str, Any] = {}
+    try:
+        from app.services import state as sm
+        st = sm.state.get_task(clean_tid)
+        if isinstance(st, dict):
+            state_data = st
+    except Exception:
+        pass
+
+    merged_data: Dict[str, Any] = {}
+    if isinstance(task_data, dict):
+        merged_data.update(task_data)
+    for k, v in state_data.items():
+        if k not in merged_data or merged_data[k] is None:
+            merged_data[k] = v
+    for k, v in script_data.items():
+        if k not in merged_data or merged_data[k] is None:
+            merged_data[k] = v
+
+    # 2. Gate Técnico: Estado da tarefa e estágios com falha
+    current_state = merged_data.get("state")
+    if current_state in (const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED) or merged_data.get("cancelled"):
+        return False, f"TECHNICAL_GATE_FAILED: state={current_state}", {"state": current_state}
+
+    failed_stage = merged_data.get("failed_stage") or script_data.get("failed_stage") or state_data.get("failed_stage")
+    if failed_stage:
+        return False, f"TECHNICAL_GATE_FAILED_STAGE: {failed_stage}", {"failed_stage": failed_stage}
+
+    # 3. Gate Técnico: Integridade do arquivo MP4
+    video_file = merged_data.get("video_file")
+    if not (video_file and os.path.isfile(video_file) and os.path.getsize(video_file) > 0):
+        disk_video = get_task_final_video(clean_tid, task_base_dir=effective_task_base)
+        if disk_video and os.path.isfile(disk_video) and os.path.getsize(disk_video) > 0:
+            video_file = disk_video
+        else:
+            return False, "TECHNICAL_GATE_VIDEO_MISSING_OR_EMPTY", {"mp4_exists": False}
+
+    try:
+        video_size = os.path.getsize(video_file)
+        if video_size <= 0:
+            return False, "TECHNICAL_GATE_VIDEO_EMPTY", {"file_size": 0}
+    except Exception as sz_exc:
+        return False, f"TECHNICAL_GATE_VIDEO_ACCESS_ERROR: {sz_exc}", {"mp4_exists": False}
+
+    # 4. Gate Técnico: Final Media Quality e Duração
+    fmq_status = (
+        merged_data.get("final_media_quality_status")
+        or script_data.get("final_media_quality_status")
+        or (merged_data.get("final_media_quality") or {}).get("status")
+        or (script_data.get("final_media_quality") or {}).get("status")
+    )
+    if fmq_status and str(fmq_status).upper().strip() in ("BLOCK", "BLOCKED", "FAIL", "FAILED"):
+        fmq_reasons = (
+            merged_data.get("final_media_quality_reasons")
+            or script_data.get("final_media_quality_reasons")
+            or (merged_data.get("final_media_quality") or {}).get("reasons")
+            or []
+        )
+        return False, f"TECHNICAL_GATE_FINAL_MEDIA_QUALITY_BLOCKED: {fmq_reasons}", {
+            "final_media_quality_status": "BLOCK",
+            "reasons": fmq_reasons,
+        }
+
+    duration_val = merged_data.get("duration") or script_data.get("duration")
+    if duration_val is not None:
+        try:
+            if float(duration_val) <= 0:
+                return False, "TECHNICAL_GATE_INVALID_DURATION", {"duration": duration_val}
+        except (ValueError, TypeError):
+            pass
+
+    # 5. Gate de Segurança: Fail-Closed e Prevalência de Registros Persistidos
+    # 5.1 Barreira canônica de retenção
+    is_held, hold_reason = is_task_held_for_safety_review(
+        clean_tid,
+        task_data=merged_data,
+        db_path=db_path,
+        task_base_dir=effective_task_base,
+    )
+    if is_held:
+        return False, f"SAFETY_GATE_HELD_FOR_REVIEW: {hold_reason}", {"safety_status": hold_reason}
+
+    # 5.2 Consulta persistida no banco SQLite: monetization_safety e quiz_safety_history
+    persisted_safety_status = None
+    try:
+        from app.services import safety_gate
+        s_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
+        if s_rec and s_rec.get("safety_status"):
+            persisted_safety_status = str(s_rec.get("safety_status")).upper().strip()
+    except Exception:
+        pass
+
+    persisted_quiz_safety = None
+    try:
+        with get_connection(db_path) as conn:
+            has_qsh = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
+            ).fetchone()
+            if has_qsh:
+                q_row = conn.execute(
+                    "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
+                    (clean_tid,),
+                ).fetchone()
+                if q_row and q_row["safety_status"]:
+                    persisted_quiz_safety = str(q_row["safety_status"]).upper().strip()
+    except Exception:
+        pass
+
+    # Prevalência estrita de registros adversos persistidos
+    if persisted_safety_status and persisted_safety_status != const.SAFETY_STATUS_PASS:
+        return False, f"SAFETY_GATE_PERSISTED_NOT_PASS: monetization_safety={persisted_safety_status}", {
+            "safety_status": persisted_safety_status
+        }
+    if persisted_quiz_safety and persisted_quiz_safety != const.SAFETY_STATUS_PASS:
+        return False, f"SAFETY_GATE_PERSISTED_NOT_PASS: quiz_safety_history={persisted_quiz_safety}", {
+            "safety_status": persisted_quiz_safety
+        }
+
+    effective_safety = (
+        persisted_safety_status
+        or persisted_quiz_safety
+        or str(merged_data.get("safety_status") or "").upper().strip()
+    )
+    if effective_safety != const.SAFETY_STATUS_PASS:
+        return False, f"SAFETY_GATE_NOT_PASS: {effective_safety or 'MISSING'}", {
+            "safety_status": effective_safety or "MISSING"
+        }
+
+    # 6. Gate de Copyright
+    cp_ok = False
+    cp_reason = ""
+    try:
+        from app.services import copyright_gate
+        c_pass, c_reason, _ = copyright_gate.evaluate_copyright_provenance_gate(
+            task_id=clean_tid,
+            task_data=merged_data,
+            task_base_dir=effective_task_base,
+            db_path=db_path,
+        )
+        cp_ok = bool(c_pass)
+        cp_reason = str(c_reason or "")
+    except Exception as cp_exc:
+        cp_ok = False
+        cp_reason = f"Exceção ao avaliar copyright: {cp_exc}"
+
+    if not cp_ok:
+        return False, f"COPYRIGHT_GATE_FAILED: {cp_reason}", {
+            "copyright_status": "BLOCK",
+            "copyright_reason": cp_reason,
+        }
+
+    return True, "TECHNICAL_SAFETY_AND_COPYRIGHT_PASS", {
+        "mp4_exists": True,
+        "video_file": video_file,
+        "safety_status": const.SAFETY_STATUS_PASS,
+        "copyright_status": "PASS",
+    }
+
+
+
+# ---------------------------------------------------------------------------
 def init_db(db_path: Optional[str] = None) -> None:
     """Inicializa o schema do banco SQLite de forma idempotente."""
+    # CF-02: Elimina dependência de ordem entre init_db e init_profile_db
+    try:
+        from app.services import profile_manager
+        profile_manager.init_profile_db(db_path)
+    except Exception as exc:
+        logger.debug(f"[SCHEDULER] init_profile_db durante init_db: {exc}")
+
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
 
@@ -796,8 +1315,6 @@ def get_platform_rate_limits(
         "available_slots": available_slots,
     }
 
-
-
 # ---------------------------------------------------------------------------
 # Scheduler: Planejamento e Agenda
 # ---------------------------------------------------------------------------
@@ -943,12 +1460,13 @@ def has_existing_or_terminal_destination(
 
     def _execute(c: sqlite3.Connection) -> bool:
         if clean_channel:
-            # 1. Match moderno no mesmo canal específico
+            # 1. Match no mesmo canal específico OU registro legado sem channel_id (CF-03)
             row = c.execute(
                 """
                 SELECT id FROM scheduled_posts
-                WHERE task_id = ? AND platform = ? AND channel_id = ?
-                AND status IN ('planned', 'ready', 'processing', 'published', 'cancelled')
+                WHERE task_id = ? AND platform = ?
+                  AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')
+                  AND status IN ('planned', 'ready', 'processing', 'published', 'cancelled')
                 LIMIT 1;
                 """,
                 (task_id, clean_plat, clean_channel),
@@ -959,52 +1477,14 @@ def has_existing_or_terminal_destination(
             pub_row = c.execute(
                 """
                 SELECT id FROM publication_events
-                WHERE task_id = ? AND platform = ? AND channel_id = ?
-                AND status = 'success'
+                WHERE task_id = ? AND platform = ?
+                  AND (channel_id = ? OR channel_id IS NULL OR channel_id = '')
+                  AND status = 'success'
                 LIMIT 1;
                 """,
                 (task_id, clean_plat, clean_channel),
             ).fetchone()
             if pub_row:
-                return True
-
-            # 1.1 Verificação canônica da tupla (task_id, platform): sucesso prévio em qualquer canal
-            pub_any = c.execute(
-                """
-                SELECT id FROM publication_events
-                WHERE task_id = ? AND platform = ?
-                AND status = 'success'
-                LIMIT 1;
-                """,
-                (task_id, clean_plat),
-            ).fetchone()
-            if pub_any:
-                return True
-
-            # 1.2 Verificação canônica de post ativo/executável em qualquer canal para a mesma plataforma
-            active_any = c.execute(
-                """
-                SELECT id FROM scheduled_posts
-                WHERE task_id = ? AND platform = ?
-                AND status IN ('planned', 'ready', 'processing', 'published')
-                LIMIT 1;
-                """,
-                (task_id, clean_plat),
-            ).fetchone()
-            if active_any:
-                return True
-
-            # 2. Tombstone legado: cancelamento pré-canais sem channel_id atua como wildcard
-            legacy_tombstone = c.execute(
-                """
-                SELECT id FROM scheduled_posts
-                WHERE task_id = ? AND platform = ? AND (channel_id IS NULL OR channel_id = '')
-                AND status = 'cancelled'
-                LIMIT 1;
-                """,
-                (task_id, clean_plat),
-            ).fetchone()
-            if legacy_tombstone:
                 return True
 
             return False
@@ -1147,22 +1627,19 @@ def plan_schedule(
         if not platforms:
             continue
 
-        # Gate de Monetização: tarefas com safety_status BLOCK ou REVIEW não entram automaticamente no Scheduler
-        safety_status = t.get("safety_status")
-        if not safety_status:
-            try:
-                from app.services import safety_gate
-                safety_rec = safety_gate.get_safety_assessment(task_id, db_path=db_path)
-                if safety_rec:
-                    safety_status = safety_rec.get("safety_status")
-            except Exception:
-                safety_status = None
-
-        if safety_status and str(safety_status).upper() in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
-            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={safety_status}")
+        # Gate de Monetização / Revisão Humana (HELD_SAFETY_REVIEW / REVIEW / BLOCK):
+        # tarefas retidas nunca entram automaticamente no Scheduler
+        is_held, hold_reason = is_task_held_for_safety_review(
+            task_id,
+            task_data=t,
+            db_path=db_path,
+            task_base_dir=task_base_dir,
+        )
+        if is_held:
+            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento automático devido a Safety={hold_reason}")
             continue
 
-        # Gate de Qualidade: se houver avaliação persistida, rejeita scores inadequados (< 70 ou WEAK/REVIEW/REJECTED)
+        # Gate de Qualidade e Aprovação Humana (RN-02)
         try:
             with get_connection(db_path) as conn:
                 q_row = conn.execute(
@@ -1173,11 +1650,45 @@ def plan_schedule(
                 if q_row:
                     q_score = float(q_row["quality_score"])
                     q_label = str(q_row["quality_label"]).upper()
-                    if (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED"):
-                        logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
-                        continue
-        except Exception:
-            pass
+                    is_sub_threshold = (math.isfinite(q_score) and q_score < 70.0) or q_label in ("WEAK", "REVIEW", "REJECTED")
+                    if is_sub_threshold:
+                        human_approved = False
+                        # CF-3B-01: Restringir aprovação humana estritamente à faixa numérica 55.0 <= q_score < 70.0 (sem exceção por label REVIEW)
+                        if math.isfinite(q_score) and 55.0 <= q_score < 70.0:
+                            has_rev_tbl = conn.execute(
+                                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';"
+                            ).fetchone()
+                            if has_rev_tbl:
+                                h_row = conn.execute(
+                                    "SELECT decision, operator_id, approved_below_threshold FROM operator_video_reviews "
+                                    "WHERE task_id = ? AND decision = 'APPROVED' ORDER BY id DESC LIMIT 1;",
+                                    (task_id,),
+                                ).fetchone()
+                                if h_row:
+                                    # Validação centralizada fail-closed dos gates técnico, segurança e copyright
+                                    tech_safety_ok, ts_reason, _ = validate_candidate_technical_and_safety_gates(
+                                        task_id=task_id,
+                                        task_data=t,
+                                        db_path=db_path,
+                                        task_base_dir=task_base_dir,
+                                    )
+                                    if tech_safety_ok:
+                                        human_approved = True
+                                        logger.info(
+                                            f"[SCHEDULER][GATE] Tarefa {task_id} (score={q_score:.1f}, label={q_label}) liberada para agendamento "
+                                            f"via APROVAÇÃO HUMANA (operator={h_row['operator_id']}) com gates técnico, safety e copyright PASS."
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"[SCHEDULER][GATE] Tarefa {task_id} possui aprovação humana, mas falhou nos gates técnicos/safety: "
+                                            f"{ts_reason}. Agendamento bloqueado."
+                                        )
+
+                        if not human_approved:
+                            logger.info(f"[SCHEDULER][GATE] Tarefa {task_id} ignorada no agendamento devido a Quality score={q_score}, label={q_label}")
+                            continue
+        except Exception as exc:
+            logger.warning(f"[SCHEDULER][GATE] Erro ao consultar Quality/Review gates para {task_id}: {exc}")
 
         # Resolução do perfil da task
         task_profile_id = t.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)
@@ -1256,6 +1767,19 @@ def plan_schedule(
 
         # Enfileira slots para os candidatos
         for task_id, task_data, task_profile_id, channel_id in candidates:
+            # CF-02: Validação Fail-Closed estrita de Autorização Individual por Canal
+            if not is_channel_auto_publish_authorized(
+                channel_id=channel_id,
+                profile_id=task_profile_id,
+                platform=clean_plat,
+                db_path=db_path,
+            ):
+                logger.info(
+                    f"[SCHEDULER][PLAN] Canal '{channel_id}' não possui autorização explícita "
+                    f"de publicação automática (auto_publish_authorized != 1). Agendamento ignorado."
+                )
+                continue
+
             # 1. Verifica idempotência e terminalidade (Hotfix V12-D.2)
             with get_connection(db_path) as conn:
                 if has_existing_or_terminal_destination(
@@ -1415,12 +1939,13 @@ def plan_schedule(
             except Exception:
                 pass
 
-            # 3. Verificação final de idempotência antes da inserção (Camada 1 - V16.4.2B)
+            # 3. Verificação final de idempotência antes da inserção (Camada 1 - V16.4.2B / Lote 3A)
             from app.services import publishing_idempotency
             with get_connection(db_path) as conn:
                 can_sched, sched_block_reason, _ = publishing_idempotency.can_schedule_task(
                     task_id=task_id,
                     platform=clean_plat,
+                    channel_id=channel_id,
                     conn=conn,
                 )
             if not can_sched:
@@ -1779,13 +2304,14 @@ def run_scheduler_cycle(
 
     logger.info(f"[SCHEDULER][CYCLE] candidate id={post_id} task_id={task_id} platform={platform} profile_id={profile_id} channel_id={channel_id} scheduled_at={post['scheduled_at']}")
 
-    # 1.1 Guard Canônico de Publicação e Idempotência (Camada 2 - V16.4.2A / V16.4.2B):
+    # 1.1 Guard Canônico de Publicação e Idempotência (Camada 2 - V16.4.2A / V16.4.2B / Lote 3A):
     from app.services import publishing_idempotency
     with get_connection(db_path) as conn:
         can_exec, exec_reason, details = publishing_idempotency.can_execute_scheduled_post(
             task_id=task_id,
             platform=platform,
             post_id=post_id,
+            channel_id=channel_id,
             conn=conn,
         )
 
@@ -1800,6 +2326,7 @@ def run_scheduler_cycle(
                     task_id=task_id,
                     platform=platform,
                     canonical_post_id=post_id,
+                    channel_id=channel_id,
                     conn=conn,
                 )
             canon = details.get("details", {})
@@ -1825,12 +2352,13 @@ def run_scheduler_cycle(
                 "platform": platform,
             }
 
-    # Neutraliza proativamente eventuais duplicatas executáveis redundantes para a mesma tupla
+    # Neutraliza proativamente eventuais duplicatas executáveis redundantes para a mesma tupla (Lote 3A)
     with get_connection(db_path) as conn:
         publishing_idempotency.neutralize_duplicate_executable_posts(
             task_id=task_id,
             platform=platform,
             canonical_post_id=post_id,
+            channel_id=channel_id,
             conn=conn,
         )
 
@@ -1861,33 +2389,63 @@ def run_scheduler_cycle(
         logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: perfil '{profile_id}' desativado.")
         return {"status": "postponed", "reason": "profile_disabled", "profile_id": profile_id}
 
-    # 3. Revalidação: Canal de publicação ativo (se channel_id especificado)
-    if channel_id:
-        ch = profile_manager.get_channel(channel_id, db_path=db_path)
-        if not ch or not ch.get("is_enabled"):
-            postpone_time = current_time + timedelta(minutes=30)
-            with get_connection(db_path) as conn:
-                conn.execute(
-                    "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
-                    (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
-                )
-            operator_console.log_operational_event(
-                component="scheduler",
-                severity="WARNING",
-                event_type="CHANNEL_DISABLED_BLOCK",
-                task_id=task_id,
-                message=f"Publicação bloqueada: canal '{channel_id}' está desabilitado.",
-                metadata={"channel_id": channel_id, "post_id": post_id},
-                db_path=db_path,
+    # 3. Revalidação Fail-Closed: Canal de publicação ativo e individualmente autorizado (CF-02)
+    if not is_channel_auto_publish_authorized(channel_id, profile_id=profile_id, platform=platform, db_path=db_path):
+        postpone_time = current_time + timedelta(minutes=30)
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
             )
-            _set_executor_status(
-                state="idle",
-                message=f"Post {post_id} postergado: canal {channel_id} desativado",
-                last_cycle_summary=f"Post {post_id} adiado: canal {channel_id} desativado",
-                db_path=db_path,
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="WARNING",
+            event_type="CHANNEL_NOT_AUTHORIZED_FOR_AUTO_PUBLISH",
+            task_id=task_id,
+            message=f"Publicação automática bloqueada: canal '{channel_id}' não possui autorização individual.",
+            metadata={"channel_id": channel_id, "post_id": post_id, "profile_id": profile_id},
+            db_path=db_path,
+        )
+        _set_executor_status(
+            state="idle",
+            message=f"Post {post_id} postergado: canal '{channel_id}' não autorizado para publicação automática",
+            last_cycle_summary=f"Post {post_id} adiado: canal '{channel_id}' sem autorização individual",
+            db_path=db_path,
+        )
+        logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: canal '{channel_id}' sem auto_publish_authorized.")
+        return {"status": "postponed", "reason": "channel_not_authorized", "channel_id": channel_id}
+
+    # 3.1 Revalidação Fail-Closed: Tarefa em HELD_SAFETY_REVIEW / REVIEW / BLOCK nunca é publicada automaticamente,
+    # inclusive com canal autorizado e agendamentos antigos pré-existentes.
+    is_held, hold_reason = is_task_held_for_safety_review(
+        task_id,
+        db_path=db_path,
+        task_base_dir=task_base_dir,
+    )
+    if is_held:
+        postpone_time = current_time + timedelta(minutes=30)
+        with get_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE scheduled_posts SET scheduled_at = ?, next_attempt_at = ?, status = 'ready' WHERE id = ?;",
+                (_to_iso(postpone_time), _to_iso(postpone_time), post_id),
             )
-            logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} postergado: canal '{channel_id}' desabilitado.")
-            return {"status": "postponed", "reason": "channel_disabled", "channel_id": channel_id}
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity="WARNING",
+            event_type="HELD_SAFETY_REVIEW_AUTO_PUBLISH_BLOCK",
+            task_id=task_id,
+            message=f"Publicação automática bloqueada: task '{task_id}' retida para revisão humana ({hold_reason}).",
+            metadata={"channel_id": channel_id, "post_id": post_id, "profile_id": profile_id, "hold_reason": hold_reason},
+            db_path=db_path,
+        )
+        _set_executor_status(
+            state="idle",
+            message=f"Post {post_id} postergado: task {task_id} retida em {hold_reason}",
+            last_cycle_summary=f"Post {post_id} retido por Safety Gate ({hold_reason})",
+            db_path=db_path,
+        )
+        logger.warning(f"[SCHEDULER][CYCLE] Post {post_id} retido: task '{task_id}' em {hold_reason} não pode publicar automaticamente.")
+        return {"status": "postponed", "reason": "held_safety_review", "hold_reason": hold_reason, "task_id": task_id}
 
     # 4. Revalidação: Plataforma habilitada nas configurações
     if platform == "tiktok" and not settings["tiktok_enabled"]:
@@ -2206,12 +2764,13 @@ def run_scheduler_cycle(
     )
     logger.info(f"[SCHEDULER][PUBLISH] Iniciando publicação automática para {task_id} no {platform}")
 
-    # 8.2 Just-In-Time Idempotency Gate (Camada 3 - V16.4.2B):
+    # 8.2 Just-In-Time Idempotency Gate (Camada 3 - V16.4.2B / Lote 3A):
     # Detecta se houve race condition ou se evento de sucesso foi registrado após o início do ciclo
     with get_connection(db_path) as conn:
         is_safe, canon_jit = publishing_idempotency.jit_provider_idempotency_guard(
             task_id=task_id,
             platform=platform,
+            channel_id=channel_id,
             conn=conn,
         )
 
@@ -2276,6 +2835,7 @@ def run_scheduler_cycle(
         decision = retry_policy.evaluate_retry_decision(
             task_id=task_id,
             platform=platform,
+            channel_id=channel_id,
             current_status="processing",
             attempts=attempts,
             error_msg=err_msg,

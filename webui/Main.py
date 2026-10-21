@@ -328,9 +328,9 @@ def _delete_runtime_config(section_name, key):
     return deleted
 
 
-def _save_runtime_config():
+def _save_runtime_config(force: bool = False):
     """请求保存 WebUI 配置；后台任务占用配置时立即返回。"""
-    saved = config.try_save_config()
+    saved = config.try_save_config(force=force)
     if not saved:
         logger.debug("deferred WebUI config save until active task completes")
     return saved
@@ -613,12 +613,6 @@ def _build_uploaded_file_path(uploaded_file, target_dir, allowed_extensions, pre
 
 def _initialize_session_state():
     """集中初始化跨 rerun 保留的页面状态。"""
-    if not st.session_state.get("cross_post_recovery_checked"):
-        # WebUI 可以不经过 FastAPI 独立运行，因此也需要在首次会话初始化时处理
-        # 进程重启留下的发布状态。恢复失败时不写标记，后续 rerun 会再次尝试。
-        recovered = tm.recover_interrupted_cross_posts()
-        if recovered is not None:
-            st.session_state["cross_post_recovery_checked"] = True
 
     saved_ui_language = config.ui.get("language", "")
     browser_locale = st.context.locale
@@ -1032,11 +1026,16 @@ def _scan_history_tasks(limit=30):
 
 
 def _collect_task_summaries(limit=20):
-    scan_limit = max(50, limit)
+    from app.services import operator_console
+    rp_cache = operator_console.get_render_pass_cache()
+    if rp_cache is not None and "_task_summaries_all" in rp_cache:
+        return [dict(item) for item in rp_cache["_task_summaries_all"][:limit]]
+
+    scan_limit = max(50, limit, 1000) if rp_cache is not None else max(50, limit)
     history_tasks = {task["task_id"]: task for task in _scan_history_tasks(limit=scan_limit)}
 
     try:
-        runtime_limit = max(100, limit)
+        runtime_limit = max(100, limit, 1000) if rp_cache is not None else max(100, limit)
         runtime_tasks, _ = sm.state.get_all_tasks(1, runtime_limit)
     except Exception as e:
         logger.warning(f"failed to load runtime tasks: {e}")
@@ -1149,7 +1148,11 @@ def _collect_task_summaries(limit=20):
             item["state"] = const.TASK_STATE_FAILED
 
     tasks = list(history_tasks.values())
-    return sorted(tasks, key=lambda item: item["mtime"], reverse=True)[:limit]
+    sorted_tasks = sorted(tasks, key=lambda item: item["mtime"], reverse=True)
+    if rp_cache is not None:
+        rp_cache["_task_summaries_all"] = sorted_tasks
+        return [dict(item) for item in sorted_tasks[:limit]]
+    return sorted_tasks[:limit]
 
 
 def _is_headless_server():
@@ -1565,7 +1568,11 @@ def _render_task_manager_entry():
     if processing_task_count > 0:
         _render_task_manager_entry_active()
     else:
-        _render_task_manager_entry_idle()
+        from app.services import operator_console
+        if operator_console.is_factory_paused():
+            _render_task_manager_popover_body(task_summaries, processing_task_count)
+        else:
+            _render_task_manager_entry_idle()
 
 
 def _load_task_restore_payload(task_id):
@@ -2102,7 +2109,7 @@ def _render_top_bar():
                     # 浏览器自动识别只影响当前会话；只有用户主动切换下拉框时才
                     # 写入 config.toml，后续新会话将优先使用该明确选择。
                     _set_runtime_config("ui", "language", selected_language_code)
-                    _save_runtime_config()
+                    _save_runtime_config(force=True)
                     # 切换语言后强制刷新，避免 selectbox 继续展示旧语言文案。
                     st.rerun()
 
@@ -2411,7 +2418,7 @@ def _get_next_active_generation_task_id(current_task_id=None):
     return ""
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every=webui_task.TASK_LOG_REFRESH_INTERVAL_SECONDS)
 def _render_running_generation_task(task_id):
     """只在任务运行期间轮询；结束后切回静态结果，停止不必要的定时刷新。"""
     try:
@@ -3439,7 +3446,7 @@ def _render_key_backup_settings(panel):
             )
         else:
             restored_count = _apply_key_backup(restored_keys)
-            _save_runtime_config()
+            _save_runtime_config(force=True)
             logger.info(f"restored keys from backup file: count={restored_count}")
             st.session_state["key_backup_message"] = (
                 "success",
@@ -4279,7 +4286,7 @@ def _render_settings_dialog():
                         openai_image_prompt_template.strip(),
                     )
 
-    _save_runtime_config()
+    _save_runtime_config(force=False)
 
 
 # -----------------------------------------------------------------------------
@@ -7930,36 +7937,79 @@ def _validate_batch_prerequisites(
             st.stop()
 
 
+def _is_primary_ui_instance() -> bool:
+    from app.services import operator_console
+    if getattr(operator_console, "_instance_initialized", False) or getattr(operator_console.is_primary_instance, "__module__", "") != "app.services.operator_console":
+        return bool(operator_console.is_primary_instance())
+    return getattr(operator_console, "_current_role", operator_console.ROLE_PRIMARY) == operator_console.ROLE_PRIMARY
+
+
+def _should_start_scheduler_worker(current_settings: dict | None = None) -> bool:
+    if not _is_primary_ui_instance():
+        return False
+    from app.services import operator_console
+    if operator_console.is_factory_paused():
+        return False
+    settings = current_settings if isinstance(current_settings, dict) else scheduler.get_all_settings()
+    if bool(settings.get("scheduler_enabled", False)):
+        return True
+    try:
+        from app.services import autonomous_production, analytics_scheduler
+        if bool(autonomous_production.get_enabled_autonomous_profiles()):
+            return True
+        if bool(analytics_scheduler.is_analytics_auto_collection_enabled()):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _on_scheduler_enabled_changed():
+    if not _is_primary_ui_instance():
+        return
+    enabled = bool(st.session_state.get("scheduler_enabled_cb", False))
     scheduler.set_setting(
         "scheduler_enabled",
-        bool(st.session_state["scheduler_enabled_cb"]),
+        enabled,
     )
+    if enabled and _should_start_scheduler_worker({"scheduler_enabled": True}):
+        from app.services import operator_console
+        if getattr(operator_console, "_instance_initialized", False) or getattr(scheduler.start_scheduler_worker, "__module__", "") != "app.services.scheduler":
+            scheduler.start_scheduler_worker(interval_seconds=30)
 
 
 def _on_auto_publish_enabled_changed():
+    if not _is_primary_ui_instance():
+        return
     scheduler.set_setting(
         "auto_publish_enabled",
-        bool(st.session_state["scheduler_auto_publish_cb"]),
+        bool(st.session_state.get("scheduler_auto_publish_cb", False)),
     )
 
 
 def _on_dry_run_changed():
+    if not _is_primary_ui_instance():
+        return
     scheduler.set_setting(
         "dry_run",
-        bool(st.session_state["scheduler_dry_run_cb"]),
+        bool(st.session_state.get("scheduler_dry_run_cb", True)),
     )
 
 
-@st.fragment(run_every="10s")
+@st.fragment
 def _render_publication_schedule():
     st.divider()
     st.write(f"### 📅 {tr('Publication Schedule')}")
 
-    # Garante que o worker daemon do executor esteja ativo em background
-    scheduler.start_scheduler_worker(interval_seconds=30)
-
     current_settings = scheduler.get_all_settings()
+
+    # Garante que o worker daemon do executor esteja ativo em background apenas quando elegível
+    if _should_start_scheduler_worker(current_settings):
+        scheduler.start_scheduler_worker(interval_seconds=30)
+
+    is_primary = _is_primary_ui_instance()
+    if not is_primary:
+        st.caption("🔒 Modo VIEW ONLY: Apenas a instância primária pode alterar configurações de agendamento e publicação.")
 
     # Sincroniza estado da sessão com os valores canônicos do banco ANTES de instanciar os widgets
     st.session_state["scheduler_enabled_cb"] = bool(current_settings["scheduler_enabled"])
@@ -7973,6 +8023,7 @@ def _render_publication_schedule():
             tr("Scheduler Enabled"),
             key="scheduler_enabled_cb",
             on_change=_on_scheduler_enabled_changed,
+            disabled=not is_primary,
         )
 
     with ctrl_col2:
@@ -7980,6 +8031,7 @@ def _render_publication_schedule():
             tr("Auto Publish Enabled"),
             key="scheduler_auto_publish_cb",
             on_change=_on_auto_publish_enabled_changed,
+            disabled=not is_primary,
         )
 
     with ctrl_col3:
@@ -7987,6 +8039,7 @@ def _render_publication_schedule():
             tr("Simulation Mode (Dry Run)"),
             key="scheduler_dry_run_cb",
             on_change=_on_dry_run_changed,
+            disabled=not is_primary,
         )
 
     if current_settings["dry_run"]:
@@ -8059,8 +8112,9 @@ def _render_publication_schedule():
         format_func=lambda m: growth_mode_labels.get(m, m),
         key="growth_mode_selector_sb",
         help=tr("Controle operacional para aquecimento e crescimento seguro das contas"),
+        disabled=not is_primary,
     )
-    if selected_growth_mode != current_growth_mode:
+    if is_primary and selected_growth_mode != current_growth_mode:
         scheduler.set_growth_mode(selected_growth_mode)
         st.rerun(scope="fragment")
 
@@ -8124,8 +8178,9 @@ def _render_publication_schedule():
                 type="secondary",
                 use_container_width=True,
                 icon=":material/library_add:",
+                disabled=not is_primary,
             )
-            if adopt_btn:
+            if is_primary and adopt_btn:
                 chosen_platforms = []
                 if dest_tk:
                     chosen_platforms.append("tiktok")
@@ -8149,6 +8204,7 @@ def _render_publication_schedule():
             type="primary",
             use_container_width=True,
             icon=":material/calendar_month:",
+            disabled=not is_primary,
         )
     with sched_btn_cols[1]:
         clear_schedule_btn = st.button(
@@ -8156,9 +8212,10 @@ def _render_publication_schedule():
             key="autopilot_clear_schedule_btn",
             use_container_width=True,
             icon=":material/delete_sweep:",
+            disabled=not is_primary,
         )
 
-    if plan_schedule_btn:
+    if is_primary and plan_schedule_btn:
         new_scheduled = scheduler.plan_schedule(all_summaries)
         if new_scheduled:
             st.success(tr("Schedule Planned").format(count=len(new_scheduled)))
@@ -8170,7 +8227,7 @@ def _render_publication_schedule():
             else:
                 st.info(tr("No Eligible Tasks to Schedule"))
 
-    if clear_schedule_btn:
+    if is_primary and clear_schedule_btn:
         st.session_state["confirm_clear_future_schedule"] = True
         st.rerun(scope="fragment")
 
@@ -8178,7 +8235,7 @@ def _render_publication_schedule():
         st.warning(tr("Confirm Clear Schedule"))
         c_yes, c_no = st.columns(2)
         with c_yes:
-            if st.button("Confirmar Limpeza", key="confirm_clear_sched_yes_btn", type="primary", use_container_width=True):
+            if st.button("Confirmar Limpeza", key="confirm_clear_sched_yes_btn", type="primary", use_container_width=True, disabled=not is_primary) and is_primary:
                 scheduler.clear_future_schedule()
                 st.session_state["confirm_clear_future_schedule"] = False
                 st.toast(tr("Schedule Cleared"), icon="🗑️")
@@ -8242,7 +8299,8 @@ def _render_publication_schedule():
                 type="secondary",
                 icon=":material/update:",
                 use_container_width=True,
-            ):
+                disabled=not is_primary,
+            ) and is_primary:
                 res = scheduler.reschedule_post_for_test(selected_post_id, interval_choice)
                 if res.get("success"):
                     new_time_str = scheduler.format_local_time(res["new_scheduled_at"], fmt="%H:%M:%S")
@@ -8259,7 +8317,8 @@ def _render_publication_schedule():
                 type="primary",
                 icon=":material/play_circle:",
                 use_container_width=True,
-            ):
+                disabled=not is_primary,
+            ) and is_primary:
                 cycle_res = scheduler.run_scheduler_cycle()
                 c_status = cycle_res.get("status")
                 c_reason = cycle_res.get("reason", "")
@@ -8281,10 +8340,25 @@ def _render_channel_factory_section():
         render_channel_factory()
 
 
+@st.fragment(run_every="30s")
+def _render_publication_schedule_active():
+    func = getattr(_render_publication_schedule, "__wrapped__", _render_publication_schedule)
+    return func()
+
+
 def _render_operator_console_section():
     with st.expander(f"🛠️ {tr('Operator Console')}", expanded=True):
         from webui.components.operator_console import render_operator_console
         render_operator_console()
+
+
+def _render_publication_schedule_section():
+    with st.expander(f"📅 {tr('Publication Schedule')} — Scheduler & Auto Publish", expanded=True):
+        current_settings = scheduler.get_all_settings()
+        if _should_start_scheduler_worker(current_settings):
+            _render_publication_schedule_active()
+        else:
+            _render_publication_schedule()
 
 
 
@@ -8972,6 +9046,7 @@ def _render_autopilot_section(
                 st.session_state["autopilot_ideas"] = []
 
         ideas_list = st.session_state.get("autopilot_ideas", [])
+        selected_indices = []
         if ideas_list:
             st.write(f"**{tr('Generated Ideas')} ({len(ideas_list)})**")
 
@@ -9084,7 +9159,7 @@ def _render_autopilot_section(
                         niche=item.get("niche") or niche,
                         preset=selected_preset,
                         trend_data=item,
-                        persist=True,
+                        persist=False,
                     )
                     item["quality_score"] = q_eval["quality_score"]
                     item["quality_label"] = q_eval["quality_label"]
@@ -9109,7 +9184,7 @@ def _render_autopilot_section(
                         quality_data=item,
                         recent_history=ideas_list[:idx],
                         last_used_structure=ideas_list[idx-1].get("recommended_structure") if idx > 0 else None,
-                        persist=True,
+                        persist=False,
                     )
                     item["strategy_score"] = s_eval["strategy_score"]
                     item["strategy_label"] = s_eval["strategy_label"]
@@ -9215,160 +9290,157 @@ def _render_autopilot_section(
         else:
             st.info("Nenhuma ideia na fila do Autopilot no momento. Gere ideias com o botão acima ou envie temas aprovados do Trend Radar para avaliar o Quality Score.")
 
-
-            queue_locked = bool(
-                webui_task.has_active_generation_tasks() or _has_active_generation()
+        is_primary = _is_primary_ui_instance()
+        queue_locked = bool(
+            webui_task.has_active_generation_tasks() or _has_active_generation()
+        )
+        add_queue_btn = st.button(
+            tr("Add Selected to Queue"),
+            key="autopilot_add_queue_btn",
+            type="primary",
+            use_container_width=True,
+            disabled=(not is_primary) or queue_locked or not selected_indices,
+            icon=":material/playlist_add:",
+            help=tr(
+                "There is a generation in progress. Please wait for completion before starting another."
             )
-            add_queue_btn = st.button(
-                tr("Add Selected to Queue"),
-                key="autopilot_add_queue_btn",
-                type="primary",
-                use_container_width=True,
-                disabled=queue_locked or not selected_indices,
-                icon=":material/playlist_add:",
-                help=tr(
-                    "There is a generation in progress. Please wait for completion before starting another."
-                )
-                if queue_locked
-                else None,
-            )
+            if queue_locked
+            else None,
+        )
 
-            if add_queue_btn:
-                if queue_locked:
-                    st.warning(
-                        tr(
-                            "There is a generation in progress. Please wait for completion before starting another."
-                        )
+        if is_primary and add_queue_btn:
+            if queue_locked:
+                st.warning(
+                    tr(
+                        "There is a generation in progress. Please wait for completion before starting another."
                     )
-                    st.stop()
-
-                selected_topics = []
-                for i in selected_indices:
-                    topic_text = st.session_state.get(f"autopilot_topic_{i}", ideas_list[i].get("topic", "")).strip()
-                    if topic_text:
-                        selected_topics.append((i, topic_text))
-
-                if not selected_topics:
-                    st.error(tr("No Ideas Selected"))
-                    st.stop()
-
-                _validate_batch_prerequisites(
-                    params=params,
-                    voice_mode=voice_mode,
-                    uploaded_audio_file=uploaded_audio_file,
-                    uploaded_bgm_file=uploaded_bgm_file,
-                    has_local_materials=has_local_materials,
                 )
+                st.stop()
 
-                final_plan = autopilot.plan_distribution(
-                    len(selected_topics),
-                    tiktok_active=tiktok_active,
-                    tiktok_target=tiktok_target,
-                    youtube_active=youtube_active,
-                    youtube_target=youtube_target,
-                )
+            selected_topics = []
+            for i in selected_indices:
+                topic_text = st.session_state.get(f"autopilot_topic_{i}", ideas_list[i].get("topic", "")).strip()
+                if topic_text:
+                    selected_topics.append((i, topic_text))
 
-                from app.services import safety_gate
+            if not selected_topics:
+                st.error(tr("No Ideas Selected"))
+                st.stop()
 
-                recent_safety = safety_gate.get_recent_safety_history(limit=5)
-                recent_structures = [
-                    h.get("narrative_structure")
-                    for h in recent_safety
-                    if h.get("narrative_structure")
-                ]
-                assigned_structures = autopilot.assign_batch_narrative_structures(
-                    len(selected_topics),
-                    recent_structures=recent_structures,
-                    performance_context=analytics.get_content_performance_feedback(),
-                )
+            _validate_batch_prerequisites(
+                params=params,
+                voice_mode=voice_mode,
+                uploaded_audio_file=uploaded_audio_file,
+                uploaded_bgm_file=uploaded_bgm_file,
+                has_local_materials=has_local_materials,
+            )
 
-                submitted_task_ids = []
-                for rank, (orig_i, topic) in enumerate(selected_topics):
-                    task_id = str(uuid4())
-                    item_params = params.model_copy(deep=True)
-                    item_params.video_subject = topic
-                    item_params.video_script = ""
-                    item_params.monetization_preset = selected_preset
-                    item_params.niche = niche
-                    if rank < len(assigned_structures):
-                        item_params.narrative_structure = assigned_structures[rank]
+            final_plan = autopilot.plan_distribution(
+                len(selected_topics),
+                tiktok_active=tiktok_active,
+                tiktok_target=tiktok_target,
+                youtube_active=youtube_active,
+                youtube_target=youtube_target,
+            )
 
-                    _add_active_generation_task(task_id, subject=topic)
+            from app.services import safety_gate
+
+            recent_safety = safety_gate.get_recent_safety_history(limit=5)
+            recent_structures = [
+                h.get("narrative_structure")
+                for h in recent_safety
+                if h.get("narrative_structure")
+            ]
+            assigned_structures = autopilot.assign_batch_narrative_structures(
+                len(selected_topics),
+                recent_structures=recent_structures,
+                performance_context=analytics.get_content_performance_feedback(),
+            )
+
+            submitted_task_ids = []
+            for rank, (orig_i, topic) in enumerate(selected_topics):
+                task_id = str(uuid4())
+                item_params = params.model_copy(deep=True)
+                item_params.video_subject = topic
+                item_params.video_script = ""
+                item_params.monetization_preset = selected_preset
+                item_params.niche = niche
+                if rank < len(assigned_structures):
+                    item_params.narrative_structure = assigned_structures[rank]
+
+                _add_active_generation_task(task_id, subject=topic)
+                try:
+                    webui_task.submit_generation(
+                        task_id=task_id,
+                        params=item_params,
+                        capture_logs=not config.ui.get("hide_log", False),
+                        voice_preview=None,
+                        loomloom_video_request=None,
+                    )
+                    assigned = final_plan[rank] if rank < len(final_plan) else []
+                    sm.state.update_task(
+                        task_id,
+                        planned_platforms=assigned,
+                        monetization_preset=selected_preset,
+                        narrative_structure=item_params.narrative_structure,
+                    )
+                    scheduler.save_task_platforms(task_id, assigned)
+                    orig_item = ideas_list[orig_i] if orig_i < len(ideas_list) else {}
                     try:
-                        webui_task.submit_generation(
-                            task_id=task_id,
-                            params=item_params,
-                            capture_logs=not config.ui.get("hide_log", False),
-                            voice_preview=None,
-                            loomloom_video_request=None,
-                        )
-                        assigned = final_plan[rank] if rank < len(final_plan) else []
-                        sm.state.update_task(
-                            task_id,
-                            planned_platforms=assigned,
-                            monetization_preset=selected_preset,
+                        quality_score.evaluate_quality(
+                            topic=topic,
+                            niche=niche,
+                            preset=selected_preset,
                             narrative_structure=item_params.narrative_structure,
+                            trend_id=orig_item.get("trend_id"),
+                            trend_score=orig_item.get("trend_score"),
+                            opportunity_score=orig_item.get("opportunity_score"),
+                            relevance_score=orig_item.get("relevance_score"),
+                            source_confidence=orig_item.get("source_confidence"),
+                            task_id=task_id,
+                            persist=True,
                         )
-                        scheduler.save_task_platforms(task_id, assigned)
-                        orig_item = ideas_list[orig_i] if orig_i < len(ideas_list) else {}
-                        try:
-                            quality_score.evaluate_quality(
-                                topic=topic,
-                                niche=niche,
-                                preset=selected_preset,
-                                narrative_structure=item_params.narrative_structure,
-                                trend_id=orig_item.get("trend_id"),
-                                trend_score=orig_item.get("trend_score"),
-                                opportunity_score=orig_item.get("opportunity_score"),
-                                relevance_score=orig_item.get("relevance_score"),
-                                source_confidence=orig_item.get("source_confidence"),
-                                task_id=task_id,
-                                persist=True,
-                            )
-                        except Exception as q_exc:
-                            logger.warning(f"Could not persist quality score for task {task_id}: {q_exc}")
+                    except Exception as q_exc:
+                        logger.warning(f"Could not persist quality score for task {task_id}: {q_exc}")
 
-                        try:
-                            content_strategy.evaluate_strategy(
-                                topic=topic,
-                                niche=niche,
-                                preset=selected_preset,
-                                trend_data=orig_item,
-                                last_used_structure=item_params.narrative_structure,
-                                task_id=task_id,
-                                persist=True,
-                            )
-                        except Exception as s_exc:
-                            logger.warning(f"Could not persist strategy score for task {task_id}: {s_exc}")
-                        submitted_task_ids.append(task_id)
-
-                    except Exception as exc:
-                        logger.error(
-                            f"Failed to submit autopilot task {task_id} for topic '{topic}': {exc}"
+                    try:
+                        content_strategy.evaluate_strategy(
+                            topic=topic,
+                            niche=niche,
+                            preset=selected_preset,
+                            trend_data=orig_item,
+                            last_used_structure=item_params.narrative_structure,
+                            task_id=task_id,
+                            persist=True,
                         )
-                        _remove_active_generation_task(task_id)
+                    except Exception as s_exc:
+                        logger.warning(f"Could not persist strategy score for task {task_id}: {s_exc}")
+                    submitted_task_ids.append(task_id)
 
-                if submitted_task_ids:
-                    submitted_indices_set = {orig_i for orig_i, _ in selected_topics}
-                    remaining_ideas = [
-                        item for i, item in enumerate(ideas_list)
-                        if i not in submitted_indices_set
-                    ]
-                    st.session_state["autopilot_ideas"] = remaining_ideas
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("autopilot_topic_") or k.startswith("autopilot_sel_"):
-                            del st.session_state[k]
-
-                    st.session_state["current_generation_task_id"] = submitted_task_ids[0]
-                    feedback_msg = tr("{count} videos added to generation queue").format(
-                        count=len(submitted_task_ids)
+                except Exception as exc:
+                    logger.error(
+                        f"Failed to submit autopilot task {task_id} for topic '{topic}': {exc}"
                     )
-                    st.success(feedback_msg)
-                    st.toast(feedback_msg, icon="📋")
-                    st.rerun(scope="app")
+                    _remove_active_generation_task(task_id)
 
-        # --- 4. Subseção: Agenda de Publicação (Fragmento isolado) ---
-        _render_publication_schedule()
+            if submitted_task_ids:
+                submitted_indices_set = {orig_i for orig_i, _ in selected_topics}
+                remaining_ideas = [
+                    item for i, item in enumerate(ideas_list)
+                    if i not in submitted_indices_set
+                ]
+                st.session_state["autopilot_ideas"] = remaining_ideas
+                for k in list(st.session_state.keys()):
+                    if k.startswith("autopilot_topic_") or k.startswith("autopilot_sel_"):
+                        del st.session_state[k]
+
+                st.session_state["current_generation_task_id"] = submitted_task_ids[0]
+                feedback_msg = tr("{count} videos added to generation queue").format(
+                    count=len(submitted_task_ids)
+                )
+                st.success(feedback_msg)
+                st.toast(feedback_msg, icon="📋")
+                st.rerun(scope="app")
 
 
 def _render_generation_controls(
@@ -9450,7 +9522,7 @@ def _render_generation_controls(
                 )
             )
             st.stop()
-        _save_runtime_config()
+        _save_runtime_config(force=True)
         task_id = pending_task_id or str(uuid4())
         _add_active_generation_task(
             task_id,
@@ -9908,9 +9980,9 @@ def _render_generation_controls(
 
     _render_channel_factory_section()
     _render_operator_console_section()
+    _render_publication_schedule_section()
     _render_trend_radar_section()
     _render_analytics_section()
-
     _render_autopilot_section(
         params=params,
         voice_mode=voice_mode,
@@ -9926,83 +9998,90 @@ def _render_generation_controls(
 def _render_application():
     """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
     from app.services import operator_console
-    operator_console.ensure_instance_initialized()
-    is_primary = operator_console.is_primary_instance()
+    with operator_console.render_pass_scope():
+        role, _ = operator_console.ensure_instance_initialized()
+        is_primary = (role == operator_console.ROLE_PRIMARY)
 
-    if is_primary and "operator_reconciled" not in st.session_state:
-        try:
-            operator_console.reconcile_orphaned_tasks()
-            st.session_state["operator_reconciled"] = True
-        except Exception as exc:
-            logger.warning(f"Erro na reconciliação pós-restart: {exc}")
+        if is_primary and not st.session_state.get("cross_post_recovery_checked") and "_cross_post_recovered" not in st.session_state:
+            recovered = tm.recover_interrupted_cross_posts()
+            if recovered is not None:
+                st.session_state["cross_post_recovery_checked"] = True
+                st.session_state["_cross_post_recovered"] = True
 
-    if not is_primary:
-        st.warning(
-            "⚠️ **SECONDARY INSTANCE — VIEW ONLY**: "
-            "O nó principal da fábrica já está ativo em outro processo/dispositivo. "
-            "Esta instância opera exclusivamente em modo leitura. "
-            "Gerações, publicações e comandos de controle operacional estão bloqueados nesta interface.",
-            icon="🔒",
+        if is_primary and "operator_reconciled" not in st.session_state:
+            try:
+                operator_console.reconcile_orphaned_tasks()
+                st.session_state["operator_reconciled"] = True
+            except Exception as exc:
+                logger.warning(f"Erro na reconciliação pós-restart: {exc}")
+
+        if not is_primary:
+            st.warning(
+                "⚠️ **SECONDARY INSTANCE — VIEW ONLY**: "
+                "O nó principal da fábrica já está ativo em outro processo/dispositivo. "
+                "Esta instância opera exclusivamente em modo leitura. "
+                "Gerações, publicações e comandos de controle operacional estão bloqueados nesta interface.",
+                icon="🔒",
+            )
+
+        _render_top_bar()
+
+        if st.session_state.get("settings_dialog_open", False):
+            _render_settings_dialog()
+
+        if _apply_pending_settings_preset():
+            st.success(tr("Settings Preset Imported"))
+
+        restore_applied = _apply_pending_task_restore()
+        restore_candidate_id = st.session_state.get("task_restore_candidate_id")
+        if restore_candidate_id:
+            _render_task_restore_dialog(restore_candidate_id)
+        restore_succeeded = st.session_state.pop("task_restore_succeeded", False)
+        if restore_applied or restore_succeeded:
+            st.success(tr("Task Configuration Loaded"))
+
+        publish_candidate_id = st.session_state.get("task_publish_candidate_id")
+        if publish_candidate_id:
+            _render_task_publish_dialog(publish_candidate_id)
+
+        if st.session_state.pop("task_publish_succeeded", False):
+            st.toast(tr("Publishing Started"), icon="🚀")
+        publish_error = st.session_state.pop("task_publish_error", None)
+        if publish_error:
+            st.toast(f"{tr('Publishing Failed')}: {publish_error}", icon="❌")
+
+        with st.container(key="main_settings_grid"):
+            panel = st.columns(4)
+        left_panel = panel[0]
+        middle_panel = panel[1]
+        audio_panel = panel[2]
+        right_panel = panel[3]
+
+        params = VideoParams(video_subject="")
+        params.match_materials_to_script = bool(
+            st.session_state.get("match_materials_to_script", False)
+        )
+        _render_script_settings(left_panel, params)
+
+        uploaded_files = _render_video_settings(middle_panel, params)
+        uploaded_audio_file, uploaded_bgm_file, voice_mode = _render_audio_settings(
+            audio_panel, params
         )
 
-    _render_top_bar()
+        _render_subtitle_settings(right_panel, params)
 
-    if st.session_state.get("settings_dialog_open", False):
-        _render_settings_dialog()
+        generation_submitted = _render_generation_controls(
+            params,
+            uploaded_files,
+            uploaded_audio_file,
+            uploaded_bgm_file,
+            voice_mode,
+        )
 
-    if _apply_pending_settings_preset():
-        st.success(tr("Settings Preset Imported"))
-
-    restore_applied = _apply_pending_task_restore()
-    restore_candidate_id = st.session_state.get("task_restore_candidate_id")
-    if restore_candidate_id:
-        _render_task_restore_dialog(restore_candidate_id)
-    restore_succeeded = st.session_state.pop("task_restore_succeeded", False)
-    if restore_applied or restore_succeeded:
-        st.success(tr("Task Configuration Loaded"))
-
-    publish_candidate_id = st.session_state.get("task_publish_candidate_id")
-    if publish_candidate_id:
-        _render_task_publish_dialog(publish_candidate_id)
-
-    if st.session_state.pop("task_publish_succeeded", False):
-        st.toast(tr("Publishing Started"), icon="🚀")
-    publish_error = st.session_state.pop("task_publish_error", None)
-    if publish_error:
-        st.toast(f"{tr('Publishing Failed')}: {publish_error}", icon="❌")
-
-    with st.container(key="main_settings_grid"):
-        panel = st.columns(4)
-    left_panel = panel[0]
-    middle_panel = panel[1]
-    audio_panel = panel[2]
-    right_panel = panel[3]
-
-    params = VideoParams(video_subject="")
-    params.match_materials_to_script = bool(
-        st.session_state.get("match_materials_to_script", False)
-    )
-    _render_script_settings(left_panel, params)
-
-    uploaded_files = _render_video_settings(middle_panel, params)
-    uploaded_audio_file, uploaded_bgm_file, voice_mode = _render_audio_settings(
-        audio_panel, params
-    )
-
-    _render_subtitle_settings(right_panel, params)
-
-    generation_submitted = _render_generation_controls(
-        params,
-        uploaded_files,
-        uploaded_audio_file,
-        uploaded_bgm_file,
-        voice_mode,
-    )
-
-    # 生成分支在启动后台线程前已经请求过保存。普通控件交互继续请求非阻塞保存；
-    # 如果后台任务正在使用配置，配置层会在任务结束时自动应用并落盘最新值。
-    if not generation_submitted:
-        _save_runtime_config()
+        # 生成分支在启动后台线程前已经请求过保存。普通控件交互继续请求非阻塞保存；
+        # 如果后台任务正在使用配置，配置层会在任务结束时自动应用并落盘最新值。
+        if not generation_submitted:
+            _save_runtime_config(force=False)
 
 
 if __name__ == "__main__":

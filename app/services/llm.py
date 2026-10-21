@@ -699,6 +699,7 @@ def build_script_prompt(
     custom_system_prompt: str = "",
     monetization_preset: str = "",
     narrative_structure: str = "",
+    topic_brief: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -717,6 +718,8 @@ def build_script_prompt(
 - video subject: {video_subject}
 - number of paragraphs: {paragraph_number}
 """.rstrip()
+    if topic_brief and str(topic_brief).strip():
+        prompt += f"\n- topic brief / editorial direction: {str(topic_brief).strip()}"
     if language:
         normalized_language = language.strip()
         if normalized_language.lower().replace("_", "-") in {
@@ -767,6 +770,7 @@ def generate_script(
     app_config=None,
     monetization_preset: str = "",
     narrative_structure: str = "",
+    topic_brief: str = "",
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -783,6 +787,7 @@ def generate_script(
         custom_system_prompt=custom_system_prompt,
         monetization_preset=monetization_preset,
         narrative_structure=narrative_structure,
+        topic_brief=topic_brief,
     )
     final_script = ""
     logger.info(

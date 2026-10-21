@@ -692,6 +692,10 @@ def _render_command_header_and_telemetry_content(demo_enabled: bool, scenario_ch
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
     _render_health_cards_row(data)
+    st.caption(
+        "💡 Controles de ativação do Scheduler, Auto Publish e Dry Run disponíveis na seção "
+        "'📅 Agenda de Publicação — Scheduler & Auto Publish' logo abaixo do Console Operacional."
+    )
 
 
 def _render_health_cards_row(data: Dict[str, Any]):
@@ -839,6 +843,11 @@ def _render_command_header_and_telemetry_active(demo_enabled: bool, scenario_cho
 
 @st.fragment(run_every="15s")
 def _render_command_header_and_telemetry_idle(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_command_header_and_telemetry_content(demo_enabled, scenario_choice, is_primary)
+
+
+@st.fragment
+def _render_command_header_and_telemetry_paused(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     _render_command_header_and_telemetry_content(demo_enabled, scenario_choice, is_primary)
 
 
@@ -1077,6 +1086,11 @@ def _render_queues_active(demo_enabled: bool, scenario_choice: str, is_primary: 
 
 @st.fragment(run_every="30s")
 def _render_queues_idle(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    _render_queues_content(demo_enabled, scenario_choice, is_primary)
+
+
+@st.fragment
+def _render_queues_paused(demo_enabled: bool, scenario_choice: str, is_primary: bool):
     _render_queues_content(demo_enabled, scenario_choice, is_primary)
 
 
@@ -2822,68 +2836,78 @@ def render_operator_console():
     with c_refresh:
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
         if st.button("🔄 Atualizar agora", key="op_btn_manual_refresh", use_container_width=True, help="Recarrega todos os dados do Operator Console imediatamente"):
+            operator_console.clear_provider_health_cache()
+            from app.utils import utils
+            utils.clear_ffmpeg_check_cache()
             st.toast("Console operacional atualizado.", icon="🔄")
             st.rerun()
 
-    if demo_enabled:
-        st.info(f"🎭 **Modo Demonstração Ativo:** Simulando `{scenario_choice}` (nenhum dado real é modificado).")
-        is_primary = (scenario_choice != "Secondary VIEW ONLY")
-        has_active_gen = (scenario_choice in ("Factory RUNNING", "Full Showcase (Todos os 7 Estados)"))
-        has_active_sched = has_active_gen
-        has_active_work = has_active_gen
-    else:
-        is_primary = operator_console.is_primary_instance()
-        try:
-            from app.services import webui_task
-            has_active_gen = webui_task.has_active_generation_tasks()
-        except Exception:
-            has_active_gen = False
-        try:
-            from app.services import scheduler
-            exec_st = scheduler.get_executor_status()
-            has_active_sched = (exec_st.get("state") == "processing")
-        except Exception:
-            has_active_sched = False
-        has_active_work = has_active_gen or has_active_sched
+    with operator_console.render_pass_scope():
+        if demo_enabled:
+            st.info(f"🎭 **Modo Demonstração Ativo:** Simulando `{scenario_choice}` (nenhum dado real é modificado).")
+            is_primary = (scenario_choice != "Secondary VIEW ONLY")
+            is_paused = (scenario_choice == "Factory PAUSED")
+            has_active_gen = (scenario_choice in ("Factory RUNNING", "Full Showcase (Todos os 7 Estados)"))
+            has_active_sched = has_active_gen
+            has_active_work = has_active_gen
+        else:
+            is_primary = operator_console.is_primary_instance()
+            is_paused = operator_console.is_factory_paused()
+            try:
+                from app.services import webui_task
+                has_active_gen = webui_task.has_active_generation_tasks()
+            except Exception:
+                has_active_gen = False
+            try:
+                from app.services import scheduler
+                exec_st = scheduler.get_executor_status()
+                has_active_sched = (exec_st.get("state") == "processing")
+            except Exception:
+                has_active_sched = False
+            has_active_work = has_active_gen or has_active_sched
 
-    # 1 & 2. Command Header & Telemetry Cards (5s active / 15s idle)
-    if has_active_work:
-        _render_command_header_and_telemetry_active(demo_enabled, scenario_choice, is_primary)
-    else:
-        _render_command_header_and_telemetry_idle(demo_enabled, scenario_choice, is_primary)
+        # 1 & 2. Command Header & Telemetry Cards (5s active / 15s idle / static when paused)
+        if has_active_work:
+            _render_command_header_and_telemetry_active(demo_enabled, scenario_choice, is_primary)
+        elif is_paused and not demo_enabled:
+            _render_command_header_and_telemetry_paused(demo_enabled, scenario_choice, is_primary)
+        else:
+            _render_command_header_and_telemetry_idle(demo_enabled, scenario_choice, is_primary)
 
-    # 3. Live Operations (5s when active / static when idle)
-    if has_active_gen:
-        _render_live_operations_active(demo_enabled, scenario_choice, is_primary)
-    else:
-        _render_live_operations_idle(demo_enabled, scenario_choice, is_primary)
+        # 3. Live Operations (5s when active / static when idle)
+        if has_active_gen:
+            _render_live_operations_active(demo_enabled, scenario_choice, is_primary)
+        else:
+            _render_live_operations_idle(demo_enabled, scenario_choice, is_primary)
 
-    # 4. Queues & Ready Stock (10s active / 30s idle)
-    if has_active_work:
-        _render_queues_active(demo_enabled, scenario_choice, is_primary)
-    else:
-        _render_queues_idle(demo_enabled, scenario_choice, is_primary)
+        # 4. Queues & Ready Stock (10s active / 30s idle / static when paused)
+        if has_active_work:
+            _render_queues_active(demo_enabled, scenario_choice, is_primary)
+        elif is_paused and not demo_enabled:
+            _render_queues_paused(demo_enabled, scenario_choice, is_primary)
+        else:
+            _render_queues_idle(demo_enabled, scenario_choice, is_primary)
 
-    # 4.5 Multi-Profile & Channel Management (STATIC)
-    _render_profile_management_section(demo_enabled, scenario_choice, is_primary)
+        # 4.5 Multi-Profile & Channel Management (STATIC)
+        _render_profile_management_section(demo_enabled, scenario_choice, is_primary)
 
-    # 5. Provider Health (STATIC)
-    _render_provider_health_section(demo_enabled, scenario_choice, is_primary)
+        # 5. Provider Health (STATIC)
+        _render_provider_health_section(demo_enabled, scenario_choice, is_primary)
 
-    # 5.5. Automatic Analytics Scheduler (STATIC)
-    _render_automatic_analytics_section(demo_enabled, scenario_choice, is_primary)
+        # 5.5. Automatic Analytics Scheduler (STATIC)
+        _render_automatic_analytics_section(demo_enabled, scenario_choice, is_primary)
 
-    # 5.55. Autonomous Production Loop (STATIC - Fase V12-E)
-    _render_autonomous_production_section(demo_enabled, scenario_choice, is_primary)
+        # 5.55. Autonomous Production Loop (STATIC - Fase V12-E)
+        _render_autonomous_production_section(demo_enabled, scenario_choice, is_primary)
 
-    # 5.56. Copyright & Asset Provenance (STATIC - Fase V14-B)
-    _render_copyright_provenance_section(demo_enabled, scenario_choice, is_primary)
+        # 5.56. Copyright & Asset Provenance (STATIC - Fase V14-B)
+        _render_copyright_provenance_section(demo_enabled, scenario_choice, is_primary)
 
-    # 5.6. Clip Mode Foundation (STATIC)
-    _render_clip_mode_section(demo_enabled, scenario_choice, is_primary)
+        # 5.6. Clip Mode Foundation (STATIC)
+        _render_clip_mode_section(demo_enabled, scenario_choice, is_primary)
 
-    # 5.7. Production Observability Baseline (STATIC - Fase V15-A)
-    _render_observability_section(demo_enabled, scenario_choice, is_primary)
+        # 5.7. Production Observability Baseline (STATIC - Fase V15-A)
+        _render_observability_section(demo_enabled, scenario_choice, is_primary)
 
-    # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
-    _render_tabs_section(demo_enabled, scenario_choice, is_primary)
+        # 6. Alerts, Timeline, Errors & Recovery Tabs (STATIC)
+        _render_tabs_section(demo_enabled, scenario_choice, is_primary)

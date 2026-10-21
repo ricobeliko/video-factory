@@ -267,36 +267,40 @@ def inspect_single_held_task(
                     if has_manual_appr:
                         cp_status = "PASS"
                     else:
-                        # 4.2. Obtém ou reconstrói proveniência via build_asset_provenance
-                        prov = script_data.get("asset_provenance") if isinstance(script_data, dict) else None
-                        if not prov:
-                            mat_sources = script_data.get("material_sources")
-                            if not mat_sources and script_data.get("scene_materials"):
-                                mat_sources = [
-                                    {
-                                        "provider": sm.get("provider"),
-                                        "asset_id": sm.get("asset_id"),
-                                        "local_file": sm.get("material_path"),
-                                        "source_page": sm.get("source_url") or "",
-                                        "search_term": sm.get("search_term_used") or "",
-                                        "duration": sm.get("duration", 0),
-                                        "used_duration_sec": sm.get("duration", 0),
-                                        "scene_index": sm.get("scene_index"),
-                                        "visual_source_type": sm.get("visual_source_type", "stock"),
-                                    }
-                                    for sm in script_data.get("scene_materials", [])
-                                ]
-                            prov = copyright_gate.build_asset_provenance(
-                                task_id=clean_tid,
-                                params=params_data,
-                                material_sources=mat_sources,
-                                task_base_dir=effective_task_dir,
-                            )
+                        # 4.2. Obtém ou reconstrói proveniência normalizada via normalize_asset_provenance
+                        raw_prov = copyright_gate._extract_raw_asset_provenance(script_data if isinstance(script_data, dict) else None)
+                        mat_sources = script_data.get("material_sources") if isinstance(script_data, dict) else None
+                        if not mat_sources and isinstance(script_data, dict) and script_data.get("scene_materials"):
+                            mat_sources = [
+                                {
+                                    "provider": sm.get("provider"),
+                                    "asset_id": sm.get("asset_id"),
+                                    "local_file": sm.get("material_path"),
+                                    "source_page": sm.get("source_url") or "",
+                                    "search_term": sm.get("search_term_used") or "",
+                                    "duration": sm.get("duration", 0),
+                                    "used_duration_sec": sm.get("duration", 0),
+                                    "scene_index": sm.get("scene_index"),
+                                    "visual_source_type": sm.get("visual_source_type", "stock"),
+                                }
+                                for sm in script_data.get("scene_materials", [])
+                                if isinstance(sm, dict)
+                            ]
+                        prov = copyright_gate.normalize_asset_provenance(
+                            raw_prov=raw_prov,
+                            task_id=clean_tid,
+                            params=params_data,
+                            material_sources=mat_sources,
+                            task_base_dir=effective_task_dir,
+                        )
 
                         # 4.3. Avalia proveniência respeitando o contrato real do Copyright Gate
                         # Não declara PASS simplesmente porque BGM está off ou parece stock:
                         # exige conformidade de BGM E conformidade de todos os clips visuais.
-                        if prov and isinstance(prov, dict):
+                        if isinstance(prov, dict) and prov.get("malformed_provenance"):
+                            cp_status = "BLOCK"
+                            copyright_reason = "Proveniência de ativos malformada ou em formato desconhecido."
+                        elif prov and isinstance(prov, dict):
                             bgm = prov.get("bgm") or {}
                             bgm_enabled = bgm.get("enabled", False)
                             bgm_source = str(bgm.get("source", "")).lower()
@@ -1031,11 +1035,31 @@ def apply_human_review_decision(
     if cand["classification"] == CLASS_ALREADY_SCHEDULED:
         raise ValueError(f"Bloqueio: Tarefa '{clean_tid}' já está agendada no Scheduler.")
 
+    # CF-3B-01: Restringe aprovação humana estritamente à faixa 55.0 <= q_score < 70.0
+    import math
+    is_below_threshold = (cand["qg_v2_quality_score"] < 70.0)
+    if is_below_threshold:
+        score_val = float(cand["qg_v2_quality_score"])
+        if not (math.isfinite(score_val) and score_val >= 55.0):
+            raise ValueError(
+                f"Bloqueio: Tarefa '{clean_tid}' com score {score_val:.1f} abaixo do limiar mínimo de 55.0 "
+                f"para aprovação humana (rejeição definitiva)."
+            )
+
+    # CF-3B-01: Validação centralizada fail-closed de gates técnicos, safety e copyright
+    ts_ok, ts_reason, _ = scheduler.validate_candidate_technical_and_safety_gates(
+        task_id=clean_tid,
+        task_data=None,
+        db_path=effective_db,
+        task_base_dir=effective_task_dir,
+    )
+    if not ts_ok:
+        raise ValueError(f"Bloqueio técnico ou de segurança para a tarefa '{clean_tid}': {ts_reason}")
+
     # 3. Tratamento de score
     # Se QG-V2 >= 70.0, é uma recuperação normal QG-V2
     # Se QG-V2 < 70.0, é uma aprovação editorial humana abaixo do limiar (approved_below_threshold = 1)
     # Em NENHUM dos casos o score original é falsificado!
-    is_below_threshold = (cand["qg_v2_quality_score"] < 70.0)
 
     if not is_below_threshold:
         quality_score.evaluate_quality(

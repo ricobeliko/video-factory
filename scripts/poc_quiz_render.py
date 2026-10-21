@@ -66,7 +66,7 @@ class QuizConfig:
     temp_dir: str = "storage/poc_quiz/temp_v3"
     images_dir: str = "storage/poc_quiz/images_v2"
     min_target_duration_sec: float = 60.0
-    target_duration_range: Tuple[float, float] = (62.0, 66.0)
+    target_duration_range: Tuple[float, float] = (60.0, 65.0)
 
     video_settings: Dict[str, Any] = field(default_factory=lambda: {
         "width": 1080,

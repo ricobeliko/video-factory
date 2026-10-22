@@ -22,6 +22,7 @@ import os
 import re
 import sqlite3
 import unicodedata
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -125,11 +126,17 @@ def _get_default_db_path() -> str:
     return os.path.join(storage_dir, "video_factory.db")
 
 
+@contextmanager
 def get_connection(db_path: Optional[str] = None):
     p = db_path or _get_default_db_path()
-    conn = sqlite3.connect(p)
+    conn = sqlite3.connect(p, timeout=15.0)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_strategy_db(db_path: Optional[str] = None) -> None:

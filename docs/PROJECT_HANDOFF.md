@@ -16,16 +16,17 @@
 
 - **LAST_UPDATED:** `22/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `MISSÃO A: SEGURANÇA E INTEGRIDADE DE PUBLICAÇÃO V1 (DEV VALIDATED)`
+- **CURRENT_FOCUS:** `MISSÃO B: ROBUSTEZ E ESTABILIDADE V1 (DEV VALIDATED)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_A_DEV_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_B_DEV_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
-- **CURRENT_MAIN_SHA:** `6343cc9bb93479372634ba3206260fa1bb9bd4d7` (base de auditoria V1)
-- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missão A)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `6343cc9bb93479372634ba3206260fa1bb9bd4d7` (confirmado pelo operador com HEALTH_8501=True)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão A: Segurança e Publicação V1 validada em DEV com 6/6 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **CURRENT_MAIN_SHA:** `5506e3465af1052e6d20b32aca376164ca771743` (homologado na Missão A)
+- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missões A e B)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `5506e3465af1052e6d20b32aca376164ca771743` (produção atualizada com Missão A)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão B: Robustez e Estabilidade V1 validada em DEV com 5/5 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **MISSION_B_ROBUSTNESS_STATUS:** `DEV VALIDATED (Correção cirúrgica de vazamentos de conexão SQLite e estabilidade: 1. app/services/content_strategy.py: get_connection transformado em contextmanager estrito com timeout=15.0, PRAGMA journal_mode=WAL; e conn.close() garantido em bloco finally, resolvendo RISK-SQL-01; 2. app/services/quality_recovery.py: get_connection local adicionado com timeout=15.0, WAL e fechamento determinístico em bloco finally, eliminando 9 locais de conexões abertas sem close em init_review_db, apply_human_review_decision, enqueue_review_command, has_pending_review_commands, process_pending_review_commands e submit_or_apply_review_decision, resolvendo RISK-SQL-02; 3. Scheduler & Anti-burst: verificação formal comprovando que o Scheduler já implementa LIMIT 1 por ciclo, limite móvel de 24h e min_interval_hours [8h warmup, 6h conservative, 4h normal, 2h scale] adiando deterministicamente posts atrasados pós-reboot para last_pub + min_interval sem disparos em rajada, preservando scheduler.py intacto conforme diretriz 'FAZER MENOS'; 4. Reconciliação operacional pós-reboot e integridade transacional preservadas; 5/5 testes direcionados PASS em test/services/test_mission_b_robustness.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_A_SAFETY_AND_PUBLISHING_STATUS:** `DEV VALIDATED (Correções mínimas cirúrgicas de segurança e publicação: 1. Invalidação síncrona de safety_status = 'FAILED' em quiz_safety_history e monetization_safety quando a duração é reprovada pós-render; 2. Tratamento defensivo de exceção em evaluate_quiz_duration_safety e propagação de REVIEW -> HELD_SAFETY_REVIEW; 3. Bloqueio estrito de publicação manual para tarefas retidas em HELD_SAFETY_REVIEW via scheduler.is_task_held_for_safety_review(); 4. scheduler.is_task_held_for_safety_review reconhece status FAILED e opera em modo fail-closed DATABASE_UNAVAILABLE_HOLD em falhas de SQLite; 5. scheduler.validate_candidate_technical_and_safety_gates opera fail-closed SAFETY_GATE_DB_ERROR em falhas de leitura do SQLite; 6. validate_candidate_technical_and_safety_gates chamado incondicionalmente para todos os candidatos em autonomous_production._recover_waiting_task e scheduler.plan_schedule sem bypass por quality score alto; 7. post_for_me.resolve_target_youtube_channel_id opera fail-closed retornando None em caso de falha de leitura do banco para canal explícito sem desviar para canal padrão; 6/6 testes direcionados PASS em test/services/test_mission_a_safety_and_publishing.py)`
 - **AUTONOMOUS_STOCK_TARGET_HOTFIX_STATUS:** `DEV VALIDATED (Correção do limite máximo de estoque pronto de 6 para 10 preservando o mínimo de 3 em get_target_ready_stock e set_target_ready_stock de autonomous_production.py; leitura, gravação e card do Console Operacional equalizados em 10; regra aplicada a todos os perfis; confirmação por inspeção de que durações 60-65s em quiz_generator.py pertencem exclusivamente ao Paper Quiz e não afetam o Quiz Dilemma; 12/12 testes direcionados PASS)`
 

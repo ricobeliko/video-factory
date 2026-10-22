@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -80,7 +81,7 @@ def init_review_db(db_path: Optional[str] = None) -> None:
     """Inicializa as tabelas de revisão humana e comandos operacionais no SQLite."""
     effective_db, _ = _resolve_paths(db_path)
     scheduler.init_db(effective_db)
-    with sqlite3.connect(effective_db) as conn:
+    with get_connection(effective_db) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS operator_video_reviews (
@@ -135,6 +136,19 @@ def _resolve_paths(
     effective_db = db_path or scheduler.get_db_path()
     effective_task_dir = task_base_dir or utils.task_dir()
     return effective_db, effective_task_dir
+
+
+@contextmanager
+def get_connection(db_path: Optional[str] = None):
+    effective_db, _ = _resolve_paths(db_path)
+    conn = sqlite3.connect(effective_db, timeout=15.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -959,7 +973,7 @@ def apply_human_review_decision(
             )
         
         # Registra o descarte em operator_video_reviews
-        with sqlite3.connect(effective_db) as conn:
+        with get_connection(effective_db) as conn:
             conn.execute(
                 """
                 INSERT INTO operator_video_reviews (
@@ -1085,7 +1099,7 @@ def apply_human_review_decision(
     profile_manager.save_task_profile(clean_tid, assigned_profile, db_path=effective_db)
 
     # Grava aprovação em operator_video_reviews
-    with sqlite3.connect(effective_db) as conn:
+    with get_connection(effective_db) as conn:
         conn.execute(
             """
             INSERT INTO operator_video_reviews (
@@ -1191,7 +1205,7 @@ def enqueue_review_command(
     init_review_db(effective_db)
 
     now_iso = _now_iso()
-    with sqlite3.connect(effective_db) as conn:
+    with get_connection(effective_db) as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -1210,7 +1224,7 @@ def has_pending_review_commands(db_path: Optional[str] = None) -> bool:
     effective_db, _ = _resolve_paths(db_path)
     if not os.path.isfile(effective_db):
         return False
-    with sqlite3.connect(effective_db) as conn:
+    with get_connection(effective_db) as conn:
         if not _table_exists(conn, "operator_review_commands"):
             return False
         row = conn.execute("SELECT 1 FROM operator_review_commands WHERE status = 'PENDING' LIMIT 1;").fetchone()
@@ -1228,7 +1242,7 @@ def process_pending_review_commands(
     if not operator_console.is_primary_instance(db_path=effective_db):
         return []
 
-    with sqlite3.connect(effective_db) as conn:
+    with get_connection(effective_db) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM operator_review_commands WHERE status = 'PENDING' ORDER BY id ASC;"
@@ -1254,7 +1268,7 @@ def process_pending_review_commands(
                 db_path=effective_db,
                 task_base_dir=effective_task_dir,
             )
-            with sqlite3.connect(effective_db) as conn:
+            with get_connection(effective_db) as conn:
                 conn.execute(
                     """
                     UPDATE operator_review_commands
@@ -1266,7 +1280,7 @@ def process_pending_review_commands(
                 conn.commit()
             results.append({"command_id": cid, "status": "completed", "result": res})
         except Exception as exc:
-            with sqlite3.connect(effective_db) as conn:
+            with get_connection(effective_db) as conn:
                 conn.execute(
                     """
                     UPDATE operator_review_commands
@@ -1324,7 +1338,7 @@ def submit_or_apply_review_decision(
     start_t = time.time()
     while (time.time() - start_t) < wait_for_primary_sec:
         time.sleep(0.15)
-        with sqlite3.connect(effective_db) as conn:
+        with get_connection(effective_db) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM operator_review_commands WHERE id = ?;", (cmd_id,)).fetchone()
             if row and row["status"] == "COMPLETED":

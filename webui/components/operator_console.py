@@ -1680,7 +1680,24 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                         st.toast("Ciclo executado no modo demo.", icon="⚡")
             with b3:
                 dest_chan = active_channel_id or "—"
-                st.caption(f"Destino: **YouTube** (`{dest_chan}`). TikTok bloqueado nesta fase. Publicação realizada pelo Scheduler.")
+                tt_info = ""
+                try:
+                    channels = profile_manager.list_channels(profile_id=active_prof_id)
+                    tt_chan = next((c for c in channels if c.get("platform") == "tiktok" and c.get("is_enabled")), None)
+                    tt_enabled_global = scheduler.get_setting("tiktok_enabled", "true").lower() == "true"
+                    if tt_chan:
+                        tt_cid = tt_chan.get("id")
+                        tt_auth = bool(tt_chan.get("auto_publish_authorized", 0))
+                        if tt_enabled_global and tt_auth:
+                            tt_info = f" | **TikTok** (`{tt_cid}`)"
+                        elif tt_enabled_global:
+                            tt_info = f" | **TikTok** (`{tt_cid}` — sem auto-pub)"
+                        else:
+                            tt_info = f" | **TikTok** (`{tt_cid}` — desativado)"
+                except Exception:
+                    pass
+
+                st.caption(f"Destinos: **YouTube** (`{dest_chan}`){tt_info}. Publicação realizada pelo Scheduler.")
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
 

@@ -165,8 +165,9 @@ def resolve_target_youtube_channel_id(
                     ext_id = str(row["external_account_id"]).strip()
                     if ext_id.startswith("UC") and len(ext_id) >= 20:
                         return ext_id
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"[PostForMe] Erro ao consultar channel_id '{c_clean}' no SQLite: {exc}")
+            return None
 
     # 2. Consulta dinâmica por profile_id se canal único habilitado
     if p_clean and not c_clean:
@@ -182,8 +183,9 @@ def resolve_target_youtube_channel_id(
                     ext_id = str(rows[0]["external_account_id"]).strip()
                     if ext_id.startswith("UC") and len(ext_id) >= 20:
                         return ext_id
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"[PostForMe] Erro ao consultar profile_id '{p_clean}' no SQLite: {exc}")
+            return None
 
     # 3. Mapeamento estático legado
     if c_clean in YOUTUBE_CHANNEL_MAP:
@@ -193,17 +195,12 @@ def resolve_target_youtube_channel_id(
     if c_clean.startswith("UC") and len(c_clean) >= 20:
         return c_clean
 
-    # 5. Fallback legado de profile_id
+    # 5. Fallback legado de profile_id (somente se channel_id não foi especificado ou é "default")
     if not c_clean or c_clean == "default":
         if p_clean in ("default", ""):
             return CHANNEL_DEFAULT_YT_ID
         elif p_clean == "profile-historias-misterio":
             return CHANNEL_MYSTERY_YT_ID
-
-    if p_clean == "profile-historias-misterio":
-        return CHANNEL_MYSTERY_YT_ID
-    if p_clean == "default":
-        return CHANNEL_DEFAULT_YT_ID
 
     return None
 

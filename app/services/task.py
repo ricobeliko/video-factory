@@ -2063,6 +2063,20 @@ def publish_task(
     if operator_console.is_factory_paused(db_path=db_path):
         return False, "Factory is paused: publishing blocked"
 
+    from app.services import scheduler
+    is_held, hold_reason = scheduler.is_task_held_for_safety_review(task_id, db_path=db_path)
+    if is_held:
+        operator_console.log_operational_event(
+            component="task",
+            severity="WARNING",
+            event_type="HELD_SAFETY_REVIEW_MANUAL_PUBLISH_BLOCK",
+            task_id=task_id,
+            message=f"Publicação manual bloqueada: task '{task_id}' retida para revisão de segurança ({hold_reason}).",
+            metadata={"hold_reason": hold_reason},
+            db_path=db_path,
+        )
+        return False, f"Cannot publish: task '{task_id}' is held for safety review ({hold_reason})"
+
     yt_provider = youtube_publisher.get_youtube_publish_provider(db_path=db_path)
     req_platforms_check = [p.lower().strip() for p in platforms if p and p.strip()] if platforms is not None else None
 
@@ -3038,11 +3052,14 @@ def _run_quiz_pipeline(
             platform=getattr(params, "platform", None) or "youtube",
             profile_id=task_profile_id,
         )
+        params.safety_status = dur_assessment.get("safety_status")
+        params.safety_reasons = "; ".join(dur_assessment.get("safety_reasons", []))
         if dur_assessment.get("safety_status") == const.SAFETY_STATUS_BLOCK:
             reasons = "; ".join(dur_assessment.get("safety_reasons", []))
             return _mark_task_failed(task_id, "duration_safety", f"Duration safety blocked: {reasons}", details=dur_assessment)
     except Exception as exc:
-        logger.warning(f"[SafetyGate] Falha ao avaliar duração pós-render para {task_id}: {exc}")
+        logger.error(f"[SafetyGate] Falha ao avaliar duração pós-render para {task_id}: {exc}")
+        return _mark_task_failed(task_id, "duration_safety", f"Duration evaluation failed: {exc}")
 
     # Quality Gate 4: Integridade de Mídia (Media Quality)
     mq_report = {}

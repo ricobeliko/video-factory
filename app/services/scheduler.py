@@ -354,14 +354,14 @@ def is_task_held_for_safety_review(
 
     # 2. State Manager em memória
     try:
-        from app.controllers.manager import memory_manager as sm
+        from app.services import state as sm
         st_task = sm.state.get_task(clean_tid) or {}
         if isinstance(st_task, dict):
             stage_val = str(st_task.get("stage") or "").strip().upper()
             if stage_val == "HELD_SAFETY_REVIEW":
                 return True, "HELD_SAFETY_REVIEW"
             s_status = str(st_task.get("safety_status") or "").strip().upper()
-            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW, "FAILED"):
                 return True, s_status
     except Exception:
         pass
@@ -372,10 +372,10 @@ def is_task_held_for_safety_review(
         safety_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
         if safety_rec:
             s_status = str(safety_rec.get("safety_status") or "").strip().upper()
-            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+            if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW, "FAILED"):
                 return True, s_status
-    except Exception:
-        pass
+    except Exception as exc:
+        return True, f"DATABASE_UNAVAILABLE_HOLD: {exc}"
 
     # 4. Tabela quiz_safety_history (Quiz Safety Gate)
     try:
@@ -390,10 +390,10 @@ def is_task_held_for_safety_review(
                 ).fetchone()
                 if q_row:
                     s_status = str(q_row["safety_status"] or "").strip().upper()
-                    if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW):
+                    if s_status in (const.SAFETY_STATUS_BLOCK, const.SAFETY_STATUS_REVIEW, "FAILED"):
                         return True, s_status
-    except Exception:
-        pass
+    except Exception as exc:
+        return True, f"DATABASE_UNAVAILABLE_HOLD: {exc}"
 
     # 5. Artefato persistido script.json em disco
     try:
@@ -529,14 +529,15 @@ def validate_candidate_technical_and_safety_gates(
         return False, f"SAFETY_GATE_HELD_FOR_REVIEW: {hold_reason}", {"safety_status": hold_reason}
 
     # 5.2 Consulta persistida no banco SQLite: monetization_safety e quiz_safety_history
+    db_safety_error = None
     persisted_safety_status = None
     try:
         from app.services import safety_gate
         s_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
         if s_rec and s_rec.get("safety_status"):
             persisted_safety_status = str(s_rec.get("safety_status")).upper().strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        db_safety_error = f"monetization_safety query error: {exc}"
 
     persisted_quiz_safety = None
     try:
@@ -551,8 +552,13 @@ def validate_candidate_technical_and_safety_gates(
                 ).fetchone()
                 if q_row and q_row["safety_status"]:
                     persisted_quiz_safety = str(q_row["safety_status"]).upper().strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        db_safety_error = f"quiz_safety_history query error: {exc}"
+
+    if db_safety_error:
+        return False, f"SAFETY_GATE_DB_ERROR: {db_safety_error}", {
+            "safety_status": "DB_ERROR"
+        }
 
     # Prevalência estrita de registros adversos persistidos
     if persisted_safety_status and persisted_safety_status != const.SAFETY_STATUS_PASS:
@@ -1689,6 +1695,19 @@ def plan_schedule(
                             continue
         except Exception as exc:
             logger.warning(f"[SCHEDULER][GATE] Erro ao consultar Quality/Review gates para {task_id}: {exc}")
+
+        # Validação centralizada fail-closed dos gates técnico, segurança e copyright (para todas as tarefas elegíveis)
+        tech_safety_ok, ts_reason, _ = validate_candidate_technical_and_safety_gates(
+            task_id=task_id,
+            task_data=t,
+            db_path=db_path,
+            task_base_dir=task_base_dir,
+        )
+        if not tech_safety_ok:
+            logger.warning(
+                f"[SCHEDULER][GATE] Tarefa {task_id} rejeitada nos gates técnicos/safety/copyright: {ts_reason}. Agendamento bloqueado."
+            )
+            continue
 
         # Resolução do perfil da task
         task_profile_id = t.get("profile_id") or profile_manager.get_task_profile_id(task_id, db_path=db_path)

@@ -2084,15 +2084,15 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         if not (is_human_eligible and human_review):
             raise ValueError("waiting_quality_not_approved")
 
-        # Validação centralizada fail-closed dos gates técnico, segurança e copyright
-        ts_ok, ts_reason, _ = scheduler.validate_candidate_technical_and_safety_gates(
-            task_id=task_id,
-            task_data=task,
-            db_path=db_path,
-            task_base_dir=task_base_dir,
-        )
-        if not ts_ok:
-            raise ValueError(f"waiting_technical_or_safety_failed: {ts_reason}")
+    # Validação centralizada fail-closed dos gates técnico, segurança e copyright para todas as tarefas elegíveis
+    ts_ok, ts_reason, _ = scheduler.validate_candidate_technical_and_safety_gates(
+        task_id=task_id,
+        task_data=task,
+        db_path=db_path,
+        task_base_dir=task_base_dir,
+    )
+    if not ts_ok:
+        raise ValueError(f"waiting_technical_or_safety_failed: {ts_reason}")
     persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
     if "youtube" not in persisted_plats and "youtube" not in (task.get("planned_platforms") or []):
         raise ValueError("waiting_youtube_destination_missing")

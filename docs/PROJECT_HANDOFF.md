@@ -14,18 +14,19 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `21/10/2026`
+- **LAST_UPDATED:** `22/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `HOTFIX V1 META DE ESTOQUE (LIMITE MÁXIMO 10 / MÍNIMO 3)`
+- **CURRENT_FOCUS:** `MISSÃO A: SEGURANÇA E INTEGRIDADE DE PUBLICAÇÃO V1 (DEV VALIDATED)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / V1_STOCK_TARGET_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_A_DEV_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
-- **CURRENT_MAIN_SHA:** `047920307b3004cb3797fb90867c4405f8a9a4a6` (origin/main pre-merge V1 aaf2975fd946c81ba377d9e1dccb573eee88f5ee)
-- **DEV_BRANCH_HEAD_SHA:** `feat/v1-integracao-lotes-1-2-3a` (integrada com Lotes 1, 2, 3A, 3B, 4, A5 + Hotfix UI/Segurança/Carregamento `b7280ef` + Hotfix Copyright/Renderização Completa sobre base `4c4c3b8188895154c3760429425a3d11391bd9f7`)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `b7280ef1a3cb2cc99d144d366ad3bd364d189ac6` (deployado no PC Forte; Fábrica em `PAUSED`, Scheduler/Auto Publish/Autonomia `OFF`, migração CA-03 ativa com 4 destinos tradicionais autorizados e 2 canais Quiz bloqueados)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Hotfix V1 Meta de Estoque [3 a 10] validado em DEV com 12/12 testes direcionados PASS)`
+- **CURRENT_MAIN_SHA:** `6343cc9bb93479372634ba3206260fa1bb9bd4d7` (base de auditoria V1)
+- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missão A)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `6343cc9bb93479372634ba3206260fa1bb9bd4d7` (confirmado pelo operador com HEALTH_8501=True)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão A: Segurança e Publicação V1 validada em DEV com 6/6 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **MISSION_A_SAFETY_AND_PUBLISHING_STATUS:** `DEV VALIDATED (Correções mínimas cirúrgicas de segurança e publicação: 1. Invalidação síncrona de safety_status = 'FAILED' em quiz_safety_history e monetization_safety quando a duração é reprovada pós-render; 2. Tratamento defensivo de exceção em evaluate_quiz_duration_safety e propagação de REVIEW -> HELD_SAFETY_REVIEW; 3. Bloqueio estrito de publicação manual para tarefas retidas em HELD_SAFETY_REVIEW via scheduler.is_task_held_for_safety_review(); 4. scheduler.is_task_held_for_safety_review reconhece status FAILED e opera em modo fail-closed DATABASE_UNAVAILABLE_HOLD em falhas de SQLite; 5. scheduler.validate_candidate_technical_and_safety_gates opera fail-closed SAFETY_GATE_DB_ERROR em falhas de leitura do SQLite; 6. validate_candidate_technical_and_safety_gates chamado incondicionalmente para todos os candidatos em autonomous_production._recover_waiting_task e scheduler.plan_schedule sem bypass por quality score alto; 7. post_for_me.resolve_target_youtube_channel_id opera fail-closed retornando None em caso de falha de leitura do banco para canal explícito sem desviar para canal padrão; 6/6 testes direcionados PASS em test/services/test_mission_a_safety_and_publishing.py)`
 - **AUTONOMOUS_STOCK_TARGET_HOTFIX_STATUS:** `DEV VALIDATED (Correção do limite máximo de estoque pronto de 6 para 10 preservando o mínimo de 3 em get_target_ready_stock e set_target_ready_stock de autonomous_production.py; leitura, gravação e card do Console Operacional equalizados em 10; regra aplicada a todos os perfis; confirmação por inspeção de que durações 60-65s em quiz_generator.py pertencem exclusivamente ao Paper Quiz e não afetam o Quiz Dilemma; 12/12 testes direcionados PASS)`
 
 - **QUIZ_DURATION_DILEMMA_HOTFIX_STATUS:** `DEV VALIDATED / HOMOLOGATED (Calibração dinâmica de pausas e duas passadas de áudio no gerador de quiz assegurando duração real entre 60.0s e 70.0s [alvo ~65s]; padronização editorial obrigatória do Dilema 7 com apelo a Jesus e Dilema 8 com CTA final sem culpa; atualização estrita dos gates de segurança; homologação real de vídeo gerado em 64.99s; 25/25 testes direcionados PASS)`
@@ -119,6 +120,25 @@
         - Tratamento explícito para `res.get("status") == "busy"` com `st.toast(display_msg, icon="⏳")` e `st.warning(display_msg)`.
     - **Validação Local:** 4 testes unitários isolados em `test/services/test_hotfix_autonomous_cycle_busy.py` (100% PASS).
 - **QUIZ_ENGINE_STATUS:** `DEV HOMOLOGATED / Q5-B2A.1 COMPLETE` (Homologação real concluída com sucesso em DEV; preflight de produção Q5-B2A validado; Quiz Engine exposto na Web UI via STRUCTURE_QUIZ_DILEMMA em Q5-B2A.1; pipeline tradicional 100% preservado; aguardando autorização humana para Q5-B2B)
+- **MISSÃO A — SEGURANÇA E INTEGRIDADE DE PUBLICAÇÃO V1 (22/10/2026):** `DEV VALIDATED (6/6 PASS)`
+  - **Contexto:** Correções mínimas, cirúrgicas e sem refatoração dos achados críticos levantados na Auditoria Mestre da V1 (relatórios em `C:\Projetos\Auditorias\MoneyPrinterTurbo-V1-2026-10\`).
+  - **Escopo 1 — Integridade dos Gates de Segurança e Quiz:**
+    1. *Dessincronia de Invalidação pós-render do Quiz (RISK-GATE-01):* `invalidate_quiz_safety_record()` em `app/services/quiz_safety_gate.py` agora atualiza de forma atômica tanto `quiz_safety_history` quanto `monetization_safety` com `safety_status = 'FAILED'`, eliminando o vazamento onde tarefas com duração fora de [60.0s, 70.0s] mantinham `PASS` no Safety Gate tradicional.
+    2. *Tratamento defensivo de exceção na checagem pós-render (RISK-GATE-04):* Em `app/services/task.py`, exceções inesperadas em `evaluate_quiz_duration_safety` são capturadas, chamam `_mark_task_failed(task_id, 'duration_safety', ...)` e atualizam `params.safety_status`, garantindo que status `REVIEW` defina `final_stage = "HELD_SAFETY_REVIEW"` sem promover para READY_STOCK.
+    3. *Reconhecimento de status FAILED e tolerância a falhas no Scheduler (RISK-GATE-02):* `scheduler.is_task_held_for_safety_review()` atualizado para reconhecer explicitamente o status `"FAILED"` em `monetization_safety`, `quiz_safety_history` e `sm.state`, e adotar fail-closed defensivo (`DATABASE_UNAVAILABLE_HOLD`) caso ocorra `sqlite3.OperationalError` ou indisponibilidade de leitura do banco.
+    4. *Falha fechada em checagens técnicas profundas do Scheduler:* `scheduler.validate_candidate_technical_and_safety_gates()` trata exceções de leitura do SQLite com retorno imediato de `SAFETY_GATE_DB_ERROR`.
+    5. *Eliminação de bypass por Quality Score alto (RISK-GATE-05):*
+       - Em `app/services/autonomous_production.py` (`_recover_waiting_task`): `validate_candidate_technical_and_safety_gates()` agora é invocado incondicionalmente para toda tarefa candidata, impedindo que scores $\ge 70$ ("STRONG") ignorem reprovações de segurança ou copyright.
+       - Em `app/services/scheduler.py` (`plan_schedule`): o agendamento de tarefas agora executa `validate_candidate_technical_and_safety_gates()` para todos os vídeos concluídos antes de alocar slots na agenda.
+  - **Escopo 2 — Publicação Segura e Isolamento de Contas:**
+    1. *Bloqueio de publicação manual em tarefas retidas (RISK-GATE-03):* Em `app/services/task.py` (`publish_task`), adicionada verificação explícita de `scheduler.is_task_held_for_safety_review(task_id, db_path=db_path)`. Tarefas em `HELD_SAFETY_REVIEW`, `REVIEW`, `BLOCK` ou `FAILED` são imediatamente bloqueadas com evento operacional auditável (`HELD_SAFETY_REVIEW_MANUAL_PUBLISH_BLOCK`), eliminando o bypass pela Web UI.
+    2. *Falha fechada na resolução de conta YouTube no Post for Me (RISK-PUB-01):* Em `app/services/post_for_me.py` (`resolve_target_youtube_channel_id`), quando um `channel_id` explícito é fornecido e a busca no SQLite falha ou não encontra correspondência, o método retorna `None` (fail-closed), sem redirecionar silenciosamente a postagem para a conta padrão `CHANNEL_DEFAULT_YT_ID`.
+  - **Mecanismos de Idempotência e Compatibilidade Preservados:**
+    - A chave de idempotência do Post for Me em 6 camadas (`video-factory:<task_id>:<platform>:<channel_id>`), índices SQLite `idx_active_schedule_v2` e deduplicações em `publication_events` foram rigorosamente mantidos.
+    - Fallback de canal default para chamadas legadas onde `channel_id is None` permanece ativo.
+  - **Validação Local:** 6 testes unitários direcionados cobrindo 100% dos cenários em `test/services/test_mission_a_safety_and_publishing.py` (6 passed in 13.03s).
+  - **Estado de Produção:** Nenhuma alteração aplicada em produção (`C:\Projetos\MoneyPrinterTurbo`), no banco SQLite operacional ou na V2. `DEPLOY_STATUS = NOT_DEPLOYED`.
+
 - **QUIZ_SAFETY_GATE_HOTFIX_STATUS:** `DEV VALIDATED / ROUTING HOTFIX COMPLETE (19/10/2026)`
   - **Sintoma / Problema:** O canal *Dose Diária de Escolhas* utiliza o formato `quiz_dilemma` com layout Q0-R homologado. Mesmo após a instalação inicial do hotfix `d6937c4`, o ciclo autônomo permaneceu bloqueado (ex.: TASK_ID `61143861-a0ab-4b56-ac67-ae55cf27ba37`) com a mensagem: `Safety Gate blocked script: Hook/abertura muito semelhante a vídeo recente (100%); CTA muito semelhante ao vídeo recente (100%); Mesma estrutura narrativa usada 3+ vezes consecutivas.`, revelando que tarefas reais de quiz ainda estavam sendo avaliadas pelo Safety Gate tradicional.
   - **Causa Raiz Comprovada (Tríplice Falha de Roteamento):**

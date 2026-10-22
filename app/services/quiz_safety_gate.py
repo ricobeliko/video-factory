@@ -274,6 +274,23 @@ def invalidate_quiz_safety_record(
                 """,
                 (reason, reason, clean_tid),
             )
+            # Invalida também na tabela canônica monetization_safety para impedir reabsorção indevida em estoque
+            has_ms = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='monetization_safety';"
+            ).fetchone()
+            if has_ms:
+                conn.execute(
+                    """
+                    UPDATE monetization_safety
+                    SET safety_status = 'FAILED',
+                        safety_reasons = CASE
+                            WHEN safety_reasons IS NULL OR safety_reasons = '' THEN ?
+                            ELSE safety_reasons || '; ' || ?
+                        END
+                    WHERE task_id = ?;
+                    """,
+                    (reason, reason, clean_tid),
+                )
             conn.commit()
         finally:
             conn.close()

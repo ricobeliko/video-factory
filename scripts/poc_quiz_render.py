@@ -66,7 +66,7 @@ class QuizConfig:
     temp_dir: str = "storage/poc_quiz/temp_v3"
     images_dir: str = "storage/poc_quiz/images_v2"
     min_target_duration_sec: float = 60.0
-    target_duration_range: Tuple[float, float] = (60.0, 65.0)
+    target_duration_range: Tuple[float, float] = (60.0, 70.0)
 
     video_settings: Dict[str, Any] = field(default_factory=lambda: {
         "width": 1080,
@@ -103,8 +103,8 @@ class QuizConfig:
     retention_hook: Dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
         "question_id": "q1",
-        "narration": "Mas atenção... a última escolha vai te surpreender!",
-        "min_countdown_sec": 3.85,
+        "narration": "Atenção: a última escolha vai te surpreender!",
+        "min_countdown_sec": 2.6,
     })
 
     theme_palettes: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {
@@ -207,8 +207,12 @@ class QuizEngine:
     # -------------------------------------------------------------------------
     def ensure_images(self) -> None:
         """Garante a disponibilidade de imagens para todas as perguntas."""
-        from app.services import material
-        api_key = material.get_api_key("pexels_api_keys")
+        api_key = None
+        try:
+            from app.services import material
+            api_key = material.get_api_key("pexels_api_keys")
+        except Exception:
+            api_key = None
         headers = {"Authorization": api_key} if api_key else {}
 
         for item in self.config.questions:
@@ -759,41 +763,84 @@ class QuizEngine:
         enable_badges = self.config.countdown_settings.get("enable_countdown_badges", False)
         sfx_countdown = self.generate_countdown_sfx(duration=3.5) if enable_badges else None
 
-        # 4. Síntese de Voz e Áudio dos Segmentos
-        total_planned_duration = 0.0
+        # 4. Síntese de Voz e Áudio dos Segmentos com Calibração Dinâmica de Duração
         hook_cfg = self.config.retention_hook
-
         reveal_sec = float(self.config.countdown_settings.get("reveal_sec", 1.0))
         default_post_sec = float(self.config.countdown_settings.get("default_sec", 3.0))
 
+        # 4.1 Síntese inicial das narrações e coleta de durações reais de áudio
+        voice_data = []
         for idx, item in enumerate(self.config.questions):
             scene_id = item["id"]
             narration_mp3 = os.path.join(self.config.temp_dir, f"narration_{scene_id}.mp3")
             dur_voice = await self.synthesize_voice(item["narration"], narration_mp3)
 
-            # Verifica se esta pergunta é o gancho de retenção
-            is_hook = item.get("is_hook") or (hook_cfg.get("enabled") and hook_cfg.get("question_id") == scene_id)
+            is_hook = bool(item.get("is_hook") or (hook_cfg.get("enabled") and hook_cfg.get("question_id") == scene_id))
+            dur_hook = 0.0
+            hook_mp3 = None
             if is_hook:
                 hook_narration = item.get("hook_narration") or hook_cfg.get("narration", "")
                 hook_mp3 = os.path.join(self.config.temp_dir, f"hook_{scene_id}.mp3")
                 dur_hook = await self.synthesize_voice(hook_narration, hook_mp3)
-                min_cd = hook_cfg.get("min_countdown_sec", 3.5)
-                post_sec = max(float(item.get("countdown_sec", min_cd)), dur_hook + 0.15)
-                item["countdown_sec"] = post_sec
-                countdown_audio = hook_mp3
-                logger.info(f"Pergunta {scene_id} (GANCHO): voz_q={dur_voice:.2f}s | voz_gancho={dur_hook:.2f}s | pos={post_sec:.2f}s")
+
+            voice_data.append({
+                "item": item,
+                "scene_id": scene_id,
+                "narration_mp3": narration_mp3,
+                "dur_voice": dur_voice,
+                "is_hook": is_hook,
+                "hook_mp3": hook_mp3,
+                "dur_hook": dur_hook,
+            })
+
+        total_voice_duration = sum(v["dur_voice"] for v in voice_data)
+        logger.info(f"[QUIZ_DURATION] Voz total sintetizada ({len(voice_data)} cenas): {total_voice_duration:.2f}s")
+
+        # 4.2 Calibração dinâmica das pausas para atingir aproximadamente 65s (faixa estrita: 60.0s a 70.0s)
+        target_min, target_max = self.config.target_duration_range[0], self.config.target_duration_range[1]
+        target_center = 65.0
+
+        min_hook_pause = 2.6
+        min_other_pause = max(1.1, reveal_sec + 0.1)
+
+        hook_item = next((v for v in voice_data if v["is_hook"]), None)
+        min_hook_required = max(min_hook_pause, (hook_item["dur_hook"] + 0.15) if hook_item else min_hook_pause)
+        other_count = max(1, len(voice_data) - (1 if hook_item else 0))
+
+        min_total_duration = total_voice_duration + (min_hook_required if hook_item else 0.0) + (other_count * min_other_pause)
+
+        if min_total_duration > target_center:
+            desired_total = min(target_max - 0.5, max(target_min + 0.5, min_total_duration))
+        else:
+            desired_total = target_center
+
+        total_pause_available = max(0.0, desired_total - total_voice_duration)
+        hook_pause = max(min_hook_required, min(total_pause_available * 0.25, 3.5)) if hook_item else 0.0
+        rem_pause = max(other_count * min_other_pause, total_pause_available - hook_pause)
+        per_q_pause = rem_pause / other_count
+
+        total_planned_duration = 0.0
+        for idx, v in enumerate(voice_data):
+            item = v["item"]
+            scene_id = v["scene_id"]
+            dur_voice = v["dur_voice"]
+
+            if v["is_hook"]:
+                post_sec = hook_pause
+                countdown_audio = v["hook_mp3"]
+                logger.info(f"Pergunta {scene_id} (GANCHO): voz_q={dur_voice:.2f}s | voz_gancho={v['dur_hook']:.2f}s | pos={post_sec:.2f}s")
             else:
-                post_sec = float(item.get("countdown_sec", default_post_sec))
-                item["countdown_sec"] = post_sec
+                post_sec = per_q_pause
                 countdown_audio = sfx_countdown if enable_badges else None
                 logger.info(f"Pergunta {scene_id}: voz_q={dur_voice:.2f}s | pos_espera_revelacao={post_sec:.2f}s")
 
+            item["countdown_sec"] = post_sec
             dur_total = dur_voice + post_sec
             item["total_duration"] = dur_total
 
             audio_scene = os.path.join(self.config.temp_dir, f"audio_{scene_id}.mp4")
             self.mix_segment_audio(
-                narration_mp3=narration_mp3,
+                narration_mp3=v["narration_mp3"],
                 countdown_audio=countdown_audio,
                 output_audio=audio_scene,
                 total_duration=dur_total,

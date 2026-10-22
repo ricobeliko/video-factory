@@ -319,14 +319,72 @@ class TestQuizSafetyGate(unittest.TestCase):
         )
         self.assertEqual(res_block_long["safety_status"], const.SAFETY_STATUS_BLOCK)
 
-        # Duração válida tecnicamente no Shorts (ex: 55s) mas fora da faixa editorial ideal de quiz [60-65s]
-        res_review = quiz_safety_gate.evaluate_quiz_duration_safety(
-            task_id="task_dur_review",
+        # Duração válida na nova faixa [60.0s, 70.0s] (ex: 68.5s)
+        res_pass_high = quiz_safety_gate.evaluate_quiz_duration_safety(
+            task_id="task_dur_pass_high",
+            actual_duration=68.5,
+            platform="youtube",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_pass_high["safety_status"], const.SAFETY_STATUS_PASS)
+
+        # Duração válida tecnicamente no Shorts (ex: 55s) mas abaixo da faixa [60-70s]
+        res_review_low = quiz_safety_gate.evaluate_quiz_duration_safety(
+            task_id="task_dur_review_low",
             actual_duration=55.0,
             platform="youtube",
             db_path=self.db_path,
         )
-        self.assertEqual(res_review["safety_status"], const.SAFETY_STATUS_REVIEW)
+        self.assertEqual(res_review_low["safety_status"], const.SAFETY_STATUS_REVIEW)
+
+        # Duração válida tecnicamente no Shorts (ex: 74s) mas acima da faixa [60-70s]
+        res_review_high = quiz_safety_gate.evaluate_quiz_duration_safety(
+            task_id="task_dur_review_high",
+            actual_duration=74.0,
+            platform="youtube",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_review_high["safety_status"], const.SAFETY_STATUS_REVIEW)
+
+    def test_quiz_dilemma_7_and_8_editorial_compliance(self):
+        """Valida que o Quiz com 8 dilemas exige Jesus no Dilema 7 e CTA no Dilema 8."""
+        from app.services.quiz_generator import QuizContentGenerator
+        gen = QuizContentGenerator()
+        fb = gen._generate_fallback_content("dilemas", "subjective", 8, "QUAL VOCÊ ESCOLHE?", "quiz_choice_religious")
+        self.assertEqual(len(fb["questions"]), 8)
+
+        # Roteiro completo conforme
+        script_text = "\n\n".join(f"[{q['id']}] {q['header']} {q['narration']}" for q in fb["questions"])
+        res_pass = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_dilemmas_ok",
+            topic="Dilemas",
+            script=script_text,
+            quiz_data=fb,
+            narrative_structure=const.STRUCTURE_QUIZ_DILEMMA,
+            profile_id="profile_quiz_dilemma",
+            db_path=self.db_path,
+        )
+        self.assertEqual(res_pass["safety_status"], const.SAFETY_STATUS_PASS)
+
+        # Dilema 7 sem menção a Jesus
+        fb_no_jesus = dict(fb)
+        fb_no_jesus["questions"] = list(fb["questions"])
+        fb_no_jesus["questions"][6] = dict(fb["questions"][6])
+        fb_no_jesus["questions"][6]["narration"] = "Ficar sem internet ou comer chocolate?"
+        fb_no_jesus["questions"][6]["top"] = {"title": "SEM INTERNET"}
+        fb_no_jesus["questions"][6]["bottom"] = {"title": "COMER CHOCOLATE"}
+        script_no_jesus = "\n\n".join(f"[{q['id']}] {q['header']} {q['narration']}" for q in fb_no_jesus["questions"])
+
+        res_no_jesus = quiz_safety_gate.evaluate_quiz_script_safety(
+            task_id="task_no_jesus",
+            topic="Dilemas",
+            script=script_no_jesus,
+            quiz_data=fb_no_jesus,
+            narrative_structure=const.STRUCTURE_QUIZ_DILEMMA,
+            profile_id="profile_quiz_dilemma",
+            db_path=self.db_path,
+        )
+        self.assertIn("Dilema 7 deve conter apelo a Jesus com menção explícita", res_no_jesus["safety_reasons"])
 
     def test_traditional_safety_gate_regression_preserved(self):
         """8. O Safety Gate tradicional permanece 100% intacto para vídeos tradicionais."""

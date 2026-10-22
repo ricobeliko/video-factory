@@ -632,6 +632,22 @@ def evaluate_quiz_script_safety(
         save_safety_assessment(assessment, db_path=db_path)
         return assessment
 
+    # 2.1 Verificação da conformidade editorial dos 8 dilemas (Dilema 7: Jesus, Dilema 8: CTA)
+    if len(dilemmas) == 8:
+        q7 = dilemmas[6]
+        q7_text = (str(q7.get("narration") or "") + " " + str(q7.get("bottom_title") or "") + " " + str(q7.get("top_title") or "")).lower()
+        if "jesus" not in q7_text:
+            reasons.append("Dilema 7 deve conter apelo a Jesus com menção explícita")
+            if status != const.SAFETY_STATUS_BLOCK:
+                status = const.SAFETY_STATUS_REVIEW
+
+        q8 = dilemmas[7]
+        q8_text = (str(q8.get("narration") or "") + " " + str(q8.get("bottom_title") or "") + " " + str(q8.get("top_title") or "")).lower()
+        if not any(k in q8_text for k in ("seguir", "perfil", "canal", "inscreva", "compartilh", "apoiar", "curtir")):
+            reasons.append("Dilema 8 deve conter CTA de encerramento do canal (seguir/curtir/compartilhar)")
+            if status != const.SAFETY_STATUS_BLOCK:
+                status = const.SAFETY_STATUS_REVIEW
+
     # 3. Verificação de duplicidade interna (dentro do próprio vídeo)
     for i in range(len(active_dilemmas)):
         for j in range(i + 1, len(active_dilemmas)):
@@ -845,9 +861,9 @@ def evaluate_quiz_duration_safety(
                 f"Duração de {actual_duration:.1f}s excede o limite oficial de 180s (3 minutos) do YouTube Shorts"
             )
             status = const.SAFETY_STATUS_BLOCK
-        elif actual_duration < 60.0 or actual_duration > 65.0:
+        elif actual_duration < 60.0 or actual_duration > 70.0:
             reasons.append(
-                f"Duração de {actual_duration:.1f}s fora da faixa editorial recomendada para Quiz [60.0s, 65.0s]"
+                f"Duração de {actual_duration:.1f}s fora da faixa editorial recomendada para Quiz [60.0s, 70.0s]"
             )
             if status != const.SAFETY_STATUS_BLOCK:
                 status = const.SAFETY_STATUS_REVIEW

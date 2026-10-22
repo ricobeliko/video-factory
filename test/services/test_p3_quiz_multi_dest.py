@@ -153,8 +153,8 @@ class TestP3QuizMultiDestination(unittest.TestCase):
     @patch("scripts.poc_quiz_render.QuizEngine.render")
     @patch("app.services.quiz_assets.QuizAssetManager.process_quiz")
     @patch("app.services.quiz_generator.QuizContentGenerator.generate_paper_quiz_structure")
-    @patch("app.services.safety_gate.evaluate_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
-    @patch("app.services.safety_gate.evaluate_duration_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_duration_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
     @patch("app.services.media_quality.evaluate_final_media_quality", return_value={"status": "PASS", "reasons": [], "metrics": {"duration": 62.0}})
     def test_03_routing_to_paper_quiz_engine(
         self,
@@ -211,7 +211,7 @@ class TestP3QuizMultiDestination(unittest.TestCase):
     @patch("app.services.task._run_quiz_pipeline")
     @patch("app.services.flow_account_pool.select_flow_account")
     @patch("app.services.task.generate_script", return_value="Roteiro tradicional de teste longo e completo para bypass.")
-    @patch("app.services.safety_gate.evaluate_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
     @patch("app.utils.utils.check_ffmpeg_ready", return_value=True)
     def test_04_google_flow_bypass_and_traditional_preservation(
         self,
@@ -251,7 +251,7 @@ class TestP3QuizMultiDestination(unittest.TestCase):
         mock_gen_script.assert_called_once()
 
     @patch("app.services.quiz_generator.QuizContentGenerator.generate_paper_quiz_structure")
-    @patch("app.services.safety_gate.evaluate_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
     def test_05_factual_safety_blocking_unverified(self, mock_safety, mock_gen_paper):
         """5. Quizzes factuais não verificados são estritamente bloqueados no factual_gate."""
         mock_gen_paper.return_value = {
@@ -290,7 +290,7 @@ class TestP3QuizMultiDestination(unittest.TestCase):
     @patch("scripts.poc_quiz_paper_render.PaperQuizEngine.render")
     @patch("app.services.quiz_assets.QuizAssetManager.process_quiz")
     @patch("app.services.quiz_generator.QuizContentGenerator.generate_paper_quiz_structure")
-    @patch("app.services.safety_gate.evaluate_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
+    @patch("app.services.quiz_safety_gate.evaluate_quiz_script_safety", return_value={"safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []})
     def test_06_duration_gate_enforcement(
         self,
         mock_script_safety,
@@ -328,10 +328,10 @@ class TestP3QuizMultiDestination(unittest.TestCase):
         self.assertIn("error", res_short)
         self.assertEqual(res_short.get("failed_stage"), "duration_safety")
 
-        # Caso B: Duração 67s (> 65s) -> Bloqueado
+        # Caso B: Duração 73s (> 70s) -> Bloqueado
         mock_paper_render.return_value = {
             "status": "CONCLUIDO_COM_SUCESSO",
-            "duration": 67.0,
+            "duration": 73.0,
         }
         params_long = VideoParams(video_subject="Longo", narrative_structure="quiz_paper")
         res_long = tm._run_quiz_pipeline(task_id="task_long", params=params_long, stop_at="video")

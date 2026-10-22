@@ -35,6 +35,221 @@ STORAGE_DIR = os.path.join(ROOT_DIR, "storage", "quiz_history")
 QUIZ_TEMPLATES_DIR = os.path.join(ROOT_DIR, "resource", "quiz_templates")
 
 
+
+# =============================================================================
+# Variações Naturais para Encerramento Editorial de Quiz (Dilema 7 e Dilema 8)
+# =============================================================================
+DILEMMA_7_JESUS_VARIATIONS = [
+    {
+        "narration": "Você prefere ficar trinta dias sem internet... Ou curtir o vídeo e comentar por Jesus?",
+        "top": {
+            "title": "30 DIAS SEM INTERNET",
+            "tag": "OPÇÃO A",
+            "image_query": "broken smartphone disconnected no wifi screen",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "CURTIR E COMENTAR POR JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "jesus christ cross heavenly light blessing sunrise",
+            "theme": "gold_red",
+        },
+        "percentage_top": 14,
+        "percentage_bottom": 86,
+    },
+    {
+        "narration": "Você prefere perder seu celular agora... Ou curtir e comentar Jesus nos comentários?",
+        "top": {
+            "title": "PERDER SEU CELULAR AGORA",
+            "tag": "OPÇÃO A",
+            "image_query": "shattered broken phone on ground screen cracked",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "CURTIR E COMENTAR JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "christian cross sunset silhouette spiritual hope",
+            "theme": "gold_red",
+        },
+        "percentage_top": 12,
+        "percentage_bottom": 88,
+    },
+    {
+        "narration": "Ficar um mês sem nenhuma rede social... Ou curtir o vídeo em honra a Jesus?",
+        "top": {
+            "title": "1 MÊS SEM REDES SOCIAIS",
+            "tag": "OPÇÃO A",
+            "image_query": "lonely person looking at blank wall boredom",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "CURTIR EM HONRA A JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "golden cross glowing rays of light sky faith",
+            "theme": "gold_red",
+        },
+        "percentage_top": 15,
+        "percentage_bottom": 85,
+    },
+    {
+        "narration": "Tomar banho gelado no inverno por um ano... Ou curtir e glorificar a Jesus?",
+        "top": {
+            "title": "BANHO GELADO POR UM ANO",
+            "tag": "OPÇÃO A",
+            "image_query": "freezing cold shower ice water shivering",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "CURTIR E GLORIFICAR A JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "divine light clouds heaven holy cross morning",
+            "theme": "gold_red",
+        },
+        "percentage_top": 10,
+        "percentage_bottom": 90,
+    },
+    {
+        "narration": "Perder todo o dinheiro da carteira agora... Ou curtir e digitar Jesus nos comentários?",
+        "top": {
+            "title": "PERDER DINHEIRO DA CARTEIRA",
+            "tag": "OPÇÃO A",
+            "image_query": "empty wallet leather broken broke sad",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "DIGITAR JESUS NO VÍDEO",
+            "tag": "OPÇÃO B",
+            "image_query": "hands praying worship god faith light cross",
+            "theme": "gold_red",
+        },
+        "percentage_top": 11,
+        "percentage_bottom": 89,
+    },
+    {
+        "narration": "Ficar um ano sem comer sua comida favorita... Ou deixar a curtida e comentar por Jesus?",
+        "top": {
+            "title": "1 ANO SEM COMIDA FAVORITA",
+            "tag": "OPÇÃO A",
+            "image_query": "sad person looking at empty plate fasting",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "DEIXAR A CURTIDA POR JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "sacred heart cross beautiful church sunlight",
+            "theme": "gold_red",
+        },
+        "percentage_top": 13,
+        "percentage_bottom": 87,
+    },
+    {
+        "narration": "Passar uma semana sem dormir na sua cama... Ou curtir agora e agradecer a Jesus?",
+        "top": {
+            "title": "UMA SEMANA SEM SUA CAMA",
+            "tag": "OPÇÃO A",
+            "image_query": "person sleeping on uncomfortable cold hard floor",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "CURTIR E AGRADECER A JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "open bible cross divine light sunrise gratitude",
+            "theme": "gold_red",
+        },
+        "percentage_top": 9,
+        "percentage_bottom": 91,
+    },
+    {
+        "narration": "Andar vinte quilômetros a pé na chuva... Ou curtir o vídeo e comentar por Jesus?",
+        "top": {
+            "title": "20 KM A PÉ NA CHUVA",
+            "tag": "OPÇÃO A",
+            "image_query": "person walking in heavy rain stormy road wet",
+            "theme": "red",
+        },
+        "bottom": {
+            "title": "CURTIR E COMENTAR POR JESUS",
+            "tag": "OPÇÃO B",
+            "image_query": "heavenly rays shining through dark clouds cross",
+            "theme": "gold_red",
+        },
+        "percentage_top": 8,
+        "percentage_bottom": 92,
+    },
+]
+
+DILEMMA_8_CTA_VARIATIONS = [
+    {
+        "narration": "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?",
+        "top": {
+            "title": "PASSAR DIRETO E PERDER TUDO",
+            "tag": "OPÇÃO A",
+            "image_query": "person walking away empty dark road night",
+            "theme": "blue_neutral",
+        },
+        "bottom": {
+            "title": "SEGUIR O PERFIL AGORA",
+            "tag": "OPÇÃO B",
+            "image_query": "smartphone social media follow subscribe celebration confetti",
+            "theme": "gold_red",
+        },
+        "percentage_top": 9,
+        "percentage_bottom": 91,
+    },
+    {
+        "narration": "Ignorar este vídeo e perder os novos desafios... Ou seguir o canal e receber bênçãos com a gente?",
+        "top": {
+            "title": "IGNORAR E PERDER DESAFIOS",
+            "tag": "OPÇÃO A",
+            "image_query": "scrolling past smartphone screen blurred dark",
+            "theme": "blue_neutral",
+        },
+        "bottom": {
+            "title": "SEGUIR O CANAL E RECEBER BÊNÇÃOS",
+            "tag": "OPÇÃO B",
+            "image_query": "community hands together golden sunset celebration",
+            "theme": "gold_red",
+        },
+        "percentage_top": 8,
+        "percentage_bottom": 92,
+    },
+    {
+        "narration": "Passar direto e não ver mais nossas escolhas... Ou seguir a página e apoiar o canal hoje?",
+        "top": {
+            "title": "PASSAR DIRETO E NÃO VER MAIS",
+            "tag": "OPÇÃO A",
+            "image_query": "person turning back darkness silhouette road",
+            "theme": "blue_neutral",
+        },
+        "bottom": {
+            "title": "SEGUIR A PÁGINA HOJE",
+            "tag": "OPÇÃO B",
+            "image_query": "bright smartphone notifications follow subscribe gold",
+            "theme": "gold_red",
+        },
+        "percentage_top": 10,
+        "percentage_bottom": 90,
+    },
+    {
+        "narration": "Passar reto e esquecer esta mensagem... Ou seguir o perfil e compartilhar com os amigos?",
+        "top": {
+            "title": "PASSAR RETO E ESQUECER",
+            "tag": "OPÇÃO A",
+            "image_query": "empty desert road dust wind forgotten",
+            "theme": "blue_neutral",
+        },
+        "bottom": {
+            "title": "SEGUIR E COMPARTILHAR",
+            "tag": "OPÇÃO B",
+            "image_query": "happy friends laughing sharing mobile video light",
+            "theme": "gold_red",
+        },
+        "percentage_top": 7,
+        "percentage_bottom": 93,
+    },
+]
+
+
 class QuizContentGenerator:
     """Gerador automático de conteúdo para o Quiz Engine (Fase Q2)."""
 
@@ -369,6 +584,9 @@ REGRAS DE RETENÇÃO ABSOLUTA (Q0-R):
 5. Textos curtos e chamativos para os cards (máximo 4 a 5 palavras).
 6. Queries de imagens ('image_query') em inglês para busca no Pexels.
 7. Adicione 'percentage_top' e 'percentage_bottom' somando 100 (simulação de votação popular).
+8. DURAÇÃO E CONCISÃO: Narrações diretas com 10 a 14 palavras por dilema para garantir duração de 60 a 70 segundos.
+9. DILEMA 7 (PENÚLTIMO): Apelo a Jesus com menção explícita a Ele. Opção A deve ser perda, sacrifício ou inconveniência (ex: ficar 30 dias sem internet, perder celular). Opção B deve ser curtir e comentar por Jesus. Varie a frase naturalmente.
+10. DILEMA 8 (ÚLTIMO): CTA final incentivando seguir o perfil/canal e apoiar o canal (Opção A: passar direto e perder os próximos vídeos; Opção B: seguir o perfil agora e apoiar o canal).
 {brief_clause}{avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
@@ -433,63 +651,82 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             topic = last_top.lower() or "última pergunta"
             return f"Mas atenção... a última pergunta sobre {topic[:25]} vai te surpreender!"
         else:
-            return "Mas atenção... a última escolha vai te surpreender!"
+            return "Atenção: a última escolha vai te surpreender!"
 
     def _apply_channel_closing(self, quiz_data: Dict[str, Any], closing_type: str, format_type: str) -> None:
-        """Configura o encerramento respeitando as regras de retenção Q0-R."""
+        """Configura o encerramento respeitando as regras de retenção Q0-R e apelo editorial."""
         questions = quiz_data.get("questions", [])
         if not questions:
             return
 
-        if closing_type == "quiz_choice_religious":
-            # Q0-R Item E: Penúltima escolha — Engajamento religioso (editorial_closing)
+        is_quiz_dilemma = (format_type == "subjective" and len(questions) >= 7)
+        use_jesus_closing = (closing_type == "quiz_choice_religious" or is_quiz_dilemma)
+
+        seed_str = str(quiz_data.get("quiz_title") or "") + "_" + str(quiz_data.get("niche") or "")
+        seed_hash = abs(hash(seed_str))
+
+        if use_jesus_closing:
+            # Dilema 7: Apelo a Jesus com menção explícita, perda/sacrifício vs curtir e comentar por Jesus
             if len(questions) >= 2:
                 penult_q = questions[-2]
+                existing_text = (str(penult_q.get("narration") or "") + " " + str(penult_q.get("bottom", {}).get("title") or "")).lower()
+                has_jesus = "jesus" in existing_text
+
+                var7 = DILEMMA_7_JESUS_VARIATIONS[seed_hash % len(DILEMMA_7_JESUS_VARIATIONS)]
                 penult_q["is_closing_choice"] = True
                 penult_q["role"] = "editorial_closing"
-                penult_q["header"] = "ESCOLHA RÁPIDO:"
-                penult_q["narration"] = "Ficar dois dias sem internet e sem Wi-Fi... Ou curtir e comentar: Jesus te ama?"
-                penult_q["top"] = {
-                    "title": "FICAR DOIS DIAS SEM WI-FI",
-                    "tag": "OPÇÃO A",
-                    "image_query": "broken wifi smartphone internet disconnect",
-                    "image_name": f"{penult_q['id']}_top.jpg",
-                    "theme": "red",
-                }
-                penult_q["bottom"] = {
-                    "title": "CURTIR E COMENTAR: JESUS TE AMA",
-                    "tag": "OPÇÃO B",
-                    "image_query": "jesus christ cross heavenly light sunset",
-                    "image_name": f"{penult_q['id']}_bot.jpg",
-                    "theme": "gold_red",
-                }
-                penult_q["percentage_top"] = 14
-                penult_q["percentage_bottom"] = 86
-                penult_q["countdown_sec"] = 3.0
+                penult_q["header"] = penult_q.get("header") or "ESCOLHA RÁPIDO:"
 
-            # Q0-R Item F: Última escolha — Seguir o perfil
+                if not has_jesus:
+                    penult_q["narration"] = var7["narration"]
+                    penult_q["top"] = {
+                        "title": var7["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var7["top"]["image_query"],
+                        "image_name": f"{penult_q['id']}_top.jpg",
+                        "theme": var7["top"]["theme"],
+                    }
+                    penult_q["bottom"] = {
+                        "title": var7["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var7["bottom"]["image_query"],
+                        "image_name": f"{penult_q['id']}_bot.jpg",
+                        "theme": var7["bottom"]["theme"],
+                    }
+                    penult_q["percentage_top"] = var7["percentage_top"]
+                    penult_q["percentage_bottom"] = var7["percentage_bottom"]
+                else:
+                    if not penult_q.get("top", {}).get("image_name"):
+                        penult_q["top"]["image_name"] = f"{penult_q['id']}_top.jpg"
+                    if not penult_q.get("bottom", {}).get("image_name"):
+                        penult_q["bottom"]["image_name"] = f"{penult_q['id']}_bot.jpg"
+                penult_q["countdown_sec"] = 2.4
+
+            # Dilema 8: CTA Final incentivando seguir, curtir ou compartilhar
             last_q = questions[-1]
+            var8 = DILEMMA_8_CTA_VARIATIONS[(seed_hash + 1) % len(DILEMMA_8_CTA_VARIATIONS)]
             last_q["is_closing_choice"] = True
             last_q["role"] = "editorial_closing"
-            last_q["header"] = "QUAL O SEU DESTINO:"
-            last_q["narration"] = "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?"
+            last_q["header"] = last_q.get("header") or "QUAL O SEU DESTINO:"
+            last_q["narration"] = var8["narration"]
             last_q["top"] = {
-                "title": "PASSAR DIRETO E PERDER TUDO",
+                "title": var8["top"]["title"],
                 "tag": "OPÇÃO A",
-                "image_query": "person walking away empty dark road night",
+                "image_query": var8["top"]["image_query"],
                 "image_name": f"{last_q['id']}_top.jpg",
-                "theme": "blue_neutral",
+                "theme": var8["top"]["theme"],
             }
             last_q["bottom"] = {
-                "title": "SEGUIR O PERFIL AGORA",
+                "title": var8["bottom"]["title"],
                 "tag": "OPÇÃO B",
-                "image_query": "smartphone social media follow subscribe celebration confetti",
+                "image_query": var8["bottom"]["image_query"],
                 "image_name": f"{last_q['id']}_bot.jpg",
-                "theme": "gold_red",
+                "theme": var8["bottom"]["theme"],
             }
-            last_q["percentage_top"] = 9
-            last_q["percentage_bottom"] = 91
-            last_q["countdown_sec"] = 3.0
+            last_q["percentage_top"] = var8["percentage_top"]
+            last_q["percentage_bottom"] = var8["percentage_bottom"]
+            last_q["countdown_sec"] = 2.4
+
         elif closing_type in ("score_challenge", "comments") or format_type == "factual":
             last_q = questions[-1]
             last_q["is_closing_choice"] = True
@@ -513,31 +750,31 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 }
                 last_q["percentage_top"] = 73
                 last_q["percentage_bottom"] = 27
-                last_q["countdown_sec"] = 3.0
+                last_q["countdown_sec"] = 2.4
         else:
-            # engagement_cta padrão neutro (Q0-R Seguir)
             last_q = questions[-1]
+            var8 = DILEMMA_8_CTA_VARIATIONS[seed_hash % len(DILEMMA_8_CTA_VARIATIONS)]
             last_q["is_closing_choice"] = True
             last_q["role"] = "editorial_closing"
             last_q["header"] = "QUAL O SEU DESTINO:"
-            last_q["narration"] = "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?"
+            last_q["narration"] = var8["narration"]
             last_q["top"] = {
-                "title": "PASSAR DIRETO E PERDER",
+                "title": var8["top"]["title"],
                 "tag": "OPÇÃO A",
-                "image_query": "person walking away road silhouette",
+                "image_query": var8["top"]["image_query"],
                 "image_name": f"{last_q['id']}_top.jpg",
-                "theme": "blue_neutral",
+                "theme": var8["top"]["theme"],
             }
             last_q["bottom"] = {
-                "title": "SEGUIR O PERFIL AGORA",
+                "title": var8["bottom"]["title"],
                 "tag": "OPÇÃO B",
-                "image_query": "smartphone follow subscribe celebration",
+                "image_query": var8["bottom"]["image_query"],
                 "image_name": f"{last_q['id']}_bot.jpg",
-                "theme": "gold_red",
+                "theme": var8["bottom"]["theme"],
             }
-            last_q["percentage_top"] = 12
-            last_q["percentage_bottom"] = 88
-            last_q["countdown_sec"] = 3.0
+            last_q["percentage_top"] = var8["percentage_top"]
+            last_q["percentage_bottom"] = var8["percentage_bottom"]
+            last_q["countdown_sec"] = 2.4
 
     # -------------------------------------------------------------------------
     # Fallback Determinístico Factual e Subjetivo
@@ -706,7 +943,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q1",
                         "header": "O QUE VOCÊ PREFERE?",
-                        "narration": "O que você prefere? Ganhar um milhão de reais na sua conta todo mês... Ou ter juventude eterna e nunca mais envelhecer?",
+                        "narration": "O que você prefere? Ganhar um milhão todo mês... Ou ter juventude eterna sem envelhecer?",
                         "top": {
                             "title": "R$ 1 MILHÃO TODO MÊS",
                             "tag": "OPÇÃO A",
@@ -728,7 +965,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q2",
                         "header": "DECISÃO DIFÍCIL:",
-                        "narration": "Ter a habilidade de voar para qualquer lugar do planeta... Ou poder ficar invisível sempre que você quiser?",
+                        "narration": "Ter o poder de voar pelo mundo... Ou ficar invisível sempre que quiser?",
                         "top": {
                             "title": "PODER VOAR PELO PLANETA",
                             "tag": "OPÇÃO A",
@@ -750,7 +987,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q3",
                         "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Conseguir ler a mente de qualquer pessoa no mundo... Ou saber exatamente o futuro da humanidade?",
+                        "narration": "Ler a mente de qualquer pessoa... Ou saber exatamente o futuro do mundo?",
                         "top": {
                             "title": "LER A MENTE DE QUALQUER PESSOA",
                             "tag": "OPÇÃO A",
@@ -772,7 +1009,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q4",
                         "header": "DILEMA IMPOSSÍVEL:",
-                        "narration": "Nunca mais sentir nenhum cansaço físico na vida... Ou nunca mais sentir nenhuma tristeza ou ansiedade?",
+                        "narration": "Nunca mais sentir cansaço físico... Ou nunca mais ter ansiedade ou tristeza?",
                         "top": {
                             "title": "NUNCA MAIS SENTIR CANSAÇO",
                             "tag": "OPÇÃO A",
@@ -794,7 +1031,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q5",
                         "header": "DECISÃO DIFÍCIL:",
-                        "narration": "Falar fluentemente todas as línguas do mundo... Ou saber se comunicar perfeitamente com todos os animais?",
+                        "narration": "Falar todas as línguas do planeta... Ou se comunicar com todos os animais?",
                         "top": {
                             "title": "FALAR TODAS AS LÍNGUAS",
                             "tag": "OPÇÃO A",
@@ -816,7 +1053,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     {
                         "id": "q6",
                         "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Viajar no tempo e conhecer a história antiga... Ou viajar para o futuro e ver civilizações espaciais?",
+                        "narration": "Viajar no tempo e ver o passado... Ou viajar ao futuro e ver o espaço?",
                         "top": {
                             "title": "VIAJAR PARA O PASSADO",
                             "tag": "OPÇÃO A",
@@ -837,29 +1074,32 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                     },
                     {
                         "id": "q7",
+                        "is_closing_choice": True,
+                        "role": "editorial_closing",
                         "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Viver sem música pelo resto da sua vida... Ou nunca mais poder assistir a nenhum filme ou série?",
+                        "narration": "Você prefere ficar trinta dias sem internet... Ou curtir o vídeo e comentar por Jesus?",
                         "top": {
-                            "title": "VIVER SEM MÚSICA",
+                            "title": "30 DIAS SEM INTERNET",
                             "tag": "OPÇÃO A",
-                            "image_query": "headphones silence acoustic quiet",
+                            "image_query": "broken smartphone disconnected no wifi screen",
                             "image_name": "q7_top_v2.jpg",
                             "theme": "red",
                         },
                         "bottom": {
-                            "title": "NUNCA MAIS VER FILMES",
+                            "title": "CURTIR E COMENTAR POR JESUS",
                             "tag": "OPÇÃO B",
-                            "image_query": "cinema movie theater screen dark",
+                            "image_query": "jesus christ cross heavenly light blessing sunrise",
                             "image_name": "q7_bot_v2.jpg",
-                            "theme": "blue",
+                            "theme": "gold_red",
                         },
-                        "percentage_top": 35,
-                        "percentage_bottom": 65,
-                        "countdown_sec": 3.0,
+                        "percentage_top": 14,
+                        "percentage_bottom": 86,
+                        "countdown_sec": 2.4,
                     },
                     {
                         "id": "q8",
                         "is_closing_choice": True,
+                        "role": "editorial_closing",
                         "header": "QUAL O SEU DESTINO:",
                         "narration": "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?",
                         "top": {
@@ -878,7 +1118,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                         },
                         "percentage_top": 9,
                         "percentage_bottom": 91,
-                        "countdown_sec": 3.0,
+                        "countdown_sec": 2.4,
                     },
                 ][:num_questions],
             }
@@ -931,7 +1171,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             "temp_dir": t_dir,
             "images_dir": img_dir,
             "min_target_duration_sec": 60.0,
-            "target_duration_range": [60.0, 65.0],
+            "target_duration_range": [60.0, 70.0],
             "video_settings": {
                 "width": 1080,
                 "height": 1920,
@@ -1072,7 +1312,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             }),
             "min_target_duration_sec": 60.0,
             "max_target_duration_sec": 65.0,
-            "target_duration_range": [60.0, 65.0],
+            "target_duration_range": [60.0, 70.0],
             "questions": questions[:num_questions] if num_questions else questions,
         }
 

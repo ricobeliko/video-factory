@@ -16,16 +16,18 @@
 
 - **LAST_UPDATED:** `21/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `HOTFIX V1 COPYRIGHT + RENDERIZAÇÃO COMPLETA (PRONTO PARA DEPLOY SUPERVISIONADO)`
+- **CURRENT_FOCUS:** `HOTFIX V1 QUIZ DURAÇÃO (60-70s) & DILEMAS 7 (JESUS) E 8 (CTA)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / V1_COPYRIGHT_FULL_RENDER_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / V1_QUIZ_DURATION_DILEMMA_HOTFIX_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
 - **CURRENT_MAIN_SHA:** `047920307b3004cb3797fb90867c4405f8a9a4a6` (origin/main pre-merge V1 aaf2975fd946c81ba377d9e1dccb573eee88f5ee)
 - **DEV_BRANCH_HEAD_SHA:** `feat/v1-integracao-lotes-1-2-3a` (integrada com Lotes 1, 2, 3A, 3B, 4, A5 + Hotfix UI/Segurança/Carregamento `b7280ef` + Hotfix Copyright/Renderização Completa sobre base `4c4c3b8188895154c3760429425a3d11391bd9f7`)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `b7280ef1a3cb2cc99d144d366ad3bd364d189ac6` (deployado no PC Forte; Fábrica em `PAUSED`, Scheduler/Auto Publish/Autonomia `OFF`, migração CA-03 ativa com 4 destinos tradicionais autorizados e 2 canais Quiz bloqueados)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Bundle Git do Hotfix V1 Copyright + Renderização Completa validado em DEV com 33/33 testes direcionados PASS)`
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Hotfix V1 Quiz Duração [60-70s], Dilema 7 Jesus e Dilema 8 CTA validado em DEV com 25/25 testes PASS e homologação real de 64.99s)`
+- **QUIZ_DURATION_DILEMMA_HOTFIX_STATUS:** `DEV VALIDATED / HOMOLOGATED (Calibração dinâmica de pausas e duas passadas de áudio no gerador de quiz assegurando duração real entre 60.0s e 70.0s [alvo ~65s]; padronização editorial obrigatória do Dilema 7 com apelo a Jesus e Dilema 8 com CTA final sem culpa; atualização estrita dos gates de segurança; homologação real de vídeo gerado em 64.99s; 25/25 testes direcionados PASS)`
+
 - **V1_UI_SAFETY_LOADING_HOTFIX_STATUS:** `DEV VALIDATED (Correção de indentação/UnboundLocalError no Autopilot em webui/Main.py, seção explícita '📅 Agenda de Publicação — Scheduler & Auto Publish' com proteção PRIMARY/SECONDARY, bloqueio de partida incondicional de start_scheduler_worker e de polling em PAUSED, persist=False no render passivo do Autopilot, e render_pass_scope eliminando 11x varreduras redundantes de estoque e 3x de histórico sem cache persistente; 24/24 testes direcionados PASS)`
 - **V1_COPYRIGHT_FULL_RENDER_HOTFIX_STATUS:** `DEV VALIDATED (Normalização segura fail-closed de asset_provenance em app/services/copyright_gate.py, operator_console.py e quality_recovery.py suportando dict canônico, list legítima do pipeline Quiz sem perda de evidências, lista vazia [], None e dados malformados sem nunca assumir PASS automático; alinhamento da sequência de renderização 1->2->3->4->5 em webui/Main.py até o Autopilot; 33/33 testes direcionados PASS)`
 - **R9_1_STATUS:** `DEV VALIDATED (Live Pipeline Telemetry Consolidation: checkpoints em task.py, provedor factual Google Flow/FFmpeg/Voice, progressão no Live Graph desacoplada de aprovação cega de Gates, estado IDLE consistente)`
@@ -2572,3 +2574,38 @@ ideocam).
 
 
 
+
+---
+
+## V16.36 — Hotfix V1 Quiz Duração (60-70s) e Dilemas 7 (Jesus) e 8 (CTA)
+
+- **Data:** `21/10/2026`
+- **Status:** `DEV_VALIDATED (25/25 testes direcionados PASS | Homologação real MP4: 64.99s com Quiz Gates PASS)`
+- **Objetivo:**
+  Corrigir o gerador e o gate de duração do perfil *Dose Diária de Escolhas* (Quiz) no MoneyPrinterTurbo V1 para garantir conformidade estrita com o intervalo de 60 a 70 segundos (alvo ~65s) em 8 dilemas, estruturando compulsoriamente o Dilema 7 (Apelo a Jesus) e o Dilema 8 (CTA Final).
+- **Diagnóstico & Causa Raiz:**
+  - `scripts/poc_quiz_render.py` utilizava temporização estática para as contagens regressivas (`countdown_sec = 3.0s` fixo para Q2..Q8 e `3.85s` para Q1), independentemente da duração dos áudios gerados pelo TTS.
+  - Com 8 áudios de narração totalizando entre 50s e 57s, a soma das pausas estáticas (+25s) produzia vídeos entre 72.59s e 82.09s, ultrapassando o limite anterior de 65.0s e gerando reprovações sistemáticas no `duration_safety`.
+  - Ausência de garantia estrutural e contratual no gerador para os Dilemas 7 e 8, dependendo de completude aleatória do LLM.
+- **Implementações Técnicas:**
+  1. *Calibração Dinâmica de Duração em `scripts/poc_quiz_render.py`:*
+     - Arquitetura de áudio em duas passadas: `Pass 4A` sintetiza todas as narrações TTS (e hook inicial) e mede a duração factual exata dos arquivos de áudio (`total_voice_duration`).
+     - `Pass 4B` calcula o tempo restante para o alvo (`target_center = 65.0s`, clamped em `[60.5s, 69.5s]`) e distribui o tempo de pausa dinamicamente entre as perguntas (`countdown_sec`), garantindo que a soma de todas as cenas convirja rigorosamente para ~65 segundos.
+     - Fallback elegante para imagens locais em `ensure_images()` caso a chave Pexels esteja ausente ou ocorra erro de rede em testes/dev.
+     - Atualização de `target_duration_range = (60.0, 70.0)` em `QuizConfig`.
+  2. *Padronização Editorial em `app/services/quiz_generator.py`:*
+     - Inclusão do banco `DILEMMA_7_JESUS_VARIATIONS` (8 variações naturais com dilema Opção A: perda/sacrifício pessoal vs Opção B: demonstração de amor/interação por Jesus).
+     - Inclusão do banco `DILEMMA_8_CTA_VARIATIONS` (4 variações naturais com fechamento e convite ao canal, sem apelo religioso nem chantagem emocional).
+     - Rotação determinística e aplicação obrigatória de Dilema 7 e 8 via `_apply_channel_closing` quando `closing_type == "quiz_choice_religious"` ou perfil subjetivo com 8 dilemas.
+     - Atualização das instruções de prompt do LLM (regras 8, 9 e 10) exigindo concisão estrita (10 a 14 palavras por narração), Dilema 7 com Jesus e Dilema 8 com CTA do canal.
+     - Atualização do gerador de fallback subjetivo com narrativas concisas e dilemas 7 e 8 em conformidade total.
+  3. *Atualização de Gates e Pipeline em `app/services/task.py` e `app/services/quiz_safety_gate.py`:*
+     - Em `app/services/task.py`: Roteamento padrão de `quiz_dilemma` com `closing_type = "quiz_choice_religious"`; intervalo de duração aceito no Quality Gate 3 atualizado para `[60.0, 70.0]`.
+     - Em `app/services/quiz_safety_gate.py`: `evaluate_quiz_duration_safety` atualizado para aceitar `[60.0, 70.0]` segundos.
+     - Em `app/services/quiz_safety_gate.py`: `evaluate_quiz_script_safety` enriquecido para validar a presença obrigatória do termo `"jesus"` no Dilema 7 e palavras-chave de CTA no Dilema 8 quando o script contiver 8 dilemas.
+- **Validação de Testes e Homologação Real:**
+  - 25/25 testes direcionados PASS em `pytest test/services/test_quiz_safety_gate.py test/services/test_quiz_generator.py test/services/test_p3_quiz_multi_dest.py` (tempo: 15.40s).
+  - Homologação real de renderização completa ponta a ponta com o motor `poc_quiz_render` gerando arquivo `final-1.mp4` (2.52 MB):
+    - Duração factual medida via `ffprobe`: **`64.99s`** (alvo ~65s, perfeitamente centralizado na faixa 60.0s a 70.0s).
+    - `evaluate_quiz_script_safety`: **`PASS`** (Dilema 7 com Jesus e Dilema 8 com CTA validados).
+    - `evaluate_quiz_duration_safety`: **`PASS`** (64.99s dentro da faixa [60.0, 70.0]).

@@ -2764,6 +2764,8 @@ def _run_quiz_pipeline(
             closing_type = "quiz_choice_religious"
         elif format_type == "factual" or is_paper_quiz:
             closing_type = "score_challenge"
+        elif video_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, "quiz_dilemma") or narrative_structure in (const.STRUCTURE_QUIZ_DILEMMA, "quiz_dilemma", "quiz_dilemmas"):
+            closing_type = "quiz_choice_religious"
         else:
             closing_type = "engagement_cta"
     elif closing_type == "comments":
@@ -3011,14 +3013,14 @@ def _run_quiz_pipeline(
 
     actual_duration = float(render_result.get("video_duration_sec", 0.0) or render_result.get("duration", 0.0))
 
-    # Quality Gate 3: Duração Editorial Obrigatória para Quizzes (60.0s a 65.0s)
-    if actual_duration < 60.0 or actual_duration > 65.0:
-        logger.warning(f"[QUIZ_PIPELINE][DURATION_VIOLATION] task_id={task_id} dur={actual_duration:.2f}s fora de [60.0s, 65.0s]")
+    # Quality Gate 3: Duração Editorial Obrigatória para Quizzes (60.0s a 70.0s)
+    if actual_duration < 60.0 or actual_duration > 70.0:
+        logger.warning(f"[QUIZ_PIPELINE][DURATION_VIOLATION] task_id={task_id} dur={actual_duration:.2f}s fora de [60.0s, 70.0s]")
         return _mark_task_failed(
             task_id,
             "duration_safety",
-            f"Duração de {actual_duration:.2f}s fora da faixa editorial obrigatória para Quiz [60.0s, 65.0s]",
-            details={"actual_duration": actual_duration, "target_min": 60.0, "target_max": 65.0},
+            f"Duração de {actual_duration:.2f}s fora da faixa editorial obrigatória para Quiz [60.0s, 70.0s]",
+            details={"actual_duration": actual_duration, "target_min": 60.0, "target_max": 70.0},
         )
 
     try:

@@ -16,16 +16,18 @@
 
 - **LAST_UPDATED:** `21/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `HOTFIX V1 QUIZ DURAÇÃO (60-70s) & DILEMAS 7 (JESUS) E 8 (CTA)`
+- **CURRENT_FOCUS:** `HOTFIX V1 META DE ESTOQUE (LIMITE MÁXIMO 10 / MÍNIMO 3)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / V1_QUIZ_DURATION_DILEMMA_HOTFIX_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / V1_STOCK_TARGET_HOTFIX_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
 - **CURRENT_MAIN_SHA:** `047920307b3004cb3797fb90867c4405f8a9a4a6` (origin/main pre-merge V1 aaf2975fd946c81ba377d9e1dccb573eee88f5ee)
 - **DEV_BRANCH_HEAD_SHA:** `feat/v1-integracao-lotes-1-2-3a` (integrada com Lotes 1, 2, 3A, 3B, 4, A5 + Hotfix UI/Segurança/Carregamento `b7280ef` + Hotfix Copyright/Renderização Completa sobre base `4c4c3b8188895154c3760429425a3d11391bd9f7`)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `b7280ef1a3cb2cc99d144d366ad3bd364d189ac6` (deployado no PC Forte; Fábrica em `PAUSED`, Scheduler/Auto Publish/Autonomia `OFF`, migração CA-03 ativa com 4 destinos tradicionais autorizados e 2 canais Quiz bloqueados)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Hotfix V1 Quiz Duração [60-70s], Dilema 7 Jesus e Dilema 8 CTA validado em DEV com 25/25 testes PASS e homologação real de 64.99s)`
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Hotfix V1 Meta de Estoque [3 a 10] validado em DEV com 12/12 testes direcionados PASS)`
+- **AUTONOMOUS_STOCK_TARGET_HOTFIX_STATUS:** `DEV VALIDATED (Correção do limite máximo de estoque pronto de 6 para 10 preservando o mínimo de 3 em get_target_ready_stock e set_target_ready_stock de autonomous_production.py; leitura, gravação e card do Console Operacional equalizados em 10; regra aplicada a todos os perfis; confirmação por inspeção de que durações 60-65s em quiz_generator.py pertencem exclusivamente ao Paper Quiz e não afetam o Quiz Dilemma; 12/12 testes direcionados PASS)`
+
 - **QUIZ_DURATION_DILEMMA_HOTFIX_STATUS:** `DEV VALIDATED / HOMOLOGATED (Calibração dinâmica de pausas e duas passadas de áudio no gerador de quiz assegurando duração real entre 60.0s e 70.0s [alvo ~65s]; padronização editorial obrigatória do Dilema 7 com apelo a Jesus e Dilema 8 com CTA final sem culpa; atualização estrita dos gates de segurança; homologação real de vídeo gerado em 64.99s; 25/25 testes direcionados PASS)`
 
 - **V1_UI_SAFETY_LOADING_HOTFIX_STATUS:** `DEV VALIDATED (Correção de indentação/UnboundLocalError no Autopilot em webui/Main.py, seção explícita '📅 Agenda de Publicação — Scheduler & Auto Publish' com proteção PRIMARY/SECONDARY, bloqueio de partida incondicional de start_scheduler_worker e de polling em PAUSED, persist=False no render passivo do Autopilot, e render_pass_scope eliminando 11x varreduras redundantes de estoque e 3x de histórico sem cache persistente; 24/24 testes direcionados PASS)`
@@ -2609,3 +2611,35 @@ ideocam).
     - Duração factual medida via `ffprobe`: **`64.99s`** (alvo ~65s, perfeitamente centralizado na faixa 60.0s a 70.0s).
     - `evaluate_quiz_script_safety`: **`PASS`** (Dilema 7 com Jesus e Dilema 8 com CTA validados).
     - `evaluate_quiz_duration_safety`: **`PASS`** (64.99s dentro da faixa [60.0, 70.0]).
+
+---
+
+## V16.37 — Hotfix V1 Meta de Estoque (Limite Máximo 10 / Mínimo 3)
+
+- **Data:** `21/10/2026`
+- **Status:** `DEV_VALIDATED (12/12 testes direcionados PASS)`
+- **Objetivo:**
+  Corrigir o limite máximo de estoque pronto (`target_ready_stock`) de 6 para 10 no Autopilot (`app/services/autonomous_production.py`), preservando o mínimo conservador de 3 e garantindo alinhamento total entre gravação, leitura e exibição no card do Console Operacional para todos os perfis.
+- **Diagnóstico & Causa Raiz:**
+  - Em produção, o perfil Quiz possuía meta configurada em SQLite com valor 10.
+  - Entretanto, o Autopilot operava com meta efetiva de 6 vídeos, interrompendo a produção autônoma precocemente.
+  - A causa raiz estava em `app/services/autonomous_production.py`:
+    - `get_target_ready_stock` executava `max(3, min(6, val))` para perfis não-default.
+    - `set_target_ready_stock` executava `clamped_target = max(3, min(6, int(target)))`.
+- **Implementações Técnicas:**
+  1. *Ajuste Canônico em `app/services/autonomous_production.py`:*
+     - Em `get_target_ready_stock`: normalização de `val` com `max(3, min(10, val))` para todos os perfis (default e não-default), eliminando o clamping em 6 e garantindo que o valor 10 persistido no SQLite seja retornado na íntegra.
+     - Em `set_target_ready_stock`: ajuste de `clamped_target = max(3, min(10, int(target)))`.
+     - Atualização das docstrings refletindo o intervalo `[3, 10]`.
+  2. *Equalização de Leitura, Gravação e Card:*
+     - Leitura via `get_target_ready_stock` retorna 10.
+     - `get_autonomous_ready_stock` computa `target_stock = 10` e `is_below_target = ready_count < 10`.
+     - Card do Console Operacional (`get_autonomous_production_status_op` -> `get_autonomous_status`) exibe `ready_stock / 10`.
+     - Quotas do perfil (`profile_manager.get_profile_quotas`) reportam `target_ready_stock = 10`.
+  3. *Inspeção de Referências a 60–65s em `app/services/quiz_generator.py`:*
+     - Confirmado por inspeção: as referências a 60–65s (`max_target_duration_sec: 65.0` e `target_duration_range: [60.0, 65.0]`) encontram-se estritamente dentro de `generate_paper_quiz_structure` (linha 1314) e `export_to_paper_quiz_config` (linhas 1363-1364), pertencentes exclusivamente ao formato `quiz_paper` (`multiple_choice_paper`).
+     - Não são executadas pelo pipeline do perfil Quiz (*Dose Diária de Escolhas*), que opera em `quiz_dilemma` com `generate_quiz_structure` e `export_to_quiz_config` já calibrados para `[60.0, 70.0]`.
+- **Validação de Testes:**
+  - 12/12 testes direcionados PASS em `pytest test/services/test_stock_target_hotfix.py test/services/test_multi_channel_capacity.py`:
+    - 3/3 novos testes em `test/services/test_stock_target_hotfix.py` validando gravação, leitura, card, reprodução exata do caso de produção SQLite e limites [3, 10] em perfis específicos e default.
+    - 9/9 testes em `test/services/test_multi_channel_capacity.py` com teste de clamping atualizado para 10.

@@ -247,8 +247,8 @@ def get_target_ready_stock(profile_id: Optional[str] = None, db_path: Optional[s
     """Retorna a meta de estoque pronto para um perfil específico (ou default).
 
     Regras V12-F.5:
-    - WARMUP: default conservador = 3 (configurável de 3 a 6)
-    - SCALE: default sugerido = 5 (configurável de 3 a 6)
+    - WARMUP: default conservador = 3 (configurável de 3 a 10)
+    - SCALE: default sugerido = 5 (configurável de 3 a 10)
     - Perfil default mantém fallback backward-compatible para a chave legada KEY_AUTONOMOUS_TARGET_STOCK.
     - Valores persistidos de produção não são alterados automaticamente.
     """
@@ -274,9 +274,7 @@ def get_target_ready_stock(profile_id: Optional[str] = None, db_path: Optional[s
     if stored is not None:
         try:
             val = int(stored)
-            if not is_default:
-                return max(3, min(6, val))
-            return max(1, val)
+            return max(3, min(10, val))
         except (ValueError, TypeError):
             pass
 
@@ -291,10 +289,10 @@ def set_target_ready_stock(
     profile_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
-    """Grava a meta de estoque pronto isolada por perfil, validando o intervalo [3, 6]."""
+    """Grava a meta de estoque pronto isolada por perfil, validando o intervalo [3, 10]."""
     operator_console.require_primary_instance(db_path=db_path)
     clean_p = str(profile_id or "").strip()
-    clamped_target = max(3, min(6, int(target)))
+    clamped_target = max(3, min(10, int(target)))
     is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
     if not is_default:
         set_autonomous_setting(f"{KEY_AUTONOMOUS_TARGET_STOCK}:{clean_p}", str(clamped_target), db_path=db_path)

@@ -206,11 +206,13 @@ def test_4_ready_target_isolated(isolated_env):
     assert stock_def["target_stock"] == 3
     assert stock_sec["target_stock"] == 5
 
-    # Clamping entre 3 e 6
+    # Clamping entre 3 e 10
     autonomous.set_target_ready_stock(1, profile_id=sec_id, db_path=db)
     assert autonomous.get_target_ready_stock(profile_id=sec_id, db_path=db) == 3
     autonomous.set_target_ready_stock(10, profile_id=sec_id, db_path=db)
-    assert autonomous.get_target_ready_stock(profile_id=sec_id, db_path=db) == 6
+    assert autonomous.get_target_ready_stock(profile_id=sec_id, db_path=db) == 10
+    autonomous.set_target_ready_stock(15, profile_id=sec_id, db_path=db)
+    assert autonomous.get_target_ready_stock(profile_id=sec_id, db_path=db) == 10
 
 
 def test_5_limits_per_profile_isolated(isolated_env):

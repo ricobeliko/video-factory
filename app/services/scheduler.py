@@ -133,6 +133,61 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Migração Missão E (Capacidade ESCALA 10 / Global Cost Guard): elevação idempotente e aditiva
+    cur_sett = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_settings';").fetchone()
+    if cur_sett:
+        cur_mig = conn.execute("SELECT value FROM autopilot_settings WHERE key = 'migration_mission_e_capacity_v1';").fetchone()
+        if cur_mig is None:
+            # 1. Global Cost Guard: eleva baselines legados para os valores autorizados (10 -> 20, 25 -> 50)
+            conn.execute(
+                """
+                UPDATE autopilot_settings
+                SET value = '20'
+                WHERE key = 'autonomous_global_max_generations_24h' AND value = '10';
+                """
+            )
+            conn.execute(
+                """
+                UPDATE autopilot_settings
+                SET value = '50'
+                WHERE key = 'autonomous_global_max_attempts_24h' AND value = '25';
+                """
+            )
+            # 2. Perfil Dose Diária de Escolhas (Quiz)
+            cur_prof = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_profiles';").fetchone()
+            if cur_prof:
+                p_cols = {row["name"] for row in conn.execute("PRAGMA table_info(content_profiles);").fetchall()}
+                where_clauses = ["LOWER(slug) LIKE '%escolhas%'", "LOWER(name) LIKE '%escolhas%'", "LOWER(id) LIKE '%escolhas%'"]
+                if "settings_json" in p_cols:
+                    where_clauses.append("LOWER(settings_json) LIKE '%quiz_dilemma%'")
+                    where_clauses.append("LOWER(settings_json) LIKE '%quiz_escolhas%'")
+                query = f"SELECT id FROM content_profiles WHERE {' OR '.join(where_clauses)};"
+                quiz_rows = conn.execute(query).fetchall()
+                for r in quiz_rows:
+                    q_pid = r[0]
+                    conn.execute(
+                        """
+                        UPDATE autopilot_settings
+                        SET value = '10'
+                        WHERE key = ? AND value = '5';
+                        """,
+                        (f"autonomous_max_generations_24h:{q_pid}",)
+                    )
+                    conn.execute(
+                        """
+                        UPDATE autopilot_settings
+                        SET value = '30'
+                        WHERE key = ? AND value = '15';
+                        """,
+                        (f"autonomous_max_attempts_24h:{q_pid}",)
+                    )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO autopilot_settings (key, value)
+                VALUES ('migration_mission_e_capacity_v1', 'done');
+                """
+            )
+
 
 # ---------------------------------------------------------------------------
 # Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)

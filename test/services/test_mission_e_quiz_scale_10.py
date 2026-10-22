@@ -49,7 +49,7 @@ def temp_workspace():
 
 
 def test_scale_mode_precedence_and_ceilings(temp_workspace):
-    """Test that SCALE mode defaults to 5/15 if unconfigured, and allows up to 10/30 when explicitly set."""
+    """Test that SCALE mode defaults to 10/30 for Dose Diária de Escolhas, 5/15 for other unconfigured profiles, and respects overrides/ceilings."""
     db_path = temp_workspace["db_path"]
     profile_id = "profile-quiz-scale"
 
@@ -60,9 +60,31 @@ def test_scale_mode_precedence_and_ceilings(temp_workspace):
         db_path=db_path,
     )
 
-    # 1. Unconfigured profile in SCALE must default to 5 approvals and 15 attempts (no auto increase)
-    assert autonomous_production.get_max_generations_24h(profile_id=profile_id, db_path=db_path) == 5
-    assert autonomous_production.get_max_attempts_24h(profile_id=profile_id, db_path=db_path) == 15
+    # 1. Dose Diária de Escolhas in SCALE defaults to authorized 10 approvals and 30 attempts
+    assert autonomous_production.get_max_generations_24h(profile_id=profile_id, db_path=db_path) == 10
+    assert autonomous_production.get_max_attempts_24h(profile_id=profile_id, db_path=db_path) == 30
+
+    # 1.1 Other profile in SCALE defaults to 5 approvals and 15 attempts (no auto increase)
+    other_scale_id = "profile-other-scale"
+    profile_manager.create_profile(
+        profile_id=other_scale_id,
+        name="Canal Diversos",
+        growth_mode=const.GROWTH_MODE_SCALE,
+        db_path=db_path,
+    )
+    assert autonomous_production.get_max_generations_24h(profile_id=other_scale_id, db_path=db_path) == 5
+    assert autonomous_production.get_max_attempts_24h(profile_id=other_scale_id, db_path=db_path) == 15
+
+    # 1.2 Other profile in WARMUP defaults to 2 approvals and 8 attempts
+    other_warmup_id = "profile-other-warmup"
+    profile_manager.create_profile(
+        profile_id=other_warmup_id,
+        name="Canal Novo",
+        growth_mode=const.GROWTH_MODE_WARMUP,
+        db_path=db_path,
+    )
+    assert autonomous_production.get_max_generations_24h(profile_id=other_warmup_id, db_path=db_path) == 2
+    assert autonomous_production.get_max_attempts_24h(profile_id=other_warmup_id, db_path=db_path) == 8
 
     # 2. Intermediate step: set to 7 approvals and 20 attempts
     autonomous_production.set_max_generations_24h(7, profile_id=profile_id, db_path=db_path)
@@ -84,15 +106,15 @@ def test_scale_mode_precedence_and_ceilings(temp_workspace):
 
 
 def test_global_cost_guard_headroom_and_quiz_non_monopolization(temp_workspace):
-    """Test that Global Cost Guard supports 20 approvals, and Quiz capped at 10 leaves room for other profiles."""
+    """Test that Global Cost Guard defaults to 20 approvals / 50 attempts, and Quiz capped at 10 leaves room for other profiles."""
     db_path = temp_workspace["db_path"]
     now = datetime.now(timezone.utc)
 
-    # Global default is 10 if unconfigured
-    assert autonomous_production.get_global_max_generations_24h(db_path=db_path) == 10
-    assert autonomous_production.get_global_max_attempts_24h(db_path=db_path) == 25
+    # Global default is 20 approvals and 50 attempts authorized by operator
+    assert autonomous_production.get_global_max_generations_24h(db_path=db_path) == 20
+    assert autonomous_production.get_global_max_attempts_24h(db_path=db_path) == 50
 
-    # Operator sets global cost guard to 20 approvals and 50 attempts
+    # Operator explicitly sets global cost guard to 20 approvals and 50 attempts
     autonomous_production.set_global_max_generations_24h(20, db_path=db_path)
     autonomous_production.set_global_max_attempts_24h(50, db_path=db_path)
     assert autonomous_production.get_global_max_generations_24h(db_path=db_path) == 20
@@ -237,3 +259,70 @@ def test_tiktok_disabled_and_unsafe_video_rejected(temp_workspace):
     can_pass, reason, _ = scheduler.validate_candidate_technical_and_safety_gates(tid_unsafe, task_base_dir=task_base_dir, db_path=db_path)
     assert not can_pass
     assert "SAFETY_GATE" in reason
+
+
+def test_legacy_persisted_settings_migration_and_precedence(temp_workspace):
+    """Test that existing databases containing legacy persisted settings (5/15 Quiz, 10/25 Global)
+    are safely, idempotently, and accurately migrated to authorized values (10/30 Quiz, 20/50 Global),
+    while preserving other profiles, and that future intentional operator changes are never overwritten.
+    """
+    db_path = temp_workspace["db_path"]
+
+    # 1. Setup Quiz profile and secondary profile
+    quiz_pid = "profile-quiz-escolhas"
+    profile_manager.create_profile(
+        profile_id=quiz_pid,
+        name="Dose Diária de Escolhas",
+        growth_mode=const.GROWTH_MODE_SCALE,
+        db_path=db_path,
+    )
+    other_pid = "profile-historias-misterio"
+    profile_manager.create_profile(
+        profile_id=other_pid,
+        name="Dose Diária de Histórias e Mistério",
+        growth_mode=const.GROWTH_MODE_WARMUP,
+        db_path=db_path,
+    )
+
+    # 2. Simulate pre-existing legacy database by forcibly writing the old baselines
+    with scheduler.get_connection(db_path) as conn:
+        # Delete migration marker if present to simulate pre-migration state
+        conn.execute("DELETE FROM autopilot_settings WHERE key = 'migration_mission_e_capacity_v1';")
+        # Write old legacy baselines
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES ('autonomous_global_max_generations_24h', '10');")
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES ('autonomous_global_max_attempts_24h', '25');")
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, '5');", (f"autonomous_max_generations_24h:{quiz_pid}",))
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, '15');", (f"autonomous_max_attempts_24h:{quiz_pid}",))
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, '2');", (f"autonomous_max_generations_24h:{other_pid}",))
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, '8');", (f"autonomous_max_attempts_24h:{other_pid}",))
+
+    # 3. Trigger database initialization / migration
+    scheduler.init_db(db_path)
+
+    # 4. Verify migrated values
+    # Quiz is elevated to 10 approvals and 30 attempts
+    assert autonomous_production.get_max_generations_24h(profile_id=quiz_pid, db_path=db_path) == 10
+    assert autonomous_production.get_max_attempts_24h(profile_id=quiz_pid, db_path=db_path) == 30
+
+    # Global Cost Guard is elevated to 20 approvals and 50 attempts
+    assert autonomous_production.get_global_max_generations_24h(db_path=db_path) == 20
+    assert autonomous_production.get_global_max_attempts_24h(db_path=db_path) == 50
+
+    # Other profile is strictly preserved at 2 approvals and 8 attempts
+    assert autonomous_production.get_max_generations_24h(profile_id=other_pid, db_path=db_path) == 2
+    assert autonomous_production.get_max_attempts_24h(profile_id=other_pid, db_path=db_path) == 8
+
+    # Migration marker is present
+    with scheduler.get_connection(db_path) as conn:
+        mig_row = conn.execute("SELECT value FROM autopilot_settings WHERE key = 'migration_mission_e_capacity_v1';").fetchone()
+        assert mig_row is not None
+        assert mig_row[0] == "done"
+
+    # 5. Idempotence test: future intentional operator changes must NOT be overwritten by init_db
+    autonomous_production.set_max_generations_24h(7, profile_id=quiz_pid, db_path=db_path)
+    autonomous_production.set_global_max_generations_24h(15, db_path=db_path)
+
+    scheduler.init_db(db_path)
+
+    assert autonomous_production.get_max_generations_24h(profile_id=quiz_pid, db_path=db_path) == 7
+    assert autonomous_production.get_global_max_generations_24h(db_path=db_path) == 15

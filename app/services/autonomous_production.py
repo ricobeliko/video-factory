@@ -112,8 +112,8 @@ KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = "autonomous_global_max_attempts_24h"
 
 DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS = 10
 DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H = 15
-DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H = 10
-DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = 25
+DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H = 20
+DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = 50
 _cycle_lock = threading.Lock()
 
 
@@ -311,13 +311,36 @@ def get_max_tasks_per_cycle(db_path: Optional[str] = None) -> int:
         return DEFAULT_AUTONOMOUS_MAX_NEW_TASKS_PER_CYCLE
 
 
+def _is_quiz_escolhas_profile(profile_id: Optional[str], db_path: Optional[str] = None) -> bool:
+    """Verifica se o perfil corresponde ao canal piloto Dose Diária de Escolhas (Quiz)."""
+    clean_p = str(profile_id or "").strip()
+    if not clean_p or clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"):
+        return False
+    try:
+        prof = profile_manager.get_profile(clean_p, db_path=db_path)
+        if not prof:
+            return False
+        name = str(prof.get("name") or "").lower()
+        slug = str(prof.get("slug") or "").lower()
+        pid = str(prof.get("id") or "").lower()
+        if "escolhas" in name or "escolhas" in slug or "escolhas" in pid:
+            return True
+        ctx = profile_manager.get_generation_profile_context(clean_p, db_path=db_path)
+        p_fmt = str(ctx.get("video_format") or ctx.get("content_style") or ctx.get("narrative_structure") or "").lower()
+        if p_fmt in (const.VIDEO_FORMAT_QUIZ_DILEMMA, "quiz_dilemma", "quiz_escolhas_impossiveis") or p_fmt.startswith("quiz_dilemma"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
     """Retorna o teto de gerações aprovadas em 24h para um perfil específico (ou default).
 
-    Regras V12-F.5 / Fail-Safe Hotfix:
+    Regras V12-F.5 / Fail-Safe Hotfix / Missão E:
     - Growth Mode define o TETO MÁXIMO de segurança:
       * WARMUP: approved cap = 2
-      * SCALE: approved cap = 5
+      * SCALE: approved cap = 10 (Dose Diária de Escolhas autorizado a 10; demais perfis padrão 5)
     - Override persistido pode REDUZIR o teto, mas NÃO pode AUMENTAR o teto do modo.
     - Configuração isolada por perfil: autonomous_max_generations_24h:<profile_id>
     - Perfil default mantém compatibilidade com KEY_AUTONOMOUS_MAX_24H quando não houver override.
@@ -346,10 +369,11 @@ def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[
         mode_cap = 2
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
-        # Capacidade máxima configurável em ESCALA (Missão E: até 10).
-        # Default de fábrica não configurado permanece 5 para não ativar aumento automaticamente sem ação do operador.
         scale_ceiling = 10
-        return min(parsed_stored, scale_ceiling) if parsed_stored is not None else 5
+        # Capacidade autorizada em ESCALA: Dose Diária de Escolhas opera com 10/24h por padrão.
+        # Demais perfis em ESCALA permanecem em 5 por padrão para não expandir sem autorização.
+        scale_default = 10 if _is_quiz_escolhas_profile(clean_p, db_path=db_path) else 5
+        return min(parsed_stored, scale_ceiling) if parsed_stored is not None else scale_default
 
     if parsed_stored is not None:
         return parsed_stored
@@ -431,10 +455,11 @@ def get_max_attempts_24h(profile_id: Optional[str] = None, db_path: Optional[str
         mode_cap = 8
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
-        # Teto máximo de tentativas em ESCALA (Missão E: até 30).
-        # Default de fábrica não configurado permanece 15 para não ativar aumento automaticamente sem ação do operador.
         scale_attempts_ceiling = 30
-        return min(parsed_stored, scale_attempts_ceiling) if parsed_stored is not None else 15
+        # Capacidade autorizada de tentativas em ESCALA: Dose Diária de Escolhas opera com 30/24h por padrão.
+        # Demais perfis em ESCALA permanecem em 15 por padrão para não expandir sem autorização.
+        scale_attempts_default = 30 if _is_quiz_escolhas_profile(clean_p, db_path=db_path) else 15
+        return min(parsed_stored, scale_attempts_ceiling) if parsed_stored is not None else scale_attempts_default
 
     if parsed_stored is not None:
         return parsed_stored

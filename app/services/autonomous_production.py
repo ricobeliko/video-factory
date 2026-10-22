@@ -346,8 +346,10 @@ def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[
         mode_cap = 2
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
-        mode_cap = 5
-        return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
+        # Capacidade máxima configurável em ESCALA (Missão E: até 10).
+        # Default de fábrica não configurado permanece 5 para não ativar aumento automaticamente sem ação do operador.
+        scale_ceiling = 10
+        return min(parsed_stored, scale_ceiling) if parsed_stored is not None else 5
 
     if parsed_stored is not None:
         return parsed_stored
@@ -429,8 +431,10 @@ def get_max_attempts_24h(profile_id: Optional[str] = None, db_path: Optional[str
         mode_cap = 8
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
-        mode_cap = 15
-        return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
+        # Teto máximo de tentativas em ESCALA (Missão E: até 30).
+        # Default de fábrica não configurado permanece 15 para não ativar aumento automaticamente sem ação do operador.
+        scale_attempts_ceiling = 30
+        return min(parsed_stored, scale_attempts_ceiling) if parsed_stored is not None else 15
 
     if parsed_stored is not None:
         return parsed_stored
@@ -465,9 +469,10 @@ def get_global_max_generations_24h(db_path: Optional[str] = None) -> int:
 
 
 def set_global_max_generations_24h(max_gen: int, db_path: Optional[str] = None) -> None:
-    """Define o teto global de gerações aprovadas em 24h somando todos os perfis."""
+    """Define o teto global de gerações aprovadas em 24h somando todos os perfis (clamped até 20)."""
     operator_console.require_primary_instance(db_path=db_path)
-    set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_24H, str(max(1, int(max_gen))), db_path=db_path)
+    clamped = max(1, min(int(max_gen), 20))
+    set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_24H, str(clamped), db_path=db_path)
 
 
 def get_global_max_attempts_24h(db_path: Optional[str] = None) -> int:
@@ -480,9 +485,10 @@ def get_global_max_attempts_24h(db_path: Optional[str] = None) -> int:
 
 
 def set_global_max_attempts_24h(max_att: int, db_path: Optional[str] = None) -> None:
-    """Define o teto global de tentativas de geração em 24h somando todos os perfis."""
+    """Define o teto global de tentativas de geração em 24h somando todos os perfis (clamped até 50)."""
     operator_console.require_primary_instance(db_path=db_path)
-    set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H, str(max(1, int(max_att))), db_path=db_path)
+    clamped = max(1, min(int(max_att), 50))
+    set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H, str(clamped), db_path=db_path)
 
 
 def resolve_autonomous_youtube_channel(profile_id: str, db_path: Optional[str] = None) -> Optional[str]:

@@ -1891,7 +1891,22 @@ def plan_schedule(
 
             limit_24h = rate_info["limit"]
             min_interval_seconds = rate_info.get("min_interval_hours", 0) * 3600
-            uniform_interval_seconds = max(60, int(86400 / max(1, limit_24h)))
+
+            # Ajusta o intervalo uniforme à janela ativa de publicação do perfil quando definida
+            window_seconds = 86400
+            try:
+                from app.services import profile_manager
+                prof_settings = profile_manager.get_profile_settings(task_profile_id, db_path=db_path)
+                if prof_settings and hasattr(prof_settings, "schedule"):
+                    sched_cfg = prof_settings.schedule
+                    start_h = getattr(sched_cfg, "publish_start_hour", 10)
+                    end_h = getattr(sched_cfg, "publish_end_hour", 22)
+                    if 0 <= start_h < end_h <= 24:
+                        window_seconds = (end_h - start_h) * 3600
+            except Exception:
+                pass
+
+            uniform_interval_seconds = max(60, int(window_seconds / max(1, limit_24h)))
             step_seconds = max(min_interval_seconds, uniform_interval_seconds)
 
             target_key = (clean_plat, task_profile_id, channel_id)

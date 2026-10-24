@@ -188,6 +188,69 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 """
             )
 
+    # Migração Missão J (Capacidade ESCALA Reutilizável / Global Cost Guard 100): elevação idempotente e aditiva
+    if cur_sett:
+        cur_mig_j = conn.execute("SELECT value FROM autopilot_settings WHERE key = 'migration_mission_j_capacity_v1';").fetchone()
+        if cur_mig_j is None:
+            # 1. Global Cost Guard: eleva baselines legados para 100 (10/20 -> 100, 25/50 -> 100)
+            conn.execute(
+                """
+                UPDATE autopilot_settings
+                SET value = '100'
+                WHERE key = 'autonomous_global_max_generations_24h' AND value IN ('10', '20');
+                """
+            )
+            conn.execute(
+                """
+                UPDATE autopilot_settings
+                SET value = '100'
+                WHERE key = 'autonomous_global_max_attempts_24h' AND value IN ('25', '50');
+                """
+            )
+            # 2. Perfis Procedurais (Quiz de Dilemas, Quiz de Papel / Quiz_Quiz, etc.)
+            cur_prof = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_profiles';").fetchone()
+            if cur_prof:
+                p_cols = {row["name"] for row in conn.execute("PRAGMA table_info(content_profiles);").fetchall()}
+                where_clauses = [
+                    "LOWER(slug) LIKE '%escolhas%'",
+                    "LOWER(name) LIKE '%escolhas%'",
+                    "LOWER(id) LIKE '%escolhas%'",
+                    "LOWER(slug) LIKE '%quiz%'",
+                    "LOWER(name) LIKE '%quiz%'",
+                    "LOWER(id) LIKE '%quiz%'",
+                ]
+                if "settings_json" in p_cols:
+                    where_clauses.append("LOWER(settings_json) LIKE '%quiz_dilemma%'")
+                    where_clauses.append("LOWER(settings_json) LIKE '%quiz_paper%'")
+                    where_clauses.append("LOWER(settings_json) LIKE '%quiz_escolhas%'")
+                    where_clauses.append("LOWER(settings_json) LIKE '%\"video_format\": \"quiz%'")
+                query = f"SELECT id FROM content_profiles WHERE {' OR '.join(where_clauses)};"
+                procedural_rows = conn.execute(query).fetchall()
+                for r in procedural_rows:
+                    p_id = r[0]
+                    conn.execute(
+                        """
+                        UPDATE autopilot_settings
+                        SET value = '10'
+                        WHERE key = ? AND value = '5';
+                        """,
+                        (f"autonomous_max_generations_24h:{p_id}",)
+                    )
+                    conn.execute(
+                        """
+                        UPDATE autopilot_settings
+                        SET value = '30'
+                        WHERE key = ? AND value = '15';
+                        """,
+                        (f"autonomous_max_attempts_24h:{p_id}",)
+                    )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO autopilot_settings (key, value)
+                VALUES ('migration_mission_j_capacity_v1', 'done');
+                """
+            )
+
 
 # ---------------------------------------------------------------------------
 # Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)

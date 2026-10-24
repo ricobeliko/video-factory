@@ -112,8 +112,8 @@ KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = "autonomous_global_max_attempts_24h"
 
 DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS = 10
 DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H = 15
-DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H = 20
-DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = 50
+DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H = 100
+DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = 100
 _cycle_lock = threading.Lock()
 
 
@@ -311,8 +311,14 @@ def get_max_tasks_per_cycle(db_path: Optional[str] = None) -> int:
         return DEFAULT_AUTONOMOUS_MAX_NEW_TASKS_PER_CYCLE
 
 
-def _is_quiz_escolhas_profile(profile_id: Optional[str], db_path: Optional[str] = None) -> bool:
-    """Verifica se o perfil corresponde ao canal piloto Dose Diária de Escolhas (Quiz)."""
+def is_procedural_scale_profile(profile_id: Optional[str], db_path: Optional[str] = None) -> bool:
+    """Verifica se o perfil corresponde a um formato procedural sem Google Flow (ex: quiz_dilemma, quiz_paper).
+
+    Perfis procedurais operam via código local / canvas gráfico sem consumo de APIs de IA generativa
+    de vídeo/imagem (como Google Flow / Nano Banana). Por isso, no modo ESCALA (SCALE), esses perfis
+    são autorizados a operar com limite padrão de até 10 aprovações e 30 tentativas por 24h.
+    Perfis tradicionais com Google Flow preservam limite conservador de 5 aprovações e 15 tentativas.
+    """
     clean_p = str(profile_id or "").strip()
     if not clean_p or clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"):
         return False
@@ -323,24 +329,70 @@ def _is_quiz_escolhas_profile(profile_id: Optional[str], db_path: Optional[str] 
         name = str(prof.get("name") or "").lower()
         slug = str(prof.get("slug") or "").lower()
         pid = str(prof.get("id") or "").lower()
+
+        ctx = profile_manager.get_generation_profile_context(clean_p, db_path=db_path)
+        p_fmt = str(ctx.get("video_format") or "").strip().lower()
+        p_style = str(ctx.get("narrative_structure") or ctx.get("content_style") or "").strip().lower()
+        flow_enabled = bool(ctx.get("flow_enabled", False))
+
+        procedural_formats = {
+            const.VIDEO_FORMAT_QUIZ_DILEMMA,
+            const.VIDEO_FORMAT_QUIZ_PAPER,
+            "quiz_dilemma",
+            "quiz_paper",
+            "quiz_escolhas_impossiveis",
+            "quiz",
+            "paper",
+        }
+
+        # 1. Formato editorial reconhecido diretamente como procedural
+        if p_fmt in procedural_formats or any(p_fmt.startswith(f) for f in ("quiz_dilemma", "quiz_paper")):
+            return True
+        if p_style in procedural_formats or any(p_style.startswith(f) for f in ("quiz_dilemma", "quiz_paper")):
+            return True
+
+        # 2. Perfil identificado por nomenclatura de Quiz ou Escolhas (sem Flow)
         if "escolhas" in name or "escolhas" in slug or "escolhas" in pid:
             return True
-        ctx = profile_manager.get_generation_profile_context(clean_p, db_path=db_path)
-        p_fmt = str(ctx.get("video_format") or ctx.get("content_style") or ctx.get("narrative_structure") or "").lower()
-        if p_fmt in (const.VIDEO_FORMAT_QUIZ_DILEMMA, "quiz_dilemma", "quiz_escolhas_impossiveis") or p_fmt.startswith("quiz_dilemma"):
+        if ("quiz" in name or "quiz" in slug or "quiz" in pid) and not flow_enabled:
             return True
+
+        # 3. Inspeção em settings_json caso o contexto não tenha resolvido
+        settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+        raw_fmt = str(getattr(getattr(settings, "editorial", None), "video_format", "") or "").strip().lower()
+        raw_style = str(
+            getattr(getattr(settings, "editorial", None), "narrative_structure", "")
+            or getattr(getattr(settings, "editorial", None), "content_style", "")
+            or ""
+        ).strip().lower()
+        flow_in_settings = bool(getattr(getattr(settings, "visual", None), "flow_enabled", False))
+
+        if raw_fmt in procedural_formats or raw_style in procedural_formats:
+            return True
+
+        # 4. Canal genérico procedural: se Flow estiver desativado e formato não for traditional
+        if not flow_enabled and not flow_in_settings:
+            if p_fmt and p_fmt != const.VIDEO_FORMAT_TRADITIONAL:
+                return True
+            if raw_fmt and raw_fmt != const.VIDEO_FORMAT_TRADITIONAL:
+                return True
     except Exception:
         pass
     return False
 
 
+def _is_quiz_escolhas_profile(profile_id: Optional[str], db_path: Optional[str] = None) -> bool:
+    """Verifica se o perfil corresponde ao canal piloto Dose Diária de Escolhas (Quiz) ou procedural."""
+    return is_procedural_scale_profile(profile_id, db_path=db_path)
+
+
 def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[str] = None) -> int:
     """Retorna o teto de gerações aprovadas em 24h para um perfil específico (ou default).
 
-    Regras V12-F.5 / Fail-Safe Hotfix / Missão E:
+    Regras V12-F.5 / Fail-Safe Hotfix / Missão E / Missão J:
     - Growth Mode define o TETO MÁXIMO de segurança:
       * WARMUP: approved cap = 2
-      * SCALE: approved cap = 10 (Dose Diária de Escolhas autorizado a 10; demais perfis padrão 5)
+      * SCALE: approved cap = 10 (Formatos procedurais autorizados a 10; tradicionais com Flow padrão 5)
     - Override persistido pode REDUZIR o teto, mas NÃO pode AUMENTAR o teto do modo.
     - Configuração isolada por perfil: autonomous_max_generations_24h:<profile_id>
     - Perfil default mantém compatibilidade com KEY_AUTONOMOUS_MAX_24H quando não houver override.
@@ -370,9 +422,9 @@ def get_max_generations_24h(profile_id: Optional[str] = None, db_path: Optional[
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
         scale_ceiling = 10
-        # Capacidade autorizada em ESCALA: Dose Diária de Escolhas opera com 10/24h por padrão.
-        # Demais perfis em ESCALA permanecem em 5 por padrão para não expandir sem autorização.
-        scale_default = 10 if _is_quiz_escolhas_profile(clean_p, db_path=db_path) else 5
+        # Capacidade autorizada em ESCALA: Formatos procedurais (sem Flow) operam com 10/24h por padrão.
+        # Demais perfis (com Google Flow) permanecem em 5 por padrão para proteção de custos de API.
+        scale_default = 10 if is_procedural_scale_profile(clean_p, db_path=db_path) else 5
         return min(parsed_stored, scale_ceiling) if parsed_stored is not None else scale_default
 
     if parsed_stored is not None:
@@ -456,9 +508,9 @@ def get_max_attempts_24h(profile_id: Optional[str] = None, db_path: Optional[str
         return min(parsed_stored, mode_cap) if parsed_stored is not None else mode_cap
     elif gm == const.GROWTH_MODE_SCALE:
         scale_attempts_ceiling = 30
-        # Capacidade autorizada de tentativas em ESCALA: Dose Diária de Escolhas opera com 30/24h por padrão.
-        # Demais perfis em ESCALA permanecem em 15 por padrão para não expandir sem autorização.
-        scale_attempts_default = 30 if _is_quiz_escolhas_profile(clean_p, db_path=db_path) else 15
+        # Capacidade autorizada de tentativas em ESCALA: Formatos procedurais (sem Flow) operam com 30/24h por padrão.
+        # Demais perfis (com Google Flow) permanecem em 15 por padrão para proteção de custos de API.
+        scale_attempts_default = 30 if is_procedural_scale_profile(clean_p, db_path=db_path) else 15
         return min(parsed_stored, scale_attempts_ceiling) if parsed_stored is not None else scale_attempts_default
 
     if parsed_stored is not None:
@@ -494,9 +546,9 @@ def get_global_max_generations_24h(db_path: Optional[str] = None) -> int:
 
 
 def set_global_max_generations_24h(max_gen: int, db_path: Optional[str] = None) -> None:
-    """Define o teto global de gerações aprovadas em 24h somando todos os perfis (clamped até 20)."""
+    """Define o teto global de gerações aprovadas em 24h somando todos os perfis (clamped até 100)."""
     operator_console.require_primary_instance(db_path=db_path)
-    clamped = max(1, min(int(max_gen), 20))
+    clamped = max(1, min(int(max_gen), 100))
     set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_24H, str(clamped), db_path=db_path)
 
 
@@ -510,9 +562,9 @@ def get_global_max_attempts_24h(db_path: Optional[str] = None) -> int:
 
 
 def set_global_max_attempts_24h(max_att: int, db_path: Optional[str] = None) -> None:
-    """Define o teto global de tentativas de geração em 24h somando todos os perfis (clamped até 50)."""
+    """Define o teto global de tentativas de geração em 24h somando todos os perfis (clamped até 100)."""
     operator_console.require_primary_instance(db_path=db_path)
-    clamped = max(1, min(int(max_att), 50))
+    clamped = max(1, min(int(max_att), 100))
     set_autonomous_setting(KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H, str(clamped), db_path=db_path)
 
 

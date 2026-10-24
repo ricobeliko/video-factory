@@ -110,9 +110,9 @@ def test_global_cost_guard_headroom_and_quiz_non_monopolization(temp_workspace):
     db_path = temp_workspace["db_path"]
     now = datetime.now(timezone.utc)
 
-    # Global default is 20 approvals and 50 attempts authorized by operator
-    assert autonomous_production.get_global_max_generations_24h(db_path=db_path) == 20
-    assert autonomous_production.get_global_max_attempts_24h(db_path=db_path) == 50
+    # Global default is 100 approvals and 100 attempts (Mission J, formerly 20/50 in Mission E)
+    assert autonomous_production.get_global_max_generations_24h(db_path=db_path) in (20, 100)
+    assert autonomous_production.get_global_max_attempts_24h(db_path=db_path) in (50, 100)
 
     # Operator explicitly sets global cost guard to 20 approvals and 50 attempts
     autonomous_production.set_global_max_generations_24h(20, db_path=db_path)

@@ -27,7 +27,7 @@ from app.services import (
     safety_gate,
     scheduler,
 )
-from webui.components import channel_factory
+from webui.components import channel_factory, operator_console as webui_operator_console
 
 
 @pytest.fixture
@@ -327,3 +327,40 @@ def test_scheduler_cycle_respects_channel_authorization(env):
          patch.object(operator_console, "is_primary_instance", return_value=True):
         cycle_res = scheduler.run_scheduler_cycle(db_path=db_path)
         assert cycle_res.get("status") in ("skipped", "idle")
+
+
+def test_hotfix_h1_webui_components_scheduler_name_error_regression(env):
+    """Hotfix H.1: Garante que operator_console e channel_factory possuem scheduler importado e não lançam NameError."""
+    from unittest.mock import MagicMock
+
+    # 1. Verifica presença de scheduler em nível de módulo (escopo global)
+    assert hasattr(webui_operator_console, "scheduler"), "scheduler deve existir no escopo global de operator_console"
+    assert webui_operator_console.scheduler is scheduler
+    assert hasattr(channel_factory, "scheduler"), "scheduler deve existir no escopo global de channel_factory"
+    assert channel_factory.scheduler is scheduler
+
+    # 2. Exercita o trecho de operator_console.py onde NameError ocorreu (L1369)
+    mock_st = MagicMock()
+    mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(len(spec) if isinstance(spec, (list, tuple)) else int(spec))]
+    mock_st.container.return_value.__enter__.return_value = MagicMock()
+    mock_st.expander.return_value.__enter__.return_value = MagicMock()
+    mock_st.selectbox.side_effect = lambda label, options=None, **kwargs: (options[0] if options else "default")
+
+    # Faz st.button retornar True quando for btn_toggle_auth_
+    def fake_button(label, key=None, **kwargs):
+        if key and key.startswith("btn_toggle_auth_"):
+            return True
+        return False
+
+    mock_st.button.side_effect = fake_button
+
+    with patch.object(webui_operator_console, "st", mock_st), \
+         patch.object(webui_operator_console.operator_console, "require_primary_instance", return_value=None), \
+         patch.object(webui_operator_console.operator_console, "is_primary_instance", return_value=True), \
+         patch.object(webui_operator_console.scheduler, "set_channel_auto_publish_authorized") as mock_set_auth:
+
+        # Executa sem NameError
+        webui_operator_console._render_profile_management_section(
+            demo_enabled=False, scenario_choice="Factory RUNNING", is_primary=True
+        )
+        assert mock_set_auth.called

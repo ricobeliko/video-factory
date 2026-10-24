@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 import streamlit as st
 
 from app.config import config
-from app.services import autonomous_production, operator_console, post_for_me, profile_manager
+from app.services import autonomous_production, operator_console, post_for_me, profile_manager, scheduler
 
 VIDEO_FORMAT_CHOICES = ["traditional", "quiz_dilemma", "quiz_paper"]
 VIDEO_FORMAT_LABELS = {

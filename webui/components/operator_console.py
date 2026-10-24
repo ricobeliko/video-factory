@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 import streamlit as st
 
 from app.models import const
-from app.services import operator_console
+from app.services import operator_console, scheduler
 
 
 def _truncate_id(id_str: str, prefix_len: int = 8, suffix_len: int = 4) -> str:

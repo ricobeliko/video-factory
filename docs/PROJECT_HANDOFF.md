@@ -14,18 +14,18 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `23/10/2026`
+- **LAST_UPDATED:** `24/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `MISSÃO H: AGENDAMENTO INDEPENDENTE DA PRODUÇÃO E CONSISTÊNCIA DE AUTORIZAÇÃO WEBUI (DEV VALIDATED)`
+- **CURRENT_FOCUS:** `HOTFIX H.1: NAMEERROR SCHEDULER NA WEBUI (DEV VALIDATED)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_H_DEV_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / HOTFIX_H1_DEV_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
-- **CURRENT_MAIN_SHA:** `61681fc8fddc10e2d8099d659b9049b7e1d89e25` (homologado na Missão G)
-- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missões A, B, D, E, G e H)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `61681fc8fddc10e2d8099d659b9049b7e1d89e25` (produção confirmada com Missão G)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão H validada em DEV com 5/5 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **CURRENT_MAIN_SHA:** `2ef0187782fe442498c14a41cd084c0620db83dc` (Missão H)
+- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Hotfix H.1)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `2ef0187782fe442498c14a41cd084c0620db83dc` (produção atual implantada com Missão H)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Hotfix H.1 validado em DEV com 6/6 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_H_STATUS:** `DEV VALIDATED (1. Desacoplamento do agendamento de estoque pronto da produção autônoma em app/services/autonomous_production.py: quando a produção está desligada/pausada mas o Scheduler está ativo, o estoque pronto existente com destinos válidos continua sendo planejado e agendado sem disparar novas gerações de vídeo; 2. Alinhamento e persistência da autorização de auto-publicação em webui/components/channel_factory.py e operator_console.py: exibição explícita do status real [🟢 Auto-Pub / 🔒 Sem Auto-Pub], adição de controle para persistir auto_publish_authorized via setter oficial e alinhamento de legendas sem alterar canais não autorizados como Quiz_Quiz [mantido 0, fail-closed]; 5/5 testes direcionados PASS em test/services/test_mission_h_independent_scheduling.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **TIKTOK_UI_STATUS_ALIGNMENT:** `DEV VALIDATED (Correção cirúrgica de legenda estática obsoleta em webui/components/operator_console.py: eliminada mensagem residual da Fase V12-E 'TikTok bloqueado nesta fase' e implementada resolução dinâmica dos destinos do perfil ativo [YouTube e TikTok com canal e status real de autorização de auto-publicação/ativação], refletindo factual e dinamicamente o estado do Scheduler e do Post For Me sem alterar regras de negócio, limites, publishers ou autorizações; 8/8 testes direcionados PASS em test/services/test_v1_ui_safety_loading_hotfix.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_E_CAPACITY_STATUS:** `DEV VALIDATED (Ativação e reconciliação dos limites autorizados pelo operador: 1. app/services/autonomous_production.py: DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H elevado para 20 e DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H para 50; get_max_generations_24h e get_max_attempts_24h resolvem Dose Diária de Escolhas em ESCALA para 10 aprovações e 30 tentativas por padrão, preservando demais perfis em 5/15 [SCALE] e 2/8 [WARMUP]; 2. app/services/scheduler.py: _run_migrations executa migração aditiva e idempotente 'migration_mission_e_capacity_v1' elevando registros legados do Global Cost Guard [10->20, 25->50] e do perfil Dose Diária de Escolhas [5->10, 15->30], sem tocar em outros perfis e protegendo alterações futuras intencionais do operador contra sobrescritas; 3. Scheduler, anti-burst, estoque [10], Safety Gates e bloqueio do TikTok 100% preservados; 4. 6/6 testes direcionados PASS em test/services/test_mission_e_quiz_scale_10.py; DEPLOY_STATUS = NOT_DEPLOYED)`
@@ -2749,9 +2749,14 @@ ideocam).
      - `operator_console.py`: Tabela de canais atualizada com a coluna de Auto-Publicação (`🟢 Liberada` / `🔒 Bloqueada (0)`) e botões de ação com controle de autoridade; legenda de destinos atualizada para explicitar `YouTube (canal — sem auto-pub)`; rótulo na Macro Meta Bar clarificado para `🚀 Auto Publish Global:`.
      - Preservação estrita de segurança: o canal `Quiz_Quiz` permaneceu inalterado no banco com `auto_publish_authorized = 0` (fail-closed).
 - **Validação de Testes:**
-  - 5/5 testes direcionados PASS em `pytest test/services/test_mission_h_independent_scheduling.py -v`:
+  - 6/6 testes direcionados PASS em `pytest test/services/test_mission_h_independent_scheduling.py -v`:
     - `test_production_off_scheduling_on_schedules_ready_stock_without_new_generation`: PASS (Estoque existente é agendado sem disparar novas gerações).
     - `test_production_off_scheduling_off_skips_profile`: PASS (Perfil com ambas as flags OFF é ignorado com segurança).
     - `test_quiz_paper_unauthorized_channel_blocked_from_scheduling`: PASS (Canal com `auto_publish_authorized = 0` é bloqueado no agendamento fail-closed).
     - `test_webui_channel_factory_reflects_and_persists_authorization`: PASS (WebUI reflete status real e persiste alterações via setter oficial).
     - `test_scheduler_cycle_respects_channel_authorization`: PASS (Ciclo de publicação respeita autorização por canal e flags globais).
+    - `test_hotfix_h1_webui_components_scheduler_name_error_regression`: PASS (Eliminação definitiva de NameError para `scheduler` em componentes WebUI).
+- **Hotfix H.1 (NameError scheduler na WebUI):**
+  - Causa Raiz: `scheduler` não havia sido importado no escopo global de módulo em `webui/components/operator_console.py` e `webui/components/channel_factory.py`, disparando `NameError: name 'scheduler' is not defined` ao acionar os botões de autorização.
+  - Correção: Inclusão cirúrgica de `from app.services import ..., scheduler` no topo de ambos os componentes e validação em teste de regressão direcionado.
+  - Testes: 6/6 testes PASS em `pytest test/services/test_mission_h_independent_scheduling.py -v`.

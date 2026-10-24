@@ -1404,6 +1404,9 @@ def _render_profile_management_section(demo_enabled: bool, scenario_choice: str,
                 else:
                     st.toast("Canal vinculado em demonstração.", icon="📺")
 
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
@@ -1497,10 +1500,112 @@ def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is
                                 except Exception as f_err:
                                     st.error(f"Erro na coleta: {f_err}")
 
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
+
+
+def _render_flow_pool_management_block(demo_enabled: bool, scenario_choice: str, is_primary: bool):
+    """Subseção do pool multi-contas do Google Flow e telemetria de créditos (FLOW-MA1 / Missão N)."""
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    st.markdown("##### 🌊 Google Flow — Pool Multi-Contas & Saldo de Créditos")
+    st.caption("Monitoramento de capacidade do Google Flow, saldo por conta, detecção de telemetria desatualizada e reconciliação sem consumo de créditos.")
+
+    try:
+        from app.services import flow_account_pool
+        flow_status = flow_account_pool.get_flow_accounts_status()
+        flow_accounts = flow_status.get("accounts", [])
+        active_aid = flow_status.get("active_account_id")
+        total_creds = flow_status.get("total_known_credits")
+    except Exception as f_err:
+        flow_accounts = []
+        active_aid = None
+        total_creds = None
+
+    if not flow_accounts:
+        st.info("Nenhuma conta Google Flow cadastrada no pool.")
+        return
+
+    # Header do Pool
+    h_col1, h_col2 = st.columns([3, 1])
+    with h_col1:
+        tot_str = f"**{total_creds:,}** créditos utilizáveis" if total_creds is not None else "Saldo total não consolidado"
+        act_str = f"`{active_aid}`" if active_aid else "Nenhuma (Pool esgotado/inativo)"
+        st.markdown(f"Capacidade do Pool: {tot_str} &nbsp;|&nbsp; Conta Ativa: {act_str}")
+    with h_col2:
+        if is_primary:
+            if st.button("🔄 Reconciliar Todas", key="op_refresh_all_flow_credits", use_container_width=True):
+                with st.spinner("Reconciliando saldo de todas as contas no Flow (sem geração)..."):
+                    from app.services import flow_account_pool
+                    res_all = flow_account_pool.refresh_all_accounts_credits(force=True)
+                    st.success("Reconciliação do pool concluída!")
+                    st.rerun()
+
+    # Cards por conta
+    num_accs = len(flow_accounts)
+    cols = st.columns(max(1, min(num_accs, 3)))
+    for idx, acct in enumerate(flow_accounts):
+        col_target = cols[idx % len(cols)]
+        with col_target:
+            aid = acct.get("account_id")
+            d_name = acct.get("display_name", aid)
+            st_code = acct.get("status", "AVAILABLE")
+            creds = acct.get("credits_remaining")
+            c_src = acct.get("credits_source", "UNKNOWN")
+            is_stale = acct.get("is_stale", False)
+            stale_reason = acct.get("staleness_reason")
+            last_ver_display = acct.get("last_verified_display", "—")
+            is_active = (aid == active_aid)
+
+            # Badges
+            if st_code == "AVAILABLE":
+                st_badge = "<span class='op-badge op-badge-green'>🟢 DISPONÍVEL</span>"
+            elif st_code == "LOW_CREDITS":
+                st_badge = "<span class='op-badge op-badge-yellow'>🟡 CRÉDITOS BAIXOS</span>"
+            elif st_code in ("EXHAUSTED", "AUTH_FAILED", "AUTH_REQUIRED"):
+                st_badge = f"<span class='op-badge op-badge-red'>🔴 {st_code}</span>"
+            elif st_code == "COOLDOWN":
+                st_badge = "<span class='op-badge op-badge-yellow'>🟠 COOLDOWN</span>"
+            else:
+                st_badge = f"<span class='op-badge op-badge-gray'>⚪ {st_code}</span>"
+
+            active_tag = " &nbsp;<span class='op-badge op-badge-blue'>🎯 ATIVA</span>" if is_active else ""
+
+            with st.container(border=True):
+                st.markdown(f"**{d_name}** (`{aid}`){active_tag} &nbsp;{st_badge}", unsafe_allow_html=True)
+
+                if creds is not None:
+                    src_label = "verificado" if c_src == "FLOW_UI_VERIFIED" else "estimado"
+                    st.markdown(f"Saldo: **{creds:,}** créditos *({src_label})*")
+                else:
+                    st.markdown("Saldo: **—** *(desconhecido)*")
+
+                st.caption(f"Última verificação: `{last_ver_display}`")
+
+                if is_stale:
+                    st.warning(f"⚠️ **Desatualizado (>24h):** {stale_reason or 'Saldo antigo'}")
+
+                if acct.get("last_error"):
+                    st.caption(f":red[Último erro:] `{str(acct['last_error'])[:35]}`")
+
+                if is_primary:
+                    if st.button("🔄 Reconciliar Saldo", key=f"op_refresh_flow_{aid}", use_container_width=True):
+                        with st.spinner(f"Verificando sessão e saldo de '{aid}'..."):
+                            from app.services import flow_account_pool
+                            r_res = flow_account_pool.refresh_account_credits(aid, force=True)
+                            if r_res.get("success"):
+                                st.success(f"✓ {r_res.get('message')}")
+                            else:
+                                st.warning(f"⚠️ {r_res.get('message')}")
+                            st.rerun()
+                else:
+                    st.caption("🔒 *Reconciliação disponível apenas para instância PRIMARY.*")
+
+
 # Section 5.5: Automatic Analytics Scheduler (Fase V10-C)
 # ---------------------------------------------------------------------------
 
@@ -1563,6 +1668,9 @@ def _render_automatic_analytics_section(demo_enabled: bool, scenario_choice: str
                 st.caption("Ações restritas ao nó PRIMARY. Em SECONDARY_VIEW_ONLY os controles são desativados.")
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
+
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
@@ -1729,6 +1837,9 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                 st.caption(f"Destinos: {yt_info}{tt_info}. Publicação realizada pelo Scheduler.")
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
+
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
@@ -1970,6 +2081,9 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
                             st.error(f"Erro ao consultar status: {exc}")
         else:
             st.caption("ℹ️ Alteração manual de status de copyright permitida apenas na instância PRIMARY.")
+
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
@@ -2561,6 +2675,9 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                                             st.info("⏳ Processando burn-in de legendas no servidor...")
 
 
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
@@ -2654,6 +2771,9 @@ def _render_observability_section(demo_enabled: bool, scenario_choice: str, is_p
                 st.write("**Analytics:** Sem snapshots recentes")
             st.write(f"**Feedback Loop:** Modo: `{p_cl.get('mode')}` | Amostras: {p_cl.get('sample_count')} (`{p_cl.get('evidence_state')}`)")
             st.write(f"**Cost Guard:** {p_cost.get('approvals_24h')}/{p_cost.get('max_approvals_24h')} aprovados | {p_cost.get('attempts_24h')}/{p_cost.get('max_attempts_24h')} tentativas")
+
+        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 

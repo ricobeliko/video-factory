@@ -3611,6 +3611,10 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             "credits_remaining",
             "credits_source",
             "credits_last_verified_at",
+            "is_stale",
+            "staleness_reason",
+            "staleness_hours",
+            "last_verified_display",
             "current_task_id",
             "last_credit_cost",
             "last_success_at",
@@ -3803,6 +3807,45 @@ def get_execution_detail(task_id: str, db_path: Optional[str] = None) -> Optiona
         "execution_trace": trace,
     }
 
+# ---------------------------------------------------------------------------
+# Operações do Google Flow Pool para Console Operacional
+# ---------------------------------------------------------------------------
+
+def get_flow_accounts_status_op(
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retorna estado consolidado do pool de contas Google Flow."""
+    from app.services import flow_account_pool
+    return flow_account_pool.get_flow_accounts_status(config_path=config_path, runtime_path=runtime_path)
 
 
+def refresh_flow_account_credits_op(
+    account_id: str,
+    force: bool = False,
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reconcilia saldo de uma conta Google Flow via Playwright headless."""
+    from app.services import flow_account_pool
+    return flow_account_pool.refresh_account_credits(
+        account_id,
+        force=force,
+        config_path=config_path,
+        runtime_path=runtime_path,
+    )
+
+
+def refresh_all_flow_accounts_credits_op(
+    force: bool = False,
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reconcilia saldo de todas as contas do pool Google Flow."""
+    from app.services import flow_account_pool
+    return flow_account_pool.refresh_all_accounts_credits(
+        force=force,
+        config_path=config_path,
+        runtime_path=runtime_path,
+    )
 

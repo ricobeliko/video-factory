@@ -2667,18 +2667,44 @@ def generate_flow_scene(
         or (credits_before is not None and credits_before < 15)
     )
     if can_failover_account(manifest) and needs_pre_failover:
-        alt_acc = failover_flow_account(
-            manifest_path,
-            flow_account_id,
-            f"Account in non-eligible status or insufficient credits: status={initial_status}, credits={credits_before}",
-        )
-        if alt_acc:
-            failover_done = True
-            flow_account_id = alt_acc["account_id"]
-            account_user_data_dir = alt_acc.get("user_data_dir") or resolve_user_data_dir(flow_account_id)
-            rt_before = alt_acc.get("runtime") or get_account_runtime(flow_account_id)
-            credits_before = rt_before.get("credits_remaining")
-            initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
+        # Se for por insuficiência de crédito ou status de esgotamento, mas a telemetria for stale,
+        # tenta reconciliar antes de executar failover
+        if initial_status not in ("AUTH_FAILED", "AUTH_REQUIRED", "DISABLED"):
+            try:
+                is_stale, s_reason, _ = is_credit_reading_stale(rt_before)
+                if is_stale:
+                    logger.info(
+                        f"[FLOW_DISPATCH] Saldo da conta '{flow_account_id}' está desatualizado ({s_reason}). "
+                        f"Reconciliando saldo com Google Flow antes do dispatch..."
+                    )
+                    ref_res = refresh_account_credits(flow_account_id, force=True)
+                    if ref_res.get("success"):
+                        rt_before = get_account_runtime(flow_account_id)
+                        credits_before = rt_before.get("credits_remaining")
+                        initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
+                        initial_status = rt_before.get("status", "AVAILABLE")
+                        if credits_before is None or credits_before >= 15:
+                            needs_pre_failover = False
+                            logger.info(
+                                f"[FLOW_DISPATCH] Reconciliação bem-sucedida para '{flow_account_id}': "
+                                f"saldo={credits_before} ({initial_credits_source}). Prosseguindo com dispatch."
+                            )
+            except Exception as ref_exc:
+                logger.warning(f"[FLOW_DISPATCH] Erro ao reconciliar saldo antes do failover: {ref_exc}")
+
+        if needs_pre_failover:
+            alt_acc = failover_flow_account(
+                manifest_path,
+                flow_account_id,
+                f"Account in non-eligible status or insufficient credits: status={initial_status}, credits={credits_before}",
+            )
+            if alt_acc:
+                failover_done = True
+                flow_account_id = alt_acc["account_id"]
+                account_user_data_dir = alt_acc.get("user_data_dir") or resolve_user_data_dir(flow_account_id)
+                rt_before = alt_acc.get("runtime") or get_account_runtime(flow_account_id)
+                credits_before = rt_before.get("credits_remaining")
+                initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
 
     # 3. Executa driver Playwright (single-flight)
     raw_res = run_playwright_flow_poc(

@@ -2840,3 +2840,57 @@ ideocam).
     - `test_upcoming_posts_destination_channel_resolution`: PASS (canal de destino e multi-destino preservados).
     - `test_upcoming_posts_missing_destination`: PASS (fallback neutro 'Destino não identificado').
     - `test_channel_filter_discovery_and_behavior`: PASS (descoberta dinâmica e filtragem visual estrita).
+
+
+---
+
+## V16.45 — Missão N: Google Flow — Créditos Atualizados, Pool Multi-Contas e Preparação da Conta C
+
+- **Data:** `24/10/2026`
+- **Status:** `MISSION_N_DEV_VALIDATED (10/10 testes direcionados PASS)`
+- **Objetivo:**
+  1. Investigar e corrigir a desatualização de créditos do Google Flow (`flow-primary` congelado em 2 créditos desde 15/10/2026 e `flow-b` estimado em 251 créditos desde 20/10/2026).
+  2. Implementar regra de telemetria desatualizada (stale > 24h) e reconciliação controlada de saldo via Playwright headless sem consumo de créditos.
+  3. Garantir que a seleção automática no pool multi-contas considere informações confiáveis (5 tiers canônicos), priorize capacidade comprovada (`rem >= 15`), preserve stickiness de tarefas iniciadas e execute failover seguro pré-dispatch.
+  4. Melhorar a indicação visual de saldo, fonte e última verificação com alerta explícito de desatualização (> 24h) e botões de reconciliação no Console Operacional da WebUI V1 (Streamlit).
+  5. Validar o suporte dinâmico à terceira conta (`flow-c`) e futuras contas adicionais com isolamento estrito de perfis Edge.
+- **Diagnóstico & Causas Raiz Comprovadas:**
+  1. *Desacoplamento de Leitura e Falta de Reconciliação:* A leitura do saldo real da interface (`read_flow_credit_balance`) só era disparada *durante o dispatch de uma geração real de vídeo* em `scripts/flow_playwright.py:dispatch_flow_browser`. Nenhuma rotina administrativa ou pré-check chamava a leitura sem geração de vídeo.
+  2. *Deadlock de Capacidade por Saldo Antigo:* Quando `flow-primary` ficou com 2 créditos em 15/10/2026, foi marcado como `STATUS_EXHAUSTED` (presente em `NON_ELIGIBLE_STATUSES`). Uma vez inelegível, nunca mais era selecionado; como nunca mais era selecionado, nunca mais era despachado; e como nunca era despachado, a leitura de créditos nunca mais era executada. Ao recarregar externamente para 50 créditos, o sistema mantinha a conta permanentemente bloqueada.
+  3. *Estimativa Local Congelada sem Reconciliação:* `flow-b` teve créditos deduzidos localmente via `record_credit_deduction` (`LOCAL_ESTIMATE`), mas a ausência de novas gerações de Flow a manteve congelada em 251 créditos, enquanto o operador recarregou mais de 1.000 créditos.
+  4. *Suporte Multi-Contas Dinâmico:* `app/services/flow_account_pool.py` já possuía arquitetura genérica para `flow-c`, porém a ordenação descartava contas `EXHAUSTED` mesmo com saldos obsoletos há semanas.
+- **Implementações Técnicas (Correções Mínimas):**
+  1. *Regra Canônica de Staleness e Reconciliação (`app/services/flow_account_pool.py`):*
+     - Constante `DEFAULT_CREDIT_STALE_HOURS = 24.0`.
+     - Função `is_credit_reading_stale(rt, max_age_hours=24.0)`: detecta registros sem verificação, com fonte `UNKNOWN` ou idade > 24 horas.
+     - Função `format_last_verified_time(iso_ts)`: exibição amigável do tempo decorrido ("Há X min", "Há Xh", "DD/MM/AAAA (Há Xd)").
+     - Função `refresh_account_credits(account_id, force=False)`: se recente e não forçado, reutiliza cache (`refreshed=False`); se stale ou forçado, executa verificação headless via Playwright sem consumo de créditos, reconcilia saldo via `record_verified_credit_balance` e restaura contas recarregadas (`>= 15`) para `STATUS_AVAILABLE`. Em caso de erro, preserva o último saldo conhecido sem zerar.
+     - Função `refresh_all_accounts_credits(force=False)`: reconcilia todas as contas do pool em lote.
+     - Subcomando CLI `python -m app.services.flow_account_pool refresh [--account-id AID] [--all] [--force]`.
+  2. *Seleção Inteligente por 5 Tiers Canônicos (`select_flow_account`):*
+     - Tier 0: Stickiness mandatória de tarefas com projeto já iniciado (`flow_project_url` ou cenas concluídas).
+     - Tier 1: Saldo verificado recente (<= 24h) >= 15 créditos (maior saldo desc, ex: B=1000 > C=200 > A=50).
+     - Tier 2: Saldo estimado recente (<= 24h) >= 15 créditos (maior saldo desc).
+     - Tier 3: Saldo desconhecido ou desatualizado (> 24h) (candidata a reavaliação/reconciliação antes de declarar esgotamento).
+     - Tier 4: Saldo recente comprovadamente insuficiente (< 15 créditos).
+     - Tier 5: Descartados (não elegíveis: erro de auth, desativada, cooldown, busy).
+  3. *Reconciliação Pré-Dispatch em `scripts/flow_playwright.py`:*
+     - Em `dispatch_flow_browser`: se a conta vinculada ou selecionada estiver marcada com insuficiência de crédito ou status de esgotamento mas a telemetria for stale (> 24h), executa `refresh_account_credits(flow_account_id, force=True)` antes de disparar failover. Se a recarga for confirmada (`rem >= 15`), o dispatch prossegue normalmente com a conta.
+  4. *Integração de Telemetria em `app/services/operator_console.py`:*
+     - Inclusão dos campos `"is_stale"`, `"staleness_reason"`, `"staleness_hours"` e `"last_verified_display"` nos `allowed_fields` de `flow_pool_data` no overview operacional.
+     - Exposição das funções wrappers `get_flow_accounts_status_op`, `refresh_flow_account_credits_op` e `refresh_all_flow_accounts_credits_op`.
+  5. *Painel no Console Operacional da WebUI V1 (`webui/components/operator_console.py`):*
+     - Bloco dedicado "🌊 Google Flow — Pool Multi-Contas & Saldo de Créditos" na Seção 5 (Provider Health).
+     - Exibição de capacidade total consolidada do pool, conta ativa selecionada, cards por conta com nome, ID, status operacional, saldo formatado (distinguindo verificado de estimado), data formatada da última verificação, alerta visual destacado `⚠️ Desatualizado (>24h)` e botão `🔄 Reconciliar Saldo (Headless)` individual e em lote (protegidos para instância PRIMARY).
+- **Validação de Testes:**
+  - 10/10 testes direcionados PASS em `pytest test/services/test_mission_n_flow_credits_and_pool.py -v`:
+    - `test_is_credit_reading_stale_and_formatting`: PASS (detecção de stale >24h e formatação amigável).
+    - `test_refresh_account_credits_cached_when_fresh`: PASS (reutilização de cache recente sem abrir navegador).
+    - `test_refresh_account_credits_recovery_from_exhausted`: PASS (reconciliação atualiza saldo e restaura conta para AVAILABLE).
+    - `test_refresh_account_credits_failure_preserves_balance`: PASS (falha de rede/browser preserva último saldo conhecido sem zerar).
+    - `test_select_flow_account_ranking_and_tiers`: PASS (seleção correta por capacidade: B=1000 > C=200 > A=50).
+    - `test_select_flow_account_stale_account_not_permanently_blocked`: PASS (conta esgotada no passado mas stale não fica bloqueada permanentemente).
+    - `test_select_flow_account_auth_failed_remains_ineligible`: PASS (erros de autenticação permanecem estritamente inelegíveis).
+    - `test_task_stickiness_and_failover_boundaries`: PASS (stickiness preservada e failover restrito a pré-dispatch).
+    - `test_profile_isolation_flow_c`: PASS (Conta C isolada em `storage/flow_browser_profiles/flow-c`).
+    - `test_get_flow_accounts_status_and_operator_console_overview`: PASS (telemetria consolidada sanitizada sem vazar segredos).

@@ -45,6 +45,8 @@ STATUS_AUTH_FAILED = "AUTH_FAILED"
 STATUS_DISABLED = "DISABLED"
 STATUS_BUSY = "BUSY"
 
+DEFAULT_CREDIT_STALE_HOURS = 24.0
+
 NON_ELIGIBLE_STATUSES = {
     STATUS_DISABLED,
     STATUS_EXHAUSTED,
@@ -359,16 +361,21 @@ def select_flow_account(
 
     Critérios de elegibilidade:
     - enabled = True
-    - status NOT IN (DISABLED, EXHAUSTED, AUTH_FAILED, AUTH_REQUIRED, COOLDOWN, BUSY)
+    - status NOT IN (DISABLED, AUTH_FAILED, AUTH_REQUIRED, COOLDOWN, BUSY)
+    - Se status estiver em (EXHAUSTED, LOW_CREDITS), a conta é elegível para reavaliação
+      se o saldo for desatualizado (> 24h ou UNKNOWN).
 
-    Critérios de preferência:
-    1. Conta já vinculada ao manifesto/tarefa (stickiness mandatória se já iniciada produção);
-    2. Maior saldo de créditos conhecido;
-    3. Maior prioridade configurada;
-    4. Ordem estável por account_id.
+    Critérios de preferência (5 tiers canônicos):
+    0. Stickiness de tarefa vinculada (mandatória se projeto já iniciado);
+    1. Saldo verificado recente (<= 24h) >= 15 créditos (maior saldo primeiro);
+    2. Saldo estimado recente (<= 24h) >= 15 créditos (maior saldo primeiro);
+    3. Saldo desconhecido ou desatualizado (> 24h) (maior saldo conhecido se houver, depois prioridade);
+    4. Saldo verificado recente < 15 créditos (insuficiente comprovado recentemente);
+    5. Descartados (não elegíveis: erro de auth, desativada, cooldown, busy).
     """
     config = load_accounts_config(config_path)
     accounts = config.get("accounts", [])
+    hard_ineligible = {STATUS_DISABLED, STATUS_AUTH_FAILED, STATUS_AUTH_REQUIRED, STATUS_COOLDOWN, STATUS_BUSY}
 
     # 1. Stickiness de task/manifest
     if task_manifest and task_manifest.get("flow_account_id"):
@@ -384,38 +391,60 @@ def select_flow_account(
                 res = dict(target)
                 res["runtime"] = rt
                 return res
-            rem = rt.get("credits_remaining")
-            if target.get("enabled", True) and rt.get("status") not in NON_ELIGIBLE_STATUSES and (rem is None or rem >= 15):
-                res = dict(target)
-                res["runtime"] = rt
-                return res
 
-    # 2. Filtragem de contas elegíveis
-    eligible: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+            st = rt.get("status")
+            is_stale, _, _ = is_credit_reading_stale(rt)
+            rem = rt.get("credits_remaining")
+            if target.get("enabled", True) and st not in hard_ineligible:
+                if rem is None or rem >= 15 or is_stale:
+                    res = dict(target)
+                    res["runtime"] = rt
+                    return res
+
+    # 2. Filtragem e categorização por Tiers
+    eligible_candidates: List[Tuple[Dict[str, Any], Dict[str, Any], int]] = []
+
     for acct in accounts:
         if not acct.get("enabled", True):
             continue
         aid = acct.get("account_id")
         rt = get_account_runtime(aid, runtime_path)
-        if rt.get("status") in NON_ELIGIBLE_STATUSES:
+        st = rt.get("status")
+        if st in hard_ineligible:
             continue
-        eligible.append((acct, rt))
 
-    if not eligible:
+        is_stale, _, _ = is_credit_reading_stale(rt)
+        rem = rt.get("credits_remaining")
+        src = rt.get("credits_source", CREDIT_SOURCE_UNKNOWN)
+
+        if not is_stale and rem is not None:
+            if rem >= 15:
+                if src == CREDIT_SOURCE_FLOW_UI_VERIFIED:
+                    tier = 1  # Saldo verificado recente >= 15
+                else:
+                    tier = 2  # Saldo estimado recente >= 15
+            else:
+                tier = 4      # Saldo recente comprovadamente insuficiente (< 15)
+        else:
+            tier = 3          # Saldo desconhecido ou desatualizado (> 24h)
+
+        eligible_candidates.append((acct, rt, tier))
+
+    if not eligible_candidates:
         return None
 
     # 3. Ordenação
-    def _sort_key(item: Tuple[Dict[str, Any], Dict[str, Any]]):
-        acct, rt = item
+    def _sort_key(item: Tuple[Dict[str, Any], Dict[str, Any], int]):
+        acct, rt, tier = item
         rem = rt.get("credits_remaining")
-        has_known = 1 if rem is not None else 0
-        rem_val = rem if rem is not None else 0
+        rem_val = rem if rem is not None else -1
         prio = acct.get("priority", 100)
         aid = acct.get("account_id", "")
-        return (-has_known, -rem_val, -prio, aid)
+        # Menor tier primeiro (1, 2, 3, 4); dentro do tier, maior saldo, maior prioridade, aid alfabético
+        return (tier, -rem_val, -prio, aid)
 
-    eligible.sort(key=_sort_key)
-    chosen_acct, chosen_rt = eligible[0]
+    eligible_candidates.sort(key=_sort_key)
+    chosen_acct, chosen_rt, _ = eligible_candidates[0]
     res = dict(chosen_acct)
     res["runtime"] = chosen_rt
     return res
@@ -608,6 +637,187 @@ def resolve_manifest_account(
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Telemetria de Créditos, Staleness e Reconciliação
+# ---------------------------------------------------------------------------
+
+def is_credit_reading_stale(
+    runtime_dict: Optional[Dict[str, Any]],
+    max_age_hours: float = DEFAULT_CREDIT_STALE_HOURS,
+) -> Tuple[bool, Optional[str], Optional[float]]:
+    """Avalia se a leitura de créditos de uma conta é considerada obsoleta (> max_age_hours ou desconhecida).
+
+    Retorna (is_stale, reason_description, age_hours).
+    """
+    if not runtime_dict or not isinstance(runtime_dict, dict):
+        return True, "Nenhum dado de runtime disponível", None
+
+    last_verified = runtime_dict.get("credits_last_verified_at")
+    source = runtime_dict.get("credits_source", CREDIT_SOURCE_UNKNOWN)
+    remaining = runtime_dict.get("credits_remaining")
+
+    # Se nunca foi verificado ou saldo desconhecido
+    if not last_verified or source == CREDIT_SOURCE_UNKNOWN or remaining is None:
+        return True, "Nenhuma verificação de saldo registrada", None
+
+    try:
+        clean_iso = str(last_verified).replace("Z", "+00:00")
+        verified_dt = datetime.fromisoformat(clean_iso)
+        if verified_dt.tzinfo is None:
+            verified_dt = verified_dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - verified_dt).total_seconds()
+        age_hours = max(0.0, age_seconds / 3600.0)
+
+        if age_hours > max_age_hours:
+            return True, f"Última verificação há mais de {int(max_age_hours)}h ({age_hours:.1f}h atrás)", age_hours
+
+        if source == CREDIT_SOURCE_LOCAL_ESTIMATE:
+            return False, f"Saldo estimado recente ({age_hours:.1f}h atrás)", age_hours
+
+        return False, f"Saldo verificado recentemente ({age_hours:.1f}h atrás)", age_hours
+    except Exception as exc:
+        return True, f"Timestamp de verificação inválido: {exc}", None
+
+
+def format_last_verified_time(iso_ts: Optional[str]) -> str:
+    """Formata timestamp UTC de verificação para formato amigável ao operador."""
+    if not iso_ts:
+        return "Nunca verificado"
+    try:
+        clean_iso = str(iso_ts).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff_sec = (now - dt).total_seconds()
+        if diff_sec < 0:
+            diff_sec = 0
+        diff_hours = diff_sec / 3600.0
+
+        if diff_hours < 1.0:
+            mins = max(1, int(diff_sec / 60.0))
+            return f"Há {mins} min"
+        elif diff_hours < 24.0:
+            return f"Há {int(diff_hours)}h"
+        else:
+            days = int(diff_hours / 24.0)
+            dt_local = dt.astimezone()
+            return f"{dt_local.strftime('%d/%m/%Y %H:%M')} (Há {days}d)"
+    except Exception:
+        return str(iso_ts)
+
+
+def refresh_account_credits(
+    account_id: str,
+    force: bool = False,
+    max_age_hours: float = DEFAULT_CREDIT_STALE_HOURS,
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reconcilia saldo de créditos da conta via Playwright headless sem consumo de créditos.
+
+    Se force=False e o saldo for recente (< max_age_hours) com fonte FLOW_UI_VERIFIED,
+    reutiliza a telemetria em cache sem abrir navegador.
+    Se falhar, preserva o último saldo conhecido sem sobrescrever indevidamente.
+    """
+    valid_id = validate_account_id(account_id)
+    rt = get_account_runtime(valid_id, runtime_path=runtime_path)
+
+    is_stale, reason, age_hours = is_credit_reading_stale(rt, max_age_hours=max_age_hours)
+
+    if not force and not is_stale and rt.get("credits_source") == CREDIT_SOURCE_FLOW_UI_VERIFIED:
+        logger.info(
+            f"[FLOW_CREDIT_REFRESH] Saldo recente em cache para '{valid_id}': "
+            f"{rt.get('credits_remaining')} créditos (verificado há {age_hours:.1f}h). Nenhuma ação necessária."
+        )
+        return {
+            "account_id": valid_id,
+            "refreshed": False,
+            "reason": "CACHED_FRESH",
+            "success": True,
+            "credits_remaining": rt.get("credits_remaining"),
+            "credits_source": rt.get("credits_source"),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "message": f"Telemetria recente ({age_hours:.1f}h atrás).",
+        }
+
+    logger.info(f"[FLOW_CREDIT_REFRESH] Iniciando reconciliação headless para conta '{valid_id}' (motivo: {reason}, force={force})...")
+    verify_res = verify_flow_account_session(valid_id, config_path=config_path, runtime_path=runtime_path)
+
+    login_st = verify_res.get("login_status")
+    bal = verify_res.get("credits_remaining")
+    src = verify_res.get("credits_source", CREDIT_SOURCE_UNKNOWN)
+
+    if login_st == "AUTHENTICATED" and bal is not None:
+        record_verified_credit_balance(valid_id, bal, runtime_path=runtime_path)
+        logger.info(f"[FLOW_CREDIT_REFRESH] Reconciliação concluída para '{valid_id}': {bal} créditos ({src}).")
+        return {
+            "account_id": valid_id,
+            "refreshed": True,
+            "success": True,
+            "credits_remaining": bal,
+            "credits_source": src,
+            "credits_last_verified_at": datetime.now(timezone.utc).isoformat(),
+            "message": f"Saldo atualizado com sucesso: {bal} créditos.",
+        }
+    elif login_st == "AUTHENTICATED":
+        prev_bal = rt.get("credits_remaining")
+        logger.warning(
+            f"[FLOW_CREDIT_REFRESH] Sessão autenticada para '{valid_id}', mas seletor de saldo não retornou valor. "
+            f"Preservando saldo anterior: {prev_bal}."
+        )
+        return {
+            "account_id": valid_id,
+            "refreshed": True,
+            "success": False,
+            "credits_remaining": prev_bal,
+            "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "message": "Sessão autenticada, mas o seletor de créditos do Flow não retornou valor numérico inequívoco.",
+        }
+    else:
+        prev_bal = rt.get("credits_remaining")
+        err_msg = verify_res.get("message") or f"Falha de autenticação ({login_st})"
+        logger.warning(
+            f"[FLOW_CREDIT_REFRESH] Falha ao verificar '{valid_id}': {err_msg}. Preservando saldo anterior: {prev_bal}."
+        )
+        return {
+            "account_id": valid_id,
+            "refreshed": True,
+            "success": False,
+            "credits_remaining": prev_bal,
+            "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "message": err_msg,
+        }
+
+
+def refresh_all_accounts_credits(
+    force: bool = False,
+    max_age_hours: float = DEFAULT_CREDIT_STALE_HOURS,
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reconcilia saldo de todas as contas ativadas no pool."""
+    config = load_accounts_config(config_path)
+    accounts = config.get("accounts", [])
+    results = {}
+    for acct in accounts:
+        if not acct.get("enabled", True):
+            continue
+        aid = acct.get("account_id")
+        results[aid] = refresh_account_credits(
+            aid,
+            force=force,
+            max_age_hours=max_age_hours,
+            config_path=config_path,
+            runtime_path=runtime_path,
+        )
+    return results
+
+
 # Leitura de Crédito e Esgotamento na UI do Flow
 # ---------------------------------------------------------------------------
 
@@ -829,6 +1039,7 @@ def get_flow_accounts_status(
     """Retorna estado consolidado de todas as contas no pool formatado para consumo por frontend/UI."""
     config = load_accounts_config(config_path)
     accounts = config.get("accounts", [])
+    hard_ineligible = {STATUS_DISABLED, STATUS_AUTH_FAILED, STATUS_AUTH_REQUIRED, STATUS_COOLDOWN, STATUS_BUSY}
 
     result_accounts = []
     total_known = 0
@@ -841,8 +1052,10 @@ def get_flow_accounts_status(
         st = rt.get("status", STATUS_AVAILABLE)
         is_enabled = acct.get("enabled", True)
 
+        is_stale, staleness_reason, age_hours = is_credit_reading_stale(rt)
+
         # Apenas contas operacionais e elegíveis somam ao total utilizável do pool
-        is_usable = is_enabled and st not in NON_ELIGIBLE_STATUSES
+        is_usable = is_enabled and st not in hard_ineligible and not (not is_stale and rem is not None and rem < 15)
         if rem is not None and is_usable:
             total_known += rem
             any_known = True
@@ -856,6 +1069,10 @@ def get_flow_accounts_status(
             "credits_remaining": rem,
             "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
             "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "is_stale": is_stale,
+            "staleness_reason": staleness_reason,
+            "staleness_hours": round(age_hours, 1) if age_hours is not None else None,
+            "last_verified_display": format_last_verified_time(rt.get("credits_last_verified_at")),
             "current_task_id": rt.get("current_task_id"),
             "last_credit_cost": rt.get("last_credit_cost"),
             "last_success_at": rt.get("last_success_at"),
@@ -1153,6 +1370,16 @@ def cli_main():
     # status
     subparsers.add_parser("status", help="Exibe status e telemetria consolidada de todas as contas")
 
+    # refresh
+    refresh_parser = subparsers.add_parser(
+        "refresh",
+        help="Reconcilia saldo de créditos via Playwright headless sem consumo de créditos",
+    )
+    refresh_parser.add_argument("--account-id", help="Identificador único da conta (ex: flow-primary, flow-b, flow-c)")
+    refresh_parser.add_argument("--all", action="store_true", help="Reconcilia todas as contas cadastradas")
+    refresh_parser.add_argument("--force", action="store_true", help="Força leitura mesmo se a telemetria for recente (< 24h)")
+
+
     args = parser.parse_args()
 
     if args.command == "list":
@@ -1232,6 +1459,31 @@ def cli_main():
     elif args.command == "status":
         st = get_flow_accounts_status()
         print(json.dumps(st, indent=2, ensure_ascii=False))
+
+    elif args.command == "refresh":
+        if args.all:
+            results = refresh_all_accounts_credits(force=args.force)
+            print(f"\nResultado da Reconciliação do Pool ({len(results)} contas):")
+            print("-" * 70)
+            for aid, res in results.items():
+                succ = "✓ OK" if res.get("success") else "✗ FALHA"
+                rem = res.get("credits_remaining")
+                src = res.get("credits_source")
+                msg = res.get("message") or ""
+                print(f"- [{aid}] {succ} | Saldo: {rem} ({src}) | {msg}")
+            print("-" * 70)
+        elif args.account_id:
+            res = refresh_account_credits(args.account_id, force=args.force)
+            print(f"ACCOUNT_ID = {res['account_id']}")
+            print(f"SUCCESS = {res.get('success')}")
+            print(f"REFRESHED = {res.get('refreshed')}")
+            print(f"CREDITS_REMAINING = {res.get('credits_remaining')}")
+            print(f"CREDITS_SOURCE = {res.get('credits_source')}")
+            print(f"MESSAGE = {res.get('message')}")
+        else:
+            print("Erro: informe --account-id <id> ou --all")
+            sys.exit(1)
+
 
 
 if __name__ == "__main__":

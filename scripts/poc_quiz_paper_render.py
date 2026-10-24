@@ -343,7 +343,8 @@ class PaperQuizEngine:
         else:
             timer_bg = (254, 243, 199, 255)
             timer_outline = (245, 158, 11, 255)
-            timer_text = "⏱️ ESCOLHA SUA RESPOSTA: 6 SEGUNDOS"
+            exp_display = int(round(float(self.config.timing_settings.get("expectation_sec", 6.0))))
+            timer_text = f"⏱️ ESCOLHA SUA RESPOSTA: {exp_display} SEGUNDOS"
             timer_text_color = (146, 64, 14, 255)
             draw.rounded_rectangle([margin_left, curr_y, box_right, curr_y + bar_h], radius=14, fill=timer_bg, outline=timer_outline, width=2)
             draw.text((margin_left + 26, curr_y + 19), timer_text, font=f_timer, fill=timer_text_color)
@@ -1012,12 +1013,12 @@ class PaperQuizEngine:
             dur_baseline += dur_outro_tot
 
         # 2. Medir duração exata da narração de cada pergunta candidata
-        candidates_with_dur: List[Tuple[Dict[str, Any], float]] = []
+        candidates_with_dur: List[Tuple[Dict[str, Any], float, float]] = []
         for q in candidate_questions:
             q_audio = os.path.join(self.config.temp_dir, f"narration_{q['id']}.mp3")
             dur_narr = await self.synthesize_voice(q["narration"], q_audio)
             scene_dur = dur_narr + expectation_sec + reveal_sec
-            candidates_with_dur.append((q, scene_dur))
+            candidates_with_dur.append((q, scene_dur, dur_narr))
 
         # 3. Busca de combinação ótima que caiba estritamente em [target_min, target_max]
         midpoint = (target_min + target_max) / 2.0
@@ -1030,15 +1031,52 @@ class PaperQuizEngine:
                     diff_to_mid = abs(total_comb_dur - midpoint)
                     valid_selections.append((diff_to_mid, [item[0] for item in comb], total_comb_dur))
 
-        if not valid_selections:
-            raise DurationGateError(
-                f"[DURATION GATE ERROR] Nenhuma seleção de perguntas atinge a faixa obrigatória de "
-                f"[{target_min:.1f}s, {target_max:.1f}s]. Baseline: {dur_baseline:.2f}s."
-            )
+        if valid_selections:
+            # Ordena pela menor distância ao ponto médio (62.5s) para margem de segurança contra variações de muxing
+            valid_selections.sort(key=lambda x: x[0])
+            best_diff, best_questions, best_dur = valid_selections[0]
+        else:
+            # 4. Calibração dinâmica das pausas (expectativa e revelação) se nenhuma combinação fixa atingir a faixa
+            num_target = min(5, len(candidates_with_dur)) if len(candidates_with_dur) >= 5 else len(candidates_with_dur)
+            if num_target == 0:
+                raise DurationGateError(
+                    f"[DURATION GATE ERROR] Nenhuma pergunta candidata fornecida. Baseline: {dur_baseline:.2f}s."
+                )
 
-        # Ordena pela menor distância ao ponto médio (62.5s) para margem de segurança contra variações de muxing
-        valid_selections.sort(key=lambda x: x[0])
-        best_diff, best_questions, best_dur = valid_selections[0]
+            chosen_candidates = candidates_with_dur[:num_target]
+            total_voice = sum(item[2] for item in chosen_candidates)
+            target_center = midpoint
+            needed_pause_total = target_center - (dur_baseline + total_voice)
+            pause_per_q = needed_pause_total / float(num_target)
+
+            # Faixa aceitável de pausa por questão: 5.5s a 11.0s (timer de raciocínio de 5.0 a 8.5s + revelação de 1.0 a 2.5s)
+            min_pause_per_q = 5.5
+            max_pause_per_q = 11.0
+
+            if not (min_pause_per_q <= pause_per_q <= max_pause_per_q):
+                raise DurationGateError(
+                    f"[DURATION GATE ERROR] Nenhuma seleção de perguntas atinge a faixa obrigatória de "
+                    f"[{target_min:.1f}s, {target_max:.1f}s]. Baseline: {dur_baseline:.2f}s, "
+                    f"voz={total_voice:.2f}s, pausa_necessária={pause_per_q:.2f}s/q (faixa permitida: [{min_pause_per_q:.1f}s, {max_pause_per_q:.1f}s])."
+                )
+
+            if pause_per_q >= 7.0:
+                extra = pause_per_q - 7.0
+                calibrated_exp = round(6.0 + (extra * 0.60), 2)
+                calibrated_rev = round(pause_per_q - calibrated_exp, 2)
+            else:
+                calibrated_rev = 1.0
+                calibrated_exp = round(pause_per_q - 1.0, 2)
+
+            self.config.timing_settings["expectation_sec"] = calibrated_exp
+            self.config.timing_settings["reveal_sec"] = calibrated_rev
+
+            best_questions = [item[0] for item in chosen_candidates]
+            best_dur = dur_baseline + total_voice + (num_target * (calibrated_exp + calibrated_rev))
+            logger.info(
+                f"[DYNAMIC CALIBRATION] {num_target} perguntas calibradas para duração alvo {best_dur:.2f}s: "
+                f"voz={total_voice:.2f}s | exp_sec={calibrated_exp:.2f}s | rev_sec={calibrated_rev:.2f}s"
+            )
 
         # Re-indexa os números das perguntas selecionadas
         formatted_questions: List[Dict[str, Any]] = []
@@ -1076,6 +1114,9 @@ class PaperQuizEngine:
             reveal_sec=rev_sec,
         )
         self.config.questions = selected_q
+        # Atualiza expectation_sec e reveal_sec após eventual calibração dinâmica
+        exp_sec = float(self.config.timing_settings.get("expectation_sec", exp_sec))
+        rev_sec = float(self.config.timing_settings.get("reveal_sec", rev_sec))
 
         # 2. Gerar Thumbnail
         self.generate_thumbnail()

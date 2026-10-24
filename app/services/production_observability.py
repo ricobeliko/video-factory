@@ -548,9 +548,9 @@ def get_production_observability_snapshot(
     cost_guard_global: Dict[str, Any] = {
         "status": "available",
         "global_approved_24h": 0,
-        "global_max_generations_24h": 10,
+        "global_max_generations_24h": 100,
         "global_attempts_24h": 0,
-        "global_max_attempts_24h": 25,
+        "global_max_attempts_24h": 100,
     }
     try:
         cost_guard_global["global_approved_24h"] = int(
@@ -624,9 +624,9 @@ def get_production_observability_snapshot(
 
     if cost_guard_global.get("status") == "available":
         att = cost_guard_global.get("global_attempts_24h", 0)
-        max_att = cost_guard_global.get("global_max_attempts_24h", 25)
+        max_att = cost_guard_global.get("global_max_attempts_24h", 100)
         appr = cost_guard_global.get("global_approved_24h", 0)
-        max_appr = cost_guard_global.get("global_max_generations_24h", 10)
+        max_appr = cost_guard_global.get("global_max_generations_24h", 100)
         if (att >= 0.8 * max_att) or (appr >= 0.8 * max_appr):
             warnings.append("GLOBAL_COST_GUARD_NEAR_LIMIT")
 

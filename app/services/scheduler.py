@@ -251,6 +251,63 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 """
             )
 
+    # Migração Missão K (Reconciliação e Persistência Explícita de Limites / Quiz de Papel Homologado):
+    # Garante que os limites globais 100/100 e procedurais 10/30 existam explicitamente na tabela autopilot_settings,
+    # prevenindo divergências entre consultas SQLite, getters em memória e WebUI.
+    if cur_sett:
+        # 1. Global Cost Guard: garante presença explícita com valor 100
+        for g_key, g_default in [
+            ("autonomous_global_max_generations_24h", "100"),
+            ("autonomous_global_max_attempts_24h", "100"),
+        ]:
+            row = conn.execute("SELECT value FROM autopilot_settings WHERE key = ?;", (g_key,)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO autopilot_settings (key, value) VALUES (?, ?);", (g_key, g_default))
+            elif str(row["value"] or "").strip() in ("10", "20", "25", "50"):
+                conn.execute("UPDATE autopilot_settings SET value = ? WHERE key = ?;", (g_default, g_key))
+
+        # 2. Perfis Procedurais em SCALE: persiste explicitamente 10 aprovações e 30 tentativas
+        cur_prof = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='content_profiles';").fetchone()
+        if cur_prof:
+            p_cols = {row["name"] for row in conn.execute("PRAGMA table_info(content_profiles);").fetchall()}
+            where_clauses = [
+                "LOWER(slug) LIKE '%escolhas%'",
+                "LOWER(name) LIKE '%escolhas%'",
+                "LOWER(id) LIKE '%escolhas%'",
+                "LOWER(slug) LIKE '%quiz%'",
+                "LOWER(name) LIKE '%quiz%'",
+                "LOWER(id) LIKE '%quiz%'",
+            ]
+            if "settings_json" in p_cols:
+                where_clauses.append("LOWER(settings_json) LIKE '%quiz_dilemma%'")
+                where_clauses.append("LOWER(settings_json) LIKE '%quiz_paper%'")
+                where_clauses.append("LOWER(settings_json) LIKE '%quiz_escolhas%'")
+                where_clauses.append("LOWER(settings_json) LIKE '%\"video_format\": \"quiz%'")
+            query = f"SELECT id FROM content_profiles WHERE {' OR '.join(where_clauses)};"
+            procedural_rows = conn.execute(query).fetchall()
+            for r in procedural_rows:
+                p_id = r[0]
+                k_gen = f"autonomous_max_generations_24h:{p_id}"
+                row_gen = conn.execute("SELECT value FROM autopilot_settings WHERE key = ?;", (k_gen,)).fetchone()
+                if row_gen is None:
+                    conn.execute("INSERT INTO autopilot_settings (key, value) VALUES (?, '10');", (k_gen,))
+                elif str(row_gen["value"] or "").strip() == "5":
+                    conn.execute("UPDATE autopilot_settings SET value = '10' WHERE key = ?;", (k_gen,))
+
+                k_att = f"autonomous_max_attempts_24h:{p_id}"
+                row_att = conn.execute("SELECT value FROM autopilot_settings WHERE key = ?;", (k_att,)).fetchone()
+                if row_att is None:
+                    conn.execute("INSERT INTO autopilot_settings (key, value) VALUES (?, '30');", (k_att,))
+                elif str(row_att["value"] or "").strip() == "15":
+                    conn.execute("UPDATE autopilot_settings SET value = '30' WHERE key = ?;", (k_att,))
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO autopilot_settings (key, value)
+            VALUES ('migration_mission_k_reconcile_capacity_v1', 'done');
+            """
+        )
+
 
 # ---------------------------------------------------------------------------
 # Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)

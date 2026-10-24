@@ -696,9 +696,14 @@ def get_autonomous_status(
 
     enabled = is_profile_autonomous_mode_enabled(target_profile, db_path=db_path)
     state = _get_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED if not enabled else STATE_IDLE, profile_id=target_profile, db_path=db_path)
-    if not enabled and state != STATE_BLOCKED:
+    sched_settings = scheduler.get_all_settings(db_path=db_path)
+    is_sched = bool(sched_settings.get("scheduler_enabled", False))
+    if not enabled and not is_sched and state != STATE_BLOCKED:
         state = STATE_DISABLED
-    default_msg = "Aguardando próximo ciclo" if enabled else f"Produção autônoma desativada para perfil '{target_profile}'."
+    default_msg = "Aguardando próximo ciclo" if enabled else (
+        f"Agendamento ativo para perfil '{target_profile}' (produção autônoma pausada)." if is_sched
+        else f"Produção autônoma desativada para perfil '{target_profile}'."
+    )
     message = _get_cycle_setting(KEY_AUTONOMOUS_MESSAGE, default_msg, profile_id=target_profile, db_path=db_path)
     last_result = _get_cycle_setting(KEY_AUTONOMOUS_LAST_RESULT, "Nenhum ciclo executado ainda", profile_id=target_profile, db_path=db_path)
     last_tick = _get_cycle_setting(KEY_AUTONOMOUS_LAST_TICK, None, profile_id=target_profile, db_path=db_path)
@@ -2264,16 +2269,20 @@ def _run_autonomous_cycle(
         }
 
     # -----------------------------------------------------------------------
-    # Guarda 3: Autonomous Mode Enabled ou One-Shot Supervisionado
+    # Guarda 3: Produção ou Agendamento Ativo
     # -----------------------------------------------------------------------
-    if not is_profile_autonomous_mode_enabled(target_profile_id, db_path=db_path) and not one_shot:
-        msg = f"Produção autônoma desativada para perfil '{target_profile_id}'."
+    sched_settings = scheduler.get_all_settings(db_path=db_path)
+    is_sched_enabled = bool(sched_settings.get("scheduler_enabled", False))
+    is_prod_enabled = is_profile_autonomous_mode_enabled(target_profile_id, db_path=db_path) or one_shot
+
+    if not is_prod_enabled and not is_sched_enabled:
+        msg = f"Produção autônoma e agendamento desativados para perfil '{target_profile_id}'."
         _set_status(KEY_AUTONOMOUS_STATE, STATE_DISABLED)
         _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
         return {
             "status": "disabled",
             "profile_id": target_profile_id,
-            "message": f"autonomous_mode_enabled is False for profile '{target_profile_id}'",
+            "message": f"autonomous_mode_enabled is False and scheduler_enabled is False for profile '{target_profile_id}'",
         }
 
     # -----------------------------------------------------------------------
@@ -2666,102 +2675,118 @@ def _run_autonomous_cycle(
 
     # Select exactly one action. A blocked publication destination is not a
     # generation lock; all persisted approvals remain discoverable after restart.
-    waiting_task_id = _get_status(KEY_AUTONOMOUS_WAITING_TASK_ID, None)
-    if waiting_task_id:
-        wait_prof = profile_manager.get_task_profile_id(waiting_task_id, db_path=db_path)
-        is_default_target = not target_profile_id or target_profile_id in (profile_manager.DEFAULT_PROFILE_ID, "default")
-        is_default_wait = not wait_prof or wait_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
-        if (is_default_target and not is_default_wait) or (not is_default_target and wait_prof != target_profile_id):
-            waiting_task_id = None
-
-    if waiting_task_id:
-        try:
-            _recover_waiting_task(waiting_task_id, db_path=db_path, task_base_dir=task_base_dir)
-        except (ValueError, TypeError, OSError) as exc:
-            _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, "")
-            _set_status(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE)
-            _set_status(KEY_AUTONOMOUS_MESSAGE, str(exc))
-            return {"status": "waiting_schedule", "task_id": waiting_task_id,
-                    "reason": "waiting_recovery_failed", "message": str(exc), "scheduled_items": 0}
-
     stock_info = get_autonomous_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=target_profile_id, channel_id=target_channel_id)
-    pending = []
-    for task_data in stock_info.get("youtube_ready", []):
-        t_prof = task_data.get("profile_id") or target_profile_id
-        target_plats = resolve_autonomous_planned_platforms(t_prof, db_path=db_path)
-        if not target_plats:
-            continue
-        channels = profile_manager.resolve_task_channels(
-            task_data["task_id"], platforms=target_plats, db_path=db_path)
-        if not channels:
-            continue
-        # Avaliação estrita POR DESTINO (task_id + platform + channel_id):
-        # A existência de agendamento em uma plataforma (ex: YouTube) NÃO pode bloquear o destino faltante (ex: TikTok)
-        missing_channels = []
-        with scheduler.get_connection(db_path) as conn:
-            for c in channels:
-                plat = c.get("platform", "youtube").lower().strip()
-                cid = c.get("channel_id")
-                if not scheduler.has_existing_or_terminal_destination(
-                    task_data["task_id"], plat, cid, conn
-                ):
-                    missing_channels.append(c)
-        if missing_channels:
-            missing_plats = list(dict.fromkeys(c.get("platform", "youtube").lower().strip() for c in missing_channels))
-            task_data["planned_platforms"] = missing_plats
-            task_data["target_platforms"] = target_plats
-            pending.append(task_data)
-    # This pointer is scoped per profile for display and recovery
-    _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, pending[0]["task_id"] if pending else "")
-    for task_data in pending:
-        t_prof = task_data.get("profile_id") or target_profile_id
-        t_chan = task_data.get("channel_id") or target_channel_id
-        missing_plats = task_data.get("planned_platforms", [])
 
-        # Validação de capacidade por destino faltante: YouTube cheio ou pausado NÃO bloqueia TikTok
-        has_capacity = False
-        for plat in missing_plats:
-            rate = scheduler.get_platform_rate_limits(
-                plat, now=current_time, profile_id=t_prof, channel_id=t_chan, db_path=db_path)
-            if rate.get("enabled") and rate.get("available_slots", 0) > 0:
-                has_capacity = True
-            else:
-                scheduler.log_growth_limit_block(
-                    task_data["task_id"], t_prof, plat, rate,
-                    now=current_time, db_path=db_path)
-        if not has_capacity:
-            continue
+    if is_sched_enabled:
+        waiting_task_id = _get_status(KEY_AUTONOMOUS_WAITING_TASK_ID, None)
+        if waiting_task_id:
+            wait_prof = profile_manager.get_task_profile_id(waiting_task_id, db_path=db_path)
+            is_default_target = not target_profile_id or target_profile_id in (profile_manager.DEFAULT_PROFILE_ID, "default")
+            is_default_wait = not wait_prof or wait_prof in (profile_manager.DEFAULT_PROFILE_ID, "default")
+            if (is_default_target and not is_default_wait) or (not is_default_target and wait_prof != target_profile_id):
+                waiting_task_id = None
 
-        retry_key = "autonomous_schedule_retry:" + task_data["task_id"]
-        retry_at = get_autonomous_setting(retry_key, None, db_path=db_path)
-        if retry_at:
+        if waiting_task_id:
             try:
-                if current_time < scheduler._from_iso(retry_at):
-                    continue
-            except (ValueError, TypeError):
-                pass  # Malformed retry metadata must not block the whole buffer.
-        set_autonomous_setting(retry_key, scheduler._to_iso(current_time + timedelta(minutes=15)), db_path=db_path)
-        # Salva o conjunto completo de plataformas no mapeamento permanente da task
-        scheduler.save_task_platforms(task_data["task_id"], task_data.get("target_platforms") or missing_plats, db_path=db_path)
-        scheduled = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path, task_base_dir=task_base_dir)
-        status = "scheduled" if scheduled else "waiting_schedule"
-        _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE if scheduled else STATE_WAITING_SCHEDULE)
-        message = f"Task {task_data['task_id']}: {status} ({len(scheduled)} scheduled items)."
-        _set_status(KEY_AUTONOMOUS_MESSAGE, message)
-        _set_status(KEY_AUTONOMOUS_LAST_RESULT, message)
-        if scheduled:
-            set_autonomous_setting(retry_key, "", db_path=db_path)
-            _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, "")
-            operator_console.log_operational_event(
-                component="autonomous_production", severity=operator_console.SEVERITY_INFO,
-                event_type="task_approved_and_scheduled", task_id=task_data["task_id"],
-                message="Persisted approval scheduled.",
-                metadata={"scheduled_items": len(scheduled)}, db_path=db_path)
-        return {"status": status, "task_id": task_data["task_id"],
-                "scheduled_items": len(scheduled), "message": message}
+                _recover_waiting_task(waiting_task_id, db_path=db_path, task_base_dir=task_base_dir)
+            except (ValueError, TypeError, OSError) as exc:
+                _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, "")
+                _set_status(KEY_AUTONOMOUS_STATE, STATE_WAITING_SCHEDULE)
+                _set_status(KEY_AUTONOMOUS_MESSAGE, str(exc))
+                return {"status": "waiting_schedule", "task_id": waiting_task_id,
+                        "reason": "waiting_recovery_failed", "message": str(exc), "scheduled_items": 0}
+
+        pending = []
+        for task_data in stock_info.get("youtube_ready", []):
+            t_prof = task_data.get("profile_id") or target_profile_id
+            target_plats = resolve_autonomous_planned_platforms(t_prof, db_path=db_path)
+            if not target_plats:
+                continue
+            channels = profile_manager.resolve_task_channels(
+                task_data["task_id"], platforms=target_plats, db_path=db_path)
+            if not channels:
+                continue
+            # Avaliação estrita POR DESTINO (task_id + platform + channel_id):
+            # A existência de agendamento em uma plataforma (ex: YouTube) NÃO pode bloquear o destino faltante (ex: TikTok)
+            missing_channels = []
+            with scheduler.get_connection(db_path) as conn:
+                for c in channels:
+                    plat = c.get("platform", "youtube").lower().strip()
+                    cid = c.get("channel_id")
+                    if not scheduler.has_existing_or_terminal_destination(
+                        task_data["task_id"], plat, cid, conn
+                    ):
+                        missing_channels.append(c)
+            if missing_channels:
+                missing_plats = list(dict.fromkeys(c.get("platform", "youtube").lower().strip() for c in missing_channels))
+                task_data["planned_platforms"] = missing_plats
+                task_data["target_platforms"] = target_plats
+                pending.append(task_data)
+        # This pointer is scoped per profile for display and recovery
+        _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, pending[0]["task_id"] if pending else "")
+        for task_data in pending:
+            t_prof = task_data.get("profile_id") or target_profile_id
+            t_chan = task_data.get("channel_id") or target_channel_id
+            missing_plats = task_data.get("planned_platforms", [])
+
+            # Validação de capacidade por destino faltante: YouTube cheio ou pausado NÃO bloqueia TikTok
+            has_capacity = False
+            for plat in missing_plats:
+                rate = scheduler.get_platform_rate_limits(
+                    plat, now=current_time, profile_id=t_prof, channel_id=t_chan, db_path=db_path)
+                if rate.get("enabled") and rate.get("available_slots", 0) > 0:
+                    has_capacity = True
+                else:
+                    scheduler.log_growth_limit_block(
+                        task_data["task_id"], t_prof, plat, rate,
+                        now=current_time, db_path=db_path)
+            if not has_capacity:
+                continue
+
+            retry_key = "autonomous_schedule_retry:" + task_data["task_id"]
+            retry_at = get_autonomous_setting(retry_key, None, db_path=db_path)
+            if retry_at:
+                try:
+                    if current_time < scheduler._from_iso(retry_at):
+                        continue
+                except (ValueError, TypeError):
+                    pass  # Malformed retry metadata must not block the whole buffer.
+            set_autonomous_setting(retry_key, scheduler._to_iso(current_time + timedelta(minutes=15)), db_path=db_path)
+            # Salva o conjunto completo de plataformas no mapeamento permanente da task
+            scheduler.save_task_platforms(task_data["task_id"], task_data.get("target_platforms") or missing_plats, db_path=db_path)
+            scheduled = scheduler.plan_schedule(tasks=[task_data], now=current_time, db_path=db_path, task_base_dir=task_base_dir)
+            status = "scheduled" if scheduled else "waiting_schedule"
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE if scheduled else STATE_WAITING_SCHEDULE)
+            message = f"Task {task_data['task_id']}: {status} ({len(scheduled)} scheduled items)."
+            _set_status(KEY_AUTONOMOUS_MESSAGE, message)
+            _set_status(KEY_AUTONOMOUS_LAST_RESULT, message)
+            if scheduled:
+                set_autonomous_setting(retry_key, "", db_path=db_path)
+                _set_status(KEY_AUTONOMOUS_WAITING_TASK_ID, "")
+                operator_console.log_operational_event(
+                    component="autonomous_production", severity=operator_console.SEVERITY_INFO,
+                    event_type="task_approved_and_scheduled", task_id=task_data["task_id"],
+                    message="Persisted approval scheduled.",
+                    metadata={"scheduled_items": len(scheduled)}, db_path=db_path)
+            return {"status": status, "task_id": task_data["task_id"],
+                    "scheduled_items": len(scheduled), "message": message}
 
     ready_total = stock_info["ready_count"]
     target_stock = stock_info["target_stock"]
+
+    if not is_prod_enabled:
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
+        msg = f"Produção autônoma pausada para perfil '{target_profile_id}'. Agendamento ativo (estoque pronto: {ready_total}/{target_stock}). Nenhuma nova geração iniciada."
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+        _set_status(KEY_AUTONOMOUS_LAST_RESULT, msg)
+        _set_status(KEY_AUTONOMOUS_LAST_TICK, now_iso)
+        return {
+            "status": "production_paused",
+            "profile_id": target_profile_id,
+            "ready_stock": ready_total,
+            "target_stock": target_stock,
+            "message": msg,
+        }
 
     if ready_total >= target_stock:
         _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
@@ -3234,13 +3259,17 @@ def run_enabled_profiles_autonomous_cycle(
     all_profiles = profile_manager.list_profiles(active_only=True, db_path=db_path)
     sorted_profiles = sorted(all_profiles, key=lambda p: str(p.get("id") or ""))
 
+    scheduler_settings = scheduler.get_all_settings(db_path=db_path)
+    sched_enabled = bool(scheduler_settings.get("scheduler_enabled", False))
+
     results: Dict[str, Any] = {}
     for prof in sorted_profiles:
         p_id = str(prof.get("id") or "").strip()
         if not p_id:
             continue
 
-        if not is_profile_autonomous_mode_enabled(p_id, db_path=db_path):
+        prod_enabled = is_profile_autonomous_mode_enabled(p_id, db_path=db_path)
+        if not prod_enabled and not sched_enabled:
             results[p_id] = {"status": "disabled", "skipped": True}
             continue
 

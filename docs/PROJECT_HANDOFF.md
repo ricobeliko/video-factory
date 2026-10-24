@@ -14,18 +14,19 @@
 
 ## START HERE — ESTADO ATUAL
 
-- **LAST_UPDATED:** `22/10/2026`
+- **LAST_UPDATED:** `23/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `CONFERÊNCIA DE STATUS TIKTOK V1: ALINHAMENTO DINÂMICO DE UI (DEV VALIDATED)`
+- **CURRENT_FOCUS:** `MISSÃO H: AGENDAMENTO INDEPENDENTE DA PRODUÇÃO E CONSISTÊNCIA DE AUTORIZAÇÃO WEBUI (DEV VALIDATED)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / TIKTOK_STATUS_ALIGNED_DEV_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_H_DEV_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
-- **CURRENT_MAIN_SHA:** `654d61dc12f64e15d3ca0f62f5e4497b3f5cdfa5` (homologado na Missão B)
-- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missões A, B, D, E e Alinhamento TikTok)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `654d61dc12f64e15d3ca0f62f5e4497b3f5cdfa5` (produção confirmada com Missão B)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Alinhamento Dinâmico de UI TikTok/Autopilot validado em DEV com 8/8 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **CURRENT_MAIN_SHA:** `61681fc8fddc10e2d8099d659b9049b7e1d89e25` (homologado na Missão G)
+- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missões A, B, D, E, G e H)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `61681fc8fddc10e2d8099d659b9049b7e1d89e25` (produção confirmada com Missão G)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão H validada em DEV com 5/5 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **MISSION_H_STATUS:** `DEV VALIDATED (1. Desacoplamento do agendamento de estoque pronto da produção autônoma em app/services/autonomous_production.py: quando a produção está desligada/pausada mas o Scheduler está ativo, o estoque pronto existente com destinos válidos continua sendo planejado e agendado sem disparar novas gerações de vídeo; 2. Alinhamento e persistência da autorização de auto-publicação em webui/components/channel_factory.py e operator_console.py: exibição explícita do status real [🟢 Auto-Pub / 🔒 Sem Auto-Pub], adição de controle para persistir auto_publish_authorized via setter oficial e alinhamento de legendas sem alterar canais não autorizados como Quiz_Quiz [mantido 0, fail-closed]; 5/5 testes direcionados PASS em test/services/test_mission_h_independent_scheduling.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **TIKTOK_UI_STATUS_ALIGNMENT:** `DEV VALIDATED (Correção cirúrgica de legenda estática obsoleta em webui/components/operator_console.py: eliminada mensagem residual da Fase V12-E 'TikTok bloqueado nesta fase' e implementada resolução dinâmica dos destinos do perfil ativo [YouTube e TikTok com canal e status real de autorização de auto-publicação/ativação], refletindo factual e dinamicamente o estado do Scheduler e do Post For Me sem alterar regras de negócio, limites, publishers ou autorizações; 8/8 testes direcionados PASS em test/services/test_v1_ui_safety_loading_hotfix.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_E_CAPACITY_STATUS:** `DEV VALIDATED (Ativação e reconciliação dos limites autorizados pelo operador: 1. app/services/autonomous_production.py: DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H elevado para 20 e DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H para 50; get_max_generations_24h e get_max_attempts_24h resolvem Dose Diária de Escolhas em ESCALA para 10 aprovações e 30 tentativas por padrão, preservando demais perfis em 5/15 [SCALE] e 2/8 [WARMUP]; 2. app/services/scheduler.py: _run_migrations executa migração aditiva e idempotente 'migration_mission_e_capacity_v1' elevando registros legados do Global Cost Guard [10->20, 25->50] e do perfil Dose Diária de Escolhas [5->10, 15->30], sem tocar em outros perfis e protegendo alterações futuras intencionais do operador contra sobrescritas; 3. Scheduler, anti-burst, estoque [10], Safety Gates e bloqueio do TikTok 100% preservados; 4. 6/6 testes direcionados PASS em test/services/test_mission_e_quiz_scale_10.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_B_ROBUSTNESS_STATUS:** `DEV VALIDATED (Correção cirúrgica de vazamentos de conexão SQLite e estabilidade: 1. app/services/content_strategy.py: get_connection transformado em contextmanager estrito com timeout=15.0, PRAGMA journal_mode=WAL; e conn.close() garantido em bloco finally, resolvendo RISK-SQL-01; 2. app/services/quality_recovery.py: get_connection local adicionado com timeout=15.0, WAL e fechamento determinístico em bloco finally, eliminando 9 locais de conexões abertas sem close em init_review_db, apply_human_review_decision, enqueue_review_command, has_pending_review_commands, process_pending_review_commands e submit_or_apply_review_decision, resolvendo RISK-SQL-02; 3. Scheduler & Anti-burst: verificação formal comprovando que o Scheduler já implementa LIMIT 1 por ciclo, limite móvel de 24h e min_interval_hours [8h warmup, 6h conservative, 4h normal, 2h scale] adiando deterministicamente posts atrasados pós-reboot para last_pub + min_interval sem disparos em rajada, preservando scheduler.py intacto conforme diretriz 'FAZER MENOS'; 4. Reconciliação operacional pós-reboot e integridade transacional preservadas; 5/5 testes direcionados PASS em test/services/test_mission_b_robustness.py; DEPLOY_STATUS = NOT_DEPLOYED)`
@@ -2718,3 +2719,39 @@ ideocam).
     - `test_3_auto_reconcile_and_ready_stock_for_quiz`: PASS (Auto-reconciliação de `task_platforms` e cálculo correto de `ready_count`).
     - `test_4_crash_recovery_clears_stuck_generating`: PASS (Recuperação limpa de tarefa interrompida por queda de energia/reboot).
     - `test_5_scheduler_plans_and_respects_limits`: PASS (`plan_schedule` idempotente com respeito estrito a quotas e canais autorizados).
+
+---
+
+## V16.39 — Missão H: Agendamento Independente da Produção e Consistência de Autorização WebUI
+
+- **Data:** `23/10/2026`
+- **Status:** `MISSION_H_DEV_VALIDATED (5/5 testes direcionados PASS)`
+- **Objetivo:**
+  1. Permitir que perfis com produção autônoma pausada (`autonomous_mode_enabled = False`), mas com Scheduler ativo (`scheduler_enabled = True`), tenham seu estoque pronto existente agendado e publicado normalmente sem disparar novas gerações de vídeo.
+  2. Resolver a divergência na WebUI onde canais com `auto_publish_authorized = 0` (como `Quiz_Quiz` / `profile-45cee883f80a`) aparentavam ter publicação automática liberada, alinhando a interface com o SQLite, provendo controle explícito e preservando canais não autorizados (fail-closed, sem elevar de 0 para 1).
+- **Diagnóstico & Causas Raiz Comprovadas:**
+  1. *Acoplamento Produção x Agendamento no Ciclo Autônomo (Problema 1):*
+     - O método `run_enabled_profiles_autonomous_cycle` ignorava perfis pausados com `if not is_profile_autonomous_mode_enabled(p_id): continue`.
+     - Dentro de `_run_autonomous_cycle`, a Guarda 3 abortava imediatamente quando `autonomous_mode_enabled is False`, antes de recuperar o estoque pronto e antes de executar `plan_schedule`.
+     - Isso impedia que estoques saudáveis de perfis desligados fossem consumidos para agendamento em background.
+  2. *Divergência Visual de Autorização em `Quiz_Quiz` (Problema 2):*
+     - Em `channel_factory.py`, o card de destinos exibia `YouTube (Conectado)` apenas checando `is_enabled`, omitindo o status de `auto_publish_authorized`.
+     - No formulário de edição do canal, não havia controle de UI para `auto_publish_authorized` nem persistência no salvamento, impossibilitando a visualização e configuração explícita pelo operador.
+     - No console operacional (`operator_console.py`), a tabela de canais e as legendas de destinos não refletiam adequadamente o estado de auto-publicação do YouTube (diferente do TikTok), e a Macro Meta Bar gerava confusão ao exibir `Auto Publish: ON` referente à chave global do sistema.
+- **Implementações Técnicas (Correções Mínimas):**
+  1. *Desacoplamento em `app/services/autonomous_production.py`:*
+     - `run_enabled_profiles_autonomous_cycle`: agora processa perfis se `prod_enabled` OU `sched_enabled` estiver ativo.
+     - `_run_autonomous_cycle`: a Guarda 3 avalia ambos os estados. Se o agendamento estiver habilitado e a produção desativada, executa a recuperação de tarefas aprovadas e o `plan_schedule` para alimentar o Scheduler; em seguida, encerra o ciclo com status `"production_paused"` sem submeter nenhuma geração de novos vídeos (`mock_gen.assert_not_called()`).
+     - `get_autonomous_status`: atualizado para exibir `"Agendamento ativo para perfil ... (produção autônoma pausada)"` quando o agendamento estiver ativo e a produção inativa.
+  2. *Alinhamento e Persistência de UI em `webui/components/channel_factory.py` e `webui/components/operator_console.py`:*
+     - `channel_factory.py`: Adicionado badge visual explícito (`🟢 Auto-Pub` / `🔒 Sem Auto-Pub`) ao lado da conta de cada destino conectado.
+     - `channel_factory.py`: Adicionado checkbox `Autorizar Publicação Automática (Fail-Closed)` na edição de canais, salvando explicitamente o status no SQLite via setter oficial `scheduler.set_channel_auto_publish_authorized(...)`.
+     - `operator_console.py`: Tabela de canais atualizada com a coluna de Auto-Publicação (`🟢 Liberada` / `🔒 Bloqueada (0)`) e botões de ação com controle de autoridade; legenda de destinos atualizada para explicitar `YouTube (canal — sem auto-pub)`; rótulo na Macro Meta Bar clarificado para `🚀 Auto Publish Global:`.
+     - Preservação estrita de segurança: o canal `Quiz_Quiz` permaneceu inalterado no banco com `auto_publish_authorized = 0` (fail-closed).
+- **Validação de Testes:**
+  - 5/5 testes direcionados PASS em `pytest test/services/test_mission_h_independent_scheduling.py -v`:
+    - `test_production_off_scheduling_on_schedules_ready_stock_without_new_generation`: PASS (Estoque existente é agendado sem disparar novas gerações).
+    - `test_production_off_scheduling_off_skips_profile`: PASS (Perfil com ambas as flags OFF é ignorado com segurança).
+    - `test_quiz_paper_unauthorized_channel_blocked_from_scheduling`: PASS (Canal com `auto_publish_authorized = 0` é bloqueado no agendamento fail-closed).
+    - `test_webui_channel_factory_reflects_and_persists_authorization`: PASS (WebUI reflete status real e persiste alterações via setter oficial).
+    - `test_scheduler_cycle_respects_channel_authorization`: PASS (Ciclo de publicação respeita autorização por canal e flags globais).

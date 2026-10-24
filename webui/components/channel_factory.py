@@ -602,11 +602,15 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 if yt and yt.get("is_enabled"):
                     acc_display = yt.get("external_account_id") or yt.get("display_name") or "Conectado"
                     proj_disp = f" [{yt.get('project_id')}]" if yt.get("project_id") else ""
-                    dest_parts.append(f"YouTube ({acc_display}{proj_disp})")
+                    yt_auth = bool(yt.get("auto_publish_authorized", 0))
+                    auth_badge = "🟢 Auto-Pub" if yt_auth else "🔒 Sem Auto-Pub"
+                    dest_parts.append(f"YouTube ({acc_display}{proj_disp} — {auth_badge})")
                 if tiktok and tiktok.get("is_enabled"):
                     acc_display = tiktok.get("external_account_id") or tiktok.get("display_name") or "Conectado"
                     proj_disp = f" [{tiktok.get('project_id')}]" if tiktok.get("project_id") else ""
-                    dest_parts.append(f"TikTok ({acc_display}{proj_disp})")
+                    tt_auth = bool(tiktok.get("auto_publish_authorized", 0))
+                    auth_badge = "🟢 Auto-Pub" if tt_auth else "🔒 Sem Auto-Pub"
+                    dest_parts.append(f"TikTok ({acc_display}{proj_disp} — {auth_badge})")
                 dest_label = " + ".join(dest_parts) if dest_parts else "Somente Estoque (Sem publicação)"
                 st.markdown(f"📡 **Destino:** `{dest_label}`")
 
@@ -750,13 +754,29 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                 with c_dest_yt_m:
                     st.markdown("###### ▶️ YouTube")
                     yt_is_en = bool(m_yt.get("is_enabled")) if m_yt else False
+                    yt_is_auth = bool(m_yt.get("auto_publish_authorized", 0)) if m_yt else False
                     m_yt_enabled = st.checkbox("Destino YouTube Habilitado", value=yt_is_en, key=f"m_yt_en_{p_id}", disabled=not is_primary)
+                    m_yt_auto_pub = st.checkbox(
+                        "Autorizar Publicação Automática (Fail-Closed)",
+                        value=yt_is_auth,
+                        key=f"m_yt_ap_{p_id}",
+                        disabled=not is_primary,
+                        help="Quando desmarcado, os vídeos gerados ficam em estoque sem agendamento/publicação automática no YouTube.",
+                    )
                     m_yt_ext = st.text_input("YouTube Channel ID (UC...)", value=(m_yt.get("external_account_id") or "") if m_yt else "", key=f"m_yt_ext_{p_id}", disabled=not is_primary)
 
                 with c_dest_tt_m:
                     st.markdown("###### 🎵 TikTok")
                     tt_is_en = bool(m_tiktok.get("is_enabled")) if m_tiktok else False
+                    tt_is_auth = bool(m_tiktok.get("auto_publish_authorized", 0)) if m_tiktok else False
                     m_tiktok_enabled = st.checkbox("Destino TikTok Habilitado", value=tt_is_en, key=f"m_tt_en_{p_id}", disabled=not is_primary)
+                    m_tiktok_auto_pub = st.checkbox(
+                        "Autorizar Publicação Automática (Fail-Closed)",
+                        value=tt_is_auth,
+                        key=f"m_tt_ap_{p_id}",
+                        disabled=not is_primary,
+                        help="Quando desmarcado, os vídeos não serão agendados nem publicados automaticamente no TikTok.",
+                    )
                     m_tiktok_ext = st.text_input("TikTok Account / User ID", value=(m_tiktok.get("external_account_id") or "") if m_tiktok else "", key=f"m_tt_ext_{p_id}", disabled=not is_primary)
 
                 if st.button("💾 Salvar Alterações", key=f"save_prof_{p_id}", disabled=not is_primary):
@@ -799,8 +819,10 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                                 external_account_id=str(m_yt_ext).strip() if m_yt_ext else None,
                                 db_path=db_path,
                             )
+                            if bool(m_yt_auto_pub) != yt_is_auth:
+                                scheduler.set_channel_auto_publish_authorized(m_yt["id"], bool(m_yt_auto_pub), db_path=db_path)
                         elif m_yt_ext:
-                            profile_manager.create_channel(
+                            new_yt_ch = profile_manager.create_channel(
                                 profile_id=p_id,
                                 platform="youtube",
                                 display_name=f"{clean_m_name} (YouTube)",
@@ -809,6 +831,8 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                                 is_enabled=bool(m_yt_enabled),
                                 db_path=db_path,
                             )
+                            if m_yt_auto_pub:
+                                scheduler.set_channel_auto_publish_authorized(new_yt_ch["id"], True, db_path=db_path)
 
                         # Atualiza ou cria destino TikTok
                         if m_tiktok:
@@ -818,8 +842,10 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                                 external_account_id=str(m_tiktok_ext).strip() if m_tiktok_ext else None,
                                 db_path=db_path,
                             )
+                            if bool(m_tiktok_auto_pub) != tt_is_auth:
+                                scheduler.set_channel_auto_publish_authorized(m_tiktok["id"], bool(m_tiktok_auto_pub), db_path=db_path)
                         elif m_tiktok_ext:
-                            profile_manager.create_channel(
+                            new_tt_ch = profile_manager.create_channel(
                                 profile_id=p_id,
                                 platform="tiktok",
                                 display_name=f"{clean_m_name} (TikTok)",
@@ -828,6 +854,8 @@ def render_channel_factory(is_primary: Optional[bool] = None, db_path: Optional[
                                 is_enabled=bool(m_tiktok_enabled),
                                 db_path=db_path,
                             )
+                            if m_tiktok_auto_pub:
+                                scheduler.set_channel_auto_publish_authorized(new_tt_ch["id"], True, db_path=db_path)
 
                         st.toast(f"Canal '{clean_m_name}' atualizado com sucesso!")
                         _safe_rerun_app()

@@ -483,7 +483,7 @@ def _render_macro_meta_bar(data: Dict[str, Any], now_time: Optional[str] = None)
             <span>🤖 <b>Autônomo:</b> {auto_status} ({gen_str})</span>
             <span>🌱 <b>Modo:</b> {data.get('growth_mode', 'Normal')}</span>
             <span>🧪 <b>Dry Run:</b> {data.get('dry_run', 'ON')}</span>
-            <span>🚀 <b>Auto Publish:</b> {data.get('auto_publish', 'OFF')}</span>
+            <span>🚀 <b>Auto Publish Global:</b> {data.get('auto_publish', 'OFF')}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1329,6 +1329,7 @@ def _render_profile_management_section(demo_enabled: bool, scenario_choice: str,
             ch_rows = []
             for ch in channels:
                 ch_status = "🟢 Habilitado" if ch.get("is_enabled") else "⚪ Desabilitado"
+                ch_auth = "🟢 Liberada" if ch.get("auto_publish_authorized") else "🔒 Bloqueada (0)"
                 plat_icon = "▶️ YouTube" if ch.get("platform") == "youtube" else ("🎵 TikTok" if ch.get("platform") == "tiktok" else ch.get("platform"))
                 ch_rows.append({
                     "ID": ch["id"],
@@ -1336,10 +1337,11 @@ def _render_profile_management_section(demo_enabled: bool, scenario_choice: str,
                     "Nome de Exibição": ch.get("display_name"),
                     "Identificador Externo": ch.get("external_profile_name") or "—",
                     "Status": ch_status,
+                    "Auto-Publicação": ch_auth,
                 })
             st.dataframe(ch_rows, use_container_width=True, hide_index=True)
 
-            c_ch_sel, c_ch_btn = st.columns([0.7, 0.3])
+            c_ch_sel, c_ch_btn, c_ch_auth_btn = st.columns([0.5, 0.25, 0.25])
             with c_ch_sel:
                 ch_opts = [ch["id"] for ch in channels]
                 ch_lbls = {ch["id"]: f"{ch.get('platform').upper()} — {ch.get('display_name')}" for ch in channels}
@@ -1357,6 +1359,18 @@ def _render_profile_management_section(demo_enabled: bool, scenario_choice: str,
                             st.rerun()
                         else:
                             st.toast("Canal alterado em demonstração.", icon="📺")
+            with c_ch_auth_btn:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                if cur_ch_obj:
+                    cur_ch_auth = bool(cur_ch_obj.get("auto_publish_authorized", 0))
+                    auth_btn_lbl = "🔒 Bloquear Auto-Pub" if cur_ch_auth else "🟢 Liberar Auto-Pub"
+                    if st.button(auth_btn_lbl, key=f"btn_toggle_auth_{sel_ch_act}", disabled=not is_primary, use_container_width=True):
+                        if not demo_enabled:
+                            scheduler.set_channel_auto_publish_authorized(sel_ch_act, not cur_ch_auth)
+                            st.toast(f"Auto-publicação alterada para {'liberada' if not cur_ch_auth else 'bloqueada'}.", icon="🚀")
+                            st.rerun()
+                        else:
+                            st.toast("Auto-publicação alterada em demonstração.", icon="🚀")
         else:
             st.info("Nenhum canal de publicação vinculado a este perfil. Adicione abaixo.")
 
@@ -1680,9 +1694,24 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                         st.toast("Ciclo executado no modo demo.", icon="⚡")
             with b3:
                 dest_chan = active_channel_id or "—"
+                yt_info = ""
                 tt_info = ""
                 try:
                     channels = profile_manager.list_channels(profile_id=active_prof_id)
+                    yt_chan = next((c for c in channels if c.get("platform") == "youtube" and c.get("is_enabled")), None)
+                    yt_enabled_global = scheduler.get_setting("youtube_enabled", "true").lower() == "true"
+                    if yt_chan:
+                        yt_cid = yt_chan.get("id")
+                        yt_auth = bool(yt_chan.get("auto_publish_authorized", 0))
+                        if yt_enabled_global and yt_auth:
+                            yt_info = f"**YouTube** (`{yt_cid}`)"
+                        elif yt_enabled_global:
+                            yt_info = f"**YouTube** (`{yt_cid}` — sem auto-pub)"
+                        else:
+                            yt_info = f"**YouTube** (`{yt_cid}` — desativado)"
+                    else:
+                        yt_info = f"**YouTube** (`{dest_chan}` — não configurado)"
+
                     tt_chan = next((c for c in channels if c.get("platform") == "tiktok" and c.get("is_enabled")), None)
                     tt_enabled_global = scheduler.get_setting("tiktok_enabled", "true").lower() == "true"
                     if tt_chan:
@@ -1695,9 +1724,9 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
                         else:
                             tt_info = f" | **TikTok** (`{tt_cid}` — desativado)"
                 except Exception:
-                    pass
+                    yt_info = f"**YouTube** (`{dest_chan}`)"
 
-                st.caption(f"Destinos: **YouTube** (`{dest_chan}`){tt_info}. Publicação realizada pelo Scheduler.")
+                st.caption(f"Destinos: {yt_info}{tt_info}. Publicação realizada pelo Scheduler.")
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
 

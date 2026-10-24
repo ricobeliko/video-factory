@@ -251,6 +251,225 @@ DILEMMA_8_CTA_VARIATIONS = [
 
 
 # =============================================================================
+# Clusters Temáticos e Catálogo Canônico Homologado para Quiz de Escolhas / Dilemas
+# =============================================================================
+DILEMMA_THEMATIC_CLUSTERS: List[Tuple[str, str]] = [
+    ("SUPERPODERES E HABILIDADES", "Superpoderes fantásticos, dons mentais inacreditáveis e sentidos aguçados."),
+    ("RIQUEZA E LUXO", "Fortunas repentinas, heranças improváveis, luxo extremo e sacrifícios materiais."),
+    ("VIAGEM NO TEMPO E UNIVERSO", "Realidades paralelas, exploração do cosmos, viagens ao passado e ao futuro distante."),
+    ("SOBREVIVÊNCIA E NATUREZA", "Cenários extremos na selva, ilhas desertas, vida selvagem e desafios de sobrevivência."),
+    ("COTIDIANO E CONVIVÊNCIA", "Situações embaraçosas hilárias, manias diárias, regras sociais inusitadas e conforto moderno."),
+    ("MISTÉRIO E DESTINO", "Sexto sentido, segredos do destino, enigmas inexplicáveis e decisões psicológicas."),
+]
+
+CANONICAL_DILEMMA_CATALOG: List[Dict[str, Any]] = [
+    # 1. Superpoderes & Habilidades
+    {
+        "category": "SUPERPODERES",
+        "header": "ESCOLHA RÁPIDO:",
+        "narration": "Controlar o fogo com as mãos... Ou respirar debaixo d'água sem limites?",
+        "top": {"title": "CONTROLAR O FOGO", "tag": "OPÇÃO A", "image_query": "fire elemental glowing flames power hands", "theme": "red"},
+        "bottom": {"title": "RESPIRAR DEBAIXO D'ÁGUA", "tag": "OPÇÃO B", "image_query": "underwater ocean swimmer coral reef sunlight", "theme": "blue"},
+        "percentage_top": 52, "percentage_bottom": 48, "countdown_sec": 3.0,
+    },
+    {
+        "category": "SUPERPODERES",
+        "header": "DECISÃO DIFÍCIL:",
+        "narration": "Teletransportar para onde quiser... Ou parar o tempo por dez segundos?",
+        "top": {"title": "TELETRANSPORTE INSTANTÂNEO", "tag": "OPÇÃO A", "image_query": "teleportation portal glowing light fantasy", "theme": "red"},
+        "bottom": {"title": "PARAR O TEMPO POR 10S", "tag": "OPÇÃO B", "image_query": "frozen time clocks pocket watch surreal", "theme": "blue"},
+        "percentage_top": 61, "percentage_bottom": 39, "countdown_sec": 3.0,
+    },
+    {
+        "category": "SUPERPODERES",
+        "header": "DILEMA IMPOSSÍVEL:",
+        "narration": "Força sobre-humana de dez homens... Ou velocidade para desviar de qualquer golpe?",
+        "top": {"title": "FORÇA DE 10 HOMENS", "tag": "OPÇÃO A", "image_query": "superhuman strength lifting heavy rock power", "theme": "red"},
+        "bottom": {"title": "VELOCIDADE INESQUIVÁVEL", "tag": "OPÇÃO B", "image_query": "fast runner motion blur trail speed lightning", "theme": "blue"},
+        "percentage_top": 45, "percentage_bottom": 55, "countdown_sec": 3.0,
+    },
+    {
+        "category": "SUPERPODERES",
+        "header": "QUAL O SEU DESTINO:",
+        "narration": "Regenerar qualquer machucado em segundos... Ou nunca mais precisar dormir na vida?",
+        "top": {"title": "REGENERAÇÃO INSTANTÂNEA", "tag": "OPÇÃO A", "image_query": "healing glowing light biological regeneration", "theme": "red"},
+        "bottom": {"title": "NUNCA MAIS PRECISAR DORMIR", "tag": "OPÇÃO B", "image_query": "night sky starry energetic person waking", "theme": "blue"},
+        "percentage_top": 57, "percentage_bottom": 43, "countdown_sec": 3.0,
+    },
+
+    # 2. Riqueza & Luxo
+    {
+        "category": "RIQUEZA",
+        "header": "DECISÃO DIFÍCIL:",
+        "narration": "Mansão privativa em ilha deserta... Ou cobertura luxuosa no centro de Tóquio?",
+        "top": {"title": "MANSÃO EM ILHA PRIVADA", "tag": "OPÇÃO A", "image_query": "luxury private island tropical villa turquoise ocean", "theme": "red"},
+        "bottom": {"title": "COBERTURA EM TÓQUIO", "tag": "OPÇÃO B", "image_query": "tokyo penthouse neon skyline luxury modern view", "theme": "blue"},
+        "percentage_top": 54, "percentage_bottom": 46, "countdown_sec": 3.0,
+    },
+    {
+        "category": "RIQUEZA",
+        "header": "ESCOLHA RÁPIDO:",
+        "narration": "Viajar de primeira classe para sempre... Ou comer de graça em qualquer restaurante do mundo?",
+        "top": {"title": "PRIMEIRA CLASSE PARA SEMPRE", "tag": "OPÇÃO A", "image_query": "first class airplane luxury seat cabin clouds", "theme": "red"},
+        "bottom": {"title": "COMER DE GRAÇA NO MUNDO", "tag": "OPÇÃO B", "image_query": "gourmet restaurant dinner chef table food", "theme": "blue"},
+        "percentage_top": 49, "percentage_bottom": 51, "countdown_sec": 3.0,
+    },
+    {
+        "category": "RIQUEZA",
+        "header": "DILEMA IMPOSSÍVEL:",
+        "narration": "Comprar qualquer carro que desejar... Ou ter um iate com tripulação completa?",
+        "top": {"title": "QUALQUER CARRO DO PLANETA", "tag": "OPÇÃO A", "image_query": "supercar luxury garage speed automotive red", "theme": "red"},
+        "bottom": {"title": "IATE COM TRIPULAÇÃO", "tag": "OPÇÃO B", "image_query": "mega yacht luxury boat mediterranean blue sea", "theme": "blue"},
+        "percentage_top": 43, "percentage_bottom": 57, "countdown_sec": 3.0,
+    },
+    {
+        "category": "RIQUEZA",
+        "header": "QUAL O SEU DESTINO:",
+        "narration": "Dez milhões em ouro enterrados agora... Ou cem mil reais depositados todo mês pro resto da vida?",
+        "top": {"title": "10 MILHÕES EM OURO AGORA", "tag": "OPÇÃO A", "image_query": "treasure chest gold bullion bars sparkling", "theme": "red"},
+        "bottom": {"title": "100 MIL POR MÊS PRA SEMPRE", "tag": "OPÇÃO B", "image_query": "bank deposit financial freedom relaxed sunset", "theme": "blue"},
+        "percentage_top": 38, "percentage_bottom": 62, "countdown_sec": 3.0,
+    },
+
+    # 3. Viagem no Tempo & Universo
+    {
+        "category": "UNIVERSO",
+        "header": "DECISÃO DIFÍCIL:",
+        "narration": "Conhecer civilizações alienígenas... Ou descobrir o segredo do início do Universo?",
+        "top": {"title": "CONTATO COM ALIENÍGENAS", "tag": "OPÇÃO A", "image_query": "futuristic alien spaceship contact nebula stars", "theme": "red"},
+        "bottom": {"title": "SEGREDO DO INÍCIO DO UNIVERSO", "tag": "OPÇÃO B", "image_query": "big bang cosmic explosion galaxies deep space", "theme": "blue"},
+        "percentage_top": 53, "percentage_bottom": 47, "countdown_sec": 3.0,
+    },
+    {
+        "category": "UNIVERSO",
+        "header": "ESCOLHA RÁPIDO:",
+        "narration": "Viver cem anos no Egito Antigo... Ou viver quinhentos anos no futuro hipertecnológico?",
+        "top": {"title": "100 ANOS NO EGITO ANTIGO", "tag": "OPÇÃO A", "image_query": "ancient egypt pyramids pharaoh gold sunset", "theme": "red"},
+        "bottom": {"title": "500 ANOS NO FUTURO", "tag": "OPÇÃO B", "image_query": "cyberpunk futuristic megalopolis flying cars night", "theme": "blue"},
+        "percentage_top": 34, "percentage_bottom": 66, "countdown_sec": 3.0,
+    },
+    {
+        "category": "UNIVERSO",
+        "header": "DILEMA IMPOSSÍVEL:",
+        "narration": "Explorar o fundo mais escuro do oceano... Ou pisar na superfície de Marte pela primeira vez?",
+        "top": {"title": "FUNDO ESCURO DO OCEANO", "tag": "OPÇÃO A", "image_query": "deep sea trench submarine bioluminescent ocean", "theme": "red"},
+        "bottom": {"title": "PISAR NO SOLO DE MARTE", "tag": "OPÇÃO B", "image_query": "astronaut red planet mars surface landscape horizon", "theme": "blue"},
+        "percentage_top": 41, "percentage_bottom": 59, "countdown_sec": 3.0,
+    },
+    {
+        "category": "UNIVERSO",
+        "header": "QUAL O SEU DESTINO:",
+        "narration": "Saber exatamente como o mundo vai acabar... Ou saber o dia em que o ser humano vai morar no espaço?",
+        "top": {"title": "COMO O MUNDO VAI ACABAR", "tag": "OPÇÃO A", "image_query": "apocalypse meteor horizon dramatic sky cinema", "theme": "red"},
+        "bottom": {"title": "QUANDO MORAREMOS NO ESPAÇO", "tag": "OPÇÃO B", "image_query": "space colony orbital station earth view sunrise", "theme": "blue"},
+        "percentage_top": 46, "percentage_bottom": 54, "countdown_sec": 3.0,
+    },
+
+    # 4. Sobrevivência & Natureza
+    {
+        "category": "SOBREVIVÊNCIA",
+        "header": "ESCOLHA RÁPIDO:",
+        "narration": "Sobreviver trinta dias na floresta amazônica... Ou passar duas semanas no gelo da Antártida?",
+        "top": {"title": "30 DIAS NA AMAZÔNIA", "tag": "OPÇÃO A", "image_query": "dense amazon rainforest jungle wild green river", "theme": "red"},
+        "bottom": {"title": "2 SEMANAS NA ANTÁRTIDA", "tag": "OPÇÃO B", "image_query": "antarctica glacier snow mountains frozen landscape", "theme": "blue"},
+        "percentage_top": 58, "percentage_bottom": 42, "countdown_sec": 3.0,
+    },
+    {
+        "category": "SOBREVIVÊNCIA",
+        "header": "DECISÃO DIFÍCIL:",
+        "narration": "Enfrentar um urso-polar desarmado... Ou mergulhar em lago com três crocodilos famintos?",
+        "top": {"title": "ENFRENTAR UM URSO-POLAR", "tag": "OPÇÃO A", "image_query": "polar bear aggressive snow blizzard arctic", "theme": "red"},
+        "bottom": {"title": "LAGO COM 3 CROCODILOS", "tag": "OPÇÃO B", "image_query": "alligator crocodile swamp murky water teeth", "theme": "blue"},
+        "percentage_top": 36, "percentage_bottom": 64, "countdown_sec": 3.0,
+    },
+    {
+        "category": "SOBREVIVÊNCIA",
+        "header": "DILEMA IMPOSSÍVEL:",
+        "narration": "Nunca mais poder usar sapatos na vida... Ou nunca mais poder tomar banho quente no frio?",
+        "top": {"title": "NUNCA MAIS USAR SAPATOS", "tag": "OPÇÃO A", "image_query": "barefoot walking grass sand nature feet", "theme": "red"},
+        "bottom": {"title": "NUNCA MAIS BANHO QUENTE", "tag": "OPÇÃO B", "image_query": "cold shower shivering water winter ice", "theme": "blue"},
+        "percentage_top": 51, "percentage_bottom": 49, "countdown_sec": 3.0,
+    },
+    {
+        "category": "SOBREVIVÊNCIA",
+        "header": "QUAL O SEU DESTINO:",
+        "narration": "Ficar preso em elevador com um leão calmo... Ou preso em caverna escura com cem morcegos?",
+        "top": {"title": "ELEVADOR COM UM LEÃO", "tag": "OPÇÃO A", "image_query": "lion sitting calm majestic zoo wild close", "theme": "red"},
+        "bottom": {"title": "CAVERNA COM 100 MORCEGOS", "tag": "OPÇÃO B", "image_query": "dark cave bats flying shadows spooky", "theme": "blue"},
+        "percentage_top": 44, "percentage_bottom": 56, "countdown_sec": 3.0,
+    },
+
+    # 5. Cotidiano & Convivência
+    {
+        "category": "COTIDIANO",
+        "header": "ESCOLHA RÁPIDO:",
+        "narration": "Falar rimando todas as frases do dia... Ou ter que dançar toda vez que ouvir música?",
+        "top": {"title": "FALAR RIMANDO SEMPRE", "tag": "OPÇÃO A", "image_query": "person talking animated poetry theatre comedy", "theme": "red"},
+        "bottom": {"title": "DANÇAR COM QUALQUER MÚSICA", "tag": "OPÇÃO B", "image_query": "person dancing funny street party music headphones", "theme": "blue"},
+        "percentage_top": 47, "percentage_bottom": 53, "countdown_sec": 3.0,
+    },
+    {
+        "category": "COTIDIANO",
+        "header": "DECISÃO DIFÍCIL:",
+        "narration": "Rir alto em momentos tristes... Ou chorar de emoção sempre que alguém espirrar?",
+        "top": {"title": "RIR ALTO EM HORAS TRISTES", "tag": "OPÇÃO A", "image_query": "person laughing embarrassed covering mouth", "theme": "red"},
+        "bottom": {"title": "CHORAR A CADA ESPIRRO", "tag": "OPÇÃO B", "image_query": "dramatic crying tears funny emotional face", "theme": "blue"},
+        "percentage_top": 42, "percentage_bottom": 58, "countdown_sec": 3.0,
+    },
+    {
+        "category": "COTIDIANO",
+        "header": "DILEMA IMPOSSÍVEL:",
+        "narration": "Usar roupa de inverno no calor de quarenta graus... Ou bermuda e regata na neve congelante?",
+        "top": {"title": "CASINHO DE LÃ NO CALORÃO", "tag": "OPÇÃO A", "image_query": "sweating hot sun desert winter coat humor", "theme": "red"},
+        "bottom": {"title": "BERMUDA E REGATA NA NEVE", "tag": "OPÇÃO B", "image_query": "shivering cold snow blizzard swimsuit freezing", "theme": "blue"},
+        "percentage_top": 55, "percentage_bottom": 45, "countdown_sec": 3.0,
+    },
+    {
+        "category": "COTIDIANO",
+        "header": "QUAL O SEU DESTINO:",
+        "narration": "Ter a voz de um pato em discussões sérias... Ou esquecer o nome das pessoas assim que elas se apresentam?",
+        "top": {"title": "VOZ DE PATO EM REUNIÃO", "tag": "OPÇÃO A", "image_query": "funny duck talking funny microphone conference", "theme": "red"},
+        "bottom": {"title": "ESQUECER NOMES NA HORA", "tag": "OPÇÃO B", "image_query": "confused awkward handshake forgetting meeting", "theme": "blue"},
+        "percentage_top": 49, "percentage_bottom": 51, "countdown_sec": 3.0,
+    },
+
+    # 6. Mistério & Destino
+    {
+        "category": "MISTÉRIO",
+        "header": "DECISÃO DIFÍCIL:",
+        "narration": "Ouvir a conversa de qualquer pessoa a dez metros... Ou fazer qualquer pessoa falar a verdade absoluta?",
+        "top": {"title": "OUVIR CONVERSAS A 10 METROS", "tag": "OPÇÃO A", "image_query": "whispering secret ear listening crowded city", "theme": "red"},
+        "bottom": {"title": "FAZER FALAR A VERDADE", "tag": "OPÇÃO B", "image_query": "truth confession honest eyes glowing mystery", "theme": "blue"},
+        "percentage_top": 40, "percentage_bottom": 60, "countdown_sec": 3.0,
+    },
+    {
+        "category": "MISTÉRIO",
+        "header": "ESCOLHA RÁPIDO:",
+        "narration": "Lembrar de cada segundo da sua infância... Ou esquecer instantaneamente todos os momentos ruins do passado?",
+        "top": {"title": "LEMBRAR DE CADA SEGUNDO", "tag": "OPÇÃO A", "image_query": "childhood nostalgia happy memories vintage photo", "theme": "red"},
+        "bottom": {"title": "ESQUECER MOMENTOS RUINS", "tag": "OPÇÃO B", "image_query": "peaceful calm sunset mind clean meditation", "theme": "blue"},
+        "percentage_top": 43, "percentage_bottom": 57, "countdown_sec": 3.0,
+    },
+    {
+        "category": "MISTÉRIO",
+        "header": "DILEMA IMPOSSÍVEL:",
+        "narration": "Ter um clone idêntico para trabalhar por você... Ou ter um assistente invisível que faz qualquer tarefa manual?",
+        "top": {"title": "CLONE IDÊNTICO NO TRABALHO", "tag": "OPÇÃO A", "image_query": "twin clone businessmen office modern technology", "theme": "red"},
+        "bottom": {"title": "ASSISTENTE INVISÍVEL", "tag": "OPÇÃO B", "image_query": "mystical invisible helper floating objects fantasy", "theme": "blue"},
+        "percentage_top": 51, "percentage_bottom": 49, "countdown_sec": 3.0,
+    },
+    {
+        "category": "MISTÉRIO",
+        "header": "QUAL O SEU DESTINO:",
+        "narration": "Saber todos os segredos dos governos do mundo... Ou saber a resposta para todos os mistérios da ciência?",
+        "top": {"title": "SEGREDOS DOS GOVERNOS", "tag": "OPÇÃO A", "image_query": "classified document top secret files archives dark", "theme": "red"},
+        "bottom": {"title": "MISTÉRIOS DA CIÊNCIA", "tag": "OPÇÃO B", "image_query": "quantum physics glowing laboratory cosmos science", "theme": "blue"},
+        "percentage_top": 35, "percentage_bottom": 65, "countdown_sec": 3.0,
+    },
+]
+
+
+# =============================================================================
 # Catálogo Canônico Homologado de Perguntas para Quiz de Papel (Fallback Rotativo)
 # =============================================================================
 CANONICAL_PAPER_QUIZ_CATALOG: List[Dict[str, Any]] = [
@@ -845,13 +1064,24 @@ class QuizContentGenerator:
 
         # Garante quantidade de perguntas
         if len(validated_questions) < num_questions:
-            # Completa com fallback se faltaram perguntas
+            # Completa com fallback se faltaram perguntas, garantindo validação anti-duplicação
             fb = self._generate_fallback_content(niche, format_type, num_questions, quiz_title, closing_type)
             for q in fb["questions"]:
                 if len(validated_questions) >= num_questions:
                     break
-                if q["id"] not in [x["id"] for x in validated_questions]:
+                q_text = q.get("narration", "")
+                opts_text = f"{q.get('top', {}).get('title', '')} {q.get('bottom', {}).get('title', '')}"
+                if not self.is_question_duplicate(q_text, opts_text) and q["id"] not in [x["id"] for x in validated_questions]:
+                    self.record_question(q_text, niche, format_type, opts_text)
                     validated_questions.append(q)
+
+            # Se ainda assim faltarem perguntas após o filtro estrito, permite as do fallback não colidentes por ID
+            if len(validated_questions) < num_questions:
+                for q in fb["questions"]:
+                    if len(validated_questions) >= num_questions:
+                        break
+                    if q["id"] not in [x["id"] for x in validated_questions]:
+                        validated_questions.append(q)
 
         parsed_data["questions"] = validated_questions[:num_questions]
 
@@ -911,14 +1141,27 @@ class QuizContentGenerator:
         closing_type: str,
         topic_brief: Optional[str] = None,
     ) -> str:
-        recent_questions = [x.get("question_text", "") for x in self.question_history[-15:] if x.get("question_text")]
+        recent_subj = [x.get("question_text", "") for x in self.question_history if x.get("question_text") and x.get("format_type") == "subjective"]
+        recent_other = [x.get("question_text", "") for x in self.question_history[-30:] if x.get("question_text")]
+        recent_questions = recent_subj[-20:] if recent_subj else recent_other[-15:]
         avoid_clause = ""
         if recent_questions:
-            avoid_clause = f"\nEvite expressamente repetir ou criar variações das seguintes perguntas já usadas recentemente:\n" + "\n".join([f"- {q}" for q in recent_questions[:8]])
+            avoid_clause = f"\nEvite expressamente repetir ou criar variações das seguintes perguntas já usadas recentemente:\n" + "\n".join([f"- {q}" for q in recent_questions[-16:]])
 
         brief_clause = ""
         if topic_brief and str(topic_brief).strip():
             brief_clause = f"\nDIRETRIZ EDITORIAL DO CANAL (SIGA RIGOROSAMENTE):\n{str(topic_brief).strip()}\n"
+
+        cluster_clause = ""
+        if format_type == "subjective":
+            seed_val = len(self.question_history) + abs(hash(str(quiz_title or niche)))
+            c_name, c_desc = DILEMMA_THEMATIC_CLUSTERS[seed_val % len(DILEMMA_THEMATIC_CLUSTERS)]
+            cluster_clause = (
+                f"\nDIRETRIZ TEMÁTICA OBRIGATÓRIA (DIVERSIFICAÇÃO):\n"
+                f"Foque os dilemas 1 a 6 estritamente no tema: '{c_name}' ({c_desc}).\n"
+                f"Crie dilemas inovadores, surpreendentes e inéditos dentro deste universo temático!\n"
+                f"NÃO repita clichês genéricos como apenas 'um milhão vs juventude' ou 'voar vs invisível'.\n"
+            )
 
         if format_type == "factual":
             return f"""Você é um roteirista sênior e checador de fatos especialista em quizzes virais educativos (YouTube Shorts / TikTok).
@@ -985,7 +1228,7 @@ REGRAS DE RETENÇÃO ABSOLUTA (Q0-R):
 8. DURAÇÃO E CONCISÃO: Narrações diretas com 10 a 14 palavras por dilema para garantir duração de 60 a 70 segundos.
 9. DILEMA 7 (PENÚLTIMO): Apelo a Jesus com menção explícita a Ele. Opção A deve ser perda, sacrifício ou inconveniência (ex: ficar 30 dias sem internet, perder celular). Opção B deve ser curtir e comentar por Jesus. Varie a frase naturalmente.
 10. DILEMA 8 (ÚLTIMO): CTA final incentivando seguir o perfil/canal e apoiar o canal (Opção A: passar direto e perder os próximos vídeos; Opção B: seguir o perfil agora e apoiar o canal).
-{brief_clause}{avoid_clause}
+{brief_clause}{cluster_clause}{avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
 {{
@@ -1332,193 +1575,127 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 ],
             }
         else:
+            # Seleção rotativa anti-duplicação a partir do CANONICAL_DILEMMA_CATALOG
+            target_active = min(6, max(1, num_questions - 2 if num_questions >= 8 else num_questions))
+
+            # 1. Filtra candidatos do catálogo que não sejam duplicatas do histórico
+            candidate_dilemmas = []
+            for item in CANONICAL_DILEMMA_CATALOG:
+                q_text = item["narration"]
+                opts_text = f"{item['top']['title']} {item['bottom']['title']}"
+                if not self.is_question_duplicate(q_text, opts_text):
+                    candidate_dilemmas.append(item)
+
+            # 2. Se o catálogo filtrado tiver menos que o necessário, completa por rotação determinística
+            if len(candidate_dilemmas) < target_active:
+                seed = len(self.question_history)
+                for i in range(len(CANONICAL_DILEMMA_CATALOG)):
+                    idx = (seed + i) % len(CANONICAL_DILEMMA_CATALOG)
+                    cat_item = CANONICAL_DILEMMA_CATALOG[idx]
+                    if cat_item not in candidate_dilemmas:
+                        candidate_dilemmas.append(cat_item)
+                    if len(candidate_dilemmas) >= target_active:
+                        break
+
+            chosen_active = candidate_dilemmas[:target_active]
+
+            # 3. Formata as perguntas ativas com IDs q1..qN
+            questions = []
+            for idx, item in enumerate(chosen_active):
+                q_id = f"q{idx + 1}"
+                header = item.get("header") or ("O QUE VOCÊ PREFERE?" if idx == 0 else "DECISÃO DIFÍCIL:")
+                narr = item["narration"]
+                if idx == 0:
+                    header = "O QUE VOCÊ PREFERE?"
+                    if not re.search(r"^o\s+que\s+voc[êe]\s+prefere", narr, re.IGNORECASE):
+                        narr = f"O que você prefere? {narr}"
+                else:
+                    narr = re.sub(r"^(?:o\s+que\s+voc[êe]\s+prefere\??\s*:?\s*)", "", narr, flags=re.IGNORECASE)
+
+                questions.append({
+                    "id": q_id,
+                    "header": header,
+                    "narration": narr.strip(),
+                    "top": {
+                        "title": item["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": item["top"]["image_query"],
+                        "image_name": f"{q_id}_top_v2.jpg",
+                        "theme": item["top"].get("theme", "red"),
+                    },
+                    "bottom": {
+                        "title": item["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": item["bottom"]["image_query"],
+                        "image_name": f"{q_id}_bot_v2.jpg",
+                        "theme": item["bottom"].get("theme", "blue"),
+                    },
+                    "percentage_top": item.get("percentage_top", 50),
+                    "percentage_bottom": item.get("percentage_bottom", 50),
+                    "countdown_sec": item.get("countdown_sec", 3.0),
+                })
+
+            # 4. Adiciona dilemas de fechamento editorial (q7 e q8) se num_questions >= 8
+            if num_questions >= 8:
+                seed_val = len(self.question_history) + abs(hash(str(quiz_title or niche)))
+                var7 = DILEMMA_7_JESUS_VARIATIONS[seed_val % len(DILEMMA_7_JESUS_VARIATIONS)]
+                questions.append({
+                    "id": "q7",
+                    "is_closing_choice": True,
+                    "role": "editorial_closing",
+                    "header": "ESCOLHA RÁPIDO:",
+                    "narration": var7["narration"],
+                    "top": {
+                        "title": var7["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var7["top"]["image_query"],
+                        "image_name": "q7_top_v2.jpg",
+                        "theme": var7["top"].get("theme", "red"),
+                    },
+                    "bottom": {
+                        "title": var7["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var7["bottom"]["image_query"],
+                        "image_name": "q7_bot_v2.jpg",
+                        "theme": var7["bottom"].get("theme", "gold_red"),
+                    },
+                    "percentage_top": var7.get("percentage_top", 14),
+                    "percentage_bottom": var7.get("percentage_bottom", 86),
+                    "countdown_sec": 2.4,
+                })
+
+                var8 = DILEMMA_8_CTA_VARIATIONS[(seed_val + 1) % len(DILEMMA_8_CTA_VARIATIONS)]
+                questions.append({
+                    "id": "q8",
+                    "is_closing_choice": True,
+                    "role": "editorial_closing",
+                    "header": "QUAL O SEU DESTINO:",
+                    "narration": var8["narration"],
+                    "top": {
+                        "title": var8["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var8["top"]["image_query"],
+                        "image_name": "q8_top_v2.jpg",
+                        "theme": var8["top"].get("theme", "blue_neutral"),
+                    },
+                    "bottom": {
+                        "title": var8["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var8["bottom"]["image_query"],
+                        "image_name": "q8_bot_v2.jpg",
+                        "theme": var8["bottom"].get("theme", "gold_red"),
+                    },
+                    "percentage_top": var8.get("percentage_top", 9),
+                    "percentage_bottom": var8.get("percentage_bottom", 91),
+                    "countdown_sec": 2.4,
+                })
+
             return {
                 "niche": niche or "curiosidades_dilemas",
                 "quiz_title": quiz_title or "QUAL VOCÊ ESCOLHERIA?",
                 "format_type": "subjective",
                 "closing_type": closing_type,
-                "questions": [
-                    {
-                        "id": "q1",
-                        "header": "O QUE VOCÊ PREFERE?",
-                        "narration": "O que você prefere? Ganhar um milhão todo mês... Ou ter juventude eterna sem envelhecer?",
-                        "top": {
-                            "title": "R$ 1 MILHÃO TODO MÊS",
-                            "tag": "OPÇÃO A",
-                            "image_query": "gold bars money wealth luxury",
-                            "image_name": "q1_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "JUVENTUDE ETERNA",
-                            "tag": "OPÇÃO B",
-                            "image_query": "hourglass sand youth time",
-                            "image_name": "q1_bot_v2.jpg",
-                            "theme": "blue",
-                        },
-                        "percentage_top": 64,
-                        "percentage_bottom": 36,
-                        "countdown_sec": 3.0,
-                    },
-                    {
-                        "id": "q2",
-                        "header": "DECISÃO DIFÍCIL:",
-                        "narration": "Ter o poder de voar pelo mundo... Ou ficar invisível sempre que quiser?",
-                        "top": {
-                            "title": "PODER VOAR PELO PLANETA",
-                            "tag": "OPÇÃO A",
-                            "image_query": "airplane flight clouds sunset",
-                            "image_name": "q2_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "FICAR INVISÍVEL QUANDO QUISER",
-                            "tag": "OPÇÃO B",
-                            "image_query": "mysterious shadow silhouette night",
-                            "image_name": "q2_bot_v2.jpg",
-                            "theme": "blue",
-                        },
-                        "percentage_top": 58,
-                        "percentage_bottom": 42,
-                        "countdown_sec": 3.0,
-                    },
-                    {
-                        "id": "q3",
-                        "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Ler a mente de qualquer pessoa... Ou saber exatamente o futuro do mundo?",
-                        "top": {
-                            "title": "LER A MENTE DE QUALQUER PESSOA",
-                            "tag": "OPÇÃO A",
-                            "image_query": "human brain glowing thinking",
-                            "image_name": "q3_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "SABER O FUTURO DA HUMANIDADE",
-                            "tag": "OPÇÃO B",
-                            "image_query": "futuristic city cyberpunk night",
-                            "image_name": "q3_bot_v2.jpg",
-                            "theme": "blue",
-                        },
-                        "percentage_top": 72,
-                        "percentage_bottom": 28,
-                        "countdown_sec": 3.0,
-                    },
-                    {
-                        "id": "q4",
-                        "header": "DILEMA IMPOSSÍVEL:",
-                        "narration": "Nunca mais sentir cansaço físico... Ou nunca mais ter ansiedade ou tristeza?",
-                        "top": {
-                            "title": "NUNCA MAIS SENTIR CANSAÇO",
-                            "tag": "OPÇÃO A",
-                            "image_query": "athlete running sprint power",
-                            "image_name": "q4_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "NUNCA MAIS SENTIR ANSIEDADE",
-                            "tag": "OPÇÃO B",
-                            "image_query": "meditation calm lake sunrise",
-                            "image_name": "q4_bot_v2.jpg",
-                            "theme": "blue",
-                        },
-                        "percentage_top": 47,
-                        "percentage_bottom": 53,
-                        "countdown_sec": 3.0,
-                    },
-                    {
-                        "id": "q5",
-                        "header": "DECISÃO DIFÍCIL:",
-                        "narration": "Falar todas as línguas do planeta... Ou se comunicar com todos os animais?",
-                        "top": {
-                            "title": "FALAR TODAS AS LÍNGUAS",
-                            "tag": "OPÇÃO A",
-                            "image_query": "earth globe map international flags",
-                            "image_name": "q5_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "FALAR COM TODOS OS ANIMAIS",
-                            "tag": "OPÇÃO B",
-                            "image_query": "wild lion safari animal connection",
-                            "image_name": "q5_bot_v2.jpg",
-                            "theme": "blue",
-                        },
-                        "percentage_top": 65,
-                        "percentage_bottom": 35,
-                        "countdown_sec": 3.0,
-                    },
-                    {
-                        "id": "q6",
-                        "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Viajar no tempo e ver o passado... Ou viajar ao futuro e ver o espaço?",
-                        "top": {
-                            "title": "VIAJAR PARA O PASSADO",
-                            "tag": "OPÇÃO A",
-                            "image_query": "ancient pyramid egypt desert history",
-                            "image_name": "q6_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "VIAJAR PARA O FUTURO",
-                            "tag": "OPÇÃO B",
-                            "image_query": "futuristic city cyberpunk night spaceship",
-                            "image_name": "q6_bot_v2.jpg",
-                            "theme": "blue",
-                        },
-                        "percentage_top": 54,
-                        "percentage_bottom": 46,
-                        "countdown_sec": 3.0,
-                    },
-                    {
-                        "id": "q7",
-                        "is_closing_choice": True,
-                        "role": "editorial_closing",
-                        "header": "ESCOLHA RÁPIDO:",
-                        "narration": "Você prefere ficar trinta dias sem internet... Ou curtir o vídeo e comentar por Jesus?",
-                        "top": {
-                            "title": "30 DIAS SEM INTERNET",
-                            "tag": "OPÇÃO A",
-                            "image_query": "broken smartphone disconnected no wifi screen",
-                            "image_name": "q7_top_v2.jpg",
-                            "theme": "red",
-                        },
-                        "bottom": {
-                            "title": "CURTIR E COMENTAR POR JESUS",
-                            "tag": "OPÇÃO B",
-                            "image_query": "jesus christ cross heavenly light blessing sunrise",
-                            "image_name": "q7_bot_v2.jpg",
-                            "theme": "gold_red",
-                        },
-                        "percentage_top": 14,
-                        "percentage_bottom": 86,
-                        "countdown_sec": 2.4,
-                    },
-                    {
-                        "id": "q8",
-                        "is_closing_choice": True,
-                        "role": "editorial_closing",
-                        "header": "QUAL O SEU DESTINO:",
-                        "narration": "Passar direto e perder os próximos vídeos... Ou seguir o perfil e apoiar o canal agora?",
-                        "top": {
-                            "title": "PASSAR DIRETO E PERDER TUDO",
-                            "tag": "OPÇÃO A",
-                            "image_query": "person walking away empty dark road night",
-                            "image_name": "q8_top_v2.jpg",
-                            "theme": "blue_neutral",
-                        },
-                        "bottom": {
-                            "title": "SEGUIR O PERFIL AGORA",
-                            "tag": "OPÇÃO B",
-                            "image_query": "smartphone social media follow subscribe celebration confetti",
-                            "image_name": "q8_bot_v2.jpg",
-                            "theme": "gold_red",
-                        },
-                        "percentage_top": 9,
-                        "percentage_bottom": 91,
-                        "countdown_sec": 2.4,
-                    },
-                ][:num_questions],
+                "questions": questions[:num_questions],
             }
 
     # -------------------------------------------------------------------------

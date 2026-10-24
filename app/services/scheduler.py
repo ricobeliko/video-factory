@@ -308,6 +308,27 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             """
         )
 
+    # Migração / Reconciliação Missão L: Destrava exclusivamente o circuit breaker
+    # de rejeições consecutivas para o perfil Dose Diária de Escolhas (profile-4d18bf9a5d94),
+    # após a correção do gerador anti-duplicação, preservando integralmente quotas,
+    # histórico de segurança, tarefas e contadores de custo.
+    if cur_sett:
+        conn.execute(
+            """
+            UPDATE autopilot_settings
+            SET value = '0'
+            WHERE key = 'autonomous_consecutive_rejections:profile-4d18bf9a5d94'
+              AND CAST(value AS INTEGER) >= 10;
+            """
+        )
+        st_row = conn.execute(
+            "SELECT value FROM autopilot_settings WHERE key = 'autonomous_state:profile-4d18bf9a5d94';"
+        ).fetchone()
+        if st_row and str(st_row["value"] or "").strip() in ("cooldown", "blocked"):
+            conn.execute(
+                "UPDATE autopilot_settings SET value = 'idle' WHERE key = 'autonomous_state:profile-4d18bf9a5d94';"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Autorização Canônica de Publicação Automática por Canal (Lote 3A / CF-01 / CF-02)

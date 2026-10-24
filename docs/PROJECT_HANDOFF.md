@@ -21,12 +21,13 @@
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
 - **QUIZ_PAPER_CHANNEL:** `Quiz_Quiz (multiple_choice_paper / profile-45cee883f80a)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_L_DEV_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_M_DEV_VALIDATED`
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão M validada em DEV com 8/8 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **MISSION_M_STATUS:** `DEV VALIDATED (Identificação de canais e formatos no Gerenciador de Tarefas e Agenda de Publicação: 1. Gerenciador de Tarefas — Formato Real: resolução de estrutura narrativa baseada nos dados históricos canônicos da própria tarefa [script.json -> params.narrative_structure ou params.video_format], com mapeamento estrito de quiz_paper para 'Quiz de Papel / Perguntas & Respostas' e quiz_dilemma para 'Quiz / Escolhas Impossíveis', eliminando o falso positivo causado pelo registro legado 'quiz_dilemma' em monetization_safety; 2. Gerenciador de Tarefas — Canal Responsável: exibição explícita de 'Canal: [nome do canal]' no card da tarefa via vínculo persistido task_profiles.task_id -> content_profiles.name com fallback neutro 'Canal não identificado' na ausência de vínculo e carregamento em lote [get_tasks_origin_channel_names]; 3. Agenda de Publicação — Canal de Destino: exibição de título, data/hora, plataforma, Canal de destino [scheduled_posts.channel_id -> publishing_channels] e status, com fallback neutro 'Destino não identificado' e suporte a múltiplos destinos; 4. Agenda de Publicação — Filtro por Canal: selectbox dinâmico com 'Todos os canais' [padrão] e canais descobertos em content_profiles/publishing_channels, com filtragem puramente visual em memória sem alterar ordenação cronológica, agendamentos, quotas, autorizações ou produção; 8/8 testes direcionados PASS em test/services/test_mission_m_ui_channel_and_format_identification.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
 - **CURRENT_MAIN_SHA:** `70dd7352fc69a081a7461aedb65dc5671e5cad49` (Missão K)
 - **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missão L)
 - **LAST_PRODUCTION_DEPLOY_SHA:** `70dd7352fc69a081a7461aedb65dc5671e5cad49` (produção de referência Missão K)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão L validada em DEV com 4/4 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_L_STATUS:** `DEV VALIDATED (Investigação e recuperação do Quiz de Escolhas / Dose Diária de Escolhas: 1. Causa Raiz: o gerador subjective operava com fallback estático de apenas 6 perguntas fixas e prompt sem clusters temáticos, enviando no máximo 8 perguntas no avoid_clause; em falhas da LLM ou complementações de duplicatas, o fallback determinístico reinjetava sempre os mesmos dilemas, gerando sobreposição real [>=40%] que disparava corretamente o Safety Gate até armar o Circuit Breaker em 10 rejeições; 2. Diversificação no Prompt: introdução de DILEMMA_THEMATIC_CLUSTERS no prompt de geração [6 clusters temáticos dinâmicos] e ampliação do avoid_clause para até 16 dilemas recentes; 3. Catálogo Canônico Homologado de Fallback Rotativo: criação de CANONICAL_DILEMMA_CATALOG com 24 dilemas ativos homologados e seleção rotativa anti-duplicação em _generate_fallback_content; 4. Complementação Segura: em generate_quiz_structure, qualquer pergunta de fallback passa obrigatoriamente por is_question_duplicate antes de ser inserida; 5. Recuperação do Canal: inclusão da migração idempotente em scheduler.py destravando autonomous_consecutive_rejections:profile-4d18bf9a5d94 para 0 e estado para idle quando travado em >=10, preservando estritamente quotas, tarefas e histórico de segurança; 6. Isolamento estrito entre quiz_dilemma e quiz_paper 100% mantido; 4/4 testes direcionados PASS em test/services/test_quiz_dilemma_investigation_and_fix.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_K_STATUS:** `DEV VALIDATED (Recuperação definitiva do Quiz de Papel e reconciliação dos limites de capacidade: 1. scripts/poc_quiz_paper_render.py: implementação de calibração dinâmica segura das pausas de expectativa [5.5s a 8.5s] e revelação [1.0s a 2.5s] em select_questions_for_target_duration quando a soma das 5 perguntas curtas não atinge o piso com pausas fixas, garantindo que o vídeo atinja com precisão a faixa obrigatória de 60.0s a 65.0s [alvo ~62.5s] sem desabilitar o Duration Gate [fail-closed mantido contra durações anômalas]; 2. Sincronização audiovisual: render_async e render_question_frame adaptam o timer circular de raciocínio, SFX e legenda do timer dinamicamente ao tempo calibrado; 3. Esclarecimento de Max Iterations: constatado que o operador se deparou com o Circuit Breaker de 10 rejeições consecutivas [consecutive_rejections_limit] ativado pelas sucessivas reprovações no Duration Gate; com a timeline calibrada, o fluxo aprova de primeira e reseta o contador; 4. app/services/scheduler.py: migração idempotente migration_mission_k_reconcile_capacity_v1 reconcilia e persiste explicitamente os limites no SQLite [Global Cost Guard em 100/100 e perfis procedurais em 10/30], eliminando divergências com consultas SELECT * e getters em memória; 5. webui/components/operator_console.py e app/services/production_observability.py: fallbacks visuais atualizados para 100/100 globais e 10/30 procedurais; 6. Isolamento estrito entre quiz_paper e quiz_dilemma preservado, canais Flow resguardados [5/15]; 3/3 testes direcionados PASS em test/services/test_mission_k_paper_quiz_and_limits.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_J_STATUS:** `DEV VALIDATED (Política SCALE reutilizável para canais procedurais e elevação do Global Cost Guard para 100: 1. app/services/autonomous_production.py: implementação do helper is_procedural_scale_profile identificando formatos procedurais sem Google Flow [quiz_dilemma, quiz_paper, e futuros canais sem Flow]; 2. Em modo ESCALA [GROWTH_MODE_SCALE], canais procedurais resolvem automaticamente 10 aprovações e 30 tentativas por padrão [sem código hardcoded por perfil], enquanto canais tradicionais com Google Flow preservam limite conservador de 5 aprovações e 15 tentativas para proteção de custos de API de vídeo/imagem; 3. Elevação do Global Cost Guard [DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H e DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H] para 100/100 com clamping de até 100 nos setters; 4. app/services/scheduler.py: inclusão da migração idempotente migration_mission_j_capacity_v1 elevando limites globais legados [10/20 -> 100, 25/50 -> 100] e perfis procedurais existentes [como Quiz_Quiz / profile-45cee883f80a de 5/15 para 10/30], preservando estritamente overrides manuais do operador; 5. Isolamento estrito entre quiz_paper e quiz_dilemma, Safety Gates e ausência de auto-ativação do Autopilot 100% preservados; 4/4 testes direcionados PASS em test/services/test_mission_j_reusable_capacity.py; DEPLOY_STATUS = NOT_DEPLOYED)`
@@ -2798,3 +2799,44 @@ ideocam).
     - `test_safety_gate_blocks_real_duplicate_paper_quiz`: PASS (Safety Gate mantém bloqueio estrito de repetições reais).
     - `test_paper_quiz_procedural_canvas_safety_and_copyright_pass`: PASS (Layout de papel aprovado no Copyright Gate).
     - `test_quiz_dilemma_isolated_from_paper_quiz`: PASS (Isolamento mútuo estrito entre quiz_paper e quiz_dilemma).
+
+---
+
+## V16.44 — Missão M: Identificação de Canais e Formatos no Gerenciador de Tarefas e Agenda de Publicação
+
+- **Data:** `24/10/2026`
+- **Status:** `MISSION_M_DEV_VALIDATED (8/8 testes direcionados PASS)`
+- **Objetivo:**
+  Implementar quatro melhorias cirúrgicas de identificação e navegação na WebUI da Video Factory V1:
+  1. Exibir a estrutura real de cada vídeo no Gerenciador de Tarefas (`quiz_paper` -> "Quiz de Papel / Perguntas & Respostas", `quiz_dilemma` -> "Quiz / Escolhas Impossíveis").
+  2. Exibir o canal de origem de cada tarefa no Gerenciador de Tarefas via vínculo persistido `task_profiles.task_id -> content_profiles.name`.
+  3. Exibir o canal de destino de cada publicação na lista de Próximos Posts (`scheduled_posts.channel_id -> publishing_channels`).
+  4. Adicionar filtro por canal na Agenda de Publicação com descoberta dinâmica ("Todos os canais" como padrão).
+  Escopo exclusivamente de apresentação e consultas somente leitura (sem alteração em scheduler, geradores, gates ou produção).
+- **Diagnóstico & Causa Raiz:**
+  - *Estrutura no Gerenciador de Tarefas:* A interface lia a estrutura exclusivamente de `safety_gate.get_safety_assessment(task_id)` (`monetization_safety`), onde execuções legadas ou avaliações de quiz gravavam estaticamente `quiz_dilemma`. A fonte de verdade histórica canônica (`script.json -> params.narrative_structure` ou `params.video_format`) continha a estrutura correta (`quiz_paper`), mas não era consultada pela UI.
+  - *Canal de Origem das Tarefas:* O card de tarefa não consultava a tabela de vínculo `task_profiles`.
+  - *Canal de Destino dos Próximos Posts:* A lista de Próximos Posts exibia apenas data/hora, plataforma e tema, sem consultar `scheduled_posts.channel_id` para identificar para qual canal cada agendamento estava direcionado.
+- **Implementações Técnicas:**
+  1. *Helpers de Leitura em `app/services/profile_manager.py`:*
+     - `get_task_real_structure(task_path, task_id, safety_info)`: Prioriza `script.json` (`params.narrative_structure` e `params.video_format`), mapeando `quiz_paper` -> "Quiz de Papel / Perguntas & Respostas", `quiz_dilemma` -> "Quiz / Escolhas Impossíveis", formatos tradicionais para seus rótulos e legado para `safety_info`.
+     - `get_task_origin_channel_name` e `get_tasks_origin_channel_names`: Consulta `task_profiles` em lote, retornando `content_profiles.name` ou fallback neutro "Canal não identificado".
+     - `get_post_destination_channel_name` e `get_posts_destination_channel_names`: Consulta `scheduled_posts.channel_id -> publishing_channels` em lote, retornando o nome do canal de publicação ou fallback neutro "Destino não identificado".
+     - `get_all_channel_filter_options`: Descoberta dinâmica de canais a partir de `content_profiles` e `publishing_channels` com opção inicial "Todos os canais".
+  2. *Apresentação no Gerenciador de Tarefas (`webui/Main.py:_render_task_table`):*
+     - Prefetch em lote dos canais de origem das tarefas visíveis.
+     - Resolução da estrutura real e exibição no card: `**Canal:** {channel_name} | **Formato:** {s_name} | **Preset:** {p_name} | **Duração:** {d_str} | **Safety:** {icon} {s_stat}`.
+  3. *Agenda de Publicação (`webui/Main.py:_render_publication_schedule`):*
+     - Adição do Selectbox `Filtro: Canal` acima da lista de Próximos Posts.
+     - Filtragem em memória preservando a ordem cronológica estrita dos posts.
+     - Destaque e itens da lista exibindo claramente vídeo, data/hora, plataforma, Canal de destino e status ("Agendado").
+- **Validação de Testes:**
+  - 8/8 testes direcionados PASS em `pytest test/services/test_mission_m_ui_channel_and_format_identification.py -v`:
+    - `test_task_real_structure_paper_quiz`: PASS (quiz_paper -> Quiz de Papel / Perguntas & Respostas).
+    - `test_task_real_structure_dilemma_quiz`: PASS (quiz_dilemma -> Quiz / Escolhas Impossíveis).
+    - `test_task_real_structure_traditional`: PASS (formatos tradicionais preservam rótulos).
+    - `test_task_origin_channel_resolution`: PASS (resolução individual e em lote do canal de origem).
+    - `test_task_origin_channel_missing_or_invalid`: PASS (fallback neutro 'Canal não identificado').
+    - `test_upcoming_posts_destination_channel_resolution`: PASS (canal de destino e multi-destino preservados).
+    - `test_upcoming_posts_missing_destination`: PASS (fallback neutro 'Destino não identificado').
+    - `test_channel_filter_discovery_and_behavior`: PASS (descoberta dinâmica e filtragem visual estrita).

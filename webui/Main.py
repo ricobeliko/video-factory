@@ -1297,6 +1297,12 @@ def _render_task_table(filtered_tasks, key_prefix):
         return
 
     visible_tasks = filtered_tasks[:12]
+    visible_task_ids = [t.get("task_id") for t in visible_tasks if t.get("task_id")]
+    try:
+        from app.services import profile_manager
+        task_origin_channels = profile_manager.get_tasks_origin_channel_names(visible_task_ids)
+    except Exception:
+        task_origin_channels = {}
     list_height = min(390, max(96, len(visible_tasks) * 58))
     with st.container(height=list_height, border=False):
         for task in visible_tasks:
@@ -1355,24 +1361,36 @@ def _render_task_table(filtered_tasks, key_prefix):
                 row_cols[2].write(subject_text)
 
                 try:
-                    from app.services import safety_gate
+                    from app.services import safety_gate, profile_manager
                     safety_info = safety_gate.get_safety_assessment(task_id)
+
+                    # 1. Estrutura real a partir do histórico/script.json canônico da tarefa
+                    task_path = task.get("task_path") or os.path.join(utils.task_dir(), task_id)
+                    s_id, s_name = profile_manager.get_task_real_structure(
+                        task_path=task_path,
+                        task_id=task_id,
+                        safety_info=safety_info,
+                    )
+
+                    # 2. Canal de origem a partir de task_profiles -> content_profiles
+                    channel_name = task_origin_channels.get(task_id) or profile_manager.get_task_origin_channel_name(task_id)
+
                     if safety_info:
                         p_spec = safety_gate.get_preset_spec(safety_info.get("preset"))
-                        s_spec = safety_gate.get_structure_spec(safety_info.get("narrative_structure"))
                         p_name = p_spec["name"]
-                        s_name = s_spec["name"] if s_spec else "—"
                         d_val = safety_info.get("actual_duration") or safety_info.get("estimated_duration")
                         d_str = f"{int(round(d_val))}s" if d_val else "—"
                         s_stat = safety_info.get("safety_status") or const.SAFETY_STATUS_PASS
                         reasons = safety_info.get("safety_reasons") or []
 
                         icon = "🟢" if s_stat == const.SAFETY_STATUS_PASS else ("🟡" if s_stat == const.SAFETY_STATUS_REVIEW else "🔴")
-                        badge_line = f"**Preset:** {p_name} | **Estrutura:** {s_name} | **Duração:** {d_str} | **Safety:** {icon} `{s_stat}`"
+                        badge_line = f"**Canal:** {channel_name} | **Formato:** {s_name} | **Preset:** {p_name} | **Duração:** {d_str} | **Safety:** {icon} `{s_stat}`"
                         if reasons and s_stat in (const.SAFETY_STATUS_REVIEW, const.SAFETY_STATUS_BLOCK):
                             motivo_text = "; ".join(reasons)
                             badge_line += f"\n*Motivo:* {motivo_text}"
                         row_cols[2].caption(badge_line)
+                    else:
+                        row_cols[2].caption(f"**Canal:** {channel_name} | **Formato:** {s_name}")
                 except Exception:
                     pass
 
@@ -8248,23 +8266,62 @@ def _render_publication_schedule():
     # Próximos Posts
     upcoming_posts = scheduler.get_upcoming_posts(limit=25)
     st.write(f"**{tr('Upcoming Posts')} ({len(upcoming_posts)})**")
-    if upcoming_posts:
+
+    from app.services import profile_manager
+    post_dest_map = profile_manager.get_posts_destination_channel_names(upcoming_posts)
+
+    # Filtro: Canal (descoberto dinamicamente)
+    channel_options = profile_manager.get_all_channel_filter_options(upcoming_posts=upcoming_posts)
+    c_filt, _ = st.columns([2, 3])
+    with c_filt:
+        selected_channel_filter = st.selectbox(
+            "Filtro: Canal",
+            options=channel_options,
+            index=0,
+            key="pub_sched_channel_filter_sb",
+            help="Filtro visual de próximos posts por canal de destino.",
+        )
+
+    if selected_channel_filter != "Todos os canais":
+        filtered_upcoming = [p for p in upcoming_posts if post_dest_map.get(p.get("id")) == selected_channel_filter]
+    else:
+        filtered_upcoming = upcoming_posts
+
+    if filtered_upcoming:
         task_subject_map = {t["task_id"]: t.get("subject", t["task_id"]) for t in all_summaries}
 
-        # Destaque para a próxima publicação imediata
-        first_post = upcoming_posts[0]
+        # Destaque para a próxima publicação imediata do filtro selecionado
+        first_post = filtered_upcoming[0]
         first_time = scheduler.format_local_time(first_post["scheduled_at"], fmt="%H:%M (%d/%m)")
         first_plat = "🎵 TikTok" if first_post["platform"] == "tiktok" else "▶️ YouTube"
         first_subj = task_subject_map.get(first_post["task_id"], first_post["task_id"])
-        st.info(f"📌 **{tr('Next Publication')}:** {first_subj} — **{first_plat}** — `{first_time}`")
+        first_dest = post_dest_map.get(first_post.get("id"), "Destino não identificado")
+        first_raw_stat = str(first_post.get("status") or "planned").lower()
+        first_stat = "Agendado" if first_raw_stat in ("planned", "ready") else first_raw_stat.capitalize()
 
-        for post in upcoming_posts:
+        st.info(
+            f"📌 **{tr('Next Publication')}:** {first_subj} — **{first_plat}** — `{first_time}`\n\n"
+            f"**Canal de destino:** {first_dest} &nbsp;|&nbsp; **Status:** {first_stat}"
+        )
+
+        for post in filtered_upcoming:
             formatted_time = scheduler.format_local_time(post["scheduled_at"], fmt="%H:%M (%d/%m)")
             p_label = "🎵 TikTok" if post["platform"] == "tiktok" else "▶️ YouTube"
             subj = task_subject_map.get(post["task_id"], post["task_id"])
-            st.markdown(f"- `{formatted_time}` — **{p_label}** — {subj}")
+            dest_name = post_dest_map.get(post.get("id"), "Destino não identificado")
+            p_raw_stat = str(post.get("status") or "planned").lower()
+            p_stat = "Agendado" if p_raw_stat in ("planned", "ready") else p_raw_stat.capitalize()
+
+            st.markdown(
+                f"- `{formatted_time}` — **{p_label}** &nbsp;|&nbsp; "
+                f"**Canal de destino:** {dest_name} &nbsp;|&nbsp; "
+                f"**Status:** {p_stat} — **{subj}**"
+            )
     else:
-        st.caption(tr("No Upcoming Posts"))
+        if upcoming_posts and selected_channel_filter != "Todos os canais":
+            st.caption(f"Nenhum post agendado para o canal '{selected_channel_filter}'.")
+        else:
+            st.caption(tr("No Upcoming Posts"))
 
     # Ferramenta de Homologação / Teste Rápido do Scheduler
     with st.expander(f"🧪 {tr('Quick Scheduler Test (Homologation)')}", expanded=False):
@@ -8276,7 +8333,8 @@ def _render_publication_schedule():
                 p_time = scheduler.format_local_time(p["scheduled_at"], fmt="%H:%M:%S (%d/%m)")
                 p_plat = "🎵 TikTok" if p["platform"] == "tiktok" else "▶️ YouTube"
                 subj = task_subject_map.get(p["task_id"], p["task_id"])
-                post_options[p["id"]] = f"{subj} — {p_plat} — {p_time}"
+                p_dest = post_dest_map.get(p.get("id"), "Destino não identificado")
+                post_options[p["id"]] = f"{subj} — {p_plat} [{p_dest}] — {p_time}"
 
             selected_post_id = st.selectbox(
                 tr("Select Post"),

@@ -5,6 +5,7 @@ Gerencia perfis de conteúdo e canais de publicação da Video Factory,
 garantindo compatibilidade retroativa total com o nó PRIMARY e suporte
 a operações de leitura em nós secundários (VIEW ONLY).
 """
+import json
 import os
 import re
 import sqlite3
@@ -12,7 +13,7 @@ import unicodedata
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -1588,3 +1589,266 @@ def resolve_task_channels(
         ]
 
     return enabled_channels
+
+
+# ---------------------------------------------------------------------------
+# Identificação de Canais e Formatos (Missão M — Somente Leitura)
+# ---------------------------------------------------------------------------
+
+def get_task_origin_channel_name(task_id: str, db_path: Optional[str] = None) -> str:
+    """
+    Retorna o nome do canal responsável pela tarefa a partir do vínculo persistido:
+    task_profiles.task_id -> task_profiles.profile_id -> content_profiles.name.
+    Quando não houver vínculo válido, retorna 'Canal não identificado'.
+    """
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return "Canal não identificado"
+    try:
+        init_profile_db(db_path)
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT cp.name
+                FROM task_profiles tp
+                JOIN content_profiles cp ON tp.profile_id = cp.id
+                WHERE tp.task_id = ?;
+                """,
+                (clean_tid,),
+            ).fetchone()
+            if row and row["name"]:
+                name = str(row["name"]).strip()
+                if name == DEFAULT_PROFILE_NAME:
+                    return CHANNEL_DEFAULT_DISPLAY
+                return name
+    except Exception:
+        pass
+    return "Canal não identificado"
+
+
+def get_tasks_origin_channel_names(task_ids: List[str], db_path: Optional[str] = None) -> Dict[str, str]:
+    """
+    Carregamento em lote dos nomes dos canais de origem das tarefas:
+    task_profiles.task_id -> content_profiles.name.
+    Retorna dict {task_id: channel_name}. Tarefas sem vínculo válido retornam 'Canal não identificado'.
+    """
+    if not task_ids:
+        return {}
+    clean_ids = [str(tid).strip() for tid in task_ids if str(tid).strip()]
+    if not clean_ids:
+        return {}
+    results = {}
+    try:
+        init_profile_db(db_path)
+        placeholders = ",".join("?" for _ in clean_ids)
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT tp.task_id, cp.name
+                FROM task_profiles tp
+                JOIN content_profiles cp ON tp.profile_id = cp.id
+                WHERE tp.task_id IN ({placeholders});
+                """,
+                clean_ids,
+            ).fetchall()
+            for r in rows:
+                tid = str(r["task_id"]).strip()
+                name = str(r["name"]).strip() if r["name"] else ""
+                if name == DEFAULT_PROFILE_NAME:
+                    name = CHANNEL_DEFAULT_DISPLAY
+                if name:
+                    results[tid] = name
+    except Exception:
+        pass
+    for tid in clean_ids:
+        if tid not in results:
+            results[tid] = "Canal não identificado"
+    return results
+
+
+def get_task_real_structure(
+    task_path: Optional[str] = None,
+    task_id: Optional[str] = None,
+    safety_info: Optional[Dict[str, Any]] = None,
+    task_data: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    """
+    Determina a estrutura real e o rótulo de exibição a partir dos dados históricos canônicos da tarefa:
+    1. task_data / script.json -> params.narrative_structure ou params.video_format
+    2. task_data / script.json -> narrative_structure ou video_format
+    3. safety_info -> narrative_structure (monetization_safety)
+    
+    Retorna tupla: (structure_id, display_label).
+    Garante mapeamento:
+    - 'quiz_paper' / 'multiple_choice_paper' -> 'Quiz de Papel / Perguntas & Respostas'
+    - 'quiz_dilemma' -> 'Quiz / Escolhas Impossíveis'
+    - Outros formatos -> seus rótulos existentes (Mistério Investigativo, etc.)
+    """
+    from app.services import safety_gate
+    from app.utils import utils
+
+    script_data = None
+    if task_data and isinstance(task_data, dict):
+        script_data = task_data
+    else:
+        resolved_path = task_path
+        if not resolved_path and task_id:
+            resolved_path = os.path.join(utils.task_dir(), task_id)
+        if resolved_path and os.path.isdir(resolved_path):
+            script_file = os.path.join(resolved_path, "script.json")
+            if os.path.isfile(script_file):
+                try:
+                    with open(script_file, "r", encoding="utf-8") as f:
+                        script_data = json.load(f)
+                except Exception:
+                    pass
+
+    raw_structure = ""
+    raw_format = ""
+    if script_data and isinstance(script_data, dict):
+        params = script_data.get("params")
+        if isinstance(params, dict):
+            raw_structure = str(params.get("narrative_structure") or "").strip().lower()
+            raw_format = str(params.get("video_format") or "").strip().lower()
+        if not raw_structure:
+            raw_structure = str(script_data.get("narrative_structure") or "").strip().lower()
+        if not raw_format:
+            raw_format = str(script_data.get("video_format") or "").strip().lower()
+
+    if not raw_structure and safety_info and isinstance(safety_info, dict):
+        raw_structure = str(safety_info.get("narrative_structure") or "").strip().lower()
+
+    if raw_structure in ("quiz_paper", "multiple_choice_paper", const.STRUCTURE_QUIZ_PAPER) or raw_format in ("quiz_paper", const.VIDEO_FORMAT_QUIZ_PAPER):
+        return (const.STRUCTURE_QUIZ_PAPER, "Quiz de Papel / Perguntas & Respostas")
+
+    if raw_structure in ("quiz_dilemma", "quiz_dilemmas", const.STRUCTURE_QUIZ_DILEMMA) or raw_format in ("quiz_dilemma", const.VIDEO_FORMAT_QUIZ_DILEMMA):
+        return (const.STRUCTURE_QUIZ_DILEMMA, "Quiz / Escolhas Impossíveis")
+
+    struct_key = raw_structure or raw_format
+    if struct_key:
+        if struct_key in ("mystery", "investigative_mystery", const.STRUCTURE_MYSTERY):
+            return (const.STRUCTURE_MYSTERY, "Mistério Investigativo")
+        spec = safety_gate.get_structure_spec(struct_key)
+        if spec and spec.get("name"):
+            return (struct_key, spec["name"])
+        return (struct_key, struct_key)
+
+    return ("", "—")
+
+
+def get_posts_destination_channel_names(posts: List[Dict[str, Any]], db_path: Optional[str] = None) -> Dict[Any, str]:
+    """
+    Carregamento em lote dos nomes dos canais de destino para uma lista de agendamentos:
+    scheduled_posts.channel_id -> publishing_channels.
+    Retorna mapeamento {post_id: destination_channel_name}.
+    Quando não houver canal válido persistido, mapeia para 'Destino não identificado'.
+    """
+    if not posts:
+        return {}
+    clean_cids = list({str(p.get("channel_id") or "").strip() for p in posts if str(p.get("channel_id") or "").strip()})
+    
+    ch_map = {}
+    if clean_cids:
+        try:
+            init_profile_db(db_path)
+            placeholders = ",".join("?" for _ in clean_cids)
+            with get_connection(db_path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT pc.id, pc.display_name, pc.profile_id, cp.name as profile_name
+                    FROM publishing_channels pc
+                    LEFT JOIN content_profiles cp ON pc.profile_id = cp.id
+                    WHERE pc.id IN ({placeholders});
+                    """,
+                    clean_cids,
+                ).fetchall()
+                for r in rows:
+                    cid = str(r["id"]).strip()
+                    pname = str(r["profile_name"] or "").strip()
+                    dname = str(r["display_name"] or "").strip()
+                    if pname:
+                        if pname == DEFAULT_PROFILE_NAME:
+                            ch_map[cid] = CHANNEL_DEFAULT_DISPLAY
+                        else:
+                            ch_map[cid] = pname
+                    elif dname:
+                        d_clean = re.sub(r"\s*\((YouTube|TikTok|Somente Estoque|Default)\)\s*$", "", dname, flags=re.IGNORECASE).strip()
+                        if d_clean == DEFAULT_PROFILE_NAME or d_clean.lower() == "tiktok":
+                            ch_map[cid] = CHANNEL_DEFAULT_DISPLAY
+                        else:
+                            ch_map[cid] = d_clean or dname
+                    else:
+                        ch_map[cid] = "Destino não identificado"
+        except Exception:
+            pass
+
+    results = {}
+    for p in posts:
+        pid = p.get("id")
+        cid = str(p.get("channel_id") or "").strip()
+        if not cid or cid not in ch_map:
+            results[pid] = "Destino não identificado"
+        else:
+            results[pid] = ch_map[cid]
+    return results
+
+
+def get_post_destination_channel_name(post: Dict[str, Any], db_path: Optional[str] = None) -> str:
+    """
+    Retorna o nome do canal de destino de um agendamento a partir de scheduled_posts.channel_id -> publishing_channels.
+    Quando channel_id for nulo, vazio, inconsistente ou ausente em publishing_channels, retorna 'Destino não identificado'.
+    Não infere destino a partir do perfil da tarefa nem do canal atualmente selecionado no console.
+    """
+    if not post or not isinstance(post, dict):
+        return "Destino não identificado"
+    cid = str(post.get("channel_id") or "").strip()
+    if not cid:
+        return "Destino não identificado"
+    
+    names = get_posts_destination_channel_names([post], db_path=db_path)
+    return names.get(post.get("id"), "Destino não identificado")
+
+
+def get_all_channel_filter_options(db_path: Optional[str] = None, upcoming_posts: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """
+    Descobre dinamicamente os canais existentes para o filtro de Próximos Posts:
+    - Perfis ativos e canais cadastrados no banco
+    - Destinos identificados nos posts agendados
+    Retorna lista iniciando com 'Todos os canais' seguido dos canais em ordem alfabética.
+    """
+    options = ["Todos os canais"]
+    discovered = set()
+
+    try:
+        init_profile_db(db_path)
+        with get_connection(db_path) as conn:
+            p_rows = conn.execute("SELECT name FROM content_profiles;").fetchall()
+            for r in p_rows:
+                name = str(r["name"] or "").strip()
+                if name:
+                    if name == DEFAULT_PROFILE_NAME:
+                        discovered.add(CHANNEL_DEFAULT_DISPLAY)
+                    else:
+                        discovered.add(name)
+
+            c_rows = conn.execute("SELECT display_name, profile_id FROM publishing_channels WHERE is_enabled = 1;").fetchall()
+            for r in c_rows:
+                dname = str(r["display_name"] or "").strip()
+                if dname:
+                    d_clean = re.sub(r"\s*\((YouTube|TikTok|Somente Estoque)\)\s*$", "", dname, flags=re.IGNORECASE).strip()
+                    if d_clean:
+                        if d_clean == DEFAULT_PROFILE_NAME:
+                            discovered.add(CHANNEL_DEFAULT_DISPLAY)
+                        else:
+                            discovered.add(d_clean)
+    except Exception:
+        pass
+
+    if upcoming_posts:
+        dest_names = get_posts_destination_channel_names(upcoming_posts, db_path=db_path)
+        for name in dest_names.values():
+            if name and name != "Destino não identificado":
+                discovered.add(name)
+
+    sorted_discovered = sorted(list(discovered))
+    return options + sorted_discovered

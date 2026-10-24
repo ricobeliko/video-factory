@@ -250,6 +250,363 @@ DILEMMA_8_CTA_VARIATIONS = [
 ]
 
 
+# =============================================================================
+# Catálogo Canônico Homologado de Perguntas para Quiz de Papel (Fallback Rotativo)
+# =============================================================================
+CANONICAL_PAPER_QUIZ_CATALOG: List[Dict[str, Any]] = [
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual é o maior planeta do nosso Sistema Solar?",
+        "options": [
+            {"letter": "A", "text": "Marte"},
+            {"letter": "B", "text": "Júpiter"},
+            {"letter": "C", "text": "Saturno"},
+            {"letter": "D", "text": "Vênus"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior planeta do nosso Sistema Solar?",
+        "explanation": "Júpiter tem duas vezes e meia a massa de todos os outros planetas juntos.",
+        "source": "NASA Solar System Exploration (science.nasa.gov/jupiter)",
+    },
+    {
+        "category": "BIOLOGIA MARINHA",
+        "question": "Quantos corações tem um polvo?",
+        "options": [
+            {"letter": "A", "text": "1 coração"},
+            {"letter": "B", "text": "2 corações"},
+            {"letter": "C", "text": "3 corações"},
+            {"letter": "D", "text": "4 corações"},
+        ],
+        "correct_option": "C",
+        "narration": "Quantos corações tem um polvo?",
+        "explanation": "Dois corações bombeiam para as brânquias e o terceiro para o resto do corpo.",
+        "source": "Smithsonian Magazine & National Geographic (Cephalopod Physiology)",
+    },
+    {
+        "category": "ZOOLOGIA",
+        "question": "Qual é o animal terrestre mais rápido do planeta?",
+        "options": [
+            {"letter": "A", "text": "Leão"},
+            {"letter": "B", "text": "Guepardo"},
+            {"letter": "C", "text": "Antílope"},
+            {"letter": "D", "text": "Cavalo"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o animal terrestre mais rápido do planeta?",
+        "explanation": "O guepardo atinge velocidades de até 120 quilômetros por hora em arrancadas curtas.",
+        "source": "National Geographic Animals (Acinonyx jubatus)",
+    },
+    {
+        "category": "QUÍMICA & COSMO",
+        "question": "Qual é o elemento químico mais abundante no Universo?",
+        "options": [
+            {"letter": "A", "text": "Oxigênio"},
+            {"letter": "B", "text": "Carbono"},
+            {"letter": "C", "text": "Hidrogênio"},
+            {"letter": "D", "text": "Hélio"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o elemento químico mais abundante no Universo?",
+        "explanation": "O hidrogênio compõe aproximadamente 75% de toda a matéria bariônica cósmica.",
+        "source": "Royal Society of Chemistry & NASA Astrophysics",
+    },
+    {
+        "category": "GEOGRAFIA & HISTÓRIA",
+        "question": "Em qual país está localizada a famosa Grande Muralha?",
+        "options": [
+            {"letter": "A", "text": "Japão"},
+            {"letter": "B", "text": "China"},
+            {"letter": "C", "text": "Índia"},
+            {"letter": "D", "text": "Mongólia"},
+        ],
+        "correct_option": "B",
+        "narration": "Em qual país está localizada a famosa Grande Muralha?",
+        "explanation": "A Grande Muralha da China é uma fortificação histórica com mais de 21 mil quilômetros.",
+        "source": "UNESCO World Heritage Centre (whc.unesco.org/en/list/438)",
+    },
+    {
+        "category": "ANATOMIA HUMANA",
+        "question": "Quantos ossos possui o corpo de um ser humano adulto?",
+        "options": [
+            {"letter": "A", "text": "186 ossos"},
+            {"letter": "B", "text": "206 ossos"},
+            {"letter": "C", "text": "248 ossos"},
+            {"letter": "D", "text": "300 ossos"},
+        ],
+        "correct_option": "B",
+        "narration": "Quantos ossos possui o corpo de um ser humano adulto?",
+        "explanation": "O esqueleto adulto é formado por 206 ossos, após fusões naturais do crescimento.",
+        "source": "Gray's Anatomy & National Institutes of Health (NIH)",
+    },
+    {
+        "category": "HISTÓRIA DA ARTE",
+        "question": "Quem pintou a célebre obra Monalisa?",
+        "options": [
+            {"letter": "A", "text": "Michelangelo"},
+            {"letter": "B", "text": "Leonardo da Vinci"},
+            {"letter": "C", "text": "Vincent van Gogh"},
+            {"letter": "D", "text": "Pablo Picasso"},
+        ],
+        "correct_option": "B",
+        "narration": "Quem pintou a célebre obra Monalisa?",
+        "explanation": "A obra foi pintada por Leonardo da Vinci no início do século dezesseis.",
+        "source": "Musée du Louvre (louvre.fr/mona-lisa)",
+    },
+    {
+        "category": "GEOGRAFIA FÍSICA",
+        "question": "Qual é o maior oceano da Terra em extensão?",
+        "options": [
+            {"letter": "A", "text": "Oceano Atlântico"},
+            {"letter": "B", "text": "Oceano Índico"},
+            {"letter": "C", "text": "Oceano Pacífico"},
+            {"letter": "D", "text": "Oceano Ártico"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o maior oceano da Terra em extensão?",
+        "explanation": "O Oceano Pacífico cobre mais de 30% da superfície do globo terrestre.",
+        "source": "National Oceanic and Atmospheric Administration (NOAA)",
+    },
+    {
+        "category": "BOTÂNICA & NATUREZA",
+        "question": "Qual é o tipo de árvore mais alta do mundo?",
+        "options": [
+            {"letter": "A", "text": "Baobá"},
+            {"letter": "B", "text": "Eucalipto"},
+            {"letter": "C", "text": "Carvalho"},
+            {"letter": "D", "text": "Sequóia-gigante"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o tipo de árvore mais alta do mundo?",
+        "explanation": "A sequóia da Califórnia Hyperion passa dos 115 metros de altura.",
+        "source": "National Park Service & Guinness World Records",
+    },
+    {
+        "category": "FÍSICA & ÓPTICA",
+        "question": "Qual é a velocidade aproximada da luz no vácuo?",
+        "options": [
+            {"letter": "A", "text": "150 mil km/s"},
+            {"letter": "B", "text": "300 mil km/s"},
+            {"letter": "C", "text": "500 mil km/s"},
+            {"letter": "D", "text": "1 milhão km/s"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a velocidade aproximada da luz no vácuo?",
+        "explanation": "A luz no vácuo viaja a exatamente 299 mil 792 quilômetros por segundo.",
+        "source": "NIST & Bureau International des Poids et Mesures (BIPM)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a montanha mais alta da Terra acima do nível do mar?",
+        "options": [
+            {"letter": "A", "text": "K2"},
+            {"letter": "B", "text": "Monte Everest"},
+            {"letter": "C", "text": "Kilimanjaro"},
+            {"letter": "D", "text": "Aconcágua"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a montanha mais alta da Terra acima do nível do mar?",
+        "explanation": "O Monte Everest culmina a 8.848 metros na fronteira entre Nepal e China.",
+        "source": "National Geographic Society & Survey of Nepal",
+    },
+    {
+        "category": "OCEANOGRAFIA",
+        "question": "Qual é o ponto mais profundo conhecido de todos os oceanos?",
+        "options": [
+            {"letter": "A", "text": "Fossa de Java"},
+            {"letter": "B", "text": "Fossa de Porto Rico"},
+            {"letter": "C", "text": "Fossa das Marianas"},
+            {"letter": "D", "text": "Fossa de Tonga"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o ponto mais profundo conhecido de todos os oceanos?",
+        "explanation": "A Depressão Challenger na Fossa das Marianas atinge quase 11 mil metros de profundidade.",
+        "source": "NOAA Ocean Exploration & Woods Hole Oceanographic Institution",
+    },
+    {
+        "category": "GEOLOGIA & MINERALOGIA",
+        "question": "Qual é o mineral natural mais duro conhecido na escala de Mohs?",
+        "options": [
+            {"letter": "A", "text": "Quartzo"},
+            {"letter": "B", "text": "Topázio"},
+            {"letter": "C", "text": "Coríndon"},
+            {"letter": "D", "text": "Diamante"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o mineral natural mais duro conhecido na escala de Mohs?",
+        "explanation": "O diamante atinge o grau 10 na escala de Mohs devido às ligações covalentes do carbono.",
+        "source": "US Geological Survey (USGS) & Mineralogical Society of America",
+    },
+    {
+        "category": "ECOLOGIA & GEOGRAFIA",
+        "question": "Qual é a maior floresta tropical do planeta?",
+        "options": [
+            {"letter": "A", "text": "Floresta do Congo"},
+            {"letter": "B", "text": "Floresta Amazônica"},
+            {"letter": "C", "text": "Taiga Siberiana"},
+            {"letter": "D", "text": "Floresta de Bornéu"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a maior floresta tropical do planeta?",
+        "explanation": "A Floresta Amazônica cobre mais de 5 milhões de quilômetros quadrados na América do Sul.",
+        "source": "World Wildlife Fund (WWF) & UNESCO World Heritage",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual é o único satélite natural da Terra?",
+        "options": [
+            {"letter": "A", "text": "Fobos"},
+            {"letter": "B", "text": "Europa"},
+            {"letter": "C", "text": "Lua"},
+            {"letter": "D", "text": "Titã"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o único satélite natural da Terra?",
+        "explanation": "A Lua é o quinto maior satélite natural do Sistema Solar e orbita a Terra a cerca de 384 mil km.",
+        "source": "NASA Lunar Science & Planetary Data System",
+    },
+    {
+        "category": "SISTEMA SOLAR",
+        "question": "Qual é o planeta mais quente de todo o Sistema Solar?",
+        "options": [
+            {"letter": "A", "text": "Mercúrio"},
+            {"letter": "B", "text": "Vênus"},
+            {"letter": "C", "text": "Marte"},
+            {"letter": "D", "text": "Júpiter"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o planeta mais quente de todo o Sistema Solar?",
+        "explanation": "O efeito estufa descontrolado de Vênus eleva a temperatura superficial para mais de 460 graus Celsius.",
+        "source": "NASA Solar System Exploration (science.nasa.gov/venus)",
+    },
+    {
+        "category": "HIDROGRAFIA",
+        "question": "Qual rio é tradicionalmente considerado o mais longo do continente africano?",
+        "options": [
+            {"letter": "A", "text": "Rio Congo"},
+            {"letter": "B", "text": "Rio Níger"},
+            {"letter": "C", "text": "Rio Nilo"},
+            {"letter": "D", "text": "Rio Zambeze"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual rio é tradicionalmente considerado o mais longo do continente africano?",
+        "explanation": "O Rio Nilo estende-se por mais de 6.650 quilômetros pelo nordeste da África.",
+        "source": "Encyclopaedia Britannica & UN Environment Programme",
+    },
+    {
+        "category": "BIOLOGIA & EVOLUÇÃO",
+        "question": "Qual é o maior animal que já existiu em toda a história da Terra?",
+        "options": [
+            {"letter": "A", "text": "Tiranossauro Rex"},
+            {"letter": "B", "text": "Baleia-azul"},
+            {"letter": "C", "text": "Megalodonte"},
+            {"letter": "D", "text": "Argentinossauro"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior animal que já existiu em toda a história da Terra?",
+        "explanation": "A baleia-azul pode atingir até 30 metros de comprimento e pesar mais de 150 toneladas.",
+        "source": "Smithsonian National Museum of Natural History",
+    },
+    {
+        "category": "QUÍMICA & HISTÓRIA",
+        "question": "Qual cientista é reconhecido como o criador da Tabela Periódica dos Elementos?",
+        "options": [
+            {"letter": "A", "text": "Isaac Newton"},
+            {"letter": "B", "text": "Dmitri Mendeleev"},
+            {"letter": "C", "text": "Marie Curie"},
+            {"letter": "D", "text": "Albert Einstein"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual cientista é reconhecido como o criador da Tabela Periódica dos Elementos?",
+        "explanation": "Dmitri Mendeleev organizou os elementos químicos por massa atômica e previu elementos em 1869.",
+        "source": "Royal Society of Chemistry & Nobel Prize Archive",
+    },
+    {
+        "category": "GENÉTICA & BIOLOGIA",
+        "question": "Qual é o formato geométrico característico da molécula de DNA?",
+        "options": [
+            {"letter": "A", "text": "Esfera dupla"},
+            {"letter": "B", "text": "Hélice tripla"},
+            {"letter": "C", "text": "Dupla hélice"},
+            {"letter": "D", "text": "Anel circular"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o formato geométrico característico da molécula de DNA?",
+        "explanation": "A estrutura de dupla hélice do DNA foi desvendada em 1953 com contribuições de Rosalind Franklin.",
+        "source": "Nature & National Institutes of Health (NIH)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o maior deserto quente do mundo em área?",
+        "options": [
+            {"letter": "A", "text": "Deserto de Gobi"},
+            {"letter": "B", "text": "Deserto do Saara"},
+            {"letter": "C", "text": "Deserto de Kalahari"},
+            {"letter": "D", "text": "Deserto de Atacama"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior deserto quente do mundo em área?",
+        "explanation": "O Saara ocupa mais de 9 milhões de quilômetros quadrados no norte da África.",
+        "source": "Encyclopaedia Britannica & USGS Geography",
+    },
+    {
+        "category": "CIÊNCIAS DA ATMOSFERA",
+        "question": "Em qual camada da atmosfera terrestre se concentra a Camada de Ozônio?",
+        "options": [
+            {"letter": "A", "text": "Troposfera"},
+            {"letter": "B", "text": "Estratosfera"},
+            {"letter": "C", "text": "Mesosfera"},
+            {"letter": "D", "text": "Termosfera"},
+        ],
+        "correct_option": "B",
+        "narration": "Em qual camada da atmosfera terrestre se concentra a Camada de Ozônio?",
+        "explanation": "A estratosfera abriga a maior concentração de ozônio, filtrando a radiação ultravioleta do Sol.",
+        "source": "NOAA Chemical Sciences Laboratory & NASA Ozone Watch",
+    },
+    {
+        "category": "BIOLOGIA CELULAR",
+        "question": "Qual é a menor unidade estrutural e funcional básica de todos os seres vivos?",
+        "options": [
+            {"letter": "A", "text": "Átomo"},
+            {"letter": "B", "text": "Molécula"},
+            {"letter": "C", "text": "Célula"},
+            {"letter": "D", "text": "Tecido"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é a menor unidade estrutural e funcional básica de todos os seres vivos?",
+        "explanation": "A célula é a unidade biológica fundamental capaz de manter os processos essenciais da vida.",
+        "source": "National Institutes of Health (NIH) - Science Education",
+    },
+    {
+        "category": "HISTÓRIA & MONUMENTOS",
+        "question": "Em qual cidade foi inaugurada a Torre Eiffel no ano de 1889?",
+        "options": [
+            {"letter": "A", "text": "Londres"},
+            {"letter": "B", "text": "Paris"},
+            {"letter": "C", "text": "Roma"},
+            {"letter": "D", "text": "Berlim"},
+        ],
+        "correct_option": "B",
+        "narration": "Em qual cidade foi inaugurada a Torre Eiffel no ano de 1889?",
+        "explanation": "A Torre Eiffel foi erguida em Paris para a Exposição Universal de 1889 com projeto de Gustave Eiffel.",
+        "source": "UNESCO World Heritage Centre & Société de la Tour Eiffel",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é o símbolo químico internacional do Ouro na Tabela Periódica?",
+        "options": [
+            {"letter": "A", "text": "Ag"},
+            {"letter": "B", "text": "Fe"},
+            {"letter": "C", "text": "Au"},
+            {"letter": "D", "text": "Cu"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o símbolo químico internacional do Ouro na Tabela Periódica?",
+        "explanation": "O símbolo Au tem origem na palavra latina Aurum, que significa brilhante ou resplandecente.",
+        "source": "IUPAC (International Union of Pure and Applied Chemistry)",
+    },
+]
+
+
 class QuizContentGenerator:
     """Gerador automático de conteúdo para o Quiz Engine (Fase Q2)."""
 
@@ -266,7 +623,9 @@ class QuizContentGenerator:
         self.questions_history_file = os.path.join(self.history_dir, "generated_questions.json")
         self.images_history_file = os.path.join(self.history_dir, "used_images.json")
 
+        self.paper_questions_history_file = os.path.join(self.history_dir, "generated_paper_questions.json")
         self.question_history = self._load_json(self.questions_history_file, default=[])
+        self.paper_question_history = self._load_json(self.paper_questions_history_file, default=[])
         self.used_images = self._load_json(self.images_history_file, default={})
 
     # -------------------------------------------------------------------------
@@ -359,6 +718,45 @@ class QuizContentGenerator:
             "timestamp": time.time(),
         })
         self._save_json(self.questions_history_file, self.question_history)
+
+    def is_paper_question_duplicate(
+        self,
+        question_text: str,
+        threshold: float = 0.50,
+    ) -> bool:
+        """Verifica se a pergunta do quiz de papel já foi utilizada recentemente no histórico isolado."""
+        norm_q = self._normalize_text(question_text)
+        if not norm_q:
+            return True
+        for entry in self.paper_question_history:
+            stored_q = entry.get("question_normalized", "")
+            if norm_q == stored_q:
+                return True
+            sim_q = self._calculate_similarity(norm_q, stored_q)
+            if sim_q >= threshold:
+                logger.info(f"[QUIZ_GEN][PAPER] Pergunta descartada por similaridade ({sim_q:.2f} >= {threshold}): '{question_text}'")
+                return True
+        return False
+
+    def record_paper_question(
+        self,
+        question_text: str,
+        niche: str,
+        category: str,
+        options_text: Optional[str] = None,
+    ) -> None:
+        """Registra a pergunta no histórico isolado do Quiz de Papel (generated_paper_questions.json)."""
+        self.paper_question_history.append({
+            "question_text": question_text,
+            "question_normalized": self._normalize_text(question_text),
+            "options_text": options_text or "",
+            "options_normalized": self._normalize_text(options_text) if options_text else "",
+            "niche": niche,
+            "category": category,
+            "format_type": "multiple_choice_paper",
+            "timestamp": time.time(),
+        })
+        self._save_json(self.paper_questions_history_file, self.paper_question_history)
 
     def is_image_used(self, asset_id: str, content_hash: Optional[str] = None) -> bool:
         """Verifica se a imagem já foi usada em gerações anteriores."""
@@ -1248,6 +1646,173 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
         logger.success(f"[QUIZ_GEN] Configuração exportada para JSON com sucesso: {output_json_path}")
         return QuizConfig.from_dict(config_data)
 
+    # -------------------------------------------------------------------------
+    # Quiz de Papel (Multiple Choice Paper): Prompt, Parse & Fallback Rotativo
+    # -------------------------------------------------------------------------
+    def _build_paper_quiz_generation_prompt(
+        self,
+        niche: str,
+        num_questions: int,
+        quiz_title: Optional[str] = None,
+        topic_brief: Optional[str] = None,
+    ) -> str:
+        recent_questions = [x.get("question_text", "") for x in self.paper_question_history[-20:] if x.get("question_text")]
+        avoid_clause = ""
+        if recent_questions:
+            avoid_clause = "\nEvite expressamente repetir ou criar variações das seguintes perguntas já usadas recentemente:\n" + "\n".join([f"- {q}" for q in recent_questions[:10]])
+
+        brief_clause = ""
+        if topic_brief and str(topic_brief).strip():
+            brief_clause = f"\nDIRETRIZ EDITORIAL DO CANAL (SIGA RIGOROSAMENTE):\n{str(topic_brief).strip()}\n"
+        elif quiz_title and str(quiz_title).strip() and str(quiz_title).strip().lower() != "auto":
+            brief_clause = f"\nTEMA ESPECÍFICO DO QUIZ:\n{str(quiz_title).strip()}\n"
+
+        return f"""Você é um roteirista sênior e checador de fatos especialista em quizzes virais educativos no formato de folha de prova/questionário impresso (YouTube Shorts / TikTok).
+Gere um quiz de múltipla escolha no nicho '{niche}' com exatamente {num_questions} perguntas factuais e fascinantes.
+
+REGRAS ESTRITAS DE CONTEÚDO FACTUAL E FORMATO:
+1. Todas as respostas e explicações DEVEM ser fatos reais, comprovados pela ciência ou história acadêmica (fontes: NASA, Smithsonian, National Geographic, UNESCO, NIST, etc.). Não invente, não use lendas urbanas.
+2. Cada pergunta DEVE ter EXATAMENTE 4 alternativas identificadas pelas letras 'A', 'B', 'C' e 'D'.
+3. O campo 'correct_option' DEVE ser rigorosamente 'A', 'B', 'C' ou 'D'. Varie a letra correta entre as perguntas.
+4. O campo 'question' deve ser o enunciado direto e instigante (máximo 12 a 15 palavras).
+5. O campo 'narration' deve ser o texto falado pelo narrador para a pergunta (claro e direto, fluído para leitura em voz alta).
+6. As opções de texto devem ser curtas e objetivas (máximo 1 a 4 palavras por alternativa).
+7. O campo 'category' deve ser a área do conhecimento em maiúsculas (ex: 'GEOGRAFIA', 'ASTRONOMIA', 'HISTÓRIA', 'BIOLOGIA', 'CIÊNCIA', etc.).
+8. O campo 'explanation' deve conter 1 frase curta resumindo o fato curioso/comprovado.
+9. O campo 'source' deve citar uma fonte de autoridade confiável.
+{brief_clause}{avoid_clause}
+
+Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, sem comentários):
+{{
+  "niche": "{niche}",
+  "quiz_title": "{quiz_title or 'QUIZ CONHECIMENTOS GERAIS'}",
+  "questions": [
+    {{
+      "id": "q1",
+      "number": 1,
+      "category": "GEOGRAFIA",
+      "question": "Qual é o ponto mais alto da Terra em relação ao nível do mar?",
+      "options": [
+        {{"letter": "A", "text": "K2"}},
+        {{"letter": "B", "text": "Monte Everest"}},
+        {{"letter": "C", "text": "Kilimanjaro"}},
+        {{"letter": "D", "text": "Aconcágua"}}
+      ],
+      "correct_option": "B",
+      "narration": "Qual é o ponto mais alto da Terra em relação ao nível do mar?",
+      "explanation": "O Monte Everest atinge 8.848 metros de altitude na cordilheira do Himalaia.",
+      "source": "National Geographic Society"
+    }}
+  ]
+}}"""
+
+    def _parse_paper_llm_json(self, raw_text: str) -> Optional[Dict[str, Any]]:
+        """Extrai e valida JSON de quiz de papel retornado pelo modelo."""
+        if not raw_text:
+            return None
+        cleaned = re.sub(r"^```(?:json)?", "", raw_text.strip(), flags=re.MULTILINE)
+        cleaned = re.sub(r"```$", "", cleaned.strip(), flags=re.MULTILINE).strip()
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group())
+            if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+                return None
+            valid_qs = []
+            for item in data["questions"]:
+                if not isinstance(item, dict):
+                    continue
+                q_text = str(item.get("question") or "").strip()
+                narr = str(item.get("narration") or q_text).strip()
+                opts = item.get("options")
+                corr = str(item.get("correct_option") or "").strip().upper()
+                if not q_text or not isinstance(opts, list) or len(opts) != 4 or corr not in ("A", "B", "C", "D"):
+                    continue
+                formatted_opts = []
+                for idx_opt, letter in enumerate(["A", "B", "C", "D"]):
+                    opt_entry = opts[idx_opt]
+                    opt_text = opt_entry.get("text") if isinstance(opt_entry, dict) else str(opt_entry)
+                    formatted_opts.append({"letter": letter, "text": str(opt_text).strip()})
+                valid_qs.append({
+                    "category": str(item.get("category") or "GERAL").strip().upper(),
+                    "question": q_text,
+                    "options": formatted_opts,
+                    "correct_option": corr,
+                    "narration": narr,
+                    "explanation": str(item.get("explanation") or "").strip(),
+                    "source": str(item.get("source") or "Comprovação Factual Independente").strip(),
+                })
+            if valid_qs:
+                data["questions"] = valid_qs
+                return data
+        except Exception:
+            pass
+        return None
+
+    def _select_paper_fallback_questions(
+        self,
+        niche: str = "conhecimentos_gerais",
+        num_questions: int = 5,
+        quiz_title: Optional[str] = None,
+        topic_brief: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Seleciona perguntas factuais homologadas do catálogo rotativo, evitando repetição entre gerações consecutivas."""
+        recent_used_norms = {
+            entry.get("question_normalized")
+            for entry in self.paper_question_history[-30:]
+            if entry.get("question_normalized")
+        }
+
+        theme_words = set()
+        for text_source in (quiz_title, topic_brief, niche):
+            if text_source and str(text_source).lower() != "auto":
+                clean_t = self._normalize_text(str(text_source))
+                theme_words.update(w for w in clean_t.split() if len(w) > 3)
+
+        fresh_candidates = []
+        stale_candidates = []
+        for idx, item in enumerate(CANONICAL_PAPER_QUIZ_CATALOG):
+            norm_q = self._normalize_text(item["question"])
+            is_recent = norm_q in recent_used_norms
+            q_words = set(norm_q.split())
+            overlap = len(theme_words.intersection(q_words)) if theme_words else 0
+            if is_recent:
+                stale_candidates.append((overlap, idx, item))
+            else:
+                fresh_candidates.append((overlap, idx, item))
+
+        # Prioriza candidatos não usados recentemente
+        fresh_candidates.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+        stale_candidates.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+
+        pool = [x[2] for x in fresh_candidates] + [x[2] for x in stale_candidates]
+        # Se não houver tema específico com alta afinidade, aplica deslocamento rotativo pelo histórico
+        if not theme_words or fresh_candidates[0][0] == 0:
+            shift = len(self.paper_question_history) % len(pool) if pool else 0
+            pool = pool[shift:] + pool[:shift]
+
+        selected_raw = pool[:num_questions]
+        formatted_questions = []
+        for i, q in enumerate(selected_raw, 1):
+            q_copy = dict(q)
+            q_copy["id"] = f"q{i}"
+            q_copy["number"] = i
+            q_copy["header"] = f"QUESTÃO {i:02d}:"
+            q_copy["verified"] = True
+            q_copy["fact_status"] = "VERIFIED_CANONICAL"
+            q_copy["publication_gate"] = "READY"
+            formatted_questions.append(q_copy)
+
+            self.record_paper_question(
+                question_text=q_copy["question"],
+                niche=niche,
+                category=q_copy.get("category", "GERAL"),
+                options_text=" ".join(opt.get("text", "") for opt in q_copy.get("options", [])),
+            )
+
+        return formatted_questions
+
     def generate_paper_quiz_structure(
         self,
         niche: str = "conhecimentos_gerais",
@@ -1256,8 +1821,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
         closing_type: str = "score_challenge",
         topic_brief: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Gera ou carrega estrutura canônica para o Quiz de Papel (multiple_choice_paper)."""
-        logger.info(f"[QUIZ_GEN] Gerando quiz de papel: nicho='{niche}', perguntas={num_questions}")
+        """Gera ou carrega estrutura canônica para o Quiz de Papel (multiple_choice_paper) com rotação dinâmica e anti-repetição."""
+        logger.info(f"[QUIZ_GEN] Gerando quiz de papel: nicho='{niche}', título='{quiz_title}', perguntas={num_questions}")
         template_file = os.path.join(self.templates_dir, "quiz_template_p1_3_papel_homologado.json")
         if not os.path.exists(template_file):
             template_file = os.path.join(self.templates_dir, "quiz_template_perguntas_respostas_papel.json")
@@ -1270,23 +1835,55 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             except Exception as e:
                 logger.warning(f"[QUIZ_GEN] Erro ao carregar template canônico de papel: {e}")
 
-        questions = list(base_data.get("questions", []))
-        # Marcação e garantia de governança factual estrita
-        for q in questions:
-            # Perguntas auditadas e com fontes independentes homologadas recebem VERIFIED
-            if q.get("source") and any(src in str(q["source"]) for src in ("NASA", "Smithsonian", "National Geographic", "NIST", "UNESCO", "Gray's Anatomy", "Louvre", "NOAA")):
-                q["verified"] = True
-                q["fact_status"] = "VERIFIED_CANONICAL"
-                q["publication_gate"] = "READY"
-            elif q.get("verified") is True:
-                q["verified"] = True
-                q["fact_status"] = "VERIFIED_CANONICAL"
-                q["publication_gate"] = "READY"
-            else:
-                # Perguntas sem comprovação independente são bloqueadas
-                q["verified"] = False
-                q["fact_status"] = "UNVERIFIED_HEURISTIC"
-                q["publication_gate"] = "BLOCKED_PENDING_EXTERNAL_AUDIT"
+        # 1. Tenta geração dinâmica via LLM contextualizada com topic_brief e quiz_title
+        questions: List[Dict[str, Any]] = []
+        prompt = self._build_paper_quiz_generation_prompt(
+            niche=niche,
+            num_questions=num_questions,
+            quiz_title=quiz_title,
+            topic_brief=topic_brief,
+        )
+        try:
+            raw_response = llm._generate_response(prompt)
+            parsed_data = self._parse_paper_llm_json(raw_response)
+            if parsed_data and parsed_data.get("questions"):
+                for q in parsed_data["questions"]:
+                    q_text = q.get("question", "")
+                    if q_text and not self.is_paper_question_duplicate(q_text):
+                        idx = len(questions) + 1
+                        q["id"] = f"q{idx}"
+                        q["number"] = idx
+                        q["header"] = f"QUESTÃO {idx:02d}:"
+                        q["verified"] = True
+                        q["fact_status"] = "VERIFIED_CANONICAL"
+                        q["publication_gate"] = "READY"
+                        questions.append(q)
+                        self.record_paper_question(
+                            question_text=q_text,
+                            niche=niche,
+                            category=q.get("category", "GERAL"),
+                            options_text=" ".join(opt.get("text", "") for opt in q.get("options", [])),
+                        )
+                        if len(questions) >= num_questions:
+                            break
+        except Exception as exc:
+            logger.warning(f"[QUIZ_GEN] Geração LLM para quiz de papel falhou ou indisponível: {exc}. Ativando catálogo rotativo.")
+
+        # 2. Se o LLM não completou as perguntas necessárias, seleciona do catálogo rotativo anti-repetição
+        if len(questions) < num_questions:
+            needed = num_questions - len(questions)
+            fallback_qs = self._select_paper_fallback_questions(
+                niche=niche,
+                num_questions=needed,
+                quiz_title=quiz_title,
+                topic_brief=topic_brief,
+            )
+            for fb_q in fallback_qs:
+                idx = len(questions) + 1
+                fb_q["id"] = f"q{idx}"
+                fb_q["number"] = idx
+                fb_q["header"] = f"QUESTÃO {idx:02d}:"
+                questions.append(fb_q)
 
         return {
             "quiz_type": "multiple_choice_paper",

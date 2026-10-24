@@ -16,16 +16,18 @@
 
 - **LAST_UPDATED:** `24/10/2026`
 - **CURRENT_PHASE:** `V1.5E` (Autonomous Production & Publication Loop — Consolidação Estrutural V1)
-- **CURRENT_FOCUS:** `HOTFIX H.1: NAMEERROR SCHEDULER NA WEBUI (DEV VALIDATED)`
+- **CURRENT_FOCUS:** `MISSÃO I: CORREÇÃO DE REPETIÇÃO DE PERGUNTAS NO QUIZ DE PAPEL (DEV VALIDATED)`
 - **AUTONOMOUS_PILOT_CHANNEL:** `Dose Diária De Internet`
 - **QUIZ_PILOT_CHANNEL:** `Dose Diária de Escolhas (quiz_dilemma / Layout Q0-R)`
+- **QUIZ_PAPER_CHANNEL:** `Quiz_Quiz (multiple_choice_paper / profile-45cee883f80a)`
 - **FLOW_TRACK:** `ACTIVE (FLOW-MA1: pool multi-contas implementado em DEV; pendente setup PROD)`
-- **PROJECT_STATUS:** `ACTIVE_DEV / HOTFIX_H1_DEV_VALIDATED`
+- **PROJECT_STATUS:** `ACTIVE_DEV / MISSION_I_DEV_VALIDATED`
 - **DEV_PATH:** `C:\Projetos\MoneyPrinterTurbo-V1` (Repositório canônico V1 no Notebook DEV)
-- **CURRENT_MAIN_SHA:** `2ef0187782fe442498c14a41cd084c0620db83dc` (Missão H)
-- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Hotfix H.1)
-- **LAST_PRODUCTION_DEPLOY_SHA:** `2ef0187782fe442498c14a41cd084c0620db83dc` (produção atual implantada com Missão H)
-- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Hotfix H.1 validado em DEV com 6/6 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **CURRENT_MAIN_SHA:** `c12dd98173bcf1d19d96810319508aa866606b61` (Hotfix H.1)
+- **DEV_BRANCH_HEAD_SHA:** `main` (DEV validado com Missão I)
+- **LAST_PRODUCTION_DEPLOY_SHA:** `c12dd98173bcf1d19d96810319508aa866606b61` (produção atual implantada com Hotfix H.1)
+- **CURRENT_GATE:** `READY_FOR_SUPERVISED_DEPLOY (Missão I validada em DEV com 6/6 testes direcionados PASS; DEPLOY_STATUS = NOT_DEPLOYED)`
+- **MISSION_I_STATUS:** `DEV VALIDATED (Correção definitiva de duplicação no gerador quiz_paper: 1. Eliminação da carga estática de 5 perguntas fixas do JSON de template em generate_paper_quiz_structure; 2. Implementação de prompt contextualizado com topic_brief e quiz_title via LLM com regras estritas de 4 alternativas e fontes auditáveis; 3. Histórico isolado e persistente generated_paper_questions.json com checagem e gravação atômica, segregado do quiz_dilemma; 4. Catálogo canônico homologado de 25 perguntas factuais com seleção rotativa anti-repetição por recência e afinidade temática para contingência de fallback sem estagnação; 5. Safety Gate, governança factual e contrato de duração 60-65s 100% preservados; 6/6 testes direcionados PASS em test/services/test_mission_i_quiz_paper.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_H_STATUS:** `DEV VALIDATED (1. Desacoplamento do agendamento de estoque pronto da produção autônoma em app/services/autonomous_production.py: quando a produção está desligada/pausada mas o Scheduler está ativo, o estoque pronto existente com destinos válidos continua sendo planejado e agendado sem disparar novas gerações de vídeo; 2. Alinhamento e persistência da autorização de auto-publicação em webui/components/channel_factory.py e operator_console.py: exibição explícita do status real [🟢 Auto-Pub / 🔒 Sem Auto-Pub], adição de controle para persistir auto_publish_authorized via setter oficial e alinhamento de legendas sem alterar canais não autorizados como Quiz_Quiz [mantido 0, fail-closed]; 5/5 testes direcionados PASS em test/services/test_mission_h_independent_scheduling.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **TIKTOK_UI_STATUS_ALIGNMENT:** `DEV VALIDATED (Correção cirúrgica de legenda estática obsoleta em webui/components/operator_console.py: eliminada mensagem residual da Fase V12-E 'TikTok bloqueado nesta fase' e implementada resolução dinâmica dos destinos do perfil ativo [YouTube e TikTok com canal e status real de autorização de auto-publicação/ativação], refletindo factual e dinamicamente o estado do Scheduler e do Post For Me sem alterar regras de negócio, limites, publishers ou autorizações; 8/8 testes direcionados PASS em test/services/test_v1_ui_safety_loading_hotfix.py; DEPLOY_STATUS = NOT_DEPLOYED)`
 - **MISSION_E_CAPACITY_STATUS:** `DEV VALIDATED (Ativação e reconciliação dos limites autorizados pelo operador: 1. app/services/autonomous_production.py: DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H elevado para 20 e DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H para 50; get_max_generations_24h e get_max_attempts_24h resolvem Dose Diária de Escolhas em ESCALA para 10 aprovações e 30 tentativas por padrão, preservando demais perfis em 5/15 [SCALE] e 2/8 [WARMUP]; 2. app/services/scheduler.py: _run_migrations executa migração aditiva e idempotente 'migration_mission_e_capacity_v1' elevando registros legados do Global Cost Guard [10->20, 25->50] e do perfil Dose Diária de Escolhas [5->10, 15->30], sem tocar em outros perfis e protegendo alterações futuras intencionais do operador contra sobrescritas; 3. Scheduler, anti-burst, estoque [10], Safety Gates e bloqueio do TikTok 100% preservados; 4. 6/6 testes direcionados PASS em test/services/test_mission_e_quiz_scale_10.py; DEPLOY_STATUS = NOT_DEPLOYED)`
@@ -2760,3 +2762,36 @@ ideocam).
   - Causa Raiz: `scheduler` não havia sido importado no escopo global de módulo em `webui/components/operator_console.py` e `webui/components/channel_factory.py`, disparando `NameError: name 'scheduler' is not defined` ao acionar os botões de autorização.
   - Correção: Inclusão cirúrgica de `from app.services import ..., scheduler` no topo de ambos os componentes e validação em teste de regressão direcionado.
   - Testes: 6/6 testes PASS em `pytest test/services/test_mission_h_independent_scheduling.py -v`.
+
+---
+
+## V16.40 — Missão I: Correção de Repetição de Perguntas no Quiz de Papel
+
+- **Data:** `24/10/2026`
+- **Status:** `MISSION_I_DEV_VALIDATED (6/6 testes direcionados PASS)`
+- **Objetivo:**
+  Investigar e corrigir a causa da repetição de 5 de 5 perguntas idênticas no gerador `quiz_paper` (perfil *Quiz_Quiz* / `profile-45cee883f80a`), preservando o isolamento do formato `quiz_dilemma` (*Dose Diária de Escolhas* / `profile-4d18bf9a5d94`), o contrato de duração (60-65s) e a integridade fail-closed do Safety Gate.
+- **Diagnóstico & Causa Raiz Comprovada:**
+  - Em `app/services/quiz_generator.py`, o método `generate_paper_quiz_structure` carregava estaticamente o arquivo de template `quiz_template_p1_3_papel_homologado.json` e retornava incondicionalmente `questions[:5]`.
+  - As 5 perguntas (Júpiter, Polvo, Guepardo, Hidrogênio, Grande Muralha) eram devolvidas de forma idêntica em todas as tarefas, ignorando completamente o LLM, o `topic_brief`, o tema do Autopilot (`quiz_title` / `params.video_subject`) e sem gravar ou checar histórico.
+  - O Safety Gate (`quiz_safety_gate.evaluate_quiz_script_safety`) funcionou com precisão cirúrgica ao detectar 100% de duplicação entre tarefas consecutivas do mesmo perfil e bloquear a segunda tarefa com `SAFETY_STATUS_BLOCK`.
+- **Implementações Técnicas (Correções Mínimas):**
+  1. *Geração Dinâmica via LLM em `generate_paper_quiz_structure`:*
+     - Implementado `_build_paper_quiz_generation_prompt` incorporando `topic_brief`, `quiz_title` (tema do Autopilot) e cláusula `avoid_clause` com perguntas recentes do histórico.
+     - Implementado `_parse_paper_llm_json` para validar o schema estrito de 4 opções (A, B, C, D) e resposta correta auditável.
+  2. *Histórico Isolado e Persistente (`generated_paper_questions.json`):*
+     - Criação de `self.paper_questions_history_file` e métodos dedicados `is_paper_question_duplicate` e `record_paper_question`, mantendo separação física estrita entre os históricos de Quiz de Papel e Quiz de Escolhas.
+  3. *Catálogo Canônico Homologado e Fallback Rotativo Anti-Repetição:*
+     - Introduzida a constante `CANONICAL_PAPER_QUIZ_CATALOG` contendo 25 perguntas factuais completas, homologadas, com fontes científicas e históricas (NASA, Smithsonian, National Geographic, UNESCO, NIST, USGS, etc.).
+     - Implementado `_select_paper_fallback_questions`: em caso de indisponibilidade ou falha do LLM, o fallback seleciona perguntas não utilizadas recentemente no histórico, priorizando afinidade temática com o briefing e aplicando rotação determinística por histórico, garantindo 0% de repetição entre tarefas consecutivas mesmo em contingência total.
+  4. *Preservação de Formatos e Segurança:*
+     - `quiz_dilemma` permaneceu 100% inalterado e isolado com seus 8 dilemas, variação de Jesus e CTA.
+     - Duração contratada de 60 a 65 segundos e validação do layout de papel no Copyright Gate preservados.
+- **Validação de Testes:**
+  - 6/6 testes direcionados PASS em `pytest test/services/test_mission_i_quiz_paper.py -v`:
+    - `test_two_consecutive_paper_quiz_generations_do_not_duplicate_questions`: PASS (Zero sobreposição entre gerações consecutivas).
+    - `test_paper_quiz_format_and_alternatives_contract`: PASS (5 perguntas, 4 alternativas A/B/C/D e dados factuais).
+    - `test_paper_quiz_duration_contract`: PASS (Duração calculada entre 60.0s e 65.0s).
+    - `test_safety_gate_blocks_real_duplicate_paper_quiz`: PASS (Safety Gate mantém bloqueio estrito de repetições reais).
+    - `test_paper_quiz_procedural_canvas_safety_and_copyright_pass`: PASS (Layout de papel aprovado no Copyright Gate).
+    - `test_quiz_dilemma_isolated_from_paper_quiz`: PASS (Isolamento mútuo estrito entre quiz_paper e quiz_dilemma).

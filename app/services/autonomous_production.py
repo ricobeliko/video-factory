@@ -2125,8 +2125,15 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     if not ts_ok:
         raise ValueError(f"waiting_technical_or_safety_failed: {ts_reason}")
     persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+    prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
+    target_platforms = resolve_autonomous_planned_platforms(prof_id, db_path=db_path)
     if "youtube" not in persisted_plats and "youtube" not in (task.get("planned_platforms") or []):
-        raise ValueError("waiting_youtube_destination_missing")
+        # Auto-reconciliação para tarefas legítimas de perfil autônomo ativo (Missão G)
+        if "youtube" in target_platforms and profile and profile["profile_id"]:
+            scheduler.save_task_platforms(task_id, target_platforms, db_path=db_path)
+            persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+        else:
+            raise ValueError("waiting_youtube_destination_missing")
     prof = profile_manager.get_profile(profile["profile_id"], db_path=db_path) if profile else None
     if not prof or not prof.get("is_active"):
         raise ValueError("waiting_profile_unavailable")
@@ -2383,6 +2390,33 @@ def _run_autonomous_cycle(
         # 3. Geração em andamento / Incompleta (sem evidência positiva de conclusão)
         # Regra FAIL-CLOSED: ausência de final-*.mp4 NÃO significa finalizada/reprovada.
         # Exige evidência positiva: arquivo existe, tamanho > 0 bytes, e estado não está PENDING/PROCESSING.
+        is_worker_alive = bool(
+            (webui_task.has_active_generation_tasks() and current_task_id in webui_task.get_active_task_ids())
+            or (task_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING))
+        )
+        if not has_final_video and not is_worker_alive:
+            # Recuperação determinística de interrupção inesperada (queda de energia / reboot - Missão G)
+            failed_task_id = current_task_id
+            _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
+            _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
+            msg = f"Geração da tarefa {failed_task_id} interrompida por reinicialização do sistema (queda de energia/reboot). Vídeo final ausente."
+            _set_status(KEY_AUTONOMOUS_LAST_ERROR, msg)
+            _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+            operator_console.log_operational_event(
+                component="autonomous_production",
+                severity=operator_console.SEVERITY_WARNING,
+                event_type="generation_interrupted_recovery",
+                task_id=failed_task_id,
+                message=msg,
+                db_path=db_path,
+            )
+            return {
+                "status": "recovery_error",
+                "task_id": failed_task_id,
+                "reason": "generation_interrupted",
+                "message": msg,
+            }
+
         is_still_generating = (
             not has_final_video
             or task_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING)
@@ -3069,6 +3103,10 @@ def _run_autonomous_cycle(
 
     _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, new_task_id)
     _set_status(KEY_AUTONOMOUS_STATE, STATE_GENERATING)
+    # Persistência antecipada dos destinos planejados no SQLite (Missão G):
+    planned_dests = resolve_autonomous_planned_platforms(target_profile_id, db_path=db_path)
+    if planned_dests:
+        scheduler.save_task_platforms(new_task_id, planned_dests, db_path=db_path)
     msg = f"Iniciando geração autônoma: '{chosen_topic}' (task_id={new_task_id})"
     _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
 

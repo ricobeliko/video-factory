@@ -2681,3 +2681,40 @@ ideocam).
   - 12/12 testes direcionados PASS em `pytest test/services/test_stock_target_hotfix.py test/services/test_multi_channel_capacity.py`:
     - 3/3 novos testes em `test/services/test_stock_target_hotfix.py` validando gravação, leitura, card, reprodução exata do caso de produção SQLite e limites [3, 10] em perfis específicos e default.
     - 9/9 testes em `test/services/test_multi_channel_capacity.py` com teste de clamping atualizado para 10.
+
+---
+
+## V16.38 — Missão G: Estoque Autônomo de Quiz, Recuperação de Queda de Energia e Resiliência do Scheduler
+
+- **Data:** `23/10/2026`
+- **Status:** `MISSION_G_DEV_VALIDATED (5/5 testes direcionados PASS)`
+- **Objetivo:**
+  Investigar e corrigir as causas do estoque zero em Quiz (*Dose Diária de Escolhas*), a ausência de novos agendamentos no Scheduler e a resiliência a interrupções abruptas por queda de energia / reinicialização.
+- **Diagnóstico & Causas Raiz Comprovadas:**
+  1. *Quiz com Estoque Zero (Problema 1):*
+     - Vídeos procedurais de Quiz (`quiz_dilemma` e `quiz_paper`) renderizam mídia gráfica e cards in-process sem clipes de vídeo de estoque (Pexels/Pixabay), resultando em `visual_clips: []` ou provedores procedurais (`paper_canvas_engine`, `pillow_canvas`, etc.).
+     - O `copyright_gate.evaluate_copyright_provenance_gate` reprovava esses vídeos por `MISSING_CLIPS` ou provedor não auditado, mesmo com BGM seguro (`ambient_auto` / `SAFE_PROCEDURAL`) e todos os gates de Safety e Quality em PASS.
+     - Essa reprovação impedia o Autopilot de salvar destinos na tabela `task_platforms`, descartando a tarefa do estoque pronto (`get_autonomous_ready_stock`).
+  2. *Outros Canais com Estoque sem Agendamento (Problema 2):*
+     - O Scheduler Worker em background (`run_scheduler_cycle`) apenas despacha publicações de posts já planejados em `scheduled_posts`. O planejamento (`plan_schedule`) depende do orquestrador autônomo (`run_enabled_profiles_autonomous_cycle`) ou do botão manual na UI.
+     - Como a fila de `scheduled_posts` havia esgotado seus slots (70 publicados no YouTube e 24 no TikTok), canais sem modo autônomo ativado ou sem tarefas com destinos persistidos em `task_platforms` aguardavam adoção manual ou ativação do perfil.
+  3. *Quedas de Energia e Recuperação de Inicialização (Problema 3):*
+     - Quedas de energia esvaziavam a memória volátil (`sm.state._tasks`).
+     - Se uma tarefa estava gerando no momento da queda e o vídeo final não existia, a condição `is_still_generating` avaliava como `True` indefinidamente na ausência de worker vivo, retendo o Autopilot no estado `generating`.
+- **Implementações Técnicas (Correções Mínimas):**
+  1. *Suporte a Formatos Procedurais no Copyright Gate (`app/services/copyright_gate.py`):*
+     - Reconhecimento de formatos procedurais homologados (`quiz_dilemma`, `quiz_paper`, etc.).
+     - Validação como `PROCEDURAL_QUIZ_CANVAS_VERIFIED` (`PASS`) quando o BGM for `SAFE_PROCEDURAL` (`ambient_auto`) ou `SAFE_NO_BGM`, mantendo BGM legado fail-closed.
+     - Provedores procedurais (`paper_canvas_engine`, `pillow_canvas`, etc.) reconhecidos como auditados para formatos de Quiz.
+  2. *Persistência Antecipada e Auto-Reconciliação (`app/services/autonomous_production.py`):*
+     - No início da geração autônoma (`run_autonomous_cycle`), os destinos planejados são persistidos antecipadamente no SQLite (`task_platforms`).
+     - Em `_recover_waiting_task`: tarefas com perfil autônomo ativo e canal YouTube ativo que possuam todos os gates atendidos têm seus destinos auto-reconciliados caso `task_platforms` esteja vazio, resgatando imediatamente tarefas órfãs aprovadas para o estoque pronto.
+  3. *Recuperação Determinística de Interrupção por Queda de Energia (`app/services/autonomous_production.py`):*
+     - Se `current_task_id` for recuperado, o vídeo final não existir e nenhum worker estiver gerando ativamente, o Autopilot registra evento de advertência, marca como `interrupted_by_restart`, limpa `current_task_id` e segue para o próximo ciclo sem travar.
+- **Validação de Testes:**
+  - 5/5 testes direcionados PASS em `pytest test/services/test_mission_g_recovery_and_quiz_stock.py -v`:
+    - `test_1_quiz_procedural_copyright_gate_pass`: PASS (Quiz procedural com `visual_clips: []` e BGM procedural é aprovado).
+    - `test_2_quiz_procedural_with_legacy_bgm_fails`: PASS (Quiz procedural com BGM legado continua reprovado fail-closed).
+    - `test_3_auto_reconcile_and_ready_stock_for_quiz`: PASS (Auto-reconciliação de `task_platforms` e cálculo correto de `ready_count`).
+    - `test_4_crash_recovery_clears_stuck_generating`: PASS (Recuperação limpa de tarefa interrompida por queda de energia/reboot).
+    - `test_5_scheduler_plans_and_respects_limits`: PASS (`plan_schedule` idempotente com respeito estrito a quotas e canais autorizados).

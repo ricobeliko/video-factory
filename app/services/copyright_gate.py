@@ -1192,7 +1192,45 @@ def evaluate_copyright_provenance_gate(
             )
 
     # 2. Verificação de Ativos Visuais
+    ALLOWED_QUIZ_PROCEDURAL_PROVIDERS = frozenset({
+        "paper_canvas_engine",
+        "pillow_canvas",
+        "internal_procedural",
+        "quiz_engine",
+        "pillow",
+        "quiz_asset_manager",
+    })
+    v_format = str(
+        params_data.get("video_format")
+        or params_data.get("narrative_structure")
+        or script_data.get("video_format")
+        or script_data.get("narrative_structure")
+        or ""
+    ).lower().strip()
+    is_procedural_quiz = (
+        v_format in ("quiz_dilemma", "quiz_paper", "quiz_escolhas_impossiveis", "quiz")
+        or bool(script_data.get("quiz_data"))
+    )
+
     if not visual_clips:
+        if is_procedural_quiz:
+            bgm_final_status = (
+                "SAFE_PROCEDURAL"
+                if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "SAFE_PROCEDURAL")
+                else "SAFE_NO_BGM"
+            )
+            return (
+                True,
+                "Formato de Quiz procedural homologado (canvas gráfico/cards internos sem clipes externos)",
+                {
+                    "copyright_provenance_gate": "PASS",
+                    "bgm_status": bgm_final_status,
+                    "visual_clips_count": 0,
+                    "visual_status": "PROCEDURAL_QUIZ_CANVAS_VERIFIED",
+                    "procedural_format": v_format or "quiz_procedural",
+                },
+            )
+
         fallback = _try_manual_legacy_approval_fallback(
             task_id=task_id,
             bgm_info=bgm_info,
@@ -1215,6 +1253,8 @@ def evaluate_copyright_provenance_gate(
     for idx, clip in enumerate(visual_clips):
         provider = str(clip.get("provider") or "").lower().strip()
         if not clip.get("local_file"):
+            if is_procedural_quiz:
+                continue
             fallback = _try_manual_legacy_approval_fallback(
                 task_id=task_id,
                 bgm_info=bgm_info,
@@ -1252,8 +1292,8 @@ def evaluate_copyright_provenance_gate(
                 )
             flow_clips_verified += 1
             clip["provenance_status"] = "GENERATED_FLOW_PROVENANCE_VERIFIED"
-        elif provider in ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS:
-            # pexels, pixabay, coverr
+        elif provider in ALLOWED_AUTONOMOUS_VISUAL_PROVIDERS or (is_procedural_quiz and provider in ALLOWED_QUIZ_PROCEDURAL_PROVIDERS):
+            # pexels, pixabay, coverr ou provedores procedurais de Quiz homologados
             pass
         else:
             fallback = _try_manual_legacy_approval_fallback(

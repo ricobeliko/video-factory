@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Central de Frota</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0A0C11}
+*{box-sizing:border-box}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid #8B9DFF;outline-offset:2px}
+.row:hover{background:#141923}
+.chip:hover{border-color:#3A4254}
+.sq:hover{transform:scale(1.18)}
+.btn:hover{filter:brightness(1.15)}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+.bob{animation:bob .7s steps(2,end) infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.blink{animation:blink .8s steps(2,end) infinite}
+@keyframes hop{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+.hop{animation:hop .5s steps(2,end) infinite}
+@keyframes wk{0%,49.9%{background-position:0 0}50%,100%{background-position:-144px 0}}
+.wk{animation:wk .8s linear infinite}
+@keyframes cwalk{from{background-position:0 0}to{background-position:-304px 0}}
+.cw{animation:cwalk .6s steps(4) infinite}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#0A0C11;color:#E8EBF1;font-family:'Inter',system-ui,sans-serif;font-size:14px;line-height:1.45">
+
+  <!-- Top bar -->
+  <header style="display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:14px 32px;border-bottom:1px solid #1B2029;background:#0D1016">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="width:28px;height:28px;border-radius:8px;background:{{accent}};display:flex;align-items:center;justify-content:center">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0A0C11" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4l14 8-14 8z"/></svg>
+      </div>
+      <span style="font-weight:700;font-size:15px;letter-spacing:-0.01em">Video Factory</span>
+      <span class="mono" style="font-size:11px;color:#9099AA;border:1px solid #262C39;border-radius:6px;padding:2px 7px">V2</span>
+    </div>
+    <nav style="display:flex;flex-wrap:wrap;gap:4px;margin-left:12px" aria-label="Seções">
+      <a href="#frota" style="padding:7px 12px;border-radius:8px;background:#161B25;color:#E8EBF1;text-decoration:none;font-weight:600;font-size:13px">Frota</a>
+      <a href="#fila" style="padding:7px 12px;border-radius:8px;color:#9099AA;text-decoration:none;font-size:13px">Produção</a>
+      <a href="#pub" style="padding:7px 12px;border-radius:8px;color:#9099AA;text-decoration:none;font-size:13px">Publicação</a>
+      <a href="#rev" style="padding:7px 12px;border-radius:8px;color:#9099AA;text-decoration:none;font-size:13px">Revisão</a>
+      <a href="#sys" style="padding:7px 12px;border-radius:8px;color:#9099AA;text-decoration:none;font-size:13px">Sistema</a>
+    </nav>
+    <div style="flex-grow:1"></div>
+    <label style="display:flex;align-items:center;gap:8px;background:#121620;border:1px solid #222834;border-radius:10px;padding:0 12px;height:38px;min-width:240px">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9099AA" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input type="text" value="{{q}}" onChange="{{onSearch}}" placeholder="Buscar canal ou nicho" aria-label="Buscar canal ou nicho" style="flex-grow:1;background:transparent;border:0;outline:0;color:#E8EBF1;font:inherit;font-size:13px;min-width:0">
+      <span class="mono" style="font-size:11px;color:#9099AA;border:1px solid #2A3040;border-radius:5px;padding:1px 6px">Ctrl K</span>
+    </label>
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#9099AA">
+      <span style="width:7px;height:7px;border-radius:50%;background:#34D399"></span>
+      <span class="mono">PROD · PC Forte</span>
+    </div>
+    <button class="btn" onClick="{{togglePause}}" style="height:38px;padding:0 16px;border-radius:10px;border:1px solid {{pauseBorder}};background:{{pauseBg}};color:{{pauseColor}};font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px">
+      <sc-if value="{{notPaused}}" hint-placeholder-val="{{true}}"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></sc-if>
+      <sc-if value="{{isPaused}}" hint-placeholder-val="{{false}}"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg></sc-if>
+      <span>{{pauseLabel}}</span>
+    </button>
+  </header>
+
+  <main style="max-width:1560px;margin:0 auto;padding:28px 32px 56px;display:flex;flex-direction:column;gap:24px">
+
+    <!-- Title -->
+    <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 24px">
+      <div style="flex-grow:1">
+        <h1 style="margin:0;font-size:26px;font-weight:700;letter-spacing:-0.02em">Frota</h1>
+        <p style="margin:4px 0 0;color:#9099AA;font-size:13.5px">A fábrica faz um vídeo por vez, um canal depois do outro. O que precisa de você aparece primeiro.</p>
+      </div>
+      <span style="font-size:12px;color:#9099AA;border:1px dashed #2A3040;border-radius:8px;padding:5px 10px">Protótipo com dados de exemplo</span>
+    </div>
+
+    <!-- KPIs -->
+    <section aria-label="Resumo da frota" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px">
+      <sc-for list="{{kpis}}" as="k" hint-placeholder-count="5">
+        <div style="background:#10131A;border:1px solid #1B2029;border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:12px;color:#9099AA;font-weight:500">{{k.label}}</span>
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <span class="mono" style="font-size:30px;font-weight:600;letter-spacing:-0.02em;color:{{k.color}}">{{k.value}}</span>
+            <span class="mono" style="font-size:13px;color:#9099AA">{{k.sub}}</span>
+          </div>
+          <div style="height:4px;border-radius:2px;background:#1B2029;overflow:hidden"><div style="height:100%;width:{{k.pct}};background:{{k.bar}};border-radius:2px"></div></div>
+        </div>
+      </sc-for>
+    </section>
+
+    <!-- Live workshop -->
+    <section aria-label="Fábrica ao vivo" style="background:#10131A;border:1px solid #1B2029;border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px">
+        <h2 style="margin:0;font-size:15px;font-weight:600">Fábrica ao vivo</h2>
+        <span style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:{{liveColor}};background:{{liveTint}};border-radius:999px;padding:3px 11px">
+          <span class="{{liveDot}}" style="width:7px;height:7px;border-radius:50%;background:{{liveColor}}"></span>{{liveLabel}}
+        </span>
+        <div style="flex-grow:1"></div>
+        <span style="font-size:12.5px;color:#9099AA">Um canal por vez. Quando um termina, o próximo entra.</span>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+
+        <div style="flex:1 1 780px;min-width:0;overflow-x:auto">
+          <div style="position:relative;width:780px;height:420px;margin:0 auto;border:1px solid #1E2744;border-radius:12px;overflow:hidden;background:radial-gradient(#1A2340 1px,transparent 1px) 0 0/20px 20px,#0A0F1F">
+
+            <svg width="780" height="420" style="position:absolute;left:0;top:0" aria-hidden="true">
+              <path d="M110 168 H670 V350 H110" fill="none" stroke="#2B3659" stroke-width="2" stroke-dasharray="6 6"/>
+            </svg>
+
+            <div style="position:absolute;left:16px;top:14px;font-size:11px;font-weight:600;color:#6F7DA8;letter-spacing:.06em">OFICINA · CANAL DA VEZ</div>
+
+            <sc-for list="{{stations}}" as="s" hint-placeholder-count="6">
+              <div style="position:absolute;left:{{s.left}};top:{{s.top}};width:180px;height:172px">
+                <sc-if value="{{s.hasBubble}}" hint-placeholder-val="{{false}}">
+                  <div style="position:absolute;left:-6px;top:-18px;max-width:190px;background:#FFF3B0;color:#2B2A14;font-size:11px;font-weight:600;border-radius:6px;padding:3px 8px;white-space:nowrap;z-index:3">{{s.bubble}}</div>
+                </sc-if>
+                <img src="/_blob/daa702cf4db33bde876b80f45644809f" alt="" style="position:absolute;left:0;top:24px;width:130px;height:auto;filter:{{s.fx}}">
+                <div class="{{s.cls}}" role="img" aria-label="{{s.alt}}" style="position:absolute;left:58px;top:2px;width:144px;height:134px;background-image:url({{s.sheet}});background-size:576px 134px;background-repeat:no-repeat;background-position:{{s.pos}} 0;filter:{{s.fx}}"></div>
+                <div style="position:absolute;left:0;right:0;top:146px;display:flex;flex-direction:column;gap:5px;padding:0 12px">
+                  <span style="font-size:12px;font-weight:700;color:{{s.labelColor}};letter-spacing:.03em">{{s.label}}</span>
+                  <span style="display:block;height:6px;background:#1B2340"><span style="display:block;height:100%;width:{{s.bar}};background:{{s.barColor}}"></span></span>
+                </div>
+              </div>
+            </sc-for>
+
+            <!-- courier carrying the video -->
+            <div style="position:absolute;left:{{courier.left}};top:{{courier.top}};width:76px;z-index:4;transition:left 1s steps(10,end),top 1s steps(10,end);text-align:center">
+              <div class="mono" style="font-size:10px;font-weight:700;color:#0A0F1F;background:{{courier.chip}};padding:1px 5px;display:inline-block;margin-bottom:1px">{{courier.ini}}</div>
+              <div class="{{courier.cls}}" role="img" aria-label="Vídeo em andamento" style="width:76px;height:66px;margin:0 auto;background-image:url(/_blob/acb64ab408a817d6b131a18fa4412564);background-size:456px 66px;background-repeat:no-repeat;background-position:{{courier.pos}} 0"></div>
+            </div>
+
+            <!-- decoration -->
+            <svg width="30" height="36" viewBox="0 0 30 36" shape-rendering="crispEdges" style="position:absolute;right:18px;bottom:16px" aria-hidden="true">
+              <rect x="13" y="8" width="4" height="12" fill="#2DE2A6"/><rect x="7" y="12" width="6" height="4" fill="#2DE2A6"/><rect x="17" y="6" width="6" height="4" fill="#2DE2A6"/>
+              <rect x="6" y="20" width="18" height="14" fill="#FF7A59"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Side panel -->
+        <div style="flex:1 1 300px;min-width:260px;display:flex;flex-direction:column;gap:12px">
+          <div style="background:#0D1016;border:1px solid #1E2744;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+            <div style="font-size:11.5px;color:#6F7DA8;font-weight:600;letter-spacing:.06em">AGORA NA OFICINA</div>
+            <div>
+              <div style="font-size:16px;font-weight:700;letter-spacing:-0.01em">{{now.name}}</div>
+              <div style="font-size:12.5px;color:#9099AA">{{now.typeLabel}} · vídeo <span class="mono">{{now.num}}</span></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="flex-grow:1;height:7px;background:#1B2340"><span style="display:block;height:100%;width:{{now.pct}};background:{{now.color}}"></span></span>
+              <span class="mono" style="font-size:12.5px;font-weight:600">{{now.pctText}}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <sc-for list="{{agents}}" as="a" hint-placeholder-count="6">
+                <div style="display:flex;align-items:center;gap:9px;font-size:12.5px">
+                  <span style="width:9px;height:9px;background:{{a.color}}"></span>
+                  <span style="flex-grow:1;color:#D4D9E3">{{a.name}}</span>
+                  <span style="font-size:11px;font-weight:700;letter-spacing:.04em;color:{{a.stColor}}">{{a.st}}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:#0D1016;border:1px solid #1E2744;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11.5px;color:#6F7DA8;font-weight:600;letter-spacing:.06em">PRÓXIMOS NA FILA</span>
+              <span class="mono" style="font-size:12px;color:#9099AA">{{doneCount}} prontos nesta sessão</span>
+            </div>
+            <sc-for list="{{upNext}}" as="u" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:10px;font-size:13px">
+                <span class="mono" style="width:18px;font-size:12px;color:#6F7DA8">{{u.pos}}</span>
+                <span style="flex-grow:1">{{u.name}}</span>
+                <span style="font-size:11.5px;font-weight:500;color:{{u.typeColor}}">{{u.typeLabel}}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:7px;padding:2px 2px 0">
+            <sc-for list="{{log}}" as="e" hint-placeholder-count="5">
+              <div style="display:flex;gap:9px;align-items:flex-start;font-size:12px;line-height:1.4">
+                <span style="width:7px;height:7px;background:{{e.color}};margin-top:5px;flex:none"></span>
+                <span style="flex-grow:1;color:#C3CAD8">{{e.text}}</span>
+                <span class="mono" style="font-size:11px;color:#6B7385;flex:none">{{e.time}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <p style="margin:0;font-size:12.5px;color:#9099AA">Animação simulada. Na versão real, cada passo vem dos eventos de execução que o backend já tem. Os canais com Google Flow demoram mais na etapa de cenas.</p>
+    </section>
+
+    <!-- Attention + heat strip -->
+    <section style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch">
+
+      <div style="flex:2 1 560px;min-width:0;background:#10131A;border:1px solid #1B2029;border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <h2 style="margin:0;font-size:15px;font-weight:600">Precisa de você</h2>
+          <span class="mono" style="font-size:12px;background:#2A1E1E;color:#FF9C9C;border-radius:999px;padding:1px 9px">{{attentionCount}}</span>
+        </div>
+        <sc-for list="{{attention}}" as="a" hint-placeholder-count="3">
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;background:#0D1016;border:1px solid #1B2029;border-radius:10px;padding:11px 14px">
+            <span style="width:26px;height:26px;border-radius:7px;background:{{a.tint}};color:{{a.color}};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px" aria-hidden="true">{{a.glyph}}</span>
+            <div style="flex:1 1 240px;min-width:0">
+              <div style="font-weight:600;font-size:13.5px">{{a.name}} <span style="font-weight:400;color:{{a.color}};font-size:12px">· {{a.statusLabel}}</span></div>
+              <div style="color:#9099AA;font-size:12.5px">{{a.issue}}</div>
+            </div>
+            <button class="btn" onClick="{{a.open}}" style="height:32px;padding:0 14px;border-radius:8px;border:1px solid #2A3040;background:#161B25;color:#E8EBF1;font-weight:600;font-size:12.5px">{{a.action}}</button>
+          </div>
+        </sc-for>
+        <sc-if value="{{noAttention}}" hint-placeholder-val="{{false}}">
+          <div style="color:#9099AA;font-size:13px;padding:10px 2px">Nada pendente. Todos os canais estão em dia.</div>
+        </sc-if>
+      </div>
+
+      <div style="flex:1 1 380px;min-width:0;background:#10131A;border:1px solid #1B2029;border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <h2 style="margin:0;font-size:15px;font-weight:600">Mapa da frota</h2>
+          <span class="mono" style="font-size:12px;color:#9099AA">{{totalChannels}} canais</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <sc-for list="{{channels}}" as="c" hint-placeholder-count="24">
+            <button class="sq" onClick="{{c.open}}" title="{{c.name}}" aria-label="{{c.ariaLabel}}" style="width:26px;height:26px;border-radius:6px;border:2px solid {{c.ring}};background:{{c.sqBg}};color:{{c.sqFg}};font-size:12px;font-weight:700;padding:0;line-height:1;transition:transform .12s">{{c.glyph}}</button>
+          </sc-for>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:#9099AA">
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:#1F6F52"></span>Em dia</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:#2B5FB8"></span>Na oficina</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:#B47A12"></span>Atenção</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:#B3402F"></span>Bloqueado</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:#2A3040"></span>Pausado</span>
+        </div>
+        <p style="margin:0;font-size:12.5px;color:#9099AA">Cabe 1 canal ou 100 na mesma tela. Clique num quadrado para abrir o canal.</p>
+      </div>
+    </section>
+
+    <!-- Table + drawer -->
+    <section style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+
+      <div style="flex:999 1 620px;min-width:0;background:#10131A;border:1px solid #1B2029;border-radius:14px;overflow:hidden">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #1B2029">
+          <h2 style="margin:0;font-size:15px;font-weight:600;margin-right:6px">Todos os canais</h2>
+          <sc-for list="{{filters}}" as="f" hint-placeholder-count="5">
+            <button class="chip" onClick="{{f.pick}}" style="height:30px;padding:0 12px;border-radius:999px;border:1px solid {{f.border}};background:{{f.bg}};color:{{f.fg}};font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:7px">
+              <span>{{f.label}}</span><span class="mono" style="font-size:11.5px;opacity:.75">{{f.count}}</span>
+            </button>
+          </sc-for>
+        </div>
+
+        <div style="overflow-x:auto">
+          <div style="min-width:860px">
+            <div style="display:grid;grid-template-columns:minmax(210px,2fr) 110px 128px 150px 90px 100px 64px;gap:12px;padding:9px 18px;font-size:11.5px;color:#9099AA;font-weight:500;border-bottom:1px solid #1B2029;text-transform:uppercase;letter-spacing:.04em">
+              <span>Canal</span><span>Tipo</span><span>Status</span><span>Estoque</span><span>Hoje</span><span>Aprov. 24h</span><span>Auto</span>
+            </div>
+            <sc-for list="{{rows}}" as="r" hint-placeholder-count="8">
+              <div class="row" style="display:grid;grid-template-columns:minmax(210px,2fr) 110px 128px 150px 90px 100px 64px;gap:12px;align-items:center;padding:{{rowPad}} 18px;border-bottom:1px solid #151922;background:{{r.rowBg}}">
+                <button onClick="{{r.open}}" style="background:transparent;border:0;padding:0;text-align:left;color:#E8EBF1;display:flex;flex-direction:column;gap:1px;min-width:0">
+                  <span style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{r.name}}</span>
+                  <span style="font-size:12px;color:#9099AA">{{r.niche}} · {{r.last}}</span>
+                </button>
+                <span style="font-size:12px;font-weight:500;color:{{r.typeColor}}">{{r.typeLabel}}</span>
+                <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:{{r.color}};font-weight:500">
+                  <span class="{{r.dotClass}}" style="width:8px;height:8px;border-radius:50%;background:{{r.color}}"></span>{{r.statusLabel}}
+                </span>
+                <span style="display:flex;align-items:center;gap:10px">
+                  <span style="flex-grow:1;height:6px;border-radius:3px;background:#1B2029;overflow:hidden"><span style="display:block;height:100%;width:{{r.stockPct}};background:{{r.stockBar}};border-radius:3px"></span></span>
+                  <span class="mono" style="font-size:12px;color:#C9CFDB;min-width:36px;text-align:right">{{r.stock}}</span>
+                </span>
+                <span class="mono" style="font-size:13px"><span style="color:#E8EBF1">{{r.today}}</span><span style="color:#9099AA"> / {{r.goal}}</span></span>
+                <span class="mono" style="font-size:13px;color:{{r.apprColor}}">{{r.appr}}</span>
+                <button onClick="{{r.toggle}}" aria-label="{{r.toggleLabel}}" aria-pressed="{{r.autoOn}}" style="width:40px;height:22px;border-radius:999px;border:0;padding:0;background:{{r.togBg}};position:relative;transition:background .15s">
+                  <span style="position:absolute;top:3px;left:{{r.knob}};width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span>
+                </button>
+              </div>
+            </sc-for>
+            <sc-if value="{{noRows}}" hint-placeholder-val="{{false}}">
+              <div style="padding:36px 18px;color:#9099AA;font-size:13px;text-align:center">Nenhum canal com esse filtro.</div>
+            </sc-if>
+          </div>
+        </div>
+        <div style="padding:11px 18px;font-size:12px;color:#9099AA;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <span>Mostrando <span class="mono">{{shownCount}}</span> de <span class="mono">{{totalChannels}}</span></span>
+          <span>Na versão real a lista é virtualizada: só desenha o que aparece na tela.</span>
+        </div>
+      </div>
+
+      <!-- Drawer -->
+      <sc-if value="{{hasSel}}" hint-placeholder-val="{{true}}">
+        <aside aria-label="Detalhe do canal" style="flex:1 1 340px;min-width:0;max-width:100%;background:#10131A;border:1px solid #262C39;border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;align-items:flex-start;gap:12px">
+            <div style="flex-grow:1;min-width:0">
+              <div style="font-size:18px;font-weight:700;letter-spacing:-0.01em">{{sel.name}}</div>
+              <div style="font-size:12.5px;color:#9099AA;margin-top:2px">{{sel.niche}} · <span style="color:{{sel.typeColor}}">{{sel.typeLabel}}</span></div>
+            </div>
+            <button onClick="{{closeSel}}" aria-label="Fechar detalhe" style="width:30px;height:30px;border-radius:8px;border:1px solid #262C39;background:transparent;color:#9099AA;padding:0;display:flex;align-items:center;justify-content:center">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+
+          <span style="align-self:flex-start;display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:{{sel.color}};background:{{sel.tint}};border-radius:999px;padding:4px 12px">
+            <span class="{{sel.dotClass}}" style="width:8px;height:8px;border-radius:50%;background:{{sel.color}}"></span>{{sel.statusLabel}}
+          </span>
+
+          <sc-if value="{{sel.hasIssue}}" hint-placeholder-val="{{false}}">
+            <div style="background:{{sel.tint}};border:1px solid {{sel.color}};border-radius:10px;padding:11px 13px;font-size:13px">
+              <div style="font-weight:600;color:{{sel.color}};margin-bottom:2px">{{sel.issueTitle}}</div>
+              <div style="color:#D4D9E3">{{sel.issue}}</div>
+            </div>
+          </sc-if>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="background:#0D1016;border:1px solid #1B2029;border-radius:10px;padding:11px 13px"><div style="font-size:11.5px;color:#9099AA">Estoque pronto</div><div class="mono" style="font-size:20px;font-weight:600">{{sel.stock}}</div></div>
+            <div style="background:#0D1016;border:1px solid #1B2029;border-radius:10px;padding:11px 13px"><div style="font-size:11.5px;color:#9099AA">Publicados hoje</div><div class="mono" style="font-size:20px;font-weight:600">{{sel.today}}<span style="font-size:13px;color:#9099AA"> / {{sel.goal}}</span></div></div>
+            <div style="background:#0D1016;border:1px solid #1B2029;border-radius:10px;padding:11px 13px"><div style="font-size:11.5px;color:#9099AA">Aprovação 24h</div><div class="mono" style="font-size:20px;font-weight:600;color:{{sel.apprColor}}">{{sel.appr}}</div></div>
+            <div style="background:#0D1016;border:1px solid #1B2029;border-radius:10px;padding:11px 13px"><div style="font-size:11.5px;color:#9099AA">Ritmo</div><div style="font-size:13.5px;font-weight:600;margin-top:4px">{{sel.pace}}</div></div>
+          </div>
+
+          <div>
+            <div style="font-size:12px;color:#9099AA;font-weight:500;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Pipeline da última execução</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <sc-for list="{{stages}}" as="s" hint-placeholder-count="6">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span class="{{s.cls}}" style="width:20px;height:20px;border-radius:6px;background:{{s.bg}};color:{{s.fg}};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700" aria-hidden="true">{{s.glyph}}</span>
+                  <span style="flex-grow:1;font-size:13px;color:{{s.text}}">{{s.name}}</span>
+                  <span class="mono" style="font-size:12px;color:#9099AA">{{s.note}}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button class="btn" style="flex:1 1 140px;height:38px;border-radius:9px;border:0;background:{{accent}};color:#0A0C11;font-weight:700;font-size:13px">Rodar ciclo agora</button>
+            <button class="btn" onClick="{{selToggle}}" style="flex:1 1 110px;height:38px;border-radius:9px;border:1px solid #2A3040;background:#161B25;color:#E8EBF1;font-weight:600;font-size:13px">{{sel.toggleText}}</button>
+          </div>
+        </aside>
+      </sc-if>
+    </section>
+  </main>
+</div>
+</x-dc>
+
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#8B9DFF","options":["#8B9DFF","#5EEAD4","#F5B546","#F08BC0"]},"density":{"editor":"enum","default":"comfortable","options":["comfortable","compact"]},"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.meta = {};
+    this.state = {
+      filter: 'all', q: '', sel: 'quiz-escolhas', ov: {}, paused: false,
+      live: {
+        cur: 'quiz-quiz', stage: 2, t: 1, phase: 'work', num: 128, done: 0,
+        queue: ['quiz-capitais', 'curiosidades-ciencia', 'quiz-filmes', 'quiz-idiomas', 'quiz-musica', 'misterios-espaco', 'quiz-animais', 'quiz-matematica', 'quiz-ciencia', 'quiz-tech', 'quiz-geek', 'quiz-mitologia']
+      },
+      log: [{ text: 'Oficina ligada. Um canal por vez.', color: '#9099AA', time: this.clock() }]
+    };
+  }
+
+  clock() {
+    const d = new Date();
+    const p = (n) => (n < 10 ? '0' : '') + n;
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  componentDidMount() {
+    this.timer = setInterval(() => this.tick(), 700);
+  }
+
+  componentWillUnmount() {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  dwell(type, stage) {
+    // Roteiro, Gates, Narração, Cenas, Render, Publicar (em ticks de 0,7 s)
+    return [4, 3, 4, type === 'flow' ? 12 : 5, 6, 3][stage];
+  }
+
+  tick() {
+    const st = this.state;
+    if (st.paused) return;
+    const live = { ...st.live, queue: st.live.queue.slice() };
+    const meta = this.meta;
+    const nm = (meta[live.cur] && meta[live.cur].name) || live.cur;
+    const type = (meta[live.cur] && meta[live.cur].type) || 'proc';
+    const rej = { 'quiz-idiomas': 0.5 };
+    const said = ['roteiro pronto', 'passou nos gates', 'narração gravada', type === 'flow' ? 'cenas prontas no Google Flow' : 'cenas montadas', 'vídeo renderizado', 'publicado'];
+    const colors = ['#FF4FD8', '#8B5CFF', '#2DE2A6', '#FFC53D', '#4DA3FF', '#FF7A59'];
+    const events = [];
+    const startNext = (pushBack) => {
+      if (pushBack) live.queue.push(live.cur);
+      live.cur = live.queue.shift();
+      live.stage = 0; live.t = 0; live.phase = 'work'; live.num += 1;
+    };
+
+    if (live.phase === 'done') {
+      live.t -= 1;
+      if (live.t <= 0) startNext(true);
+    } else if (live.phase === 'rej') {
+      live.t -= 1;
+      if (live.t <= 0) { events.push({ text: nm + ' voltou para o fim da fila.', color: '#9099AA' }); startNext(true); }
+    } else {
+      live.t += 1;
+      if (live.stage === 1 && live.t === 1 && Math.random() < (rej[live.cur] || 0.03)) {
+        live.phase = 'rej'; live.t = 4;
+        events.push({ text: nm + ' foi rejeitado no gate de segurança.', color: '#FF8A7A' });
+      } else if (live.t >= this.dwell(type, live.stage)) {
+        events.push({ text: nm + ': ' + said[live.stage] + '.', color: colors[live.stage] });
+        if (live.stage === 5) { live.phase = 'done'; live.t = 4; live.done += 1; }
+        else { live.stage += 1; live.t = 0; }
+      }
+    }
+    const time = this.clock();
+    this.setState({ live, log: events.map((e) => ({ ...e, time })).concat(st.log).slice(0, 5) });
+  }
+
+  renderVals() {
+    const accent = this.props.accent ?? '#8B9DFF';
+    const pad = (this.props.density ?? 'comfortable') === 'compact' ? '6px' : '11px';
+
+    // id, nome, nicho, tipo, status, pronto, hoje, meta, aprov, ultimo, problema, acao
+    const raw = [
+      ['curiosidades-ciencia','Curiosidades Ciência','Ciência','flow','ok',8,1,1,94,'há 2 h','',''],
+      ['misterios-espaco','Mistérios do Espaço','Espaço','flow','ok',6,0,1,91,'há 1 h','',''],
+      ['historia-60s','História em 60s','História','flow','ok',7,1,1,96,'há 3 h','',''],
+      ['fatos-bizarros','Fatos Bizarros','Curiosidades','flow','bad',3,0,1,88,'há 9 h','O token de publicação expirou. Nada sai até reconectar a conta.','Reconectar conta'],
+      ['animais-extremos','Animais Extremos','Natureza','flow','warn',2,1,1,90,'há 5 h','A conta Google Flow está sem créditos. O estoque cobre só 2 dias.','Trocar conta Flow'],
+      ['quiz-escolhas','Quiz de Escolhas','Quiz','proc','bad',1,0,4,41,'há 40 min','O gate de segurança rejeitou 8 dos últimos 10 vídeos. O disjuntor pausou a produção.','Ver rejeições'],
+      ['quiz-quiz','Quiz_Quiz','Quiz','proc','ok',10,3,4,93,'há 12 min','',''],
+      ['quiz-bandeiras','Quiz Bandeiras','Quiz','proc','warn',2,2,4,89,'há 20 min','Estoque 2 de 10. A produção está mais lenta que a publicação.','Rodar ciclo'],
+      ['quiz-capitais','Quiz Capitais','Quiz','proc','ok',9,4,4,95,'há 8 min','',''],
+      ['quiz-matematica','Quiz Matemática','Quiz','proc','ok',7,3,4,92,'há 16 min','',''],
+      ['quiz-filmes','Quiz Filmes','Quiz','proc','ok',10,4,4,94,'há 15 min','',''],
+      ['quiz-musica','Quiz Música','Quiz','proc','ok',8,3,4,90,'há 25 min','',''],
+      ['quiz-animais','Quiz Animais','Quiz','proc','ok',10,4,4,97,'há 6 min','',''],
+      ['quiz-corpo','Quiz Corpo Humano','Quiz','proc','ok',9,3,4,93,'há 30 min','',''],
+      ['quiz-logos','Quiz Logos','Quiz','proc','ok',6,2,4,87,'há 28 min','',''],
+      ['quiz-ciencia','Quiz Ciência','Quiz','proc','ok',10,4,4,96,'há 4 min','',''],
+      ['quiz-historia','Quiz História','Quiz','proc','ok',8,3,4,91,'há 18 min','',''],
+      ['quiz-esportes','Quiz Esportes','Quiz','proc','pause',5,0,0,90,'há 2 dias','',''],
+      ['quiz-comida','Quiz Comida','Quiz','proc','ok',9,4,4,94,'há 9 min','',''],
+      ['quiz-geek','Quiz Geek','Quiz','proc','ok',10,3,4,92,'há 22 min','',''],
+      ['quiz-idiomas','Quiz Idiomas','Quiz','proc','warn',4,1,4,76,'há 35 min','A aprovação caiu para 76% nas últimas 24h. Vale olhar os temas rejeitados.','Ver rejeições'],
+      ['quiz-mitologia','Quiz Mitologia','Quiz','proc','ok',8,3,4,93,'há 14 min','',''],
+      ['quiz-tech','Quiz Tecnologia','Quiz','proc','ok',10,4,4,95,'há 11 min','',''],
+      ['tech-1min','Tech em 1 Min','Tecnologia','flow','pause',4,0,0,92,'há 3 dias','','']
+    ];
+
+    const S = {
+      ok:   { label:'Em dia',      color:'#34D399', tint:'#10261E', sq:'#1F6F52', sqfg:'#D6FBEA', glyph:'' },
+      run:  { label:'Na oficina',  color:'#6AA8FF', tint:'#112038', sq:'#2B5FB8', sqfg:'#E3EEFF', glyph:'•' },
+      warn: { label:'Atenção',     color:'#F5B546', tint:'#2A2010', sq:'#B47A12', sqfg:'#FFF1D6', glyph:'!' },
+      bad:  { label:'Bloqueado',   color:'#FF8A7A', tint:'#2C1613', sq:'#B3402F', sqfg:'#FFE3DE', glyph:'×' },
+      pause:{ label:'Pausado',     color:'#9099AA', tint:'#171B24', sq:'#2A3040', sqfg:'#C9CFDB', glyph:'–' }
+    };
+
+    const st = this.state;
+    const ov = st.ov;
+    const q = st.q.trim().toLowerCase();
+    const live = st.live;
+
+    const all = raw.map((a) => {
+      const id = a[0];
+      let status = a[4];
+      let autoOn = status !== 'pause';
+      if (Object.prototype.hasOwnProperty.call(ov, id)) {
+        autoOn = ov[id];
+        if (!autoOn) status = 'pause';
+        else if (status === 'pause') status = 'ok';
+      }
+      if (st.paused) { autoOn = false; }
+      if (id === live.cur && status === 'ok' && !st.paused) status = 'run';
+      const m = S[status];
+      const isFlow = a[3] === 'flow';
+      const target = 10;
+      const stockPct = Math.min(100, Math.round((a[5] / target) * 100)) + '%';
+      const lowStock = a[5] <= 2;
+      const apprVal = a[8];
+      return {
+        id, name: a[1], niche: a[2], type: a[3], status, ready: a[5], today: a[6], goal: a[7],
+        apprVal, last: a[9], issue: a[10], action: a[11], autoOn,
+        meta: m, isFlow,
+        typeLabel: isFlow ? 'Google Flow' : 'Procedural',
+        typeColor: isFlow ? '#C7A9FF' : '#7BE3D0',
+        stock: a[5] + '/' + target, stockPct,
+        stockBar: lowStock ? '#F5B546' : accent,
+        appr: apprVal + '%',
+        apprColor: apprVal < 80 ? '#FF8A7A' : '#E8EBF1',
+        pace: isFlow ? '1 vídeo por dia' : (a[7] ? a[7] + ' vídeos por dia' : 'pausado')
+      };
+    });
+    const byId = {};
+    all.forEach((c) => { byId[c.id] = c; this.meta[c.id] = { name: c.name, type: c.type }; });
+
+    const match = (c) => {
+      if (q && c.name.toLowerCase().indexOf(q) < 0 && c.niche.toLowerCase().indexOf(q) < 0) return false;
+      const f = st.filter;
+      if (f === 'flow') return c.type === 'flow';
+      if (f === 'proc') return c.type === 'proc';
+      if (f === 'attn') return c.status === 'warn' || c.status === 'bad';
+      if (f === 'pause') return c.status === 'pause';
+      return true;
+    };
+
+    const open = (id) => () => this.setState({ sel: id });
+    const toggle = (c) => () => this.setState({ ov: { ...ov, [c.id]: !c.autoOn } });
+
+    const rows = all.filter(match).map((c) => ({
+      id: c.id, name: c.name, niche: c.niche, last: c.status === 'run' ? 'agora' : c.last,
+      typeLabel: c.typeLabel, typeColor: c.typeColor,
+      statusLabel: c.meta.label, color: c.meta.color,
+      dotClass: c.status === 'run' ? 'pulse' : '',
+      stock: c.stock, stockPct: c.stockPct, stockBar: c.stockBar,
+      today: c.today, goal: c.goal,
+      appr: c.appr, apprColor: c.apprColor,
+      autoOn: c.autoOn,
+      toggleLabel: (c.autoOn ? 'Pausar ' : 'Ativar ') + c.name,
+      togBg: c.autoOn ? accent : '#2A3040',
+      knob: c.autoOn ? '21px' : '3px',
+      rowBg: st.sel === c.id ? '#151A25' : 'transparent',
+      open: open(c.id),
+      toggle: toggle(c)
+    }));
+
+    const channels = all.map((c) => ({
+      name: c.name,
+      ariaLabel: c.name + ': ' + c.meta.label,
+      sqBg: c.meta.sq, sqFg: c.meta.sqfg, glyph: c.meta.glyph,
+      ring: st.sel === c.id ? '#FFFFFF' : 'transparent',
+      open: open(c.id)
+    }));
+
+    const count = (fn) => all.filter(fn).length;
+    const filterDefs = [
+      ['all', 'Todos', all.length],
+      ['attn', 'Atenção', count((c) => c.status === 'warn' || c.status === 'bad')],
+      ['flow', 'Google Flow', count((c) => c.type === 'flow')],
+      ['proc', 'Procedural', count((c) => c.type === 'proc')],
+      ['pause', 'Pausados', count((c) => c.status === 'pause')]
+    ];
+    const filters = filterDefs.map((d) => {
+      const on = st.filter === d[0];
+      return {
+        label: d[1], count: d[2],
+        bg: on ? '#1B2133' : 'transparent',
+        border: on ? accent : '#262C39',
+        fg: on ? '#FFFFFF' : '#B4BBC9',
+        pick: () => this.setState({ filter: d[0] })
+      };
+    });
+
+    // KPIs
+    const active = count((c) => c.status !== 'pause');
+    const done = all.reduce((n, c) => n + c.today, 0);
+    const goal = all.reduce((n, c) => n + c.goal, 0);
+    const attnList = all.filter((c) => c.status === 'warn' || c.status === 'bad');
+    const stockSum = all.reduce((n, c) => n + c.ready, 0);
+    const pctOf = (a, b) => (b ? Math.min(100, Math.round((a / b) * 100)) : 0) + '%';
+    const curName = byId[live.cur] ? byId[live.cur].name : '';
+    const kpis = [
+      { label: 'Canais ativos', value: active, sub: '/ ' + all.length, color: '#E8EBF1', pct: pctOf(active, all.length), bar: accent },
+      { label: 'Vídeos hoje', value: done, sub: 'meta ' + goal, color: '#E8EBF1', pct: pctOf(done, goal), bar: accent },
+      { label: 'Na oficina agora', value: st.paused ? 0 : 1, sub: st.paused ? 'pausada' : curName, color: '#6AA8FF', pct: st.paused ? '0%' : '100%', bar: '#6AA8FF' },
+      { label: 'Estoque pronto', value: stockSum, sub: 'vídeos', color: '#E8EBF1', pct: pctOf(stockSum, all.length * 10), bar: accent },
+      { label: 'Atenção', value: attnList.length, sub: attnList.length === 1 ? 'canal' : 'canais', color: attnList.length ? '#F5B546' : '#34D399', pct: pctOf(attnList.length, all.length), bar: '#F5B546' }
+    ];
+
+    const attention = attnList
+      .slice()
+      .sort((a, b) => (a.status === 'bad' ? 0 : 1) - (b.status === 'bad' ? 0 : 1))
+      .slice(0, 4)
+      .map((c) => ({
+        name: c.name, issue: c.issue, action: c.action,
+        statusLabel: c.meta.label, color: c.meta.color, tint: c.meta.tint,
+        glyph: c.status === 'bad' ? '×' : '!',
+        open: open(c.id)
+      }));
+
+    // Live workshop
+    const stNames = ['1 · ROTEIRO', '2 · GATES', '3 · NARRAÇÃO', '4 · CENAS', '5 · RENDER', '6 · PUBLICAR'];
+    const agentNames = ['Roteiro', 'Gates de segurança', 'Narração', 'Cenas', 'Render', 'Publicação'];
+    const hue = ['#FF4FD8', '#8B5CFF', '#2DE2A6', '#FFC53D', '#4DA3FF', '#FF7A59'];
+    const pos = [[20, 40], [300, 40], [580, 40], [580, 226], [300, 226], [20, 226]];
+    const sheets = [
+      '/_blob/b229158578ddc64469c37e3edc165da2',
+      '/_blob/fd120a61495c029a3c78feddad476cbc',
+      '/_blob/91b8ddb56dfbffc534e860e55ed5a61c',
+      '/_blob/313e739762e76dcd00cfda7578a0c174',
+      '/_blob/9547cab0e101f553f153f2dc01d4b9fe',
+      '/_blob/eba95cb0b32468e2cfc0dbb42b7fb3ec'
+    ];
+    const cur = byId[live.cur] || all[0];
+    const curType = cur.type;
+    const total = [0, 1, 2, 3, 4, 5].reduce((n, i) => n + this.dwell(curType, i), 0);
+    const bubbles = [
+      'escrevendo…', 'conferindo segurança…', 'gravando a voz…',
+      curType === 'flow' ? 'gerando no Google Flow…' : 'montando as cenas…',
+      'renderizando…', 'publicando…'
+    ];
+    const paused = st.paused;
+    let elapsed = 0;
+    for (let i = 0; i < live.stage; i++) elapsed += this.dwell(curType, i);
+    elapsed += live.phase === 'work' ? live.t : 0;
+    const allDone = live.phase === 'done';
+    const rejected = live.phase === 'rej';
+    const pct = allDone ? 100 : Math.min(99, Math.round((elapsed / total) * 100));
+
+    const stations = stNames.map((label, i) => {
+      let state = 'idle';
+      if (allDone || i < live.stage) state = 'done';
+      else if (i === live.stage) state = rejected ? 'fail' : 'work';
+      const working = state === 'work' && !paused;
+      const color = state === 'idle' ? '#3A4262' : (state === 'fail' ? '#FF5A4D' : hue[i]);
+      const barPct = state === 'done' ? 100 : (state === 'fail' ? 100 : (state === 'work' ? Math.round((live.t / this.dwell(curType, i)) * 100) : 0));
+      const bubble = (working ? bubbles[i] : '') || (state === 'fail' ? 'rejeitado, volta pra fila' : '');
+      return {
+        left: pos[i][0] + 'px', top: pos[i][1] + 'px',
+        label, labelColor: state === 'idle' ? '#6F7DA8' : (state === 'fail' ? '#FF8A7A' : '#E8EBF1'),
+        sheet: sheets[i],
+        pos: state === 'done' ? '-288px' : (state === 'fail' ? '-432px' : '0px'),
+        cls: working ? 'wk' : '',
+        fx: state === 'idle' ? 'grayscale(0.7) brightness(0.62)' : 'none',
+        alt: agentNames[i] + ': ' + (state === 'done' ? 'pronto' : (state === 'fail' ? 'rejeitou' : (state === 'work' ? 'trabalhando' : 'esperando'))),
+        bar: barPct + '%', barColor: state === 'fail' ? '#FF5A4D' : (state === 'done' ? '#34D399' : hue[i]),
+        bubble, hasBubble: !!bubble
+      };
+    });
+
+    const cp = pos[live.stage];
+    const ini = cur.name.split(/[\s_]+/).map((w) => w.charAt(0)).join('').slice(0, 3).toUpperCase();
+    const walking = !paused && live.phase === 'work' && live.stage > 0 && live.t <= 1;
+    const courier = {
+      left: (cp[0] + 2) + 'px',
+      top: (cp[1] + 62) + 'px',
+      ini,
+      chip: cur.isFlow ? '#C7A9FF' : '#7BE3D0',
+      cls: walking ? 'cw' : '',
+      pos: allDone ? '-380px' : '-304px'
+    };
+
+    const agents = agentNames.map((n, i) => {
+      let s = 'NA FILA', c = '#6F7DA8';
+      if (allDone || i < live.stage) { s = 'PRONTO'; c = '#34D399'; }
+      else if (i === live.stage) { s = rejected ? 'REJEITOU' : 'TRABALHANDO'; c = rejected ? '#FF8A7A' : '#FFC53D'; }
+      return { name: n, color: hue[i], st: s, stColor: c };
+    });
+
+    const now = {
+      name: cur.name, typeLabel: cur.typeLabel, num: '#' + live.num,
+      pct: pct + '%', pctText: pct + '%', color: rejected ? '#FF5A4D' : (allDone ? '#34D399' : '#FFC53D')
+    };
+    const upNext = live.queue.slice(0, 4).map((id, i) => ({
+      pos: i + 1, name: byId[id] ? byId[id].name : id,
+      typeLabel: byId[id] && byId[id].isFlow ? 'Google Flow' : 'Procedural',
+      typeColor: byId[id] && byId[id].isFlow ? '#C7A9FF' : '#7BE3D0'
+    }));
+
+    // Drawer
+    const sc = byId[st.sel];
+    let sel = null;
+    let stages = [];
+    if (sc) {
+      const m = sc.meta;
+      sel = {
+        name: sc.name, niche: sc.niche, typeLabel: sc.typeLabel, typeColor: sc.typeColor,
+        statusLabel: m.label, color: m.color, tint: m.tint,
+        dotClass: sc.status === 'run' ? 'pulse' : '',
+        hasIssue: !!sc.issue,
+        issueTitle: sc.status === 'bad' ? 'Bloqueado' : 'Atenção',
+        issue: sc.issue,
+        stock: sc.stock, today: sc.today, goal: sc.goal,
+        appr: sc.appr, apprColor: sc.apprColor, pace: sc.pace,
+        toggleText: sc.autoOn ? 'Pausar canal' : 'Retomar canal'
+      };
+      const names = sc.isFlow
+        ? ['Roteiro', 'Gates de segurança', 'Narração', 'Cenas no Google Flow', 'Render', 'Publicação']
+        : ['Roteiro', 'Gates de segurança', 'Narração', 'Cenas procedurais', 'Render', 'Publicação'];
+      const notes = sc.isFlow
+        ? ['4 s', '2 s', '9 s', '6 min', '1 min', 'agendado']
+        : ['2 s', '1 s', '7 s', '12 s', '38 s', 'agendado'];
+      // 0 done, 1 active, 2 failed, 3 idle
+      let states = [0, 0, 0, 0, 0, 0];
+      if (sc.status === 'run') states = [0, 0, 0, 0, 1, 3];
+      else if (sc.status === 'bad' && sc.id === 'quiz-escolhas') states = [0, 2, 3, 3, 3, 3];
+      else if (sc.status === 'bad') states = [0, 0, 0, 0, 0, 2];
+      else if (sc.status === 'pause') states = [3, 3, 3, 3, 3, 3];
+      stages = names.map((n, i) => {
+        const s = states[i];
+        const map = [
+          { bg: '#10261E', fg: '#34D399', glyph: '✓', text: '#E8EBF1', cls: '' },
+          { bg: '#112038', fg: '#6AA8FF', glyph: '•', text: '#E8EBF1', cls: 'pulse' },
+          { bg: '#2C1613', fg: '#FF8A7A', glyph: '×', text: '#FFB4A9', cls: '' },
+          { bg: '#171B24', fg: '#6B7385', glyph: '', text: '#9099AA', cls: '' }
+        ][s];
+        return { name: n, note: s === 3 ? '—' : (s === 2 ? 'falhou' : (s === 1 ? 'em curso' : notes[i])), ...map };
+      });
+    }
+
+    return {
+      accent, rowPad: pad,
+      stations, courier, agents, now, upNext, log: st.log, doneCount: live.done,
+      liveColor: paused ? '#9099AA' : '#34D399',
+      liveTint: paused ? '#171B24' : '#10261E',
+      liveLabel: paused ? 'Pausada' : 'Ao vivo',
+      liveDot: paused ? '' : 'pulse',
+      q: st.q,
+      onSearch: (e) => this.setState({ q: e.target.value }),
+      togglePause: () => this.setState({ paused: !st.paused }),
+      isPaused: st.paused, notPaused: !st.paused,
+      pauseLabel: st.paused ? 'Retomar fábrica' : 'Pausar fábrica',
+      pauseBg: st.paused ? accent : 'transparent',
+      pauseColor: st.paused ? '#0A0C11' : '#E8EBF1',
+      pauseBorder: st.paused ? accent : '#2A3040',
+      kpis, attention, attentionCount: attnList.length, noAttention: attnList.length === 0,
+      channels, filters, rows, noRows: rows.length === 0,
+      shownCount: rows.length, totalChannels: all.length,
+      hasSel: !!sc, sel, stages,
+      closeSel: () => this.setState({ sel: null }),
+      selToggle: () => { if (sc) this.setState({ ov: { ...ov, [sc.id]: !sc.autoOn } }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

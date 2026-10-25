@@ -98,6 +98,14 @@ export default function FactoryHeader({
           <nav className="header-nav-switcher" aria-label="Navegação Principal">
             <button
               type="button"
+              className={`nav-switch-tab ${activeTab === 'frota' ? 'active' : ''}`}
+              onClick={() => onSelectTab && onSelectTab('frota')}
+            >
+              <span className="tab-icon">🚀</span>
+              <span>Frota</span>
+            </button>
+            <button
+              type="button"
               className={`nav-switch-tab ${activeTab === 'factory-live' ? 'active' : ''}`}
               onClick={() => onSelectTab && onSelectTab('factory-live')}
             >

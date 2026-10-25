@@ -7,6 +7,7 @@ import ExecutionDrawer from './components/ExecutionDrawer';
 import AgentOpsView from './components/AgentOps/AgentOpsView';
 import VideoReviewView from './components/VideoReview/VideoReviewView';
 import { getLiveExecutions, getSystemStatus } from './api';
+import FleetView from './components/Fleet/FleetView';
 import './styles.css';
 
 /**
@@ -20,13 +21,15 @@ import './styles.css';
  * - Human Video Review Center for safe Quality Gate inspection and recovery.
  */
 export default function App() {
-  // Navigation tab state (Factory Live | Agent Ops | Video Review) with URL hash persistence
+  // Navigation tab state (Frota | Factory Live | Agent Ops | Video Review) with URL hash persistence
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
+      if (window.location.hash === '#factory-live') return 'factory-live';
       if (window.location.hash === '#agent-ops') return 'agent-ops';
       if (window.location.hash === '#video-review') return 'video-review';
+      if (window.location.hash === '#frota') return 'frota';
     }
-    return 'factory-live';
+    return 'frota';
   });
 
   const [channels, setChannels] = useState([]);
@@ -136,8 +139,10 @@ export default function App() {
           setActiveTab('agent-ops');
         } else if (hash === '#video-review') {
           setActiveTab('video-review');
-        } else {
+        } else if (hash === '#factory-live') {
           setActiveTab('factory-live');
+        } else {
+          setActiveTab('frota');
         }
       }
     };
@@ -148,7 +153,14 @@ export default function App() {
   const handleSelectTab = (tab) => {
     setActiveTab(tab);
     if (typeof window !== 'undefined') {
-      window.location.hash = tab === 'agent-ops' ? '#agent-ops' : tab === 'video-review' ? '#video-review' : '#factory-live';
+      window.location.hash =
+        tab === 'agent-ops'
+          ? '#agent-ops'
+          : tab === 'video-review'
+          ? '#video-review'
+          : tab === 'factory-live'
+          ? '#factory-live'
+          : '#frota';
     }
   };
 
@@ -164,6 +176,10 @@ export default function App() {
     setDrawerStage(stage || channel?.execution?.pipeline_stage);
     setIsDrawerOpen(true);
   };
+
+  if (activeTab === 'frota') {
+    return <FleetView onNavigate={handleSelectTab} />;
+  }
 
   return (
     <div className="app-container">

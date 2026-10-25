@@ -287,3 +287,10 @@ export async function discardReviewTask(taskId, options = {}) {
 
 
 
+
+/**
+ * GET /api/v2/fleet/summary — Central Fleet aggregated summary & channels health.
+ */
+export async function getFleetSummary() {
+  return fetchJson('/api/v2/fleet/summary');
+}

@@ -52,3 +52,6 @@ client_secret*.json
 *.token.json
 youtube_direct_*.json
 storage/credentials/
+
+# Relatórios transitórios de auditoria
+docs/auditorias/AUDIT_LEARNING_LOOP_REPORT.md

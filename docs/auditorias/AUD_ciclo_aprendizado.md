@@ -2,30 +2,37 @@
 
 - **Documento:** `docs/auditorias/AUD_ciclo_aprendizado.md`
 - **Missão:** Missão B — V2 Auditoria de Aprendizado (Somente Leitura)
-- **Data:** 24 de Outubro de 2026
+- **Data:** 24 de Outubro de 2026 (Atualizado com evidências empíricas de PROD em 25/10/2026)
 - **Status da Operação:** SOMENTE LEITURA (`mode=ro`). Zero escritas, zero alteração de regras de negócio, zero rede externa.
 
 ---
 
 ## Sumário Executivo
 
-Esta auditoria técnica investigou detalhadamente o ecossistema de aprendizado de máquina adaptativo e feedback contínuo da Video Factory V1, analisando o código-fonte em DEV (`C:\Projetos\MoneyPrinterTurbo-V1`), o mecanismo do agendador (`scheduler.py` e `analytics_scheduler.py`), o motor estatístico de aprendizado (`analytics.py`) e a integração na esteira autônoma de produção (`autonomous_production.py`).
+Esta auditoria técnica investigou detalhadamente o ecossistema de aprendizado de máquina adaptativo e feedback contínuo da Video Factory V1, combinando a análise analítica do código-fonte em DEV (`C:\Projetos\MoneyPrinterTurbo-V1`) com a execução empírica do script de auditoria sobre o banco de dados real de produção no **PC Forte**.
+
+> [!IMPORTANT]
+> **Evidência Operacional do PC Forte (Produção Real):**
+> A execução no banco de produção revelou **503 decisões de closed loop registradas**, com exatamente **0 decisões adaptadas** (`closed_loop_adapted_total = 0`).
+> A causa primária comprovada: **100% dos snapshots de métricas colhidos foram sumariamente excluídos pelo filtro de copyright com o motivo `copyright_unknown`** (descartes por perfil: **251, 188, 18, 11 e 1**). Como nenhuma publicação recebeu auditoria de copyright explícita (`clean_manual`), nenhuma atingiu a elegibilidade para compor evidência estatística.
 
 ### Resumo dos Vereditos por Canal
 
-| Canal | Formato Técnico | Veredito | Causa Raiz Técnica Primária |
+*(Veredictos iniciais estabelecidos por inferência analítica do código-fonte; confirmados e aprofundados pela auditoria empírica do PC Forte)*
+
+| Canal | Formato Técnico | Veredito (Inferência pelo Código) | Evidência Empírica em Produção (PC Forte) |
 | :--- | :---: | :---: | :--- |
-| **Dose Diária de Internet** (`default`) | Tradicional / Variado | **NÃO FUNCIONA / FALTA DADO** | Flag global desativada; ausência do mínimo de 12 snapshots na janela 72–96h com copyright `clean_manual`. |
-| **Dose Diária de Histórias e Mistério** (`profile-historias-misterio`) | Tradicional (`mystery`) | **FALTA DADO** | O código suporta integralmente o canal, mas a base histórica não possui 12 vídeos maduros na janela 72–96h com contraste estatístico. |
-| **Dose Diária de Escolhas** (`profile-4d18bf9a5d94`) | `quiz_dilemma` (Procedural) | **NÃO FUNCIONA** | A esteira autônoma sobrescreve a estrutura (`rec_struct = fixed_format`) e o pipeline procedural em `task.py` ignora o clustering. |
-| **Quiz_Quiz** (`profile-45cee883f80a`) | `quiz_paper` (Procedural) | **NÃO FUNCIONA** | Mesma sobrescrita incondicional da estrutura recomendada e bypass de roteirização tradicional. |
-| **Dose Diária de GTA VI** (`profile-gta-vi`) | Tradicional | **FALTA DADO** | Canal em pausa operacional, sem volume de publicações com snapshots elegíveis na janela de 72–96h. |
+| **Dose Diária de Internet** (`default`) | Tradicional / Variado | **NÃO FUNCIONA / FALTA DADO** | 188 snapshots excluídos por `copyright_unknown`; 0 amostras elegíveis; 0 decisões adaptadas. |
+| **Dose Diária de Histórias e Mistério** (`profile-historias-misterio`) | Tradicional (`mystery`) | **FALTA DADO** | 251 snapshots excluídos por `copyright_unknown`; 0 amostras elegíveis; 0 decisões adaptadas. |
+| **Dose Diária de Escolhas** (`profile-4d18bf9a5d94`) | `quiz_dilemma` (Procedural) | **NÃO FUNCIONA** | 18 snapshots excluídos por `copyright_unknown`; sobrescrita incondicional de estrutura (`rec_struct = fixed_format`). |
+| **Quiz_Quiz** (`profile-45cee883f80a`) | `quiz_paper` (Procedural) | **NÃO FUNCIONA** | 11 snapshots excluídos por `copyright_unknown`; sobrescrita incondicional e bypass da roteirização tradicional. |
+| **Dose Diária de GTA VI** (`profile-gta-vi`) | Tradicional | **FALTA DADO** | 1 snapshot excluído por `copyright_unknown`; canal em pausa operacional. |
 
 ---
 
 ## 1. Quais Perfis e Formatos Entram de Fato no Closed Loop?
 
-### 1.1 Análise de Código em `autonomous_production.py`
+### 1.1 Análise de Código em `autonomous_production.py` *(Inferência pelo Código)*
 
 O ciclo fechado de aprendizado é acionado na esteira autônoma em [autonomous_production.py](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/autonomous_production.py#L3038-L3153):
 
@@ -81,7 +88,7 @@ Embora os perfis de quiz possam disparar o bloco acima se possuírem `yt_channel
 3. **Incompatibilidade Semântica de Trends:**
    O Trend Radar ([autonomous_production.py:3047-3065](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/autonomous_production.py#L3047-L3065)) busca tópicos noticiosos gerais. Tópicos de notícias não possuem relação semântica com perguntas atemporais de quiz ("Você prefere X ou Y?").
 
-**Conclusão do Item 1:** Para canais tradicionais (`mystery`, `explainer`, `default`), o closed loop consegue injetar `rec_struct` e `topic_cluster`. Para `quiz_dilemma` e `quiz_paper`, o closed loop é um **no-op operacional**: consome tempo de banco de dados, mas não afeta em nada a geração.
+**Conclusão do Item 1:** Para canais tradicionais (`mystery`, `explainer`, `default`), o closed loop consegue teoricamente injetar `rec_struct` e `topic_cluster`. Para `quiz_dilemma` e `quiz_paper`, o closed loop é um **no-op operacional**: consome tempo de banco de dados, mas não afeta em nada a geração.
 
 ---
 
@@ -127,9 +134,8 @@ A coleta automática de métricas **para imediatamente** nas seguintes situaçõ
 ### 3.1 Ambiente DEV (Notebook)
 
 No banco de dados local do ambiente de desenvolvimento (`storage/video_factory.db`):
-- A tabela `content_analytics` **não existe** (zero snapshots de métricas).
+- A tabela `content_analytics` **não possui snapshots reais de produção** (apenas testes sintéticos).
 - A tabela `autopilot_settings` não possui histórico de execuções de analytics (`analytics_last_cycle_at = NULL`).
-- As publicações existentes são mockups e testes locais, sem vinculação com canais ativos do YouTube.
 
 ### 3.2 Regras Estritas de Evidência em Produção (`analytics.py`)
 
@@ -151,21 +157,37 @@ No banco de produção (PC Forte), o algoritmo de validação em [app/services/a
    - Mínimo de **12 publicações elegíveis** (`MIN_ELIGIBLE_PUBLICATIONS = 12`).
    - Exigência de pelo menos 2 grupos na dimensão analisada com no mínimo 5 amostras cada para haver contraste estatístico válido (`MIN_GROUP_SAMPLES = 5`). Se não houver variação suficiente, o estado é `NO_CONTRAST`.
 
+### 3.3 Evidência Empírica Real do Banco de Produção (PC Forte)
+
+A auditoria em tempo real executada no PC Forte sobre a base `C:\Projetos\MoneyPrinterTurbo\storage\video_factory.db` comprovou matematicamente o diagnóstico:
+
+- **Decisões Registradas:** Foram executadas **503 decisões de closed loop** registradas na tabela `operational_events`.
+- **Decisões Adaptadas:** Exatamente **0 decisões adaptadas** (`closed_loop_adapted_total = 0`). A taxa real de adaptação é de **0,0%**.
+- **Descarte de Snapshots:** **100% dos snapshots colhidos foram descartados por `copyright_unknown`**.
+- **Distribuição de Descartes por Perfil:**
+  1. `profile-historias-misterio`: **251** publicações/snapshots descartados (`copyright_unknown`).
+  2. `default` (Dose Diária de Internet): **188** publicações/snapshots descartados (`copyright_unknown`).
+  3. `profile-4d18bf9a5d94` (Dose Diária de Escolhas): **18** publicações/snapshots descartados (`copyright_unknown`).
+  4. `profile-45cee883f80a` (Quiz_Quiz): **11** publicações/snapshots descartados (`copyright_unknown`).
+  5. `profile-gta-vi`: **1** publicação/snapshot descartado (`copyright_unknown`).
+
+**Causa Raiz Empírica Definitiva:** O algoritmo de validação em [analytics.py:183-186](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/analytics.py#L183-L186) descarta sumariamente qualquer publicação cujo status de copyright não seja explicitamente `clean_manual`. Como na operação diária os vídeos são publicados sem auditoria humana manual de copyright, 100% das publicações permanecem em `unknown`, tornando impossível qualquer canal atingir as 12 amostras necessárias para adaptação.
+
 ---
 
 ## 4. Script de Auditoria Somente Leitura (`scripts/audit_learning_loop.py`)
 
-Para que o operador possa auditar o banco de produção do PC Forte sem qualquer risco de contaminação, escrita ou vazamento de credenciais, foi criado o script canônico:
+Para que o operador possa auditar o banco de produção do PC Forte sem qualquer risco de contaminação, lock de concorrência ou vazamento de credenciais, foi desenvolvido o script canônico:
 
 [scripts/audit_learning_loop.py](file:///c:/Projetos/MoneyPrinterTurbo-V1/scripts/audit_learning_loop.py)
 
-### 4.1 Características de Segurança
+### 4.1 Características de Segurança e Arquitetura
 
-- **Modo Estritamente Somente Leitura:** Abre a conexão com SQLite via URI `file:<path>?mode=ro`. Qualquer tentativa acidental de escrita resulta em `sqlite3.OperationalError: attempt to write a readonly database`.
-- **Integridade Criptográfica (SHA-256):** O script calcula o hash SHA-256 do arquivo `.db` antes da execução e após o término da inspeção. Se o hash divergir, aborta com código de erro fatal.
-- **Isolamento de Rede:** ZERO chamadas a APIs externas, Google Flow, YouTube ou TikTok.
-- **Sanitização de Segredos:** Nenhuma chave de API, segredo ou token do `config.toml` é lido, exibido ou gravado no relatório.
-- **Geração de Relatório:** Grava automaticamente o relatório estruturado em `docs/auditorias/AUDIT_LEARNING_LOOP_REPORT.md` e opcionalmente imprime no terminal com `--stdout`.
+- **Cópia Segura via `sqlite3.backup`:** O script conecta ao banco ao vivo com URI estrita `Path.as_uri() + "?mode=ro"` e realiza uma cópia snapshot online para um arquivo temporário (`tempfile.mkstemp()`). Isso **elimina falsos alarmes de verificação de hash** causados pelas escritas normais da fábrica em execução e garante isolamento absoluto.
+- **Validação de Existência do Banco:** Retorna mensagem de erro clara e fatal (`[ERRO FATAL] Banco de dados SQLite não encontrado...`) com código de saída 1 caso o caminho informado não exista.
+- **Fonte Canônica de Autonomia e Formato:** Utiliza diretamente as APIs `autonomous_production.is_profile_autonomous_mode_enabled()` e `profile_manager.get_generation_profile_context()` com fallback SQL robusto que lê `content_profiles.settings_json` e `autopilot_settings`, garantindo exibição correta dos canais autônomos e formatos procedurais (`quiz_dilemma`, `quiz_paper`).
+- **Default de Saída em Pasta Temporária:** O argumento `--output` grava por padrão no diretório temporário do sistema operacional (`tempfile.gettempdir()`), evitando poluir acidentalmente o repositório Git.
+- **Isolamento de Rede e Segredos:** ZERO chamadas a APIs externas, Google Flow, YouTube ou TikTok. Nenhuma credencial é acessada ou impressa.
 
 ### 4.2 Instrução de Execução pelo Operador no PC Forte
 
@@ -180,39 +202,32 @@ python scripts/audit_learning_loop.py --db-path "C:\Projetos\MoneyPrinterTurbo\s
 ## 5. Conclusão Detalhada por Canal
 
 ### 5.1 Dose Diária de Internet (`default`)
-- **Veredito:** **NÃO FUNCIONA / FALTA DADO**
+- **Veredito Inicial (Inferência do Código):** **NÃO FUNCIONA / FALTA DADO**
+- **Comprovação em Produção (PC Forte):** 188 snapshots colhidos, mas **100% excluídos por `copyright_unknown`**. 0 amostras elegíveis.
 - **Diagnóstico Técnico:**
   1. A flag global `closed_feedback_loop_enabled` vem desativada por padrão no banco.
-  2. O canal ainda não acumulou o mínimo de 12 publicações com snapshots colhidos estritamente na janela de 72–96 horas com status de copyright marcado como `clean_manual`.
-- **Menor Correção Possível (sem implementar):**
-  Ativar a flag `closed_feedback_loop_enabled = true` em `autopilot_settings`, garantir que o `YouTubeAnalyticsProvider` realize snapshots regulares aos 3 dias pós-publicação e auditar manualmente o status de copyright dos vídeos elegíveis via WebUI.
+  2. Todas as 188 publicações na base foram descartadas porque nenhuma possui status `clean_manual`.
 
 ### 5.2 Dose Diária de Histórias e Mistério (`profile-historias-misterio`)
-- **Veredito:** **FALTA DADO**
+- **Veredito Inicial (Inferência do Código):** **FALTA DADO**
+- **Comprovação em Produção (PC Forte):** 251 snapshots colhidos, mas **100% excluídos por `copyright_unknown`**. 0 amostras elegíveis.
 - **Diagnóstico Técnico:**
-  O canal utiliza formato tradicional narrativo (`mystery` / `explainer`), sendo plenamente compatível com o clustering de temas e adaptação de estruturas em `autonomous_production.py`. No entanto, o volume de vídeos publicados ainda não atingiu a massa crítica de 12 amostras na janela de 72–96h. O motor reporta corretamente `INSUFFICIENT_DATA`.
-- **Menor Correção Possível (sem implementar):**
-  Nenhuma alteração de código é necessária. Aguardar a produção e publicação continuada até atingir 12 vídeos na janela alvo de métricas com copyright aprovado.
+  O canal possui volume histórico massivo (251 publicações avaliadas), formato narrativo tradicional (`mystery`) totalmente compatível com o clustering de temas. No entanto, o bloqueio absoluto de copyright `unknown` impede que qualquer uma das 251 publicações entre na contagem de amostras elegíveis.
 
 ### 5.3 Dose Diária de Escolhas (`profile-4d18bf9a5d94`)
-- **Veredito:** **NÃO FUNCIONA**
+- **Veredito Inicial (Inferência do Código):** **NÃO FUNCIONA**
+- **Comprovação em Produção (PC Forte):** 18 snapshots colhidos, **100% excluídos por `copyright_unknown`**.
 - **Diagnóstico Técnico:**
-  O canal opera no formato `quiz_dilemma`.
-  1. A estrutura recomendada pelo closed loop é anulada na linha 3152 de `autonomous_production.py`, que força `rec_struct = fixed_format`.
-  2. O pipeline procedural em [task.py:2844](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/task.py#L2844) (`_run_quiz_pipeline`) gera dilemas através de um gerador procedural específico, ignorando tópicos do Trend Radar e estruturas narrativas do closed loop.
-- **Menor Correção Possível (sem implementar):**
-  Desativar expressamente a consulta de closed loop para perfis procedurais em `autonomous_production.py`, ou criar uma dimensão de aprendizado específica para quizzes (ex: categorias de dilemas, retenção por tempo de transição de tela) ao invés de tentar encaixar a estrutura de 3 atos tradicional.
+  O canal opera no formato procedural `quiz_dilemma`. Além da exclusão de copyright, a estrutura recomendada é anulada incondicionalmente em [autonomous_production.py:3152](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/autonomous_production.py#L3152) (`rec_struct = fixed_format`) e o gerador procedural de dilemas ignora o clustering.
 
 ### 5.4 Quiz_Quiz (`profile-45cee883f80a`)
-- **Veredito:** **NÃO FUNCIONA**
+- **Veredito Inicial (Inferência do Código):** **NÃO FUNCIONA**
+- **Comprovação em Produção (PC Forte):** 11 snapshots colhidos, **100% excluídos por `copyright_unknown`**.
 - **Diagnóstico Técnico:**
-  O canal opera no formato `quiz_paper`. Apresenta exatamente a mesma causa raiz do Quiz de Escolhas: sobrescrita incondicional da estrutura na linha 3152 de `autonomous_production.py` e bypass de roteirização tradicional em [task.py:3025](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/task.py#L3025) (`_run_quiz_paper_pipeline`).
-- **Menor Correção Possível (sem implementar):**
-  Isolar o canal da lógica de narrativa tradicional no closed loop. O canal depende exclusivamente do gerador procedural de perguntas de papel e de assets gráficos locais.
+  O canal opera no formato procedural `quiz_paper`. Apresenta exatamente a mesma anulação estrutural em `autonomous_production.py:3152` e bypass de roteirização tradicional em [task.py:3025](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/task.py#L3025).
 
 ### 5.5 Dose Diária de GTA VI (`profile-gta-vi`)
-- **Veredito:** **FALTA DADO**
+- **Veredito Inicial (Inferência do Código):** **FALTA DADO**
+- **Comprovação em Produção (PC Forte):** 1 snapshot colhido, **100% excluído por `copyright_unknown`**.
 - **Diagnóstico Técnico:**
-  Canal com formato tradicional compatível com o closed loop, mas atualmente em pausa operacional (`autonomous_mode_enabled = False` e poucas publicações históricas). Não possui amostras na janela 72–96h.
-- **Menor Correção Possível (sem implementar):**
-  Retomar a produção quando conveniente e aguardar o ciclo de maturação de 12 vídeos para avaliação estatística.
+  Canal com formato tradicional compatível com o closed loop, mas atualmente pausado e com apenas 1 publicação registrada na base histórica.

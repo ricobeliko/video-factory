@@ -2,19 +2,19 @@
 """Script de Auditoria Somente Leitura do Ciclo Fechado de Aprendizado (Closed Feedback Loop).
 
 Missão B — V2 Auditoria de Aprendizado.
-Opera estritamente em modo READ-ONLY (mode=ro) sobre o banco SQLite.
-ZERO modificações em banco, ZERO chamadas de rede externas e ZERO vazamento de segredos.
+Opera estritamente em modo READ-ONLY sobre cópia temporária do banco SQLite (via sqlite3 backup).
+ZERO modificações no banco ao vivo, ZERO chamadas de rede externas e ZERO vazamento de segredos.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,8 +28,8 @@ def _get_ro_connection(db_path: str) -> sqlite3.Connection:
     abs_path = os.path.abspath(db_path)
     if not os.path.isfile(abs_path):
         raise FileNotFoundError(f"Arquivo de banco de dados não encontrado: {abs_path}")
-    uri = f"file:{abs_path}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+    uri = Path(abs_path).as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=10.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -44,22 +44,11 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return bool(row)
 
 
-def _get_file_hash(filepath: str) -> str:
-    """Calcula hash SHA-256 do arquivo para validação de imutabilidade."""
-    if not os.path.isfile(filepath):
-        return ""
-    hasher = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        while chunk := f.read(65536):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def audit_learning_loop(db_path: str) -> Dict[str, Any]:
-    """Executa a auditoria completa de aprendizado e métricas de forma somente leitura."""
+def audit_learning_loop(db_path: str, original_db_path: Optional[str] = None) -> Dict[str, Any]:
+    """Executa a auditoria completa de aprendizado e métricas sobre a cópia do banco."""
     report_data: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "db_path": os.path.abspath(db_path),
+        "db_path": original_db_path or os.path.abspath(db_path),
         "db_exists": os.path.isfile(db_path),
         "global_settings": {},
         "channels": [],
@@ -108,51 +97,85 @@ def audit_learning_loop(db_path: str) -> Dict[str, Any]:
         # 3. Perfis e Canais Operacionais
         profiles = []
         if _table_exists(conn, "content_profiles"):
-            cur = conn.execute("SELECT id, name, is_active FROM content_profiles ORDER BY id;")
+            cur = conn.execute("SELECT id, name, slug, is_active, settings_json FROM content_profiles ORDER BY id;")
             profiles = [dict(r) for r in cur.fetchall()]
+
+        # Mapeamento de canais de publicação
+        channels_by_profile: Dict[str, List[Dict[str, Any]]] = {}
+        if _table_exists(conn, "publishing_channels"):
+            cur = conn.execute(
+                "SELECT id, profile_id, platform, display_name, is_enabled, auto_publish_authorized "
+                "FROM publishing_channels;"
+            )
+            for r in cur.fetchall():
+                ch_dict = dict(r)
+                p_id_key = ch_dict.get("profile_id") or "default"
+                channels_by_profile.setdefault(p_id_key, []).append(ch_dict)
 
         channels_info = []
         for prof in profiles:
             p_id = prof["id"]
             p_name = prof["name"]
 
-            # Formato e configurações do perfil
+            # Formato e configurações do perfil (fonte de verdade de autonomous_production e profile_manager)
             fixed_format = "traditional"
             target_stock = 3
             is_autonomous = False
-            if _table_exists(conn, "content_profile_settings"):
-                cur = conn.execute(
-                    "SELECT settings_json FROM content_profile_settings WHERE profile_id=?;",
-                    (p_id,),
-                )
-                p_set_row = cur.fetchone()
-                if p_set_row and p_set_row["settings_json"]:
-                    try:
-                        p_settings = json.loads(p_set_row["settings_json"])
-                        fixed_format = (
-                            p_settings.get("video_format")
-                            or p_settings.get("content_style")
-                            or p_settings.get("format")
-                            or "traditional"
-                        )
-                        target_stock = p_settings.get("target_ready_stock", 3)
-                        is_autonomous = bool(p_settings.get("autonomous_mode_enabled", False))
-                    except Exception:
-                        pass
 
-            # Canal YouTube do perfil
-            yt_channel_id = None
-            auto_publish_auth = False
-            if _table_exists(conn, "publishing_channels"):
-                cur = conn.execute(
-                    "SELECT id, is_enabled, auto_publish_authorized FROM publishing_channels "
-                    "WHERE profile_id=? AND platform='youtube' LIMIT 1;",
-                    (p_id,),
+            resolved_via_service = False
+            try:
+                from app.services import profile_manager, autonomous_production
+                prof_ctx = profile_manager.get_generation_profile_context(profile_id=p_id, db_path=db_path)
+                fixed_format = prof_ctx.get("video_format") or prof_ctx.get("content_style") or "traditional"
+                is_autonomous = bool(autonomous_production.is_profile_autonomous_mode_enabled(p_id, db_path=db_path))
+                target_stock = autonomous_production.get_target_ready_stock(p_id, db_path=db_path)
+                resolved_via_service = True
+            except Exception:
+                pass
+
+            # Fallback direto via banco / settings_json
+            if not resolved_via_service or fixed_format in ("traditional", "standard", ""):
+                try:
+                    p_settings = json.loads(prof.get("settings_json") or "{}")
+                    ed = p_settings.get("editorial", {})
+                    raw_fmt = str(ed.get("video_format") or p_settings.get("video_format") or "").strip().lower()
+                    raw_style = str(ed.get("narrative_structure") or ed.get("content_style") or p_settings.get("content_style") or "").strip().lower()
+                    if raw_fmt in ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis") or raw_style in ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis"):
+                        fixed_format = "quiz_dilemma"
+                    elif raw_fmt in ("quiz_paper", "paper") or raw_style in ("quiz_paper", "paper"):
+                        fixed_format = "quiz_paper"
+                    elif raw_fmt:
+                        fixed_format = raw_fmt
+                    elif raw_style:
+                        fixed_format = raw_style
+                except Exception:
+                    pass
+
+            if not resolved_via_service and _table_exists(conn, "autopilot_settings"):
+                auto_key = "autonomous_mode_enabled" if p_id in ("default", "profile-default", "") else f"autonomous_mode_enabled:{p_id}"
+                cur_auto = conn.execute("SELECT value FROM autopilot_settings WHERE key=?;", (auto_key,))
+                r_auto = cur_auto.fetchone()
+                if not r_auto and p_id not in ("default", "profile-default", ""):
+                    cur_auto = conn.execute("SELECT value FROM autopilot_settings WHERE key='autonomous_mode_enabled';")
+                    r_auto = cur_auto.fetchone()
+                if r_auto:
+                    is_autonomous = str(r_auto["value"]).lower() in ("true", "1", "yes")
+
+            # Canais associados
+            ch_list = channels_by_profile.get(p_id, [])
+            yt_ch = next((c for c in ch_list if c.get("platform") == "youtube"), None)
+            yt_channel_id = yt_ch["id"] if yt_ch else None
+            auto_publish_auth = bool(yt_ch.get("auto_publish_authorized")) if yt_ch else False
+
+            # Verificação de override autônomo por canal em autopilot_settings
+            if yt_channel_id and _table_exists(conn, "autopilot_settings"):
+                cur_ch_auto = conn.execute(
+                    "SELECT value FROM autopilot_settings WHERE key=?;",
+                    (f"autonomous_mode_enabled:{yt_channel_id}",),
                 )
-                ch_row = cur.fetchone()
-                if ch_row:
-                    yt_channel_id = ch_row["id"]
-                    auto_publish_auth = bool(ch_row["auto_publish_authorized"])
+                r_ch_auto = cur_ch_auto.fetchone()
+                if r_ch_auto:
+                    is_autonomous = str(r_ch_auto["value"]).lower() in ("true", "1", "yes")
 
             # Contagem de linhas em content_analytics por age_bucket para este canal
             age_buckets = {
@@ -166,7 +189,6 @@ def audit_learning_loop(db_path: str) -> Dict[str, Any]:
             last_collected_at = None
 
             if _table_exists(conn, "content_analytics"):
-                # Total por canal
                 query = """
                     SELECT ca.published_at, ca.collected_at
                     FROM content_analytics ca
@@ -291,7 +313,7 @@ def generate_markdown_report(data: Dict[str, Any]) -> str:
     md.append("# Relatório de Auditoria: Ciclo Fechado de Aprendizado (Closed Feedback Loop)")
     md.append("")
     md.append(f"- **Data da Auditoria (UTC):** `{ts}`")
-    md.append(f"- **Banco Inspecionado:** `{db_path}` *(Modo estritamente somente-leitura `mode=ro`)*")
+    md.append(f"- **Banco Inspecionado:** `{db_path}` *(Auditado via cópia segura snapshot `sqlite3.backup`)*")
     md.append(f"- **Flag Global de Closed Loop (`closed_feedback_loop_enabled`):** `{cl_enabled}`")
     md.append(f"- **Flag Global de Coleta de Métricas (`auto_collection_enabled`):** `{auto_coll_enabled}`")
     md.append(f"- **Último Ciclo de Analytics Executado:** `{last_cycle}`")
@@ -349,7 +371,7 @@ def generate_markdown_report(data: Dict[str, Any]) -> str:
     for ch in data.get("channels", []):
         b = ch["age_buckets"]
         yt = ch["yt_channel_id"] or "—"
-        md.append(f"| **{ch['profile_name']}** | `{yt}` | {b['under_6h']} | {b['6h_to_24h']} | {b['24h_to_72h']} | **{b['72h_to_96h']}** | {b['over_96h']} | **{b['total']}** |")
+        md.append(f"| **{ch['profile_name']}** | `{yt}` | {b['under_6h']} | {b['6h_to_24h']} | {b['24h_to_72h']} | **{b['72h_to_96h']}** | {b['over96h'] if 'over96h' in b else b['over_96h']} | **{b['total']}** |")
 
     md.append("")
     md.append("---")
@@ -387,34 +409,52 @@ def main():
         except Exception:
             pass
 
+    default_output = os.path.join(tempfile.gettempdir(), "AUDIT_LEARNING_LOOP_REPORT.md")
+
     parser = argparse.ArgumentParser(description="Auditoria Somente Leitura do Ciclo Fechado de Aprendizado")
     parser.add_argument("--db-path", default="storage/video_factory.db", help="Caminho do banco SQLite")
-    parser.add_argument("--output", default="docs/auditorias/AUDIT_LEARNING_LOOP_REPORT.md", help="Arquivo markdown de saída")
+    parser.add_argument("--output", default=default_output, help="Arquivo markdown de saída (padrão: pasta temporária)")
     parser.add_argument("--stdout", action="store_true", help="Imprime o relatório markdown também no console")
     args = parser.parse_args()
 
-    # Validação prévia de imutabilidade: calcula SHA-256 antes da leitura
-    hash_before = _get_file_hash(args.db_path) if os.path.isfile(args.db_path) else "NA"
-
-    print(f"[AUDIT] Iniciando auditoria em modo READ-ONLY em '{args.db_path}'...")
-    data = audit_learning_loop(args.db_path)
-    report_md = generate_markdown_report(data)
-
-    # Validação pós-leitura: confirma que o hash do arquivo NÃO mudou
-    hash_after = _get_file_hash(args.db_path) if os.path.isfile(args.db_path) else "NA"
-    if hash_before != "NA" and hash_before != hash_after:
-        print("[ERRO FATAL] O hash do banco SQLite mudou durante a execução! Violação de modo READ-ONLY!", file=sys.stderr)
+    db_file = Path(args.db_path).resolve()
+    if not db_file.is_file():
+        print(f"[ERRO FATAL] Banco de dados SQLite não encontrado: {db_file}", file=sys.stderr)
         sys.exit(1)
 
-    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    with open(args.output, "w", encoding="utf-8") as f:
-        f.write(report_md)
+    print(f"[AUDIT] Criando snapshot seguro do banco em arquivo temporário via sqlite3 backup...")
+    temp_fd, temp_db_path = tempfile.mkstemp(prefix="audit_learning_loop_", suffix=".db")
+    os.close(temp_fd)
 
-    print(f"[AUDIT] Relatório gravado com sucesso em: {args.output}")
-    print(f"[AUDIT] Integridade do SQLite confirmada (SHA-256 inalterado: {hash_before[:12]}...).")
+    try:
+        # Abre o banco de origem em modo estritamente somente-leitura (mode=ro)
+        src_uri = db_file.as_uri() + "?mode=ro"
+        src_conn = sqlite3.connect(src_uri, uri=True, timeout=10.0)
+        dst_conn = sqlite3.connect(temp_db_path)
+        src_conn.backup(dst_conn)
+        dst_conn.close()
+        src_conn.close()
 
-    if args.stdout:
-        print("\n" + report_md)
+        print(f"[AUDIT] Snapshot do banco copiado com sucesso para: {temp_db_path}")
+        print(f"[AUDIT] Executando auditoria sobre a cópia temporária...")
+        data = audit_learning_loop(temp_db_path, original_db_path=str(db_file))
+        report_md = generate_markdown_report(data)
+
+        out_path = Path(args.output).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(report_md)
+
+        print(f"[AUDIT] Relatório gravado com sucesso em: {out_path}")
+
+        if args.stdout:
+            print("\n" + report_md)
+    finally:
+        if os.path.exists(temp_db_path):
+            try:
+                os.remove(temp_db_path)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

@@ -2636,6 +2636,7 @@ def generate_flow_scene(
     try:
         from app.services.flow_account_pool import (
             resolve_manifest_account,
+            estimate_task_flow_credits,
             get_account_runtime,
             record_credit_deduction,
             record_account_success,
@@ -2643,28 +2644,49 @@ def generate_flow_scene(
             failover_flow_account,
             can_failover_account,
             resolve_user_data_dir,
+            is_credit_reading_stale,
+            refresh_account_credits,
         )
+        required_credits = estimate_task_flow_credits(manifest)
         account_info = resolve_manifest_account(manifest, manifest_path=manifest_path)
     except Exception as pool_exc:
         logger.warning(f"Falha ao consultar pool de contas: {pool_exc}")
-        account_info = {
-            "account_id": "flow-primary",
-            "user_data_dir": DEFAULT_USER_DATA_DIR,
-            "runtime": {},
-        }
+        account_info = None
+        required_credits = 90
+
+    if not account_info:
+        err_msg = (
+            f"INSUFFICIENT_POOL_CREDITS: Nenhuma conta no pool do Google Flow possui saldo suficiente "
+            f"para produzir o vídeo (orçamento estimado: {required_credits} créditos)."
+        )
+        logger.error(f"[FLOW_DISPATCH] {err_msg}")
+        return FlowSceneResult(
+            status="FAILED",
+            scene_index=scene_index,
+            clip_path=None,
+            prompt_used=None,
+            generation_time_sec=0.0,
+            project_url=target_project_url,
+            error=err_msg,
+            details={
+                "pool_insufficient": True,
+                "required_credits": required_credits,
+                "error_code": "INSUFFICIENT_POOL_CREDITS",
+            },
+        )
 
     flow_account_id = account_info.get("account_id", "flow-primary")
-    account_user_data_dir = account_info.get("user_data_dir") or DEFAULT_USER_DATA_DIR
+    account_user_data_dir = account_info.get("user_data_dir") or resolve_user_data_dir(flow_account_id)
     rt_before = account_info.get("runtime") or {}
     credits_before = rt_before.get("credits_remaining")
     initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
     initial_status = rt_before.get("status", "AVAILABLE")
 
-    # Pre-dispatch failover se conta estiver em status não elegível ou com saldo insuficiente
+    # Pre-dispatch failover se conta estiver em status não elegível ou com saldo inferior ao orçamento do vídeo
     failover_done = False
     needs_pre_failover = (
         initial_status in ("EXHAUSTED", "AUTH_FAILED", "AUTH_REQUIRED", "DISABLED", "COOLDOWN")
-        or (credits_before is not None and credits_before < 15)
+        or (credits_before is not None and credits_before < required_credits)
     )
     if can_failover_account(manifest) and needs_pre_failover:
         # Se for por insuficiência de crédito ou status de esgotamento, mas a telemetria for stale,
@@ -2683,7 +2705,7 @@ def generate_flow_scene(
                         credits_before = rt_before.get("credits_remaining")
                         initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
                         initial_status = rt_before.get("status", "AVAILABLE")
-                        if credits_before is None or credits_before >= 15:
+                        if credits_before is None or credits_before >= required_credits:
                             needs_pre_failover = False
                             logger.info(
                                 f"[FLOW_DISPATCH] Reconciliação bem-sucedida para '{flow_account_id}': "
@@ -2696,7 +2718,8 @@ def generate_flow_scene(
             alt_acc = failover_flow_account(
                 manifest_path,
                 flow_account_id,
-                f"Account in non-eligible status or insufficient credits: status={initial_status}, credits={credits_before}",
+                f"Account in non-eligible status or insufficient credits: status={initial_status}, credits={credits_before} (required={required_credits})",
+                required_credits=required_credits,
             )
             if alt_acc:
                 failover_done = True
@@ -2705,6 +2728,27 @@ def generate_flow_scene(
                 rt_before = alt_acc.get("runtime") or get_account_runtime(flow_account_id)
                 credits_before = rt_before.get("credits_remaining")
                 initial_credits_source = rt_before.get("credits_source", "UNKNOWN")
+            else:
+                err_msg = (
+                    f"INSUFFICIENT_POOL_CREDITS: Conta '{flow_account_id}' tem saldo insuficiente ({credits_before} < {required_credits} cr) "
+                    f"e nenhuma conta alternativa no pool possui saldo suficiente para a tarefa."
+                )
+                logger.error(f"[FLOW_DISPATCH] {err_msg}")
+                return FlowSceneResult(
+                    status="FAILED",
+                    scene_index=scene_index,
+                    clip_path=None,
+                    prompt_used=None,
+                    generation_time_sec=0.0,
+                    project_url=target_project_url,
+                    error=err_msg,
+                    details={
+                        "pool_insufficient": True,
+                        "required_credits": required_credits,
+                        "account_id": flow_account_id,
+                        "credits_remaining": credits_before,
+                    },
+                )
 
     # 3. Executa driver Playwright (single-flight)
     raw_res = run_playwright_flow_poc(

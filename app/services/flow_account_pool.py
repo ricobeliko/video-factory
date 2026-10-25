@@ -45,6 +45,10 @@ STATUS_AUTH_FAILED = "AUTH_FAILED"
 STATUS_DISABLED = "DISABLED"
 STATUS_BUSY = "BUSY"
 
+DEFAULT_FLOW_CREDITS_PER_SCENE = 15
+DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6
+DEFAULT_FLOW_VIDEO_BUDGET = DEFAULT_FLOW_CREDITS_PER_SCENE * DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT  # 90 creditos
+
 DEFAULT_CREDIT_STALE_HOURS = 24.0
 
 NON_ELIGIBLE_STATUSES = {
@@ -352,32 +356,101 @@ def record_account_success(
     update_account_runtime(account_id, updates, runtime_path=runtime_path)
 
 
+def estimate_task_flow_credits(
+    task_manifest: Optional[Dict[str, Any]] = None,
+    scene_count: Optional[int] = None,
+) -> int:
+    """Calcula o orcamento de creditos Google Flow necessario para uma tarefa de video.
+
+    Regra canonica:
+    - Se scene_count for informado: scene_count * 15 creditos.
+    - Se houver manifesto estruturado: calcula a quantidade de cenas marcadas como Flow Premium
+      que ainda NAO foram concluidas (completed_scenes) * 15 creditos.
+    - Se todas as cenas ja foram concluidas: 0 creditos.
+    - Fallback padrao: 6 cenas * 15 creditos = 90 creditos.
+    """
+    if scene_count is not None:
+        return max(0, int(scene_count)) * DEFAULT_FLOW_CREDITS_PER_SCENE
+
+    if not task_manifest or not isinstance(task_manifest, dict):
+        return DEFAULT_FLOW_VIDEO_BUDGET
+
+    completed_scenes = set(task_manifest.get("flow_generation", {}).get("completed_scenes") or [])
+
+    # Caso 1: manifesto contem lista detalhada de scenes
+    scenes = task_manifest.get("scenes")
+    if isinstance(scenes, list) and scenes:
+        pending_flow = [
+            s for s in scenes
+            if s.get("is_flow_premium", False) and s.get("scene_index") not in completed_scenes
+        ]
+        has_any_flow = any(s.get("is_flow_premium", False) for s in scenes)
+        if has_any_flow or completed_scenes:
+            return len(pending_flow) * DEFAULT_FLOW_CREDITS_PER_SCENE
+
+    # Caso 2: manifesto contem flow_scenes (indices das cenas Flow)
+    flow_scenes = task_manifest.get("flow_scenes")
+    if isinstance(flow_scenes, list):
+        pending_flow = [s for s in flow_scenes if s not in completed_scenes]
+        if flow_scenes or completed_scenes:
+            return len(pending_flow) * DEFAULT_FLOW_CREDITS_PER_SCENE
+
+    # Caso 3: parametros de contagem explicitos no manifesto
+    if task_manifest.get("target_flow_scenes") is not None:
+        try:
+            return max(0, int(task_manifest["target_flow_scenes"])) * DEFAULT_FLOW_CREDITS_PER_SCENE
+        except (ValueError, TypeError):
+            pass
+
+    if task_manifest.get("flow_scene_count") is not None:
+        try:
+            return max(0, int(task_manifest["flow_scene_count"])) * DEFAULT_FLOW_CREDITS_PER_SCENE
+        except (ValueError, TypeError):
+            pass
+
+    return DEFAULT_FLOW_VIDEO_BUDGET
+
+
 def select_flow_account(
     task_manifest: Optional[Dict[str, Any]] = None,
+    required_credits: Optional[int] = None,
     config_path: Optional[str] = None,
     runtime_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Seleciona a conta mais apropriada no pool para uma nova cena/tarefa.
+    """Seleciona a conta mais apropriada no pool para uma nova tarefa ou cena de video.
 
-    Critérios de elegibilidade:
+    Orcamento:
+    - Se required_credits for especificado, utiliza este valor;
+    - Se task_manifest for fornecido, calcula via estimate_task_flow_credits(task_manifest);
+    - Se nenhum for especificado, assume o orcamento padrao de video (DEFAULT_FLOW_VIDEO_BUDGET = 90).
+
+    Criterios de elegibilidade:
     - enabled = True
     - status NOT IN (DISABLED, AUTH_FAILED, AUTH_REQUIRED, COOLDOWN, BUSY)
-    - Se status estiver em (EXHAUSTED, LOW_CREDITS), a conta é elegível para reavaliação
-      se o saldo for desatualizado (> 24h ou UNKNOWN).
 
-    Critérios de preferência (5 tiers canônicos):
-    0. Stickiness de tarefa vinculada (mandatória se projeto já iniciado);
-    1. Saldo verificado recente (<= 24h) >= 15 créditos (maior saldo primeiro);
-    2. Saldo estimado recente (<= 24h) >= 15 créditos (maior saldo primeiro);
-    3. Saldo desconhecido ou desatualizado (> 24h) (maior saldo conhecido se houver, depois prioridade);
-    4. Saldo verificado recente < 15 créditos (insuficiente comprovado recentemente);
-    5. Descartados (não elegíveis: erro de auth, desativada, cooldown, busy).
+    Criterios de preferencia (5 tiers canonicos por capacidade e confiabilidade):
+    0. Stickiness de tarefa vinculada (mandatoria se o projeto ja foi iniciado na conta);
+    1. Saldo verificado recente (<= 24h) >= required_credits (maior saldo primeiro);
+    2. Saldo estimado recente (<= 24h) >= required_credits (maior saldo primeiro);
+    3. Saldo desconhecido ou desatualizado (> 24h) (candidata a reconciliacao antes do dispatch);
+    4. Saldo conhecido recente comprovadamente INSUFICIENTE (< required_credits);
+    5. Inelegiveis (desativada, auth falhou, cooldown, ocupada).
+
+    Se nenhuma conta individual possuir capacidade (Tier 1 ou 2) ou potencial (Tier 3),
+    e as unicas contas disponiveis estiverem no Tier 4 (< required_credits), retorna None.
+    NUNCA soma creditos de contas diferentes para justificar o inicio de um video.
     """
     config = load_accounts_config(config_path)
     accounts = config.get("accounts", [])
     hard_ineligible = {STATUS_DISABLED, STATUS_AUTH_FAILED, STATUS_AUTH_REQUIRED, STATUS_COOLDOWN, STATUS_BUSY}
 
-    # 1. Stickiness de task/manifest
+    needed = (
+        required_credits
+        if required_credits is not None
+        else (estimate_task_flow_credits(task_manifest) if task_manifest else DEFAULT_FLOW_VIDEO_BUDGET)
+    )
+
+    # 1. Stickiness de task/manifest (se ja iniciado, nao pode trocar de conta)
     if task_manifest and task_manifest.get("flow_account_id"):
         bound_id = task_manifest["flow_account_id"]
         has_url = bool(task_manifest.get("flow_project_url"))
@@ -387,21 +460,24 @@ def select_flow_account(
         target = next((a for a in accounts if a.get("account_id") == bound_id), None)
         if target:
             rt = get_account_runtime(bound_id, runtime_path)
+            # Se for sticky, preserva obrigatoriamente a conta do projeto ja iniciado
             if is_sticky:
                 res = dict(target)
                 res["runtime"] = rt
                 return res
 
+            # Pre-dispatch: so mantem bound_id se tiver saldo suficiente comprovado ou desconhecido
             st = rt.get("status")
             is_stale, _, _ = is_credit_reading_stale(rt)
             rem = rt.get("credits_remaining")
             if target.get("enabled", True) and st not in hard_ineligible:
-                if rem is None or rem >= 15 or is_stale:
+                if rem is None or rem >= needed or is_stale:
                     res = dict(target)
                     res["runtime"] = rt
                     return res
+            # Se a conta bound_id tiver rem < needed comprovado recentemente, cai para selecao no pool
 
-    # 2. Filtragem e categorização por Tiers
+    # 2. Filtragem e categorizacao por Tiers de Capacidade Individual
     eligible_candidates: List[Tuple[Dict[str, Any], Dict[str, Any], int]] = []
 
     for acct in accounts:
@@ -418,13 +494,13 @@ def select_flow_account(
         src = rt.get("credits_source", CREDIT_SOURCE_UNKNOWN)
 
         if not is_stale and rem is not None:
-            if rem >= 15:
+            if rem >= needed:
                 if src == CREDIT_SOURCE_FLOW_UI_VERIFIED:
-                    tier = 1  # Saldo verificado recente >= 15
+                    tier = 1  # Saldo verificado recente suficiente (>= needed)
                 else:
-                    tier = 2  # Saldo estimado recente >= 15
+                    tier = 2  # Saldo estimado recente suficiente (>= needed)
             else:
-                tier = 4      # Saldo recente comprovadamente insuficiente (< 15)
+                tier = 4      # Saldo recente comprovadamente INSUFICIENTE (< needed)
         else:
             tier = 3          # Saldo desconhecido ou desatualizado (> 24h)
 
@@ -433,18 +509,29 @@ def select_flow_account(
     if not eligible_candidates:
         return None
 
-    # 3. Ordenação
+    # 3. Ordenacao
     def _sort_key(item: Tuple[Dict[str, Any], Dict[str, Any], int]):
         acct, rt, tier = item
         rem = rt.get("credits_remaining")
         rem_val = rem if rem is not None else -1
         prio = acct.get("priority", 100)
         aid = acct.get("account_id", "")
-        # Menor tier primeiro (1, 2, 3, 4); dentro do tier, maior saldo, maior prioridade, aid alfabético
+        # Menor tier primeiro (1, 2, 3, 4); dentro do tier, maior saldo, maior prioridade, aid alfabetico
         return (tier, -rem_val, -prio, aid)
 
     eligible_candidates.sort(key=_sort_key)
-    chosen_acct, chosen_rt, _ = eligible_candidates[0]
+    chosen_acct, chosen_rt, chosen_tier = eligible_candidates[0]
+
+    # Se a melhor conta disponivel for Tier 4 (saldo insuficiente) e o orcamento demandar creditos > 0,
+    # nenhuma conta do pool atende ao video. Rejeita o dispatch retornando None.
+    if chosen_tier == 4 and needed > 0:
+        logger.warning(
+            f"[FLOW_ACCOUNT_SELECTION] Nenhuma conta com capacidade individual suficiente no pool "
+            f"(necessario: {needed} cr). Melhor conta tem {chosen_rt.get('credits_remaining')} cr. "
+            f"Selecao recusada (fail-closed)."
+        )
+        return None
+
     res = dict(chosen_acct)
     res["runtime"] = chosen_rt
     return res
@@ -474,10 +561,11 @@ def failover_flow_account(
     manifest_path: str,
     failed_account_id: str,
     error_reason: str,
+    required_credits: Optional[int] = None,
     config_path: Optional[str] = None,
     runtime_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Executa failover automático seguro para uma nova conta no pool se pré-dispatch."""
+    """Executa failover automatico seguro para uma nova conta no pool se pre-dispatch."""
     if not os.path.exists(manifest_path):
         return None
     try:
@@ -488,7 +576,7 @@ def failover_flow_account(
 
     if not can_failover_account(manifest):
         logger.warning(
-            f"[FLOW_FAILOVER] Failover proibido para {manifest_path}: projeto já iniciado na conta original."
+            f"[FLOW_FAILOVER] Failover proibido para {manifest_path}: projeto ja iniciado na conta original."
         )
         return None
 
@@ -511,10 +599,17 @@ def failover_flow_account(
 
     temp_manifest = dict(manifest)
     temp_manifest["flow_account_id"] = None
-    next_acc = select_flow_account(temp_manifest, config_path=config_path, runtime_path=runtime_path)
+    if required_credits is None:
+        required_credits = estimate_task_flow_credits(temp_manifest)
+    next_acc = select_flow_account(
+        temp_manifest,
+        required_credits=required_credits,
+        config_path=config_path,
+        runtime_path=runtime_path,
+    )
 
     if not next_acc or next_acc.get("account_id") == failed_account_id:
-        logger.warning(f"[FLOW_FAILOVER] Nenhuma conta alternativa disponível para substituir '{failed_account_id}'.")
+        logger.warning(f"[FLOW_FAILOVER] Nenhuma conta alternativa disponivel para substituir '{failed_account_id}'.")
         return None
 
     new_aid = next_acc["account_id"]
@@ -529,19 +624,21 @@ def resolve_manifest_account(
     manifest_path: Optional[str] = None,
     config_path: Optional[str] = None,
     runtime_path: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Resolve ou atribui atomicamente flow_account_id no manifesto da tarefa."""
+) -> Optional[Dict[str, Any]]:
+    """Resolve ou atribui atomicamente flow_account_id no manifesto da tarefa com base no orcamento total."""
     current_aid = manifest.get("flow_account_id")
-    if current_aid:
-        has_url = bool(manifest.get("flow_project_url"))
-        has_completed = bool(manifest.get("flow_generation", {}).get("completed_scenes"))
-        is_sticky = has_url or has_completed
+    has_url = bool(manifest.get("flow_project_url"))
+    has_completed = bool(manifest.get("flow_generation", {}).get("completed_scenes"))
+    is_sticky = has_url or has_completed
 
+    needed_credits = estimate_task_flow_credits(manifest)
+
+    if current_aid:
         rt = get_account_runtime(current_aid, runtime_path)
         rem = rt.get("credits_remaining")
         st = rt.get("status")
 
-        # Se for sticky, preserva a conta vinculada (não troca de conta em projeto já iniciado)
+        # Se for sticky, preserva a conta vinculada (nao troca de conta em projeto ja iniciado)
         if is_sticky:
             config = load_accounts_config(config_path)
             for a in config.get("accounts", []):
@@ -558,8 +655,11 @@ def resolve_manifest_account(
                 "runtime": rt,
             }
 
-        # Se NÃO for sticky (pré-dispatch), avalia se a conta atual é elegível e possui saldo viável (>= 15)
-        is_ineligible = st in NON_ELIGIBLE_STATUSES or (rem is not None and rem < 15)
+        # Se NAO for sticky (pre-dispatch), avalia se a conta atual e elegivel e possui saldo suficiente
+        is_stale, _, _ = is_credit_reading_stale(rt)
+        is_insufficient = (rem is not None and not is_stale and rem < needed_credits)
+        is_ineligible = st in NON_ELIGIBLE_STATUSES or is_insufficient
+
         if not is_ineligible:
             config = load_accounts_config(config_path)
             for a in config.get("accounts", []):
@@ -568,12 +668,17 @@ def resolve_manifest_account(
                     res["runtime"] = rt
                     return res
 
-        # Pré-dispatch: se a conta vinculada for inelegível ou com saldo insuficiente, seleciona melhor conta no pool
-        chosen = select_flow_account(manifest, config_path=config_path, runtime_path=runtime_path)
+        # Pre-dispatch: se a conta vinculada for inelegivel ou com saldo insuficiente, seleciona melhor conta no pool
+        chosen = select_flow_account(
+            manifest,
+            required_credits=needed_credits,
+            config_path=config_path,
+            runtime_path=runtime_path,
+        )
         if chosen and chosen.get("account_id") != current_aid:
             logger.info(
-                f"[FLOW_ACCOUNT_RESOLVER] Pré-dispatch switch: conta '{current_aid}' "
-                f"(status={st}, rem={rem}) substituída por '{chosen['account_id']}'."
+                f"[FLOW_ACCOUNT_RESOLVER] Pre-dispatch switch: conta '{current_aid}' "
+                f"(status={st}, rem={rem}, necessario={needed_credits}) substituida por '{chosen['account_id']}'."
             )
             manifest["flow_account_id"] = chosen["account_id"]
             if manifest_path and os.path.exists(manifest_path):
@@ -583,23 +688,16 @@ def resolve_manifest_account(
                     logger.warning(f"Erro ao persistir novo flow_account_id no manifest: {exc}")
             return chosen
 
-        config = load_accounts_config(config_path)
-        for a in config.get("accounts", []):
-            if a.get("account_id") == current_aid:
-                res = dict(a)
-                res["runtime"] = rt
-                return res
-        return {
-            "account_id": current_aid,
-            "display_name": current_aid,
-            "enabled": True,
-            "priority": 100,
-            "user_data_dir": resolve_user_data_dir(current_aid),
-            "runtime": rt,
-        }
+        if chosen:
+            return chosen
 
-    # Manifesto legado com projeto já existente
-    if manifest.get("flow_project_url") or manifest.get("flow_generation", {}).get("completed_scenes"):
+        logger.warning(
+            f"[FLOW_ACCOUNT_RESOLVER] Nenhuma conta com capacidade para a tarefa ({needed_credits} cr). Conta atual '{current_aid}' insuficiente."
+        )
+        return None
+
+    # Manifesto legado com projeto ja existente
+    if is_sticky:
         manifest["flow_account_id"] = LEGACY_ACCOUNT_ID
         if manifest_path and os.path.exists(manifest_path):
             try:
@@ -615,17 +713,18 @@ def resolve_manifest_account(
             "runtime": get_account_runtime(LEGACY_ACCOUNT_ID, runtime_path),
         }
 
-    # Nova tarefa: seleciona do pool
-    chosen = select_flow_account(manifest, config_path=config_path, runtime_path=runtime_path)
+    # Nova tarefa: seleciona do pool respeitando o orcamento necessario
+    chosen = select_flow_account(
+        manifest,
+        required_credits=needed_credits,
+        config_path=config_path,
+        runtime_path=runtime_path,
+    )
     if not chosen:
-        chosen = {
-            "account_id": LEGACY_ACCOUNT_ID,
-            "display_name": "Flow Primary",
-            "enabled": True,
-            "priority": 100,
-            "user_data_dir": LEGACY_USER_DATA_DIR,
-            "runtime": get_account_runtime(LEGACY_ACCOUNT_ID, runtime_path),
-        }
+        logger.warning(
+            f"[FLOW_ACCOUNT_RESOLVER] Nenhuma conta disponivel no pool com capacidade para {needed_credits} creditos."
+        )
+        return None
 
     manifest["flow_account_id"] = chosen["account_id"]
     if manifest_path and os.path.exists(manifest_path):
@@ -634,7 +733,6 @@ def resolve_manifest_account(
         except Exception as exc:
             logger.warning(f"Erro ao persistir flow_account_id no manifest: {exc}")
     return chosen
-
 
 # ---------------------------------------------------------------------------
 
@@ -1054,7 +1152,7 @@ def get_flow_accounts_status(
 
         is_stale, staleness_reason, age_hours = is_credit_reading_stale(rt)
 
-        # Apenas contas operacionais e elegíveis somam ao total utilizável do pool
+        # Apenas contas operacionais e elegiveis somam ao total utilizavel do pool
         is_usable = is_enabled and st not in hard_ineligible and not (not is_stale and rem is not None and rem < 15)
         if rem is not None and is_usable:
             total_known += rem
@@ -1077,18 +1175,30 @@ def get_flow_accounts_status(
             "last_credit_cost": rt.get("last_credit_cost"),
             "last_success_at": rt.get("last_success_at"),
             "last_error": rt.get("last_error"),
+            "standard_video_capacity": (int(rem // DEFAULT_FLOW_VIDEO_BUDGET) if rem is not None and not is_stale and st not in hard_ineligible else 0),
+            "can_produce_standard_video": ((rem >= DEFAULT_FLOW_VIDEO_BUDGET) if rem is not None and not is_stale and st not in hard_ineligible else False),
         }
         result_accounts.append(acc_summary)
 
-    active_acct = select_flow_account(config_path=config_path, runtime_path=runtime_path)
-    active_id = active_acct["account_id"] if active_acct else None
+    rec_acct = select_flow_account(
+        required_credits=DEFAULT_FLOW_VIDEO_BUDGET,
+        config_path=config_path,
+        runtime_path=runtime_path,
+    )
+    rec_id = rec_acct["account_id"] if rec_acct else None
+
+    # Detecta se alguma conta esta em uso no momento por uma tarefa
+    busy_acct = next((a for a in result_accounts if a.get("current_task_id")), None)
+    active_task_aid = busy_acct["account_id"] if busy_acct else None
 
     return {
         "accounts": result_accounts,
-        "active_account_id": active_id,
+        "active_account_id": rec_id,  # backward compatibility
+        "recommended_account_id": rec_id,
+        "active_task_account_id": active_task_aid,
+        "default_video_budget": DEFAULT_FLOW_VIDEO_BUDGET,
         "total_known_credits": total_known if any_known else None,
     }
-
 
 # ---------------------------------------------------------------------------
 # Gerenciamento de Configuração (CLI & Admin)

@@ -1404,10 +1404,7 @@ def _render_profile_management_section(demo_enabled: bool, scenario_choice: str,
                 else:
                     st.toast("Canal vinculado em demonstração.", icon="📺")
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
-    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1500,9 +1497,8 @@ def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is
                                 except Exception as f_err:
                                     st.error(f"Erro na coleta: {f_err}")
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
+    # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missões N & O - Canônico)
     _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
-
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
@@ -1510,7 +1506,12 @@ def _render_provider_health_section(demo_enabled: bool, scenario_choice: str, is
 
 
 def _render_flow_pool_management_block(demo_enabled: bool, scenario_choice: str, is_primary: bool):
-    """Subseção do pool multi-contas do Google Flow e telemetria de créditos (FLOW-MA1 / Missão N)."""
+    """Subseção do pool multi-contas do Google Flow e telemetria de créditos (FLOW-MA1 / Missões N & O)."""
+    # Guard contra duplicação de renderização no mesmo ciclo Streamlit
+    if st.session_state.get("_flow_pool_block_rendered"):
+        return
+    st.session_state["_flow_pool_block_rendered"] = True
+
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
     st.markdown("##### 🌊 Google Flow — Pool Multi-Contas & Saldo de Créditos")
     st.caption("Monitoramento de capacidade do Google Flow, saldo por conta, detecção de telemetria desatualizada e reconciliação sem consumo de créditos.")
@@ -1519,23 +1520,32 @@ def _render_flow_pool_management_block(demo_enabled: bool, scenario_choice: str,
         from app.services import flow_account_pool
         flow_status = flow_account_pool.get_flow_accounts_status()
         flow_accounts = flow_status.get("accounts", [])
-        active_aid = flow_status.get("active_account_id")
+        recommended_aid = flow_status.get("recommended_account_id")
+        active_task_aid = flow_status.get("active_task_account_id")
         total_creds = flow_status.get("total_known_credits")
     except Exception as f_err:
         flow_accounts = []
-        active_aid = None
+        recommended_aid = None
+        active_task_aid = None
         total_creds = None
 
     if not flow_accounts:
         st.info("Nenhuma conta Google Flow cadastrada no pool.")
         return
 
-    # Header do Pool
+    # Header do Pool com capacidade total informativa e indicação de conta recomendada/em uso
     h_col1, h_col2 = st.columns([3, 1])
     with h_col1:
-        tot_str = f"**{total_creds:,}** créditos utilizáveis" if total_creds is not None else "Saldo total não consolidado"
-        act_str = f"`{active_aid}`" if active_aid else "Nenhuma (Pool esgotado/inativo)"
-        st.markdown(f"Capacidade do Pool: {tot_str} &nbsp;|&nbsp; Conta Ativa: {act_str}")
+        if total_creds is not None:
+            tot_str = f"**{total_creds:,}** créditos *(informativo — vídeos usam uma conta individual por vez)*"
+        else:
+            tot_str = "Saldo total não consolidado"
+
+        rec_str = f"`{recommended_aid}`" if recommended_aid else ":red[Nenhuma (saldo individual insuficiente para vídeo padrão de ~90 cr)]"
+        in_use_str = f" &nbsp;|&nbsp; Em uso no momento: `{active_task_aid}`" if active_task_aid else ""
+
+        st.markdown(f"**Capacidade Total do Pool:** {tot_str}")
+        st.markdown(f"**Conta Recomendada (vídeo padrão ~90 cr):** {rec_str}{in_use_str}")
     with h_col2:
         if is_primary:
             if st.button("🔄 Reconciliar Todas", key="op_refresh_all_flow_credits", use_container_width=True):
@@ -1559,7 +1569,10 @@ def _render_flow_pool_management_block(demo_enabled: bool, scenario_choice: str,
             is_stale = acct.get("is_stale", False)
             stale_reason = acct.get("staleness_reason")
             last_ver_display = acct.get("last_verified_display", "—")
-            is_active = (aid == active_aid)
+            is_recommended = (aid == recommended_aid)
+            current_tid = acct.get("current_task_id")
+            can_produce = acct.get("can_produce_standard_video", False)
+            cap_vids = acct.get("standard_video_capacity", 0)
 
             # Badges
             if st_code == "AVAILABLE":
@@ -1573,16 +1586,22 @@ def _render_flow_pool_management_block(demo_enabled: bool, scenario_choice: str,
             else:
                 st_badge = f"<span class='op-badge op-badge-gray'>⚪ {st_code}</span>"
 
-            active_tag = " &nbsp;<span class='op-badge op-badge-blue'>🎯 ATIVA</span>" if is_active else ""
+            rec_tag = " &nbsp;<span class='op-badge op-badge-blue'>⭐ RECOMENDADA (~90 cr)</span>" if is_recommended else ""
+            busy_tag = f" &nbsp;<span class='op-badge op-badge-purple'>⚙️ EM USO (`{current_tid}`)</span>" if current_tid else ""
 
             with st.container(border=True):
-                st.markdown(f"**{d_name}** (`{aid}`){active_tag} &nbsp;{st_badge}", unsafe_allow_html=True)
+                st.markdown(f"**{d_name}** (`{aid}`){rec_tag}{busy_tag} &nbsp;{st_badge}", unsafe_allow_html=True)
 
                 if creds is not None:
                     src_label = "verificado" if c_src == "FLOW_UI_VERIFIED" else "estimado"
                     st.markdown(f"Saldo: **{creds:,}** créditos *({src_label})*")
+                    if can_produce:
+                        st.caption(f":green[Capacidade estimada: ~{cap_vids} vídeos padrão (~90 cr)]")
+                    else:
+                        st.caption(":orange[Saldo insuficiente para 1 vídeo padrão (< 90 cr)]")
                 else:
                     st.markdown("Saldo: **—** *(desconhecido)*")
+                    st.caption(":gray[Capacidade não estimada (saldo pendente de leitura)]")
 
                 st.caption(f"Última verificação: `{last_ver_display}`")
 
@@ -1606,6 +1625,7 @@ def _render_flow_pool_management_block(demo_enabled: bool, scenario_choice: str,
                     st.caption("🔒 *Reconciliação disponível apenas para instância PRIMARY.*")
 
 
+# ---------------------------------------------------------------------------
 # Section 5.5: Automatic Analytics Scheduler (Fase V10-C)
 # ---------------------------------------------------------------------------
 
@@ -1669,10 +1689,7 @@ def _render_automatic_analytics_section(demo_enabled: bool, scenario_choice: str
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
-    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1838,10 +1855,7 @@ def _render_autonomous_production_section(demo_enabled: bool, scenario_choice: s
         else:
             st.info("ℹ️ Modo VIEW ONLY: somente leitura. Controles de ativação e execução desabilitados.")
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
-    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2082,10 +2096,7 @@ def _render_copyright_provenance_section(demo_enabled: bool, scenario_choice: st
         else:
             st.caption("ℹ️ Alteração manual de status de copyright permitida apenas na instância PRIMARY.")
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
-    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2675,10 +2686,7 @@ def _render_clip_mode_section(demo_enabled: bool, scenario_choice: str, is_prima
                                             st.info("⏳ Processando burn-in de legendas no servidor...")
 
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
-    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2772,10 +2780,7 @@ def _render_observability_section(demo_enabled: bool, scenario_choice: str, is_p
             st.write(f"**Feedback Loop:** Modo: `{p_cl.get('mode')}` | Amostras: {p_cl.get('sample_count')} (`{p_cl.get('evidence_state')}`)")
             st.write(f"**Cost Guard:** {p_cost.get('approvals_24h')}/{p_cost.get('max_approvals_24h')} aprovados | {p_cost.get('attempts_24h')}/{p_cost.get('max_attempts_24h')} tentativas")
 
-        # Google Flow Multi-Account Pool & Telemetria de Créditos (FLOW-MA1 / Missão N)
-    _render_flow_pool_management_block(demo_enabled, scenario_choice, is_primary)
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2960,6 +2965,7 @@ def _render_tabs_section(demo_enabled: bool, scenario_choice: str, is_primary: b
 # ---------------------------------------------------------------------------
 
 def render_operator_console():
+    st.session_state["_flow_pool_block_rendered"] = False
     """Main renderer for V8 Operator Console.
 
     Modular UX Architecture:

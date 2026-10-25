@@ -2894,3 +2894,50 @@ ideocam).
     - `test_task_stickiness_and_failover_boundaries`: PASS (stickiness preservada e failover restrito a pré-dispatch).
     - `test_profile_isolation_flow_c`: PASS (Conta C isolada em `storage/flow_browser_profiles/flow-c`).
     - `test_get_flow_accounts_status_and_operator_console_overview`: PASS (telemetria consolidada sanitizada sem vazar segredos).
+
+### Missão O: Google Flow — Capacidade por Vídeo e Correção do Streamlit
+
+- **Data:** `24/10/2026`
+- **Status:** `MISSION_O_DEV_VALIDATED (10/10 testes direcionados PASS)`
+- **Objetivo:**
+  1. Corrigir a seleção de contas no pool Google Flow para avaliar a capacidade pelo orçamento total do vídeo (`cenas_pendentes * 15 cr`), e não pelo limiar fixo legado de 15 créditos.
+  2. Evitar que contas com saldo menor que o necessário (ex.: 50 cr) vençam contas com saldo superior (ex.: 831 cr) ou iniciem tarefas sem capacidade individual comprovada.
+  3. Rejeitar o dispatch de tarefas (fail-closed) quando nenhuma conta individual do pool cobrir o custo total do vídeo, nunca somando créditos de contas distintas.
+  4. Preservar a stickiness da tarefa se o projeto já tiver sido iniciado no Google Flow (`flow_project_url` ou `completed_scenes`).
+  5. Eliminar o erro `StreamlitDuplicateElementKey: op_refresh_all_flow_credits` removendo as 6 chamadas duplicadas espúrias em `webui/components/operator_console.py` e adicionando guard de execução única por ciclo.
+  6. Clarificar na WebUI que o total consolidado do pool é meramente informativo, indicando explicitamente a conta recomendada para o vídeo padrão (~90 cr) e a capacidade em vídeos por conta.
+- **Causas Raiz Comprovadas:**
+  1. *Seleção por Limiar Atômico vs. Orçamento de Vídeo:* `select_flow_account()` utilizava `15` créditos como limiar fixo de elegibilidade e preferência. Assim, uma conta com 50 créditos verificados entrava em Tier 1 (50 >= 15), enquanto uma conta com 831 créditos estimados ficava em Tier 2. Como Tier 1 superava Tier 2 incondicionalmente, a conta de 50 cr era escolhida para vídeos de 6 cenas (90 cr), falhando no meio da geração.
+  2. *Duplicação de Renderização no Streamlit:* No commit anterior da Missão N, uma substituição inadvertida inseriu `_render_flow_pool_management_block` no final de 7 seções em `webui/components/operator_console.py` (linhas 1408, 1504, 1673, 1842, 2086, 2679, 2776). Como o botão de reconciliação em lote possui chave fixa `key="op_refresh_all_flow_credits"`, o Streamlit quebrava na segunda renderização com erro de chave duplicada.
+- **Implementação Realizada:**
+  1. *Cálculo de Orçamento Dinâmico (`app/services/flow_account_pool.py`):*
+     - Constantes canônicas: `DEFAULT_FLOW_CREDITS_PER_SCENE = 15`, `DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6`, `DEFAULT_FLOW_VIDEO_BUDGET = 90`.
+     - Função `estimate_task_flow_credits(task_manifest, scene_count)`: orça com base em cenas Flow Premium pendentes (`len(pending_scenes) * 15`), parâmetros da tarefa ou fallback para 90 cr.
+  2. *Seleção e Resolução por Capacidade Individual:*
+     - `select_flow_account(task_manifest, required_credits, ...)`: classifica contas comparando saldo diretamente contra `required_credits`. Contas com saldo recente < orçamento entram em Tier 4. Se a melhor conta for Tier 4, retorna `None`.
+     - `resolve_manifest_account(manifest, ...)`: pré-dispatch substitui contas com saldo inferior ao orçamento e retorna `None` se nenhuma conta cobrir o vídeo. Mantém stickiness se o projeto já tiver URL ou cenas prontas.
+     - `failover_flow_account`: repassa `required_credits` para selecionar substituta com capacidade suficiente.
+     - `get_flow_accounts_status`: calcula `standard_video_capacity` e `can_produce_standard_video` por conta, reportando `recommended_account_id` e `active_task_account_id`.
+  3. *Proteção Pré-Dispatch no Driver Playwright (`scripts/flow_playwright.py`):*
+     - Se `resolve_manifest_account` retornar `None`, aborta imediatamente com `FlowSceneResult(status="FAILED", error="INSUFFICIENT_POOL_CREDITS...", details={"pool_insufficient": True})` sem abrir navegador.
+     - Pré-failover compara `credits_before < required_credits` em vez do valor fixo 15.
+  4. *Integração de Tarefa (`app/services/task.py`):*
+     - Passa `required_credits = int(flow_scene_count) * 15` para `select_flow_account`.
+  5. *Correção Estrutural da WebUI V1 (`webui/components/operator_console.py`):*
+     - Remoção das 6 chamadas duplicadas espúrias, mantendo a chamada canônica exclusivamente na Seção 5 (Provider Health).
+     - Guard `_flow_pool_block_rendered` em session state resetado no início de `render_operator_console()`.
+     - Header da seção esclarece: `Capacidade Total do Pool: {total_creds} créditos (informativo — vídeos usam uma conta individual por vez)`.
+     - Identificação de conta recomendada (~90 cr), conta em uso no momento e capacidade estimada em vídeos nos cards individuais.
+- **Validação de Testes:**
+  - 10/10 testes direcionados PASS em `pytest test/services/test_mission_o_flow_capacity_and_ui.py -v`:
+    - `test_scenario_1_reject_50_credits_for_90_credits_video`: PASS (50 cr rejeitado para 90 cr).
+    - `test_scenario_2_select_account_b_with_831_credits_for_90_cr`: PASS (Conta B com 831 cr selecionada com sucesso).
+    - `test_scenario_3_small_task_accepts_50_credits_account`: PASS (2 cenas = 30 cr aceita Conta A com 50 cr).
+    - `test_scenario_4_do_not_sum_credits_across_accounts`: PASS (duas contas de 50 cr não são somadas para atender 90 cr).
+    - `test_scenario_5_stickiness_preserved_once_started`: PASS (stickiness mantida se projeto já foi iniciado).
+    - `test_scenario_6_failed_reconciliation_preserves_credits`: PASS (falha de verificação não inventa saldo).
+    - `test_scenario_7_stale_account_is_not_treated_as_verified`: PASS (conta stale cai para Tier 3 e não vence saldo recente).
+    - `test_scenario_8_no_duplicate_keys_in_streamlit`: PASS (exatamente 1 chamada canônica e guard anti-duplicação ativo).
+    - `test_scenario_9_three_accounts_supported_transparently`: PASS (3 contas suportadas no pool com capacidades individuais).
+    - `test_scenario_10_procedural_generators_unaffected`: PASS (quiz procedural e tarefas sem Flow operam normalmente).
+

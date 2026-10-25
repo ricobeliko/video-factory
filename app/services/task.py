@@ -3539,7 +3539,9 @@ def _run_pipeline(
     if getattr(params, "flow_enabled", False):
         try:
             from app.services import flow_account_pool
-            acct = flow_account_pool.select_flow_account()
+            scene_cnt = getattr(params, "flow_scene_count", 6) or 6
+            req_cr = int(scene_cnt) * flow_account_pool.DEFAULT_FLOW_CREDITS_PER_SCENE
+            acct = flow_account_pool.select_flow_account(required_credits=req_cr)
             if acct and acct.get("account_id"):
                 flow_aid = acct.get("account_id")
                 visuals_prov = f"Google Flow ({flow_aid})"

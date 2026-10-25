@@ -22,11 +22,11 @@ Esta auditoria técnica investigou detalhadamente o ecossistema de aprendizado d
 
 | Canal | Formato Técnico | Veredito (Inferência pelo Código) | Evidência Empírica em Produção (PC Forte) |
 | :--- | :---: | :---: | :--- |
-| **Dose Diária de Internet** (`default`) | Tradicional / Variado | **NÃO FUNCIONA / FALTA DADO** | 188 snapshots excluídos por `copyright_unknown`; 0 amostras elegíveis; 0 decisões adaptadas. |
-| **Dose Diária de Histórias e Mistério** (`profile-historias-misterio`) | Tradicional (`mystery`) | **FALTA DADO** | 251 snapshots excluídos por `copyright_unknown`; 0 amostras elegíveis; 0 decisões adaptadas. |
+| **Dose Diária de Internet** (`default`) | Tradicional / Variado | **NÃO FUNCIONA / FALTA DADO** | 251 snapshots excluídos por `copyright_unknown`; 0 amostras elegíveis; 0 decisões adaptadas. |
+| **Dose Diária de Histórias e Mistério** (`profile-historias-misterio`) | Tradicional (`mystery`) | **FALTA DADO** | 188 snapshots excluídos por `copyright_unknown`; 0 amostras elegíveis; 0 decisões adaptadas. |
 | **Dose Diária de Escolhas** (`profile-4d18bf9a5d94`) | `quiz_dilemma` (Procedural) | **NÃO FUNCIONA** | 18 snapshots excluídos por `copyright_unknown`; sobrescrita incondicional de estrutura (`rec_struct = fixed_format`). |
-| **Quiz_Quiz** (`profile-45cee883f80a`) | `quiz_paper` (Procedural) | **NÃO FUNCIONA** | 11 snapshots excluídos por `copyright_unknown`; sobrescrita incondicional e bypass da roteirização tradicional. |
-| **Dose Diária de GTA VI** (`profile-gta-vi`) | Tradicional | **FALTA DADO** | 1 snapshot excluído por `copyright_unknown`; canal em pausa operacional. |
+| **Quiz_Quiz** (`profile-45cee883f80a`) | `quiz_paper` (Procedural) | **NÃO FUNCIONA** | 1 snapshot excluído por `copyright_unknown`; sobrescrita incondicional e bypass da roteirização tradicional. |
+| **Dose Diária de GTA VI** (`profile-2095da4fbe23`) | Tradicional | **FALTA DADO** | 11 snapshots excluídos por `copyright_unknown`; canal em pausa operacional. |
 
 ---
 
@@ -165,11 +165,11 @@ A auditoria em tempo real executada no PC Forte sobre a base `C:\Projetos\MoneyP
 - **Decisões Adaptadas:** Exatamente **0 decisões adaptadas** (`closed_loop_adapted_total = 0`). A taxa real de adaptação é de **0,0%**.
 - **Descarte de Snapshots:** **100% dos snapshots colhidos foram descartados por `copyright_unknown`**.
 - **Distribuição de Descartes por Perfil:**
-  1. `profile-historias-misterio`: **251** publicações/snapshots descartados (`copyright_unknown`).
-  2. `default` (Dose Diária de Internet): **188** publicações/snapshots descartados (`copyright_unknown`).
+  1. `default` (Dose Diária de Internet): **251** publicações/snapshots descartados (`copyright_unknown`).
+  2. `profile-historias-misterio` (Dose Diária de Histórias e Mistério): **188** publicações/snapshots descartados (`copyright_unknown`).
   3. `profile-4d18bf9a5d94` (Dose Diária de Escolhas): **18** publicações/snapshots descartados (`copyright_unknown`).
-  4. `profile-45cee883f80a` (Quiz_Quiz): **11** publicações/snapshots descartados (`copyright_unknown`).
-  5. `profile-gta-vi`: **1** publicação/snapshot descartado (`copyright_unknown`).
+  4. `profile-2095da4fbe23` (Dose Diária de GTA VI): **11** publicações/snapshots descartados (`copyright_unknown`).
+  5. `profile-45cee883f80a` (Quiz_Quiz): **1** publicação/snapshot descartado (`copyright_unknown`).
 
 **Causa Raiz Empírica Definitiva:** O algoritmo de validação em [analytics.py:183-186](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/analytics.py#L183-L186) descarta sumariamente qualquer publicação cujo status de copyright não seja explicitamente `clean_manual`. Como na operação diária os vídeos são publicados sem auditoria humana manual de copyright, 100% das publicações permanecem em `unknown`, tornando impossível qualquer canal atingir as 12 amostras necessárias para adaptação.
 
@@ -203,16 +203,16 @@ python scripts/audit_learning_loop.py --db-path "C:\Projetos\MoneyPrinterTurbo\s
 
 ### 5.1 Dose Diária de Internet (`default`)
 - **Veredito Inicial (Inferência do Código):** **NÃO FUNCIONA / FALTA DADO**
-- **Comprovação em Produção (PC Forte):** 188 snapshots colhidos, mas **100% excluídos por `copyright_unknown`**. 0 amostras elegíveis.
+- **Comprovação em Produção (PC Forte):** 251 snapshots colhidos, mas **100% excluídos por `copyright_unknown`**. 0 amostras elegíveis.
 - **Diagnóstico Técnico:**
   1. A flag global `closed_feedback_loop_enabled` vem desativada por padrão no banco.
-  2. Todas as 188 publicações na base foram descartadas porque nenhuma possui status `clean_manual`.
+  2. Todas as 251 publicações na base foram descartadas porque nenhuma possui status `clean_manual`.
 
 ### 5.2 Dose Diária de Histórias e Mistério (`profile-historias-misterio`)
 - **Veredito Inicial (Inferência do Código):** **FALTA DADO**
-- **Comprovação em Produção (PC Forte):** 251 snapshots colhidos, mas **100% excluídos por `copyright_unknown`**. 0 amostras elegíveis.
+- **Comprovação em Produção (PC Forte):** 188 snapshots colhidos, mas **100% excluídos por `copyright_unknown`**. 0 amostras elegíveis.
 - **Diagnóstico Técnico:**
-  O canal possui volume histórico massivo (251 publicações avaliadas), formato narrativo tradicional (`mystery`) totalmente compatível com o clustering de temas. No entanto, o bloqueio absoluto de copyright `unknown` impede que qualquer uma das 251 publicações entre na contagem de amostras elegíveis.
+  O canal possui volume histórico expressivo (188 publicações avaliadas), formato narrativo tradicional (`mystery`) totalmente compatível com o clustering de temas. No entanto, o bloqueio absoluto de copyright `unknown` impede que qualquer uma das 188 publicações entre na contagem de amostras elegíveis.
 
 ### 5.3 Dose Diária de Escolhas (`profile-4d18bf9a5d94`)
 - **Veredito Inicial (Inferência do Código):** **NÃO FUNCIONA**
@@ -222,12 +222,12 @@ python scripts/audit_learning_loop.py --db-path "C:\Projetos\MoneyPrinterTurbo\s
 
 ### 5.4 Quiz_Quiz (`profile-45cee883f80a`)
 - **Veredito Inicial (Inferência do Código):** **NÃO FUNCIONA**
-- **Comprovação em Produção (PC Forte):** 11 snapshots colhidos, **100% excluídos por `copyright_unknown`**.
+- **Comprovação em Produção (PC Forte):** 1 snapshot colhido, **100% excluído por `copyright_unknown`**.
 - **Diagnóstico Técnico:**
   O canal opera no formato procedural `quiz_paper`. Apresenta exatamente a mesma anulação estrutural em `autonomous_production.py:3152` e bypass de roteirização tradicional em [task.py:3025](file:///c:/Projetos/MoneyPrinterTurbo-V1/app/services/task.py#L3025).
 
-### 5.5 Dose Diária de GTA VI (`profile-gta-vi`)
+### 5.5 Dose Diária de GTA VI (`profile-2095da4fbe23`)
 - **Veredito Inicial (Inferência do Código):** **FALTA DADO**
-- **Comprovação em Produção (PC Forte):** 1 snapshot colhido, **100% excluído por `copyright_unknown`**.
+- **Comprovação em Produção (PC Forte):** 11 snapshots colhidos, **100% excluídos por `copyright_unknown`**.
 - **Diagnóstico Técnico:**
-  Canal com formato tradicional compatível com o closed loop, mas atualmente pausado e com apenas 1 publicação registrada na base histórica.
+  Canal com formato tradicional compatível com o closed loop, mas atualmente pausado e com 11 publicações registradas na base histórica (todas com snapshots descartados por `copyright_unknown`).

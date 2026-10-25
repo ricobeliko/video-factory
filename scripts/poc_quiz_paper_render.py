@@ -81,7 +81,7 @@ class PaperQuizConfig:
         "fps": 30,
         "font_bold": "resource/fonts/BeVietnamPro-Bold.ttf",
         "font_medium": "resource/fonts/BeVietnamPro-Medium.ttf",
-        "bgm_path": "resource/songs/output000.mp3",
+        "bgm_path": "",
         "bgm_volume": 0.12,
     })
 
@@ -953,31 +953,46 @@ class PaperQuizEngine:
         probe = probe_media(staged_concat)
         total_dur = float(probe.get("format_duration", 0.0) or 68.0)
 
+        # Mixagem com BGM (se fornecido e existente)
         bgm_path = self.config.video_settings.get("bgm_path", "")
-        bgm_vol = float(self.config.video_settings.get("bgm_volume", 0.12))
-        fade_start = max(0.0, total_dur - 3.0)
-
-        filter_complex = (
-            f"[0:a]volume=1.0[voice];"
-            f"[1:a]volume={bgm_vol:.2f},afade=t=out:st={fade_start:.2f}:d=3[music];"
-            f"[voice][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.98[aout]"
-        )
-
+        bgm_vol = float(self.config.video_settings.get("bgm_volume", 0.14))
         out_mp4 = self.config.output_video_path
-        cmd_final = [
-            self.ffmpeg_bin, "-y",
-            "-i", os.path.abspath(staged_concat),
-            "-stream_loop", "-1",
-            "-i", os.path.abspath(bgm_path),
-            "-filter_complex", filter_complex,
-            "-map", "0:v",
-            "-map", "[aout]",
-            "-c:v", "copy",
-            "-c:a", "aac", "-b:a", "192k",
-            "-t", f"{total_dur:.3f}",
-            "-movflags", "+faststart",
-            os.path.abspath(out_mp4),
-        ]
+
+        has_bgm = bool(bgm_path and os.path.isfile(str(bgm_path)) and os.path.getsize(str(bgm_path)) > 0)
+        if has_bgm:
+            fade_start = max(0.0, total_dur - 3.0)
+            filter_complex = (
+                f"[0:a]volume=1.0[voice];"
+                f"[1:a]volume={bgm_vol:.2f},afade=t=out:st={fade_start:.2f}:d=3[music];"
+                f"[voice][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.98[aout]"
+            )
+            cmd_final = [
+                self.ffmpeg_bin, "-y",
+                "-i", os.path.abspath(staged_concat),
+                "-stream_loop", "-1",
+                "-i", os.path.abspath(str(bgm_path)),
+                "-filter_complex", filter_complex,
+                "-map", "0:v",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", f"{total_dur:.3f}",
+                "-movflags", "+faststart",
+                os.path.abspath(out_mp4),
+            ]
+        else:
+            logger.info("[QUIZ_PAPER] Renderizando áudio sem BGM (bgm_path vazio ou inexistente)")
+            cmd_final = [
+                self.ffmpeg_bin, "-y",
+                "-i", os.path.abspath(staged_concat),
+                "-map", "0:v",
+                "-map", "0:a",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", f"{total_dur:.3f}",
+                "-movflags", "+faststart",
+                os.path.abspath(out_mp4),
+            ]
 
         res_f = subprocess.run(cmd_final, capture_output=True, text=True)
         return res_f.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1000

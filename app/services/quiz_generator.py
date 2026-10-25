@@ -1711,6 +1711,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
         images_dir: Optional[str] = None,
         voice_name: Optional[str] = None,
         voice_rate: Optional[str] = "+12%",
+        bgm_path: Optional[str] = None,
+        bgm_volume: float = 0.14,
     ) -> QuizConfig:
         """Monta a estrutura compatível com a Quiz Engine e exporta para JSON."""
         niche = raw_quiz.get("niche", "curiosidades")
@@ -1752,8 +1754,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 "height": 1920,
                 "fps": 30,
                 "font_path": "resource/fonts/BeVietnamPro-Bold.ttf",
-                "bgm_path": "resource/songs/output000.mp3",
-                "bgm_volume": 0.14,
+                "bgm_path": bgm_path or "",
+                "bgm_volume": bgm_volume if bgm_path else 0.0,
             },
             "voice_settings": {
                 "voice_name": voice_name or "pt-BR-AntonioNeural",
@@ -2099,6 +2101,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
         output_json_path: Optional[str] = None,
         voice_name: Optional[str] = None,
         voice_rate: str = "+20%",
+        bgm_path: Optional[str] = None,
+        bgm_volume: float = 0.14,
     ) -> Any:
         """Exporta configuração serializada para o PaperQuizEngine (P1.3)."""
         from scripts.poc_quiz_paper_render import PaperQuizConfig
@@ -2141,6 +2145,11 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
             config_data["voice_settings"] = {}
         config_data["voice_settings"]["voice_name"] = voice_name or config_data["voice_settings"].get("voice_name") or "pt-BR-AntonioNeural"
         config_data["voice_settings"]["voice_rate"] = voice_rate or "+20%"
+
+        if "video_settings" not in config_data:
+            config_data["video_settings"] = {}
+        config_data["video_settings"]["bgm_path"] = bgm_path or ""
+        config_data["video_settings"]["bgm_volume"] = bgm_volume if bgm_path else 0.0
 
         if output_json_path:
             os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)

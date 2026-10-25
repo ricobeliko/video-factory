@@ -15,7 +15,8 @@ param(
     [string]$HostAddress = "0.0.0.0",
     [int]$Port = 8080,
     [switch]$NoWorker,
-    [switch]$KillExisting
+    [switch]$KillExisting,
+    [int]$LockWaitSeconds = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,6 +95,7 @@ Write-OperationalLog "Python Runtime        : $VenvPython"
 Write-OperationalLog "Entrypoint            : $Entrypoint"
 Write-OperationalLog "Endereço de Escuta    : $HostAddress"
 Write-OperationalLog "Porta de Serviço      : $Port"
+Write-OperationalLog "Espera de Lock        : $LockWaitSeconds segundos"
 Write-OperationalLog "Modo NoWorker         : $(if ($NoWorker) { 'ATIVO (Worker e Watchdog desligados)' } else { 'INATIVO (Worker e Watchdog ativos)' })"
 Write-OperationalLog "Bootstrap Motor V2    : PRIMARY + SchedulerExecutionWorker + Watchdog no mesmo processo"
 
@@ -141,7 +143,8 @@ try {
 $EntrypointArgs = @(
     $Entrypoint,
     "--host", $HostAddress,
-    "--port", [string]$Port
+    "--port", [string]$Port,
+    "--lock-wait-seconds", [string]$LockWaitSeconds
 )
 if ($NoWorker) {
     $EntrypointArgs += "--no-worker"

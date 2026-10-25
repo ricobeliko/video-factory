@@ -1,18 +1,25 @@
 """
-Testes Unitários do Motor Unificado V2 — scripts/engine_entrypoint.py (Missão D).
+Testes Unitários do Motor Unificado V2 — scripts/engine_entrypoint.py (Missões D e F).
 
 Valida com mocks (sem iniciar processos, workers ou servidores de rede reais):
-(a) Ordem estrita de boot: lock -> recover -> reconcile -> worker -> servidor;
+(a) Ordem estrita de boot: wait lock -> acquire lock -> recover -> reconcile -> worker -> servidor;
 (b) SECONDARY sai com código != 0 sem abrir porta;
 (c) Worker que não confirma atividade aborta antes de abrir porta;
 (d) Flag --no-worker não inicia worker nem watchdog;
 (e) Encerramento limpo chama stop worker e release lock;
-(f) Watchdog monitora e reinicia worker inativo.
+(f) Watchdog monitora e reinicia worker inativo;
+(g) Espera pelo lock termina quando o lock expira/é liberado;
+(h) Espera acaba por tempo (timeout) e o motor aborta como SECONDARY;
+(i) Flag --lock-wait-seconds 0 desliga espera;
+(j) Subclasse EngineServer chama clean_shutdown no shutdown().
 """
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
+
+import uvicorn
 
 from app.services import operator_console
 from scripts import engine_entrypoint
@@ -51,7 +58,8 @@ class TestEngineEntrypoint(unittest.TestCase):
              patch("app.services.scheduler.start_scheduler_worker", side_effect=mock_start_worker), \
              patch("app.services.scheduler.is_worker_alive", return_value=True), \
              patch("scripts.engine_entrypoint.run_engine_server", side_effect=mock_server), \
-             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"):
+             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"), \
+             patch("scripts.engine_entrypoint.wait_for_primary_lock", return_value=True):
 
             exit_code = engine_entrypoint.main(["--port", "8080"])
             self.assertEqual(exit_code, 0)
@@ -71,7 +79,8 @@ class TestEngineEntrypoint(unittest.TestCase):
              patch("app.services.operator_console.reconcile_orphaned_tasks") as mock_reconcile, \
              patch("app.services.scheduler.start_scheduler_worker") as mock_worker, \
              patch("scripts.engine_entrypoint.run_engine_server") as mock_server, \
-             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"):
+             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"), \
+             patch("scripts.engine_entrypoint.wait_for_primary_lock", return_value=False):
 
             exit_code = engine_entrypoint.main(["--port", "8080"])
             self.assertNotEqual(exit_code, 0, "Instância SECONDARY deve retornar código de saída != 0")
@@ -91,7 +100,8 @@ class TestEngineEntrypoint(unittest.TestCase):
              patch("app.services.scheduler.start_scheduler_worker"), \
              patch("app.services.scheduler.is_worker_alive", return_value=False), \
              patch("scripts.engine_entrypoint.run_engine_server") as mock_server, \
-             patch("scripts.engine_entrypoint.shutdown_worker_and_lock") as mock_shutdown:
+             patch("scripts.engine_entrypoint.shutdown_worker_and_lock") as mock_shutdown, \
+             patch("scripts.engine_entrypoint.wait_for_primary_lock", return_value=True):
 
             exit_code = engine_entrypoint.main(["--port", "8080"])
             self.assertNotEqual(exit_code, 0, "Falha na confirmação do worker deve abortar com código != 0")
@@ -109,7 +119,8 @@ class TestEngineEntrypoint(unittest.TestCase):
              patch("app.services.scheduler.start_scheduler_worker") as mock_start_worker, \
              patch("scripts.engine_entrypoint.SchedulerWatchdog") as mock_watchdog_cls, \
              patch("scripts.engine_entrypoint.run_engine_server") as mock_server, \
-             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"):
+             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"), \
+             patch("scripts.engine_entrypoint.wait_for_primary_lock", return_value=True):
 
             exit_code = engine_entrypoint.main(["--no-worker", "--port", "8080"])
             self.assertEqual(exit_code, 0)
@@ -131,7 +142,8 @@ class TestEngineEntrypoint(unittest.TestCase):
              patch("scripts.engine_entrypoint.SchedulerWatchdog", return_value=mock_watchdog), \
              patch("scripts.engine_entrypoint.run_engine_server"), \
              patch("app.services.scheduler.stop_scheduler_worker") as mock_stop_worker, \
-             patch("app.services.operator_console.release_instance_lock") as mock_release_lock:
+             patch("app.services.operator_console.release_instance_lock") as mock_release_lock, \
+             patch("scripts.engine_entrypoint.wait_for_primary_lock", return_value=True):
 
             exit_code = engine_entrypoint.main([])
             self.assertEqual(exit_code, 0)
@@ -151,3 +163,103 @@ class TestEngineEntrypoint(unittest.TestCase):
                 scheduler.start_scheduler_worker(interval_seconds=watchdog.interval_seconds)
 
             mock_start_worker.assert_called_once_with(interval_seconds=1)
+
+    def test_lock_wait_succeeds_when_lock_expires(self):
+        """(g) Espera pelo lock termina quando o lock expira/é liberado antes do timeout."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        info_active = {
+            "primary_node_name": "OldPrimary",
+            "primary_pid": 8888,
+            "primary_status": "ACTIVE",
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 10,
+        }
+        info_stale = {
+            "primary_node_name": "OldPrimary",
+            "primary_pid": 8888,
+            "primary_status": "ACTIVE",
+            "is_heartbeat_stale": True,
+            "heartbeat_seconds_ago": 95,
+        }
+
+        with patch("time.monotonic", side_effect=mock_monotonic), \
+             patch("time.sleep", side_effect=mock_sleep) as mock_sl, \
+             patch("app.services.operator_console.get_instance_info", side_effect=[info_active, info_active, info_stale]):
+
+            res = engine_entrypoint.wait_for_primary_lock(
+                lock_wait_seconds=60,
+                check_interval_seconds=5.0,
+            )
+            self.assertTrue(res)
+            self.assertEqual(mock_sl.call_count, 2)
+
+    def test_lock_wait_times_out_and_aborts(self):
+        """(h) Espera acaba por tempo (timeout) e o motor aborta como SECONDARY."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        info_active = {
+            "primary_node_name": "ActivePrimary",
+            "primary_pid": 7777,
+            "primary_status": "ACTIVE",
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 5,
+        }
+
+        with patch("time.monotonic", side_effect=mock_monotonic), \
+             patch("time.sleep", side_effect=mock_sleep), \
+             patch("app.services.operator_console.get_instance_info", return_value=info_active), \
+             patch(
+                 "app.services.operator_console.ensure_instance_initialized",
+                 return_value=(operator_console.ROLE_SECONDARY_VIEW_ONLY, {"node_name": "ActivePrimary", "pid": 7777}),
+             ), \
+             patch("scripts.engine_entrypoint.run_engine_server") as mock_server, \
+             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"):
+
+            exit_code = engine_entrypoint.main(["--lock-wait-seconds", "15"])
+            self.assertNotEqual(exit_code, 0)
+            mock_server.assert_not_called()
+
+    def test_lock_wait_zero_skips_wait(self):
+        """(i) --lock-wait-seconds 0 não espera nem consulta/dorme."""
+        with patch("time.sleep") as mock_sleep, \
+             patch("app.services.operator_console.get_instance_info") as mock_get_info, \
+             patch(
+                 "app.services.operator_console.ensure_instance_initialized",
+                 return_value=(operator_console.ROLE_PRIMARY, {"node_name": "Node", "pid": 111}),
+             ), \
+             patch("app.services.task.recover_interrupted_cross_posts"), \
+             patch("app.services.operator_console.reconcile_orphaned_tasks"), \
+             patch("scripts.engine_entrypoint.run_engine_server"), \
+             patch("scripts.engine_entrypoint.shutdown_worker_and_lock"):
+
+            exit_code = engine_entrypoint.main(["--no-worker", "--lock-wait-seconds", "0"])
+            self.assertEqual(exit_code, 0)
+            mock_sleep.assert_not_called()
+            mock_get_info.assert_not_called()
+
+    def test_engine_server_subclass_calls_clean_shutdown(self):
+        """(j) Subclasse EngineServer chama clean_shutdown(watchdog) no shutdown()."""
+        mock_watchdog = MagicMock()
+        config = uvicorn.Config(app=MagicMock(), host="127.0.0.1", port=8080)
+        server = engine_entrypoint.EngineServer(config=config, watchdog=mock_watchdog)
+
+        with patch("uvicorn.Server.shutdown", return_value=None), \
+             patch("scripts.engine_entrypoint.clean_shutdown") as mock_clean:
+
+            asyncio.run(server.shutdown())
+            mock_clean.assert_called_once_with(mock_watchdog)

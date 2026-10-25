@@ -208,6 +208,7 @@ def generate_ambient_bgm(
     volume: float = 1.0,
     fade_in: float = FADE_IN_SECONDS,
     fade_out: float = FADE_OUT_SECONDS,
+    seed: Optional[Any] = None,
 ) -> str:
     """
     Sintetiza um sound bed procedural contínuo usando FFmpeg local em nível canônico estável.
@@ -227,6 +228,20 @@ def generate_ambient_bgm(
 
     synth_def = _MOOD_SYNTHESIS_DEFINITIONS[clean_mood]
     expr_l, expr_r, filter_chain = synth_def
+
+    if seed is not None and clean_mood == "energetic":
+        import hashlib
+        h = int(hashlib.md5(str(seed).encode("utf-8")).hexdigest()[:8], 16)
+        roots = [
+            (146.8, 220.0, 293.7, 440.0, 2.2),
+            (130.8, 196.0, 261.6, 392.0, 2.0),
+            (164.8, 246.9, 329.6, 493.9, 2.4),
+            (174.6, 261.6, 349.2, 523.3, 2.1),
+            (196.0, 293.7, 392.0, 587.3, 2.3),
+        ]
+        f1, f2, f3, f4, pulse = roots[h % len(roots)]
+        expr_l = f"(0.6+0.4*sin(2*PI*{pulse:.2f}*t)*sin(2*PI*{pulse:.2f}*t))*(0.21*sin(2*PI*{f1:.1f}*t)+0.16*sin(2*PI*{f2:.1f}*t)+0.12*sin(2*PI*{f3:.1f}*t)+0.07*sin(2*PI*{f4:.1f}*t))"
+        expr_r = f"(0.6+0.4*sin(2*PI*{pulse:.2f}*t)*sin(2*PI*{pulse:.2f}*t))*(0.21*sin(2*PI*{f1+0.6:.1f}*t)+0.16*sin(2*PI*{f2+0.8:.1f}*t)+0.12*sin(2*PI*{f3+0.9:.1f}*t)+0.07*sin(2*PI*{f4+1.2:.1f}*t))"
 
     ffmpeg_bin = utils.get_ffmpeg_binary()
     if not ffmpeg_bin:

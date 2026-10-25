@@ -381,13 +381,21 @@ def build_asset_provenance(
         raw_bgm_file = bgm_file_used or _get_param(params, "bgm_file", "") or ""
         filename = Path(raw_bgm_file).name if raw_bgm_file else None
 
-        if bgm_type == "ambient_auto":
+        if bgm_type in ("ambient_auto", "procedural") or (raw_bgm_file and "procedural" in str(raw_bgm_file).lower()):
             bgm_prov = {
                 "enabled": True,
                 "filename": filename or "ambient_auto_procedural",
                 "source": "procedural",
                 "license_type": "safe_procedural",
                 "provenance_status": "SAFE_PROCEDURAL",
+            }
+        elif bgm_type == "whitelist" or (raw_bgm_file and "whitelist" in str(raw_bgm_file).lower()):
+            bgm_prov = {
+                "enabled": True,
+                "filename": filename,
+                "source": "whitelist",
+                "license_type": "whitelisted_manual",
+                "provenance_status": "WHITELISTED_MANUAL",
             }
         else:
             # Identifica se é faixa legada de resource/songs
@@ -471,13 +479,21 @@ def build_asset_provenance(
             else:
                 raw_bgm_file = bgm_file_used or _get_param(params, "bgm_file", "") or ""
                 filename = Path(raw_bgm_file).name if raw_bgm_file else None
-                if bgm_type == "ambient_auto":
+                if bgm_type in ("ambient_auto", "procedural") or (raw_bgm_file and "procedural" in str(raw_bgm_file).lower()):
                     bgm_prov = {
                         "enabled": True,
                         "filename": filename or "ambient_auto_procedural",
                         "source": "procedural",
                         "license_type": "safe_procedural",
                         "provenance_status": "SAFE_PROCEDURAL",
+                    }
+                elif bgm_type == "whitelist" or (raw_bgm_file and "whitelist" in str(raw_bgm_file).lower()):
+                    bgm_prov = {
+                        "enabled": True,
+                        "filename": filename,
+                        "source": "whitelist",
+                        "license_type": "whitelisted_manual",
+                        "provenance_status": "WHITELISTED_MANUAL",
                     }
                 else:
                     is_legacy = bool(
@@ -687,7 +703,16 @@ def normalize_asset_provenance(
             return built
 
         normalized_sources: List[Dict[str, Any]] = []
+        bgm_item_from_list: Optional[Dict[str, Any]] = None
         for idx, item in enumerate(raw_prov):
+            if isinstance(item, dict) and (
+                item.get("asset_type") == "bgm"
+                or item.get("source") in ("whitelist", "procedural")
+                or item.get("provenance_status") in ("WHITELISTED_MANUAL", "SAFE_PROCEDURAL")
+            ):
+                bgm_item_from_list = item
+                continue
+
             if not _is_valid_clip_item_dict(item):
                 logger.warning(
                     f"[COPYRIGHT_GATE] Item #{idx} malformado em lista asset_provenance na task '{task_id}': "
@@ -718,6 +743,19 @@ def normalize_asset_provenance(
             material_sources=normalized_sources,
             task_base_dir=task_base_dir,
         )
+        if bgm_item_from_list:
+            bgm_file = bgm_item_from_list.get("local_file") or bgm_item_from_list.get("local_path")
+            built["bgm"] = {
+                "enabled": bool(bgm_file),
+                "filename": Path(str(bgm_file)).name if bgm_file else bgm_item_from_list.get("track_id"),
+                "source": bgm_item_from_list.get("source", "procedural"),
+                "license_type": bgm_item_from_list.get("license", "safe_procedural"),
+                "provenance_status": bgm_item_from_list.get("provenance_status", "SAFE_PROCEDURAL"),
+                "track_id": bgm_item_from_list.get("track_id"),
+            }
+            if built["bgm"]["provenance_status"] == "WHITELISTED_MANUAL":
+                built["provenance_status"] = "WHITELISTED_MANUAL"
+
         visual_clips = built.get("visual_clips", [])
         for idx, clip_dict in enumerate(visual_clips):
             if idx < len(raw_prov) and isinstance(raw_prov[idx], dict):
@@ -794,7 +832,11 @@ def normalize_asset_provenance(
             else (
                 "SAFE_PROCEDURAL"
                 if bgm_enabled and bgm_dict.get("provenance_status") == "SAFE_PROCEDURAL" and norm_clips
-                else ("UNVERIFIED_BGM" if bgm_enabled else "INCOMPLETE_ASSETS")
+                else (
+                    "WHITELISTED_MANUAL"
+                    if bgm_enabled and bgm_dict.get("provenance_status") == "WHITELISTED_MANUAL" and norm_clips
+                    else ("UNVERIFIED_BGM" if bgm_enabled else "INCOMPLETE_ASSETS")
+                )
             )
         )
 
@@ -897,7 +939,7 @@ def _try_manual_legacy_approval_fallback(
     if bgm_enabled:
         bgm_source = str(bgm_info.get("source") or "").lower()
         bgm_prov = str(bgm_info.get("provenance_status") or "").upper()
-        if not (bgm_source == "procedural" or bgm_prov == "SAFE_PROCEDURAL"):
+        if not (bgm_source in ("procedural", "whitelist") or bgm_prov in ("SAFE_PROCEDURAL", "WHITELISTED_MANUAL")):
             return None
 
     # 2. Zero evidência de claim, blocked ou strike
@@ -1021,7 +1063,11 @@ def _try_manual_legacy_approval_fallback(
     bgm_final_status = (
         "SAFE_PROCEDURAL"
         if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "SAFE_PROCEDURAL")
-        else "SAFE_NO_BGM"
+        else (
+            "WHITELISTED_MANUAL"
+            if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "WHITELISTED_MANUAL")
+            else "SAFE_NO_BGM"
+        )
     )
     details: Dict[str, Any] = {
         "copyright_provenance_gate": "PASS",
@@ -1167,10 +1213,17 @@ def evaluate_copyright_provenance_gate(
     if bgm_info.get("enabled"):
         bgm_source = str(bgm_info.get("source", "")).lower()
         bgm_prov_status = str(bgm_info.get("provenance_status", "")).upper()
-        if bgm_type == "ambient_auto" and (bgm_source == "procedural" or bgm_prov_status == "SAFE_PROCEDURAL"):
-            # SAFE_PROCEDURAL é expressamente aprovada para modo autônomo (V1.5E-G8)
-            pass
-        elif "legacy" in bgm_source or "songs" in bgm_source or bgm_type in ("random", "preset"):
+        raw_bgm_file = str(_get_param(params_data, "bgm_file", "") or "")
+        filename = str(bgm_info.get("filename") or "")
+
+        is_legacy = bool(
+            "legacy" in bgm_source
+            or "songs" in bgm_source
+            or ("resource" in raw_bgm_file and "songs" in raw_bgm_file)
+            or ("resource" in filename and "songs" in filename)
+            or bgm_type in ("random", "preset")
+        )
+        if is_legacy:
             return (
                 False,
                 "BGM legado de resource/songs não é permitido em gerações autônomas",
@@ -1180,6 +1233,11 @@ def evaluate_copyright_provenance_gate(
                     "bgm_source": bgm_source,
                 },
             )
+
+        if bgm_prov_status == "SAFE_PROCEDURAL" or (bgm_type in ("ambient_auto", "procedural") and bgm_source == "procedural"):
+            pass
+        elif bgm_prov_status == "WHITELISTED_MANUAL" or bgm_source == "whitelist" or bgm_type == "whitelist":
+            pass
         else:
             return (
                 False,
@@ -1217,7 +1275,11 @@ def evaluate_copyright_provenance_gate(
             bgm_final_status = (
                 "SAFE_PROCEDURAL"
                 if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "SAFE_PROCEDURAL")
-                else "SAFE_NO_BGM"
+                else (
+                    "WHITELISTED_MANUAL"
+                    if (bgm_info.get("enabled") and bgm_info.get("provenance_status") == "WHITELISTED_MANUAL")
+                    else "SAFE_NO_BGM"
+                )
             )
             return (
                 True,

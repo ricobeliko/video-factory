@@ -2982,6 +2982,54 @@ def _run_quiz_pipeline(
         stage="VIDEO",
     )
 
+    # Resolução de Trilha Segura para Quizzes (Missão H)
+    quiz_format_key = "quiz_paper" if is_paper_quiz else "quiz_dilemma"
+    from app.services import quiz_bgm
+    bgm_resolution = quiz_bgm.resolve_quiz_bgm(
+        format_key=quiz_format_key,
+        work_dir=temp_quiz_dir,
+        seed=task_id,
+        duration_sec=65.0,
+        mood="energetic",
+    )
+    resolved_bgm_path = bgm_resolution.get("path")
+    bgm_source = bgm_resolution.get("source", "none")
+    bgm_prov_status = bgm_resolution.get("provenance_status", "NONE")
+    bgm_track_id = bgm_resolution.get("track_id")
+
+    if hasattr(params, "bgm_type"):
+        params.bgm_type = "ambient_auto" if bgm_source == "procedural" else ("whitelist" if bgm_source == "whitelist" else "none")
+    if hasattr(params, "bgm_file"):
+        params.bgm_file = resolved_bgm_path or ""
+    if hasattr(params, "bgm_volume"):
+        params.bgm_volume = 0.14 if resolved_bgm_path else 0.0
+
+    bgm_asset_entry = {
+        "asset_id": bgm_track_id or f"bgm_{quiz_format_key}",
+        "asset_type": "bgm",
+        "provider": bgm_source,
+        "source": bgm_source,
+        "provenance_status": bgm_prov_status,
+        "track_id": bgm_track_id,
+        "local_file": resolved_bgm_path or "",
+        "local_path": resolved_bgm_path or "",
+        "license": (
+            "whitelisted_manual"
+            if bgm_prov_status == "WHITELISTED_MANUAL"
+            else ("safe_procedural" if bgm_prov_status == "SAFE_PROCEDURAL" else "none")
+        ),
+        "verified": True,
+    }
+    if "asset_provenance" not in processed_quiz or not isinstance(processed_quiz["asset_provenance"], list):
+        processed_quiz["asset_provenance"] = []
+    processed_quiz["asset_provenance"].append(bgm_asset_entry)
+
+    task_artifacts.patch_script_data(
+        task_id,
+        asset_provenance=processed_quiz["asset_provenance"],
+        bgm_resolution=bgm_resolution,
+    )
+
     if is_paper_quiz:
         try:
             from scripts.poc_quiz_paper_render import PaperQuizEngine, DurationGateError
@@ -2995,6 +3043,8 @@ def _run_quiz_pipeline(
                 temp_dir=temp_quiz_dir,
                 voice_name=getattr(params, "voice_name", None),
                 voice_rate=v_rate_str,
+                bgm_path=resolved_bgm_path,
+                bgm_volume=0.14,
             )
             engine = PaperQuizEngine(config=paper_cfg)
             render_result = engine.render()
@@ -3018,6 +3068,8 @@ def _run_quiz_pipeline(
                 images_dir=images_dir,
                 voice_name=getattr(params, "voice_name", None),
                 voice_rate=v_rate_str,
+                bgm_path=resolved_bgm_path,
+                bgm_volume=0.14,
             )
             engine = QuizEngine(config=quiz_cfg)
             render_result = engine.render()

@@ -263,3 +263,246 @@ class TestEngineEntrypoint(unittest.TestCase):
 
             asyncio.run(server.shutdown())
             mock_clean.assert_called_once_with(mock_watchdog)
+
+    def test_lock_wait_dead_pid_same_host_returns_true_immediately(self):
+        """(k) PID morto no mesmo host -> retorna True imediatamente sem esperar."""
+        info_dead_pid = {
+            "primary_node_name": "DeadPrimary",
+            "primary_pid": 9999,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "workstation-alpha",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 15,
+        }
+
+        with patch("time.sleep") as mock_sleep, \
+             patch("app.services.operator_console.get_instance_info", return_value=info_dead_pid), \
+             patch("app.services.operator_console.is_local_pid_alive", return_value=False) as mock_pid_alive, \
+             patch.object(engine_entrypoint.logger, "info") as mock_logger_info:
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=60)
+            self.assertTrue(res)
+            mock_sleep.assert_not_called()
+            mock_pid_alive.assert_called_once_with(9999)
+            mock_logger_info.assert_any_call(
+                "[ENGINE_BOOT] PRIMARY anterior (PID 9999) não existe mais; assumindo imediatamente"
+            )
+
+        # Caso próprio PID (ex: reinício/recuperação)
+        info_own_pid = {
+            "primary_node_name": "OwnNode",
+            "primary_pid": 1234,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "workstation-alpha",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 5,
+        }
+        with patch("time.sleep") as mock_sleep, \
+             patch("app.services.operator_console.get_instance_info", return_value=info_own_pid):
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=60)
+            self.assertTrue(res)
+            mock_sleep.assert_not_called()
+
+    def test_lock_wait_live_pid_same_host_waits_and_respects_timeout(self):
+        """(l) PID vivo no mesmo host -> espera e respeita o timeout esgotado."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        info_live_pid = {
+            "primary_node_name": "LivePrimary",
+            "primary_pid": 8888,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "workstation-alpha",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 10,
+        }
+
+        with patch("time.monotonic", side_effect=mock_monotonic),              patch("time.sleep", side_effect=mock_sleep) as mock_sleep_call,              patch("app.services.operator_console.get_instance_info", return_value=info_live_pid),              patch("app.services.operator_console.is_local_pid_alive", return_value=True):
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=15, check_interval_seconds=5.0)
+            self.assertFalse(res)
+            self.assertEqual(mock_sleep_call.call_count, 3)
+
+    def test_lock_wait_different_host_waits_and_respects_timeout(self):
+        """(m) Host diferente -> não assume PID local e respeita o timeout de espera."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        info_diff_host = {
+            "primary_node_name": "RemotePrimary",
+            "primary_pid": 9999,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "server-beta",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 10,
+        }
+
+        with patch("time.monotonic", side_effect=mock_monotonic),              patch("time.sleep", side_effect=mock_sleep) as mock_sleep_call,              patch("app.services.operator_console.get_instance_info", return_value=info_diff_host),              patch("app.services.operator_console.is_local_pid_alive", return_value=False) as mock_pid_alive:
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=10, check_interval_seconds=5.0)
+            self.assertFalse(res)
+            # Mesmo se o PID estiver morto localmente, não deve checar PID local pois host é diferente
+            mock_pid_alive.assert_not_called()
+            self.assertEqual(mock_sleep_call.call_count, 2)
+
+    def test_lock_wait_missing_or_inconsistent_data_waits_safely(self):
+        """(n) Dados ausentes/inconsistentes -> na dúvida, espera com segurança."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        inconsistent_cases = [
+            # PID ausente
+            {
+                "primary_node_name": "NodeA",
+                "primary_pid": None,
+                "primary_status": "ACTIVE",
+                "primary_hostname": "host-alpha",
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+            # Host ausente
+            {
+                "primary_node_name": "NodeB",
+                "primary_pid": 8888,
+                "primary_status": "ACTIVE",
+                "primary_hostname": None,
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+            # PID inválido não conversível para inteiro
+            {
+                "primary_node_name": "NodeC",
+                "primary_pid": "invalid_pid",
+                "primary_status": "ACTIVE",
+                "primary_hostname": "host-alpha",
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+            # PID menor ou igual a 0
+            {
+                "primary_node_name": "NodeD",
+                "primary_pid": 0,
+                "primary_status": "ACTIVE",
+                "primary_hostname": "host-alpha",
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+        ]
+
+        for case_info in inconsistent_cases:
+            current_time = 1000.0
+            with patch("time.monotonic", side_effect=mock_monotonic),                  patch("time.sleep", side_effect=mock_sleep) as mock_sl,                  patch("app.services.operator_console.get_instance_info", return_value=case_info):
+
+                res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=5, check_interval_seconds=5.0)
+                self.assertFalse(res, f"Falha no caso: {case_info}")
+                self.assertEqual(mock_sl.call_count, 1)
+
+
+    def test_engine_terminates_cleanly_under_signal_and_releases_lock(self):
+        """(o) Valida que sob sinal de interrupção o motor encerra limpo em < 15s e libera o lock PRIMARY."""
+        import os
+        import signal
+        import socket
+        import sqlite3
+        import subprocess
+        import sys
+        import time
+        import urllib.request
+
+        # 1. Aloca porta TCP livre
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        test_port = s.getsockname()[1]
+        s.close()
+
+        # 2. Banco isolado temporário
+        temp_dir = os.environ.get("TEMP", "C:\\Temp")
+        test_db = os.path.join(temp_dir, f"test_e3_signal_{test_port}.db")
+        if os.path.exists(test_db):
+            try:
+                os.remove(test_db)
+            except Exception:
+                pass
+
+        env = os.environ.copy()
+        env["VIDEO_FACTORY_DB_PATH"] = test_db
+        env["PYTHONPATH"] = str(engine_entrypoint.PROJECT_ROOT)
+
+        cmd = [sys.executable, str(engine_entrypoint.PROJECT_ROOT / "scripts" / "engine_entrypoint.py"), "--port", str(test_port)]
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+
+        proc = subprocess.Popen(cmd, env=env, creationflags=creationflags)
+        try:
+            # 3. Aguarda boot com timeout estrito
+            t0 = time.time()
+            booted = False
+            while time.time() - t0 < 25:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{test_port}/", timeout=0.5) as resp:
+                        if resp.status == 200:
+                            booted = True
+                            break
+                except Exception:
+                    time.sleep(0.3)
+
+            self.assertTrue(booted, "Motor não inicializou dentro do tempo limite")
+
+            # 4. Envia sinal de interrupção
+            t_sig = time.time()
+            if sys.platform == "win32":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.send_signal(signal.SIGINT)
+
+            proc.wait(timeout=15)
+            elapsed = time.time() - t_sig
+
+            self.assertLess(elapsed, 15.0, f"Encerramento demorou mais que 15s: {elapsed:.2f}s")
+            self.assertEqual(proc.returncode, 0, f"Código de saída esperado 0, obteve {proc.returncode}")
+
+            # 5. Valida liberação do lock no SQLite
+            self.assertTrue(os.path.exists(test_db), "Banco temporário não foi encontrado")
+            conn = sqlite3.connect(test_db)
+            cur = conn.cursor()
+            cur.execute("SELECT status FROM instance_locks WHERE node_name='ProductionEngine'")
+            row = cur.fetchone()
+            conn.close()
+
+            self.assertIsNotNone(row, "Registro do lock PRIMARY não encontrado no banco")
+            self.assertEqual(row[0], "STOPPED", f"Lock deveria estar STOPPED, mas está: {row[0]}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if os.path.exists(test_db):
+                try:
+                    os.remove(test_db)
+                except Exception:
+                    pass

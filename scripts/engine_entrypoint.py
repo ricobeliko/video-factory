@@ -31,6 +31,9 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
+import os
+import signal
 import sys
 import threading
 import time
@@ -59,6 +62,65 @@ DEFAULT_LOCK_CHECK_INTERVAL_SECONDS = 5.0
 
 _shutdown_lock = threading.Lock()
 _shutdown_completed = False
+_active_engine_server: Optional[EngineServer] = None
+_active_watchdog: Optional[SchedulerWatchdog] = None
+
+
+def _handle_signal_shutdown(signum: int, frame: Any) -> None:
+    logger.info(f"[ENGINE_SHUTDOWN] Sinal {signum} interceptado. Solicitando saída do motor...")
+    if _active_engine_server is not None:
+        _active_engine_server.should_exit = True
+    else:
+        clean_shutdown(_active_watchdog)
+
+
+try:
+    signal.signal(signal.SIGINT, _handle_signal_shutdown)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _handle_signal_shutdown)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _handle_signal_shutdown)
+except Exception:
+    pass
+
+
+if sys.platform == "win32":
+    import ctypes
+
+    try:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False)
+    except Exception:
+        pass
+
+    _PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
+
+    def _windows_console_ctrl_handler(dw_ctrl_type: int) -> bool:
+        logger.info(
+            f"[ENGINE_SHUTDOWN] Evento de console Windows recebido (dwCtrlType={dw_ctrl_type}). "
+            "Iniciando encerramento gracioso..."
+        )
+        if _active_engine_server is not None:
+            _active_engine_server.should_exit = True
+
+        if dw_ctrl_type in (2, 5, 6):
+            logger.info(
+                f"[ENGINE_SHUTDOWN] Fechamento imediato do console (dwCtrlType={dw_ctrl_type}). "
+                "Liberando lock e worker imediatamente..."
+            )
+            clean_shutdown(_active_watchdog)
+            return True
+
+        if dw_ctrl_type in (0, 1):
+            return True
+
+        return False
+
+    _registered_console_handler = _PHANDLER_ROUTINE(_windows_console_ctrl_handler)
+    try:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(_registered_console_handler, True)
+    except Exception as exc:
+        logger.warning(f"[ENGINE_BOOT] Não foi possível registrar SetConsoleCtrlHandler: {exc}")
+
 
 
 class SchedulerWatchdog(threading.Thread):
@@ -133,6 +195,43 @@ def wait_for_primary_lock(
                     "Prosseguindo com aquisição..."
                 )
             return True
+
+        # Se o PRIMARY está ACTIVE e não stale, mas o titular está no mesmo host E o PID está morto
+        # (ou é o próprio PID), assume imediatamente sem esperar.
+        primary_hostname = info.get("primary_hostname")
+        my_hostname = info.get("hostname")
+        primary_pid = info.get("primary_pid")
+        my_pid = info.get("pid") or os.getpid()
+
+        is_same = (
+            info.get("primary_is_same_host")
+            if info.get("primary_is_same_host") is not None
+            else operator_console.is_same_host(primary_hostname, my_hostname)
+        )
+
+        if is_same and primary_pid is not None:
+            try:
+                target_pid = int(primary_pid)
+            except (TypeError, ValueError):
+                target_pid = None
+
+            if target_pid is not None and target_pid > 0:
+                is_own_pid = (target_pid == my_pid)
+                if is_own_pid:
+                    is_alive = False
+                elif info.get("primary_pid_alive") is not None:
+                    is_alive = bool(info["primary_pid_alive"])
+                else:
+                    try:
+                        is_alive = operator_console.is_local_pid_alive(target_pid)
+                    except Exception:
+                        is_alive = True
+
+                if is_own_pid or not is_alive:
+                    logger.info(
+                        f"[ENGINE_BOOT] PRIMARY anterior (PID {primary_pid}) não existe mais; assumindo imediatamente"
+                    )
+                    return True
 
         elapsed = time.monotonic() - start_time
         remaining = lock_wait_seconds - elapsed
@@ -289,6 +388,14 @@ class EngineServer(uvicorn.Server):
         super().__init__(config=config)
         self.watchdog = watchdog
 
+    @contextlib.contextmanager
+    def capture_signals(self):
+        with super().capture_signals():
+            yield
+        # Limpa os sinais capturados para evitar que o Uvicorn re-dispare
+        # SIGBREAK / SIGINT com terminação forçada (exit code 3 / 0xC000013A) no Windows.
+        self._captured_signals.clear()
+
     async def shutdown(self, sockets: Optional[List[Any]] = None) -> None:
         await super().shutdown(sockets=sockets)
         clean_shutdown(self.watchdog)
@@ -348,9 +455,16 @@ def run_engine_server(
         from app.asgi import app as asgi_app
 
     logger.info(f"[ENGINE_ENTRYPOINT] Iniciando servidor Uvicorn em http://{host}:{port}...")
+    global _active_engine_server, _active_watchdog
     config = uvicorn.Config(app=asgi_app, host=host, port=port, log_level="info")
     server = EngineServer(config=config, watchdog=watchdog)
-    server.run()
+    _active_engine_server = server
+    _active_watchdog = watchdog
+    try:
+        server.run()
+    finally:
+        _active_engine_server = None
+        _active_watchdog = None
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -374,6 +488,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         atexit.register(clean_shutdown, watchdog)
 
         run_engine_server(host=args.host, port=args.port, watchdog=watchdog)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("[ENGINE_SHUTDOWN] Interrupção (Ctrl+C / saída) tratada com sucesso.")
+        return 0
     except Exception as exc:
         logger.exception(f"[ENGINE_ENTRYPOINT] Falha crítica durante execução do motor: {exc}")
         return 1

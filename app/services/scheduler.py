@@ -35,6 +35,9 @@ def get_db_path(custom_path: Optional[str] = None) -> str:
     """Retorna o caminho do banco SQLite do scheduler."""
     if custom_path:
         return custom_path
+    env_path = os.environ.get("VIDEO_FACTORY_DB_PATH")
+    if env_path:
+        return env_path
     storage_folder = utils.storage_dir(create=True)
     return os.path.join(storage_folder, "video_factory.db")
 

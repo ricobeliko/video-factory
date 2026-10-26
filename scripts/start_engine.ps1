@@ -90,6 +90,7 @@ if (-not (Test-Path $Entrypoint)) {
 # 5. Configuração do Working Directory e Ambiente
 Set-Location -Path $ProjectRoot
 $env:PYTHONPATH = $ProjectRoot
+$env:VIRTUAL_ENV = Join-Path $ProjectRoot ".venv"
 
 Write-OperationalLog "Python Runtime        : $VenvPython"
 Write-OperationalLog "Entrypoint            : $Entrypoint"
@@ -151,9 +152,15 @@ if ($NoWorker) {
 }
 
 Write-OperationalLog "Iniciando processo do Motor V2 (FastAPI + Worker no mesmo processo)..."
+$ExitCode = 0
 try {
     & $VenvPython $EntrypointArgs
-    $ExitCode = $LASTEXITCODE
+    if ($LASTEXITCODE -ne $null) {
+        $ExitCode = $LASTEXITCODE
+    }
+} catch {
+    Write-OperationalLog "Interrupção capturada no PowerShell: $_" -Level "WARN"
+    $ExitCode = 0
 } finally {
     try {
         if (Test-Path $PidFile) {

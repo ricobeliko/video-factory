@@ -232,6 +232,21 @@ def _is_local_pid_alive(pid: int) -> bool:
         return False
 
 
+def is_local_pid_alive(pid: int) -> bool:
+    """Verifica se um processo com determinado PID ainda existe na máquina local.
+
+    Alias público reutilizável de _is_local_pid_alive.
+    """
+    return _is_local_pid_alive(pid)
+
+
+def is_same_host(host1: Optional[str], host2: Optional[str]) -> bool:
+    """Retorna True se host1 e host2 representam a mesma máquina (case-insensitive)."""
+    if not host1 or not host2:
+        return False
+    return str(host1).strip().lower() == str(host2).strip().lower()
+
+
 def _parse_iso_utc(ts: Optional[str]) -> Optional[datetime]:
     """Converte string ISO para datetime UTC timezone-aware."""
     if not ts:
@@ -893,6 +908,8 @@ def get_instance_info(db_path: Optional[str] = None) -> Dict[str, Any]:
         "primary_hostname": None,
         "primary_pid": None,
         "primary_status": None,
+        "primary_is_same_host": False,
+        "primary_pid_alive": None,
         "last_heartbeat": None,
         "heartbeat_seconds_ago": None,
         "is_heartbeat_stale": False,
@@ -914,6 +931,17 @@ def get_instance_info(db_path: Optional[str] = None) -> Dict[str, Any]:
         info["primary_pid"] = r.get("pid")
         info["primary_status"] = r.get("status")
         info["last_heartbeat"] = r.get("last_heartbeat")
+
+        is_same = is_same_host(info["primary_hostname"], info["hostname"])
+        info["primary_is_same_host"] = is_same
+        if is_same and info["primary_pid"] is not None:
+            try:
+                p_pid = int(info["primary_pid"])
+                info["primary_pid_alive"] = is_local_pid_alive(p_pid) if p_pid > 0 else False
+            except (ValueError, TypeError):
+                info["primary_pid_alive"] = None
+        else:
+            info["primary_pid_alive"] = None
 
         hb_dt = _parse_iso_utc(r.get("last_heartbeat"))
         if hb_dt:

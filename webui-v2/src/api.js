@@ -105,6 +105,10 @@ export async function getSystemStatus(profileId = null) {
   return fetchJson(`/api/v2/system/status${query}`);
 }
 
+export async function getChannelsOverview() {
+  return fetchJson('/api/v2/channels');
+}
+
 export async function getProfiles() {
   return fetchJson('/api/v2/profiles');
 }

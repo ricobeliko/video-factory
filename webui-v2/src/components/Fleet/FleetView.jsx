@@ -207,9 +207,12 @@ export default function FleetView({ onNavigate }) {
           >
             Agent Ops
           </button>
-          <button type="button" className="fleet-nav-link" disabled title="Em breve">
-            <span>Sistema</span>
-            <span className="fleet-nav-soon">em breve</span>
+          <button
+            type="button"
+            className="fleet-nav-link"
+            onClick={() => handleNavClick('sistema')}
+          >
+            Sistema
           </button>
         </nav>
 

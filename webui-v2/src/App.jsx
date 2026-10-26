@@ -9,6 +9,7 @@ import VideoReviewView from './components/VideoReview/VideoReviewView';
 import { getLiveExecutions, getSystemStatus } from './api';
 import FleetView from './components/Fleet/FleetView';
 import ProductionView from './components/Production/ProductionView';
+import SystemView from './components/System/SystemView';
 import './styles.css';
 
 /**
@@ -25,6 +26,7 @@ export default function App() {
   // Navigation tab state (Frota | Factory Live | Agent Ops | Video Review) with URL hash persistence
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
+      if (window.location.hash === '#sistema') return 'sistema';
       if (window.location.hash === '#producao') return 'producao';
       if (window.location.hash === '#factory-live') return 'factory-live';
       if (window.location.hash === '#agent-ops') return 'agent-ops';
@@ -82,7 +84,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'frota' || activeTab === 'producao') {
+    if (activeTab === 'frota' || activeTab === 'producao' || activeTab === 'sistema') {
       return;
     }
     pollData();
@@ -140,7 +142,9 @@ export default function App() {
     const handleHashChange = () => {
       if (typeof window !== 'undefined') {
         const hash = window.location.hash;
-        if (hash === '#producao') {
+        if (hash === '#sistema') {
+          setActiveTab('sistema');
+        } else if (hash === '#producao') {
           setActiveTab('producao');
         } else if (hash === '#agent-ops') {
           setActiveTab('agent-ops');
@@ -161,7 +165,9 @@ export default function App() {
     setActiveTab(tab);
     if (typeof window !== 'undefined') {
       window.location.hash =
-        tab === 'producao'
+        tab === 'sistema'
+          ? '#sistema'
+          : tab === 'producao'
           ? '#producao'
           : tab === 'agent-ops'
           ? '#agent-ops'
@@ -191,6 +197,9 @@ export default function App() {
   }
   if (activeTab === 'producao') {
     return <ProductionView onNavigate={handleSelectTab} />;
+  }
+  if (activeTab === 'sistema') {
+    return <SystemView onNavigate={handleSelectTab} />;
   }
 
   return (

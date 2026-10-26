@@ -424,3 +424,85 @@ class TestEngineEntrypoint(unittest.TestCase):
                 self.assertFalse(res, f"Falha no caso: {case_info}")
                 self.assertEqual(mock_sl.call_count, 1)
 
+
+    def test_engine_terminates_cleanly_under_signal_and_releases_lock(self):
+        """(o) Valida que sob sinal de interrupção o motor encerra limpo em < 15s e libera o lock PRIMARY."""
+        import os
+        import signal
+        import socket
+        import sqlite3
+        import subprocess
+        import sys
+        import time
+        import urllib.request
+
+        # 1. Aloca porta TCP livre
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        test_port = s.getsockname()[1]
+        s.close()
+
+        # 2. Banco isolado temporário
+        temp_dir = os.environ.get("TEMP", "C:\\Temp")
+        test_db = os.path.join(temp_dir, f"test_e3_signal_{test_port}.db")
+        if os.path.exists(test_db):
+            try:
+                os.remove(test_db)
+            except Exception:
+                pass
+
+        env = os.environ.copy()
+        env["VIDEO_FACTORY_DB_PATH"] = test_db
+        env["PYTHONPATH"] = str(engine_entrypoint.PROJECT_ROOT)
+
+        cmd = [sys.executable, str(engine_entrypoint.PROJECT_ROOT / "scripts" / "engine_entrypoint.py"), "--port", str(test_port)]
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+
+        proc = subprocess.Popen(cmd, env=env, creationflags=creationflags)
+        try:
+            # 3. Aguarda boot com timeout estrito
+            t0 = time.time()
+            booted = False
+            while time.time() - t0 < 25:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{test_port}/", timeout=0.5) as resp:
+                        if resp.status == 200:
+                            booted = True
+                            break
+                except Exception:
+                    time.sleep(0.3)
+
+            self.assertTrue(booted, "Motor não inicializou dentro do tempo limite")
+
+            # 4. Envia sinal de interrupção
+            t_sig = time.time()
+            if sys.platform == "win32":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.send_signal(signal.SIGINT)
+
+            proc.wait(timeout=15)
+            elapsed = time.time() - t_sig
+
+            self.assertLess(elapsed, 15.0, f"Encerramento demorou mais que 15s: {elapsed:.2f}s")
+            self.assertEqual(proc.returncode, 0, f"Código de saída esperado 0, obteve {proc.returncode}")
+
+            # 5. Valida liberação do lock no SQLite
+            self.assertTrue(os.path.exists(test_db), "Banco temporário não foi encontrado")
+            conn = sqlite3.connect(test_db)
+            cur = conn.cursor()
+            cur.execute("SELECT status FROM instance_locks WHERE node_name='ProductionEngine'")
+            row = cur.fetchone()
+            conn.close()
+
+            self.assertIsNotNone(row, "Registro do lock PRIMARY não encontrado no banco")
+            self.assertEqual(row[0], "STOPPED", f"Lock deveria estar STOPPED, mas está: {row[0]}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if os.path.exists(test_db):
+                try:
+                    os.remove(test_db)
+                except Exception:
+                    pass

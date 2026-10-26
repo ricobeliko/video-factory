@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import os
 import sys
 import threading
 import time
@@ -133,6 +134,43 @@ def wait_for_primary_lock(
                     "Prosseguindo com aquisição..."
                 )
             return True
+
+        # Se o PRIMARY está ACTIVE e não stale, mas o titular está no mesmo host E o PID está morto
+        # (ou é o próprio PID), assume imediatamente sem esperar.
+        primary_hostname = info.get("primary_hostname")
+        my_hostname = info.get("hostname")
+        primary_pid = info.get("primary_pid")
+        my_pid = info.get("pid") or os.getpid()
+
+        is_same = (
+            info.get("primary_is_same_host")
+            if info.get("primary_is_same_host") is not None
+            else operator_console.is_same_host(primary_hostname, my_hostname)
+        )
+
+        if is_same and primary_pid is not None:
+            try:
+                target_pid = int(primary_pid)
+            except (TypeError, ValueError):
+                target_pid = None
+
+            if target_pid is not None and target_pid > 0:
+                is_own_pid = (target_pid == my_pid)
+                if is_own_pid:
+                    is_alive = False
+                elif info.get("primary_pid_alive") is not None:
+                    is_alive = bool(info["primary_pid_alive"])
+                else:
+                    try:
+                        is_alive = operator_console.is_local_pid_alive(target_pid)
+                    except Exception:
+                        is_alive = True
+
+                if is_own_pid or not is_alive:
+                    logger.info(
+                        f"[ENGINE_BOOT] PRIMARY anterior (PID {primary_pid}) não existe mais; assumindo imediatamente"
+                    )
+                    return True
 
         elapsed = time.monotonic() - start_time
         remaining = lock_wait_seconds - elapsed

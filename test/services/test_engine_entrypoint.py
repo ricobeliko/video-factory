@@ -263,3 +263,164 @@ class TestEngineEntrypoint(unittest.TestCase):
 
             asyncio.run(server.shutdown())
             mock_clean.assert_called_once_with(mock_watchdog)
+
+    def test_lock_wait_dead_pid_same_host_returns_true_immediately(self):
+        """(k) PID morto no mesmo host -> retorna True imediatamente sem esperar."""
+        info_dead_pid = {
+            "primary_node_name": "DeadPrimary",
+            "primary_pid": 9999,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "workstation-alpha",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 15,
+        }
+
+        with patch("time.sleep") as mock_sleep, \
+             patch("app.services.operator_console.get_instance_info", return_value=info_dead_pid), \
+             patch("app.services.operator_console.is_local_pid_alive", return_value=False) as mock_pid_alive, \
+             patch.object(engine_entrypoint.logger, "info") as mock_logger_info:
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=60)
+            self.assertTrue(res)
+            mock_sleep.assert_not_called()
+            mock_pid_alive.assert_called_once_with(9999)
+            mock_logger_info.assert_any_call(
+                "[ENGINE_BOOT] PRIMARY anterior (PID 9999) não existe mais; assumindo imediatamente"
+            )
+
+        # Caso próprio PID (ex: reinício/recuperação)
+        info_own_pid = {
+            "primary_node_name": "OwnNode",
+            "primary_pid": 1234,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "workstation-alpha",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 5,
+        }
+        with patch("time.sleep") as mock_sleep, \
+             patch("app.services.operator_console.get_instance_info", return_value=info_own_pid):
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=60)
+            self.assertTrue(res)
+            mock_sleep.assert_not_called()
+
+    def test_lock_wait_live_pid_same_host_waits_and_respects_timeout(self):
+        """(l) PID vivo no mesmo host -> espera e respeita o timeout esgotado."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        info_live_pid = {
+            "primary_node_name": "LivePrimary",
+            "primary_pid": 8888,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "workstation-alpha",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 10,
+        }
+
+        with patch("time.monotonic", side_effect=mock_monotonic),              patch("time.sleep", side_effect=mock_sleep) as mock_sleep_call,              patch("app.services.operator_console.get_instance_info", return_value=info_live_pid),              patch("app.services.operator_console.is_local_pid_alive", return_value=True):
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=15, check_interval_seconds=5.0)
+            self.assertFalse(res)
+            self.assertEqual(mock_sleep_call.call_count, 3)
+
+    def test_lock_wait_different_host_waits_and_respects_timeout(self):
+        """(m) Host diferente -> não assume PID local e respeita o timeout de espera."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        info_diff_host = {
+            "primary_node_name": "RemotePrimary",
+            "primary_pid": 9999,
+            "primary_status": "ACTIVE",
+            "primary_hostname": "server-beta",
+            "hostname": "workstation-alpha",
+            "pid": 1234,
+            "is_heartbeat_stale": False,
+            "heartbeat_seconds_ago": 10,
+        }
+
+        with patch("time.monotonic", side_effect=mock_monotonic),              patch("time.sleep", side_effect=mock_sleep) as mock_sleep_call,              patch("app.services.operator_console.get_instance_info", return_value=info_diff_host),              patch("app.services.operator_console.is_local_pid_alive", return_value=False) as mock_pid_alive:
+
+            res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=10, check_interval_seconds=5.0)
+            self.assertFalse(res)
+            # Mesmo se o PID estiver morto localmente, não deve checar PID local pois host é diferente
+            mock_pid_alive.assert_not_called()
+            self.assertEqual(mock_sleep_call.call_count, 2)
+
+    def test_lock_wait_missing_or_inconsistent_data_waits_safely(self):
+        """(n) Dados ausentes/inconsistentes -> na dúvida, espera com segurança."""
+        current_time = 1000.0
+
+        def mock_monotonic():
+            return current_time
+
+        def mock_sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        inconsistent_cases = [
+            # PID ausente
+            {
+                "primary_node_name": "NodeA",
+                "primary_pid": None,
+                "primary_status": "ACTIVE",
+                "primary_hostname": "host-alpha",
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+            # Host ausente
+            {
+                "primary_node_name": "NodeB",
+                "primary_pid": 8888,
+                "primary_status": "ACTIVE",
+                "primary_hostname": None,
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+            # PID inválido não conversível para inteiro
+            {
+                "primary_node_name": "NodeC",
+                "primary_pid": "invalid_pid",
+                "primary_status": "ACTIVE",
+                "primary_hostname": "host-alpha",
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+            # PID menor ou igual a 0
+            {
+                "primary_node_name": "NodeD",
+                "primary_pid": 0,
+                "primary_status": "ACTIVE",
+                "primary_hostname": "host-alpha",
+                "hostname": "host-alpha",
+                "is_heartbeat_stale": False,
+            },
+        ]
+
+        for case_info in inconsistent_cases:
+            current_time = 1000.0
+            with patch("time.monotonic", side_effect=mock_monotonic),                  patch("time.sleep", side_effect=mock_sleep) as mock_sl,                  patch("app.services.operator_console.get_instance_info", return_value=case_info):
+
+                res = engine_entrypoint.wait_for_primary_lock(lock_wait_seconds=5, check_interval_seconds=5.0)
+                self.assertFalse(res, f"Falha no caso: {case_info}")
+                self.assertEqual(mock_sl.call_count, 1)
+

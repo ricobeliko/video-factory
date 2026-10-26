@@ -294,3 +294,15 @@ export async function discardReviewTask(taskId, options = {}) {
 export async function getFleetSummary() {
   return fetchJson('/api/v2/fleet/summary');
 }
+
+
+/**
+ * GET /api/v2/production/overview — Resumo operacional de produção V2.
+ */
+export async function getProductionOverview(profileId = null, limitPerSection = null) {
+  const params = new URLSearchParams();
+  if (profileId) params.set('profile_id', profileId);
+  if (limitPerSection != null) params.set('limit_per_section', String(limitPerSection));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return fetchJson(`/api/v2/production/overview${qs}`);
+}

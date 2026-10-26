@@ -1,12 +1,15 @@
-"""Production Overview Service (Web UI V2 - Missão P1).
+"""Production Overview Service (Web UI V2 - Missão P1 / P1b).
 
 Fornece visão consolidada e em tempo real da produção para a Web UI V2:
 - Estoque de vídeos prontos canônico (get_canonical_ready_stock)
 - Fila de agendamento (scheduled_posts)
-- Tarefas recentes das últimas 24h (recent_runs com status SUCCESS, FAILED, REJECTED, RUNNING)
-- Totais gerais agregados
+- Tarefas recentes das últimas 24h (recent_runs com status SUCCESS, FAILED, REJECTED, RUNNING, UNKNOWN)
+- Totais gerais agregados únicos (total_ready, total_scheduled, total_runs_24h, success_24h, failed_24h, rejected_24h, running_24h, unknown_24h)
 - Filtros por profile_id e limit_per_section
-- Cache curto configurável (10s) para garantir performance sub-segundo
+- Sem invenção de dados: ausência de valor = null
+- Consultas indexadas por janela temporal (created_at >= 24h)
+- Cópia seletiva de campos em memória sem deepcopy integral
+- Cache curto de 10s em memória
 """
 from __future__ import annotations
 
@@ -33,6 +36,23 @@ from app.services import state as sm
 _cache_lock = threading.Lock()
 _overview_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 CACHE_TTL_SECONDS = 10.0
+
+NEEDED_TASK_FIELDS = (
+    "video_subject",
+    "topic",
+    "state",
+    "created_at",
+    "finished_at",
+    "updated_at",
+    "profile_id",
+    "error",
+    "failed_stage",
+    "failure_stage",
+    "stage",
+    "gate_status",
+    "gate_reason",
+    "safety_status",
+)
 
 
 def clear_production_overview_cache() -> None:
@@ -119,16 +139,11 @@ def get_production_overview(
                 "total_ready": 0,
                 "total_scheduled": 0,
                 "total_runs_24h": 0,
-                "ready_stock": 0,
-                "scheduled": 0,
                 "success_24h": 0,
                 "failed_24h": 0,
                 "rejected_24h": 0,
-                "total_ready_stock": 0,
-                "total_scheduled": 0,
-                "total_success_24h": 0,
-                "total_failed_24h": 0,
-                "total_rejected_24h": 0,
+                "running_24h": 0,
+                "unknown_24h": 0,
             },
             "channels": [],
         }
@@ -178,33 +193,42 @@ def get_production_overview(
                 if c_pid:
                     channels_by_prof.setdefault(c_pid, []).append(dict(cr))
 
-        # 4. Dados para resolução de Scheduled Posts
+        # 4. Dados para resolução de Scheduled Posts (com LIMIT seguro)
         scheduled_posts_by_prof: Dict[str, List[Dict[str, Any]]] = {}
         if "scheduled_posts" in existing_tables:
-            s_rows = conn.execute(
-                """
+            sched_query = """
                 SELECT id, task_id, scheduled_at, status, created_at, profile_id
                 FROM scheduled_posts
                 WHERE status IN ('planned', 'ready')
-                ORDER BY scheduled_at ASC;
-                """
-            ).fetchall()
+            """
+            sched_params: List[Any] = []
+            if clean_profile_id:
+                sched_query += " AND (profile_id = ? OR profile_id IS NULL)"
+                sched_params.append(clean_profile_id)
+            sched_query += " ORDER BY scheduled_at ASC LIMIT ?"
+            sched_params.append(max(effective_limit * 10, 500))
+            s_rows = conn.execute(sched_query, sched_params).fetchall()
             for sr in s_rows:
                 s_pid = sr["profile_id"] or profile_manager.DEFAULT_PROFILE_ID
                 scheduled_posts_by_prof.setdefault(s_pid, []).append(dict(sr))
 
         # 5. Dados para Recent Runs das últimas 24h
-        # 5.1 task_profiles
+        # 5.1 task_profiles: filtrado por created_at >= 24h no SQL
         task_prof_map: Dict[str, str] = {}
         task_created_map: Dict[str, str] = {}
         if "task_profiles" in existing_tables:
-            tp_rows = conn.execute("SELECT task_id, profile_id, created_at FROM task_profiles;").fetchall()
+            tp_query = "SELECT task_id, profile_id, created_at FROM task_profiles WHERE created_at >= ?"
+            tp_params: List[Any] = [h24_ago_iso]
+            if clean_profile_id:
+                tp_query += " AND profile_id = ?"
+                tp_params.append(clean_profile_id)
+            tp_rows = conn.execute(tp_query, tp_params).fetchall()
             for tpr in tp_rows:
                 task_prof_map[tpr["task_id"]] = tpr["profile_id"] or profile_manager.DEFAULT_PROFILE_ID
                 if tpr["created_at"]:
                     task_created_map[tpr["task_id"]] = tpr["created_at"]
 
-        # 5.2 monetization_safety recente
+        # 5.2 monetization_safety recente (estritamente checked_at >= 24h)
         safety_map: Dict[str, Dict[str, Any]] = {}
         if "monetization_safety" in existing_tables:
             ms_cols = {r[1] for r in conn.execute("PRAGMA table_info(monetization_safety);").fetchall()}
@@ -213,21 +237,21 @@ def get_production_overview(
                 f"""
                 SELECT task_id, safety_status, {sel_reasons}, checked_at
                 FROM monetization_safety
-                WHERE checked_at >= ? OR checked_at IS NULL;
+                WHERE checked_at >= ?;
                 """,
                 (h24_ago_iso,),
             ).fetchall()
             for msr in ms_rows:
                 safety_map[msr["task_id"]] = dict(msr)
 
-        # 5.3 quality scores recente
+        # 5.3 quality scores recente (estritamente created_at >= 24h)
         quality_map: Dict[str, Dict[str, Any]] = {}
         if "content_quality_scores" in existing_tables:
             qs_rows = conn.execute(
                 """
                 SELECT task_id, quality_score, quality_label, created_at
                 FROM content_quality_scores
-                WHERE created_at >= ? OR created_at IS NULL
+                WHERE created_at >= ?
                 ORDER BY created_at DESC;
                 """,
                 (h24_ago_iso,),
@@ -236,7 +260,7 @@ def get_production_overview(
                 if qsr["task_id"] not in quality_map:
                     quality_map[qsr["task_id"]] = dict(qsr)
 
-        # 5.4 operational_events recente
+        # 5.4 operational_events recente (estritamente timestamp >= 24h)
         events_by_task: Dict[str, List[Dict[str, Any]]] = {}
         if "operational_events" in existing_tables:
             oe_rows = conn.execute(
@@ -253,21 +277,25 @@ def get_production_overview(
                 if tid:
                     events_by_task.setdefault(tid, []).append(dict(oer))
 
-        # 5.5 tasks table se existir
+        # 5.5 tasks table se existir (filtrada por created_at ou updated_at com LIMIT)
         tasks_table_data: Dict[str, Dict[str, Any]] = {}
         if "tasks" in existing_tables:
-            try:
-                t_rows = conn.execute(
-                    """
-                    SELECT * FROM tasks
-                    WHERE created_at >= ? OR updated_at >= ?;
-                    """,
-                    (h24_ago_iso, h24_ago_iso),
-                ).fetchall()
-                for tr in t_rows:
-                    tasks_table_data[tr["task_id"]] = dict(tr)
-            except Exception:
-                pass
+            t_cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks);").fetchall()}
+            date_col = "created_at" if "created_at" in t_cols else ("updated_at" if "updated_at" in t_cols else None)
+            if date_col:
+                try:
+                    t_rows = conn.execute(
+                        f"""
+                        SELECT * FROM tasks
+                        WHERE {date_col} >= ?
+                        LIMIT ?;
+                        """,
+                        (h24_ago_iso, max(effective_limit * 20, 1000)),
+                    ).fetchall()
+                    for tr in t_rows:
+                        tasks_table_data[tr["task_id"]] = dict(tr)
+                except Exception:
+                    pass
 
     finally:
         conn.close()
@@ -280,12 +308,21 @@ def get_production_overview(
     except Exception:
         pass
 
-    # Tarefas em memória
-    memory_tasks = {}
+    # Tarefas em memória: cópia seletiva de campos necessários para tarefas ativas ou recentes
+    memory_tasks: Dict[str, Dict[str, Any]] = {}
     state_obj = getattr(sm, "state", None)
     if state_obj and hasattr(state_obj, "_tasks") and isinstance(state_obj._tasks, dict):
         with getattr(state_obj, "_lock", threading.Lock()):
-            memory_tasks = {k: copy.deepcopy(v) for k, v in state_obj._tasks.items()}
+            for tid, t_dict in state_obj._tasks.items():
+                if not isinstance(t_dict, dict):
+                    continue
+                t_state = t_dict.get("state")
+                is_active = (tid in active_running_tids) or (t_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING))
+                c_time = t_dict.get("created_at")
+                u_time = t_dict.get("updated_at") or t_dict.get("finished_at")
+                is_recent = bool((c_time and c_time >= h24_ago_iso) or (u_time and u_time >= h24_ago_iso))
+                if is_active or is_recent:
+                    memory_tasks[tid] = {k: t_dict[k] for k in NEEDED_TASK_FIELDS if k in t_dict}
 
     # 6. Construção dos dados por canal
     channels_output = []
@@ -295,6 +332,8 @@ def get_production_overview(
     tot_success_24h = 0
     tot_failed_24h = 0
     tot_rejected_24h = 0
+    tot_running_24h = 0
+    tot_unknown_24h = 0
 
     for prof in profiles:
         pid = prof["id"]
@@ -310,9 +349,19 @@ def get_production_overview(
             else pname
         )
 
-        # Contexto e formato editorial
-        prof_ctx = profile_manager.get_generation_profile_context(profile_id=pid, db_path=effective_db)
-        video_format = prof_ctx.get("video_format") or prof_ctx.get("content_style") or "traditional"
+        # Contexto e formato editorial extraído diretamente dos metadados já carregados
+        video_format = "traditional"
+        settings_raw = prof.get("settings_json")
+        if settings_raw:
+            try:
+                s_dict = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+                if isinstance(s_dict, dict):
+                    editorial = s_dict.get("editorial") or {}
+                    video_format = editorial.get("video_format") or editorial.get("content_style") or prof.get("default_preset") or "traditional"
+            except Exception:
+                pass
+        if not video_format:
+            video_format = prof.get("default_preset") or "traditional"
 
         # -------------------------------------------------------------
         # A. Ready Stock Canônico
@@ -341,12 +390,14 @@ def get_production_overview(
                 q_score = None
 
             safety_status = item.get("safety_status") or None
-            copyright_status = (
-                item.get("copyright_provenance_gate")
-                or item.get("copyright_status")
-                or "PASS"
-            )
-            gate_status = item.get("gate_status") or ("APPROVED" if safety_status == "PASS" else None)
+
+            # (a) NÃO inventar valores: se não houver dado de copyright_status, retorne null
+            raw_cp = item.get("copyright_provenance_gate") or item.get("copyright_status")
+            copyright_status = str(raw_cp) if raw_cp is not None else None
+
+            # (b) NÃO deduzir gate_status: use só o gate_status real da tarefa, senão null
+            gate_status = item.get("gate_status") or None
+
             created_at = item.get("created_at") or None
             age_hours = _calculate_age_hours(created_at, now_utc)
 
@@ -471,7 +522,7 @@ def get_production_overview(
                 or None
             )
 
-            # Classificação estrita de status: SUCCESS, FAILED, REJECTED, RUNNING
+            # Classificação estrita de status: SUCCESS, FAILED, REJECTED, RUNNING, UNKNOWN
             t_state = mem_t.get("state")
             if t_state is None and "state" in sql_t:
                 t_state = sql_t["state"]
@@ -481,8 +532,11 @@ def get_production_overview(
             has_reject_event = any(e.get("event_type") == "task_gate_rejected" for e in t_events)
 
             error_msg = mem_t.get("error") or sql_t.get("error") or None
-            safety_status = ms_entry.get("safety_status") or mem_t.get("safety_status")
-            gate_status = mem_t.get("gate_status") or ("APPROVED" if (safety_status and str(safety_status).upper() == "PASS") else ("REJECTED" if (safety_status and str(safety_status).upper() == "FAIL") else None))
+            safety_status = ms_entry.get("safety_status") or mem_t.get("safety_status") or None
+
+            # (b) use só o gate_status real da tarefa, senão null
+            gate_status = mem_t.get("gate_status") or sql_t.get("gate_status") or None
+
             gate_reason = (
                 ms_entry.get("safety_reasons")
                 or ms_entry.get("gate_reason")
@@ -490,6 +544,8 @@ def get_production_overview(
                 or sql_t.get("gate_reason")
                 or None
             )
+
+            # (c) use só failure_stage real, senão null (não inventar SAFETY/QUALITY)
             failure_stage = (
                 mem_t.get("failed_stage")
                 or mem_t.get("failure_stage")
@@ -499,6 +555,7 @@ def get_production_overview(
                 or None
             )
 
+            # (d) status: RUNNING, FAILED, REJECTED, SUCCESS (só quando COMPLETE sem erro/rejeição), senão UNKNOWN
             if is_active:
                 status = "RUNNING"
                 failure_stage = None
@@ -513,19 +570,13 @@ def get_production_overview(
                 or (safety_status and str(safety_status).upper() == "FAIL")
             ):
                 status = "REJECTED"
-                if not failure_stage:
-                    if safety_status and str(safety_status).upper() == "FAIL":
-                        failure_stage = "SAFETY"
-                    else:
-                        failure_stage = "QUALITY"
-            elif t_state == const.TASK_STATE_COMPLETE:
+            elif t_state == const.TASK_STATE_COMPLETE and not error_msg and not has_failed_event:
                 status = "SUCCESS"
                 failure_stage = None
                 gate_reason = None
                 error_msg = None
             else:
-                # Se não há estado explícito mas tem erro -> FAILED, senão SUCCESS
-                status = "FAILED" if error_msg else "SUCCESS"
+                status = "UNKNOWN"
 
             runs_list.append({
                 "task_id": tid,
@@ -549,7 +600,7 @@ def get_production_overview(
             "items": runs_list[:effective_limit],
         }
 
-        # Acumula totais gerais
+        # Acumula totais gerais únicos
         tot_ready_stock += stock_total
         tot_scheduled += len(sched_rows)
         tot_runs_24h += len(runs_list)
@@ -560,6 +611,10 @@ def get_production_overview(
                 tot_failed_24h += 1
             elif r["status"] == "REJECTED":
                 tot_rejected_24h += 1
+            elif r["status"] == "RUNNING":
+                tot_running_24h += 1
+            elif r["status"] == "UNKNOWN":
+                tot_unknown_24h += 1
 
         channels_output.append({
             "profile_id": pid,
@@ -576,16 +631,11 @@ def get_production_overview(
             "total_ready": tot_ready_stock,
             "total_scheduled": tot_scheduled,
             "total_runs_24h": tot_runs_24h,
-            "ready_stock": tot_ready_stock,
-            "scheduled": tot_scheduled,
             "success_24h": tot_success_24h,
             "failed_24h": tot_failed_24h,
             "rejected_24h": tot_rejected_24h,
-            "total_ready_stock": tot_ready_stock,
-            "total_scheduled": tot_scheduled,
-            "total_success_24h": tot_success_24h,
-            "total_failed_24h": tot_failed_24h,
-            "total_rejected_24h": tot_rejected_24h,
+            "running_24h": tot_running_24h,
+            "unknown_24h": tot_unknown_24h,
         },
         "channels": channels_output,
     }

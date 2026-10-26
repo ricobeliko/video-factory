@@ -1,20 +1,26 @@
-"""Testes do Endpoint de Produção V2 (Missão P1 — GET /api/v2/production/overview).
+"""Testes do Endpoint de Produção V2 (Missão P1 / P1b — GET /api/v2/production/overview).
 
 Valida:
 1. Rota /api/v2/production/overview registrada no FastAPI e no OpenAPI;
 2. Estoque de vídeos prontos respeita as regras canônicas (mp4 físico, safety PASS, quality >= 70, canal YouTube ativo e não publicado);
 3. Posts agendados (scheduled_posts);
-4. Tarefas recentes (recent_runs) nas últimas 24h com status (SUCCESS, FAILED, REJECTED, RUNNING), estágios e motivos (gate_reason/error);
+4. Tarefas recentes (recent_runs) nas últimas 24h com status (SUCCESS, FAILED, REJECTED, RUNNING, UNKNOWN);
 5. Filtro por profile_id;
 6. Limite por seção (limit_per_section);
-7. Campos ausentes serializados como null (nunca inventados);
-8. Banco/canal vazio retorna listas vazias;
-9. Medição de tempo de resposta e cache efêmero.
+7. Campos ausentes serializados como null (nunca inventados):
+   - copyright ausente -> null
+   - estado desconhecido -> UNKNOWN
+   - reprovado sem etapa -> failure_stage é null (sem inferir SAFETY/QUALITY)
+   - gate_status não inferido de safety PASS -> null
+8. Totais únicos sem duplicatas: total_ready, total_scheduled, total_runs_24h, success_24h, failed_24h, rejected_24h, running_24h, unknown_24h;
+9. Banco/canal vazio retorna listas vazias;
+10. Desempenho com banco sintético grande (20.000 task_profiles, 5.000 tasks em 6 perfis): frio < 1.5s, em cache < 50ms.
 """
 from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -144,8 +150,16 @@ class TestApiV2ProductionOverview(unittest.TestCase):
                 {"provider": "pexels", "asset_id": "999", "local_file": "v1.mp4", "duration": 5}
             ],
             "asset_provenance": {
-                "bgm": {"enabled": False, "filename": None, "source": "none", "license_type": "none", "provenance_status": "SAFE_NO_BGM"},
-                "visual_clips": [{"provider": "pexels", "asset_id": "999", "local_file": "v1.mp4", "duration": 5}],
+                "bgm": {
+                    "enabled": False,
+                    "filename": None,
+                    "source": "none",
+                    "license_type": "none",
+                    "provenance_status": "SAFE_NO_BGM",
+                },
+                "visual_clips": [
+                    {"provider": "pexels", "asset_id": "999", "local_file": "v1.mp4", "duration": 5}
+                ],
                 "presenter": {"enabled": False, "mode": "none"},
                 "provenance_status": "SAFE_NO_BGM",
             },
@@ -164,7 +178,7 @@ class TestApiV2ProductionOverview(unittest.TestCase):
         self.assertIn("/api/v2/production/overview", paths)
 
     def test_empty_database_returns_empty_lists(self):
-        """2. Quando não há tarefas nem posts, retorna estrutura completa com listas vazias."""
+        """2. Quando não há tarefas nem posts, retorna estrutura completa com listas vazias e totais únicos."""
         with patch.object(scheduler, "get_db_path", return_value=self.db_path):
             client = TestClient(asgi.app)
             resp = client.get("/api/v2/production/overview")
@@ -174,11 +188,17 @@ class TestApiV2ProductionOverview(unittest.TestCase):
 
             self.assertIn("totals", payload)
             self.assertIn("channels", payload)
-            self.assertEqual(payload["totals"]["ready_stock"], 0)
-            self.assertEqual(payload["totals"]["scheduled"], 0)
-            self.assertEqual(payload["totals"]["success_24h"], 0)
-            self.assertEqual(payload["totals"]["failed_24h"], 0)
-            self.assertEqual(payload["totals"]["rejected_24h"], 0)
+            expected_totals = {
+                "total_ready": 0,
+                "total_scheduled": 0,
+                "total_runs_24h": 0,
+                "success_24h": 0,
+                "failed_24h": 0,
+                "rejected_24h": 0,
+                "running_24h": 0,
+                "unknown_24h": 0,
+            }
+            self.assertEqual(payload["totals"], expected_totals)
 
             self.assertEqual(len(payload["channels"]), 2)
             ch0 = payload["channels"][0]
@@ -305,7 +325,8 @@ class TestApiV2ProductionOverview(unittest.TestCase):
             self.assertEqual(item["quality_score"], 88.5)
             self.assertEqual(item["safety_status"], "PASS")
             self.assertEqual(item["copyright_status"], "PASS")
-            self.assertEqual(item["gate_status"], "APPROVED")
+            # gate_status não é inferido de safety_status
+            self.assertIsNone(item["gate_status"])
             self.assertIsNotNone(item["created_at"])
             self.assertIsNotNone(item["age_hours"])
             self.assertEqual(item["duration"], 42.5)
@@ -469,11 +490,14 @@ class TestApiV2ProductionOverview(unittest.TestCase):
             self.assertEqual(runs_by_id[t_run]["status"], "RUNNING")
             self.assertIsNone(runs_by_id[t_run]["finished_at"])
 
-            # Valida Totais do Resumo
+            # Valida Totais Únicos do Resumo
             totals = payload["totals"]
             self.assertEqual(totals["success_24h"], 1)
             self.assertEqual(totals["failed_24h"], 1)
             self.assertEqual(totals["rejected_24h"], 1)
+            self.assertEqual(totals["running_24h"], 1)
+            self.assertEqual(totals["unknown_24h"], 0)
+            self.assertEqual(totals["total_runs_24h"], 4)
 
     def test_filter_by_profile_id(self):
         """6. Parâmetro profile_id filtra exatamente o canal solicitado."""
@@ -495,7 +519,7 @@ class TestApiV2ProductionOverview(unittest.TestCase):
             self.assertEqual(resp_none.status_code, 200)
             data_none = resp_none.json()["data"]
             self.assertEqual(len(data_none["channels"]), 0)
-            self.assertEqual(data_none["totals"]["ready_stock"], 0)
+            self.assertEqual(data_none["totals"]["total_ready"], 0)
 
     def test_limit_per_section(self):
         """7. limit_per_section limita o número de itens retornados em items preservando total."""
@@ -524,18 +548,53 @@ class TestApiV2ProductionOverview(unittest.TestCase):
             self.assertEqual(len(sched["items"]), 2)
 
     def test_missing_fields_are_null_never_invented(self):
-        """8. Campos ausentes são estritamente null (nunca inventados)."""
-        now_iso = datetime.now(timezone.utc).isoformat()
-        tid = "task-null-fields"
+        """8. Campos ausentes são estritamente null (nunca inventados):
+        - copyright ausente -> null
+        - estado desconhecido -> UNKNOWN
+        - reprovado sem etapa -> failure_stage é null (não inventar SAFETY/QUALITY)
+        - gate_status não inferido de safety PASS -> null
+        """
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+
+        # 1. Task sem campos opcionais (topic, duration, error, failure_stage, gate_reason)
+        tid1 = "task-null-fields"
         sm.state.update_task(
-            tid,
+            tid1,
             state=const.TASK_STATE_COMPLETE,
-            # Sem duration, sem topic, sem error
             created_at=now_iso,
             profile_id="default",
         )
+
+        # 2. Task com estado desconhecido (state não reconhecido) -> deve retornar UNKNOWN
+        tid_unknown = "task-unknown-state"
+        sm.state.update_task(
+            tid_unknown,
+            state="some_unrecognized_state",
+            video_subject="Vídeo Estado Estranho",
+            created_at=now_iso,
+            profile_id="default",
+        )
+
+        # 3. Task rejeitada sem etapa de falha informada -> failure_stage deve ser null (não SAFETY/QUALITY)
+        tid_rej_no_stage = "task-rej-no-stage"
+        sm.state.update_task(
+            tid_rej_no_stage,
+            state=const.TASK_STATE_COMPLETE,
+            video_subject="Rejeitado Sem Etapa",
+            created_at=now_iso,
+            profile_id="default",
+        )
+
         with scheduler.get_connection(self.db_path) as conn:
-            conn.execute("INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, 'default', ?);", (tid, now_iso))
+            conn.execute("INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, 'default', ?);", (tid1, now_iso))
+            conn.execute("INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, 'default', ?);", (tid_unknown, now_iso))
+            conn.execute("INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, 'default', ?);", (tid_rej_no_stage, now_iso))
+            # Injeta safety FAIL sem informar failure_stage
+            conn.execute(
+                "INSERT INTO monetization_safety (task_id, preset, safety_status, safety_reasons, checked_at) VALUES (?, 'tech', 'FAIL', 'Motivo x', ?);",
+                (tid_rej_no_stage, now_iso),
+            )
 
         with patch.object(scheduler, "get_db_path", return_value=self.db_path):
             client = TestClient(asgi.app)
@@ -544,14 +603,31 @@ class TestApiV2ProductionOverview(unittest.TestCase):
             payload = resp.json()["data"]
 
             runs = payload["channels"][0]["recent_runs"]["items"]
-            target = next(r for r in runs if r["task_id"] == tid)
-            self.assertIsNone(target["topic"])
-            self.assertIsNone(target["failure_stage"])
-            self.assertIsNone(target["gate_reason"])
-            self.assertIsNone(target["error"])
+            runs_by_id = {r["task_id"]: r for r in runs}
+
+            # Caso 1: campos ausentes são null
+            t1 = runs_by_id[tid1]
+            self.assertIsNone(t1["topic"])
+            self.assertIsNone(t1["failure_stage"])
+            self.assertIsNone(t1["gate_reason"])
+            self.assertIsNone(t1["error"])
+            self.assertEqual(t1["status"], "SUCCESS")
+
+            # Caso 2: estado desconhecido -> UNKNOWN
+            t_unk = runs_by_id[tid_unknown]
+            self.assertEqual(t_unk["status"], "UNKNOWN")
+
+            # Caso 3: reprovado sem etapa -> failure_stage é estritamente null (não SAFETY nem QUALITY)
+            t_rej = runs_by_id[tid_rej_no_stage]
+            self.assertEqual(t_rej["status"], "REJECTED")
+            self.assertIsNone(t_rej["failure_stage"])
+            self.assertEqual(t_rej["gate_reason"], "Motivo x")
+
+            # Valida totais com unknown_24h incrementado
+            self.assertEqual(payload["totals"]["unknown_24h"], 1)
 
     def test_performance_under_two_seconds_and_caching(self):
-        """9. Resposta executa em menos de 2s (performance sub-segundo) e cache efêmero funciona."""
+        """9. Resposta executa em menos de 2s e cache efêmero funciona."""
         with patch.object(scheduler, "get_db_path", return_value=self.db_path):
             client = TestClient(asgi.app)
 
@@ -570,3 +646,75 @@ class TestApiV2ProductionOverview(unittest.TestCase):
 
             self.assertEqual(resp2.status_code, 200)
             self.assertLess(t_cached, 0.1, f"Cache efêmero deveria responder em <100ms: {t_cached:.4f}s")
+
+    def test_performance_large_synthetic_database(self):
+        """10. Desempenho com banco sintético grande (20.000 task_profiles, 5.000 tasks em 6 perfis):
+        - Frio < 1.5s
+        - Em cache < 50ms
+        """
+        temp_dir = tempfile.TemporaryDirectory()
+        synth_db = os.path.join(temp_dir.name, "synthetic_large.db")
+
+        try:
+            scheduler.init_db(synth_db)
+            profile_manager.init_profile_db(synth_db)
+
+            conn = sqlite3.connect(synth_db)
+            profiles = [f"prof-{i}" for i in range(1, 7)]
+            for pid in profiles:
+                conn.execute(
+                    """
+                    INSERT INTO content_profiles (id, name, slug, niche, default_preset, growth_mode, is_active, settings_json, created_at, updated_at)
+                    VALUES (?, ?, ?, 'tech', 'traditional', 'SCALE', 1, '{"editorial": {"video_format": "traditional"}}', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');
+                    """,
+                    (pid, f"Channel {pid}", pid),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO publishing_channels (id, profile_id, platform, display_name, is_enabled, created_at, updated_at)
+                    VALUES (?, ?, 'youtube', ?, 1, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');
+                    """,
+                    (f"chan-{pid}", pid, f"YT {pid}"),
+                )
+
+            now = datetime.now(timezone.utc)
+            old_time = (now - timedelta(days=5)).isoformat()
+            recent_time = (now - timedelta(hours=2)).isoformat()
+
+            # 20.000 task_profiles
+            tp_data = [(f"task-{i}", profiles[i % 6], recent_time if i < 1000 else old_time) for i in range(20000)]
+            conn.executemany("INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?);", tp_data)
+
+            # 5.000 tasks
+            conn.execute("CREATE TABLE IF NOT EXISTS tasks (task_id TEXT PRIMARY KEY, video_subject TEXT, state TEXT, created_at TEXT, updated_at TEXT);")
+            t_data = [(f"task-{i}", f"Topic {i}", "complete", recent_time if i < 300 else old_time, recent_time if i < 300 else old_time) for i in range(5000)]
+            conn.executemany("INSERT INTO tasks (task_id, video_subject, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?);", t_data)
+
+            # 100 scheduled posts
+            sp_data = [(f"task-sched-{i}", "youtube", recent_time, "planned", recent_time, profiles[i % 6]) for i in range(100)]
+            conn.executemany("INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at, profile_id) VALUES (?, ?, ?, ?, ?, ?);", sp_data)
+
+            conn.commit()
+            conn.close()
+
+            production_overview.clear_production_overview_cache()
+
+            # 1. Execução Fria (sem cache)
+            t0 = time.perf_counter()
+            res_cold = production_overview.get_production_overview(db_path=synth_db, use_cache=True)
+            t_cold = time.perf_counter() - t0
+
+            self.assertLess(t_cold, 1.5, f"Tempo frio excedeu a meta de 1.5s: {t_cold:.4f}s")
+            self.assertEqual(len(res_cold["channels"]), 6)
+            self.assertEqual(res_cold["totals"]["total_runs_24h"], 1000)
+
+            # 2. Execução com Cache
+            t1 = time.perf_counter()
+            res_cached = production_overview.get_production_overview(db_path=synth_db, use_cache=True)
+            t_cached = time.perf_counter() - t1
+
+            self.assertLess(t_cached, 0.05, f"Tempo em cache excedeu 50ms: {t_cached*1000:.2f}ms")
+            self.assertEqual(res_cold["totals"], res_cached["totals"])
+
+        finally:
+            temp_dir.cleanup()

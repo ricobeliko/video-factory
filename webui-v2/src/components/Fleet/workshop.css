@@ -1,0 +1,481 @@
+/**
+ * workshop.css — Estilos da Oficina ao Vivo da Frota (webui-v2).
+ * Todas as classes prefixadas com fleet-ws- e regras contidas na identidade do protótipo.
+ */
+
+.fleet-root {
+  --fleet-ws-canvas-bg: #0A0F1F;
+  --fleet-ws-canvas-border: #1E2744;
+  --fleet-ws-canvas-dot: #1A2340;
+  --fleet-ws-panel-bg: #0D1016;
+  --fleet-ws-panel-border: #1E2744;
+  --fleet-ws-conveyor: #2B3659;
+  --fleet-ws-bar-track: #1B2340;
+}
+
+/* --------------------------------------------------------------------------
+   Layout principal da oficina
+   -------------------------------------------------------------------------- */
+.fleet-ws-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.fleet-ws-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   Faixa de demonstração
+   -------------------------------------------------------------------------- */
+.fleet-ws-demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background-color: #2A1F0D;
+  border: 1px solid #D97706;
+  border-radius: 8px;
+  padding: 8px 16px;
+  color: #FCD34D;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fleet-ws-demo-badge {
+  background-color: #D97706;
+  color: #0A0C11;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Canvas da Fábrica (SVG + Estações + Courier)
+   -------------------------------------------------------------------------- */
+.fleet-ws-canvas-container {
+  flex: 1 1 780px;
+  min-width: 0;
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid var(--fleet-ws-canvas-border);
+}
+
+.fleet-ws-canvas {
+  position: relative;
+  width: 780px;
+  height: 420px;
+  margin: 0 auto;
+  overflow: hidden;
+  background: radial-gradient(var(--fleet-ws-canvas-dot) 1px, transparent 1px) 0 0 / 20px 20px,
+    var(--fleet-ws-canvas-bg);
+}
+
+.fleet-ws-svg-conveyor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.fleet-ws-canvas-header {
+  position: absolute;
+  left: 16px;
+  top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 2;
+}
+
+.fleet-ws-canvas-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6F7DA8;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fleet-ws-badge-extra {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6AA8FF;
+  background: #112038;
+  border: 1px solid #2B5FB8;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.fleet-ws-badge-offline {
+  font-size: 11px;
+  font-weight: 600;
+  color: #FF8A7A;
+  background: #2C1613;
+  border: 1px solid #B3402F;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* --------------------------------------------------------------------------
+   Estação individual de trabalho
+   -------------------------------------------------------------------------- */
+.fleet-ws-station {
+  position: absolute;
+  width: 180px;
+  height: 172px;
+  user-select: none;
+}
+
+.fleet-ws-bubble {
+  position: absolute;
+  left: -6px;
+  top: -18px;
+  max-width: 190px;
+  background: #FFF3B0;
+  color: #2B2A14;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  z-index: 3;
+}
+
+.fleet-ws-bubble-error {
+  background: #FFE3DE;
+  color: #7A1910;
+  border: 1px solid #B3402F;
+}
+
+.fleet-ws-desk {
+  position: absolute;
+  left: 0;
+  top: 24px;
+  width: 130px;
+  height: auto;
+  pointer-events: none;
+}
+
+.fleet-ws-desk-idle {
+  filter: grayscale(0.7) brightness(0.62);
+}
+
+.fleet-ws-robot {
+  position: absolute;
+  left: 58px;
+  top: 2px;
+  width: 144px;
+  height: 134px;
+  background-size: 576px 134px;
+  background-repeat: no-repeat;
+}
+
+.fleet-ws-robot-idle {
+  background-position: 0px 0px;
+  filter: grayscale(0.7) brightness(0.62);
+}
+
+.fleet-ws-robot-working {
+  background-position: -144px 0px;
+}
+
+.fleet-ws-robot-happy {
+  background-position: -288px 0px;
+}
+
+.fleet-ws-robot-error {
+  background-position: -432px 0px;
+}
+
+.fleet-ws-station-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 146px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 12px;
+}
+
+.fleet-ws-station-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.fleet-ws-station-bar-track {
+  display: block;
+  height: 6px;
+  background: var(--fleet-ws-bar-track);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fleet-ws-station-bar-fill {
+  display: block;
+  height: 100%;
+  transition: width 0.4s ease;
+}
+
+/* --------------------------------------------------------------------------
+   Courier (robô entregador transportando o vídeo)
+   -------------------------------------------------------------------------- */
+.fleet-ws-courier {
+  position: absolute;
+  width: 76px;
+  z-index: 4;
+  text-align: center;
+  transition: left 1s steps(10, end), top 1s steps(10, end);
+}
+
+.fleet-ws-courier-chip {
+  font-size: 10px;
+  font-weight: 700;
+  color: #0A0F1F;
+  padding: 1px 5px;
+  display: inline-block;
+  margin-bottom: 1px;
+  border-radius: 3px;
+}
+
+.fleet-ws-courier-sprite {
+  width: 76px;
+  height: 66px;
+  margin: 0 auto;
+  background-size: 456px 66px;
+  background-repeat: no-repeat;
+}
+
+/* --------------------------------------------------------------------------
+   Animações CSS com steps()
+   -------------------------------------------------------------------------- */
+@keyframes fleet-ws-wk {
+  0%, 49.9% {
+    background-position: 0px 0px;
+  }
+  50%, 100% {
+    background-position: -144px 0px;
+  }
+}
+
+.fleet-ws-wk {
+  animation: fleet-ws-wk 0.8s steps(1) infinite;
+}
+
+@keyframes fleet-ws-cwalk {
+  from {
+    background-position: 0px 0px;
+  }
+  to {
+    background-position: -304px 0px;
+  }
+}
+
+.fleet-ws-cw {
+  animation: fleet-ws-cwalk 0.6s steps(4) infinite;
+}
+
+/* --------------------------------------------------------------------------
+   Cartão lateral de identificação (Side Panel)
+   -------------------------------------------------------------------------- */
+.fleet-ws-panel {
+  flex: 1 1 300px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fleet-ws-card {
+  background: var(--fleet-ws-panel-bg);
+  border: 1px solid var(--fleet-ws-panel-border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fleet-ws-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fleet-ws-card-tag {
+  font-size: 11.5px;
+  color: #6F7DA8;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fleet-ws-status-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.fleet-ws-status-running {
+  background: #112038;
+  color: #6AA8FF;
+  border: 1px solid #2B5FB8;
+}
+
+.fleet-ws-status-failed {
+  background: #2C1613;
+  color: #FF8A7A;
+  border: 1px solid #B3402F;
+}
+
+.fleet-ws-status-idle {
+  background: #171B24;
+  color: #9099AA;
+  border: 1px solid #2A3040;
+}
+
+.fleet-ws-card-channel-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #E8EBF1;
+  letter-spacing: -0.01em;
+  margin-bottom: 2px;
+}
+
+.fleet-ws-card-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: #9099AA;
+}
+
+.fleet-ws-chip-format {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #151922;
+  border: 1px solid #262C39;
+}
+
+.fleet-ws-chip-provider {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #1A1D2E;
+  color: #8B9DFF;
+  border: 1px solid #2E3859;
+}
+
+.fleet-ws-card-topic {
+  font-size: 13px;
+  color: #D4D9E3;
+  line-height: 1.4;
+  background: #10131A;
+  border: 1px solid #1B2029;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.fleet-ws-card-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fleet-ws-card-progress-track {
+  flex-grow: 1;
+  height: 7px;
+  background: var(--fleet-ws-bar-track);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fleet-ws-card-progress-fill {
+  display: block;
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.fleet-ws-card-progress-val {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 38px;
+  text-align: right;
+}
+
+.fleet-ws-card-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  border-top: 1px solid #1E2744;
+  padding-top: 10px;
+}
+
+.fleet-ws-card-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fleet-ws-card-info-label {
+  color: #6F7DA8;
+}
+
+.fleet-ws-card-info-value {
+  color: #D4D9E3;
+  font-weight: 500;
+}
+
+.fleet-ws-card-error-box {
+  background: #2C1613;
+  border: 1px solid #B3402F;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #FFB4A9;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fleet-ws-card-error-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+  color: #FF8A7A;
+}
+
+.fleet-ws-card-idle-msg {
+  font-size: 13px;
+  color: #9099AA;
+  line-height: 1.4;
+  text-align: center;
+  padding: 16px 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Prefers reduced motion (Acessibilidade)
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .fleet-ws-wk,
+  .fleet-ws-cw,
+  .fleet-ws-courier {
+    animation: none !important;
+    transition: none !important;
+  }
+}

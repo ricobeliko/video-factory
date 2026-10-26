@@ -80,10 +80,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (activeTab === 'frota') {
+      return;
+    }
     pollData();
     const interval = setInterval(pollData, 3000);
     return () => clearInterval(interval);
-  }, [pollData]);
+  }, [pollData, activeTab]);
 
   // Set default initial channel ID once loaded
   useEffect(() => {

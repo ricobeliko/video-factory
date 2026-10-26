@@ -9,7 +9,7 @@ import {
   getAttentionList,
   filterChannels,
 } from './fleetLogic';
-import deskImg from '../../assets/fleet/desk.png';
+import Workshop from './Workshop';
 import './fleet.css';
 
 const POLL_INTERVAL_MS = 15000;
@@ -427,27 +427,12 @@ export default function FleetView({ onNavigate }) {
           </div>
         </section>
 
-        {/* 4. Fábrica ao vivo (Oficina dos Robôs — Placeholder) */}
+        {/* 4. Fábrica ao vivo (Oficina dos Robôs) */}
         <section className="fleet-workshop-section" aria-label="Fábrica ao vivo">
           <div className="fleet-workshop-header">
             <h2 className="fleet-workshop-title">Fábrica ao vivo</h2>
-            <span className="fleet-badge-wip">
-              <span>🛠️</span>
-              <span>Em construção</span>
-            </span>
           </div>
-
-          <div className="fleet-workshop-placeholder">
-            <img
-              src={deskImg}
-              alt="Mesa de oficina"
-              className="fleet-workshop-placeholder-img"
-              aria-hidden="true"
-            />
-            <p className="fleet-workshop-placeholder-text">
-              Em construção: a oficina com os robôs entra na próxima missão.
-            </p>
-          </div>
+          <Workshop fleetSummary={data} />
         </section>
 
         {/* 5. Middle Row: "Precisa de você" + "Mapa da frota" */}

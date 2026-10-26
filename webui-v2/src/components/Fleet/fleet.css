@@ -20,7 +20,9 @@
   --fleet-font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --fleet-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  min-height: 100vh;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
   background-color: var(--fleet-bg);
   color: var(--fleet-text-main);
   font-family: var(--fleet-font-sans);

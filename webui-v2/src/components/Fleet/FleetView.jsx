@@ -175,9 +175,12 @@ export default function FleetView({ onNavigate }) {
           <button type="button" className="fleet-nav-link active">
             Frota
           </button>
-          <button type="button" className="fleet-nav-link" disabled title="Em breve">
-            <span>Produção</span>
-            <span className="fleet-nav-soon">em breve</span>
+          <button
+            type="button"
+            className="fleet-nav-link"
+            onClick={() => handleNavClick('producao')}
+          >
+            Produção
           </button>
           <button type="button" className="fleet-nav-link" disabled title="Em breve">
             <span>Publicação</span>

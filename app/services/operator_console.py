@@ -4344,3 +4344,23 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         "totals": totals,
         "channels": channels_data,
     }
+
+
+# ---------------------------------------------------------------------------
+# 29. Production Overview (Web UI V2 - Missão P1)
+# ---------------------------------------------------------------------------
+
+def get_production_overview(
+    profile_id: Optional[str] = None,
+    limit_per_section: int = 20,
+    db_path: Optional[str] = None,
+    use_cache: bool = True,
+) -> Dict[str, Any]:
+    """Wrapper canônico para o serviço de produção V2 (Missão P1)."""
+    from app.services import production_overview
+    return production_overview.get_production_overview(
+        profile_id=profile_id,
+        limit_per_section=limit_per_section,
+        db_path=db_path,
+        use_cache=use_cache,
+    )

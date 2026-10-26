@@ -193,17 +193,107 @@ test('5. computeStationStates sets completed=happy, current=working, remaining=i
 });
 
 // -----------------------------------------------------------------------------
-// 6. Poses por estação em falha (FAILED)
+// 6. Progresso não numérico na estação em andamento (barPct = 0, sem fallback 50)
 // -----------------------------------------------------------------------------
-test('6. computeStationStates marks failure station as error (-432px) with error reason', () => {
-  // Failed at SAFETY (station 4: Gates)
-  const exec = {
+test('6. computeStationStates sets barPct = 0 when progress is not a number (removes default 50)', () => {
+  // Cenário a: progress undefined
+  const execUndefined = {
+    task_id: 't_no_prog',
+    pipeline_stage: 'SCRIPT',
+  };
+  const stUndef = computeStationStates(execUndefined, 'RUNNING');
+  assert.strictEqual(stUndef[0].barPct, 0);
+  assert.strictEqual(stUndef[0].isWorking, true);
+  assert.strictEqual(stUndef[0].pose, 'working');
+
+  // Cenário b: progress null
+  const execNull = {
+    task_id: 't_null_prog',
+    pipeline_stage: 'NARRATION',
+    progress: null,
+  };
+  const stNull = computeStationStates(execNull, 'RUNNING');
+  assert.strictEqual(stNull[1].barPct, 0);
+
+  // Cenário c: progress string (ex: "50%")
+  const execStr = {
+    task_id: 't_str_prog',
+    pipeline_stage: 'RENDER',
+    progress: '50%',
+  };
+  const stStr = computeStationStates(execStr, 'RUNNING');
+  assert.strictEqual(stStr[3].barPct, 0);
+
+  // Cenário d: progress NaN
+  const execNaN = {
+    task_id: 't_nan_prog',
+    pipeline_stage: 'VISUALS',
+    progress: NaN,
+  };
+  const stNaN = computeStationStates(execNaN, 'RUNNING');
+  assert.strictEqual(stNaN[2].barPct, 0);
+
+  // Cenário e: progress numérico 0 (deve manter 0)
+  const execZero = {
+    task_id: 't_zero_prog',
+    pipeline_stage: 'SAFETY',
+    progress: 0,
+  };
+  const stZero = computeStationStates(execZero, 'RUNNING');
+  assert.strictEqual(stZero[4].barPct, 0);
+});
+
+// -----------------------------------------------------------------------------
+// 7. Estágio não reconhecido (RUNNING ou FAILED): todas as 6 estações em idle
+// -----------------------------------------------------------------------------
+test('7. computeStationStates leaves all 6 stations in idle when pipeline_stage is unrecognized', () => {
+  // RUNNING com estágio não mapeado (NÃO deve assumir Roteiro)
+  const execUnknownRunning = {
+    task_id: 't_unk_run',
+    pipeline_stage: 'CUSTOM_PREPARATION_PHASE',
+    status: 'RUNNING',
+    progress: 60,
+  };
+  const stRun = computeStationStates(execUnknownRunning, 'RUNNING');
+  assert.strictEqual(stRun.length, 6);
+  for (const st of stRun) {
+    assert.strictEqual(st.pose, 'idle');
+    assert.strictEqual(st.bgPos, '0px 0px');
+    assert.strictEqual(st.isWorking, false);
+    assert.strictEqual(st.barPct, 0);
+    assert.strictEqual(st.bubble, null);
+  }
+
+  // FAILED com estágio não mapeado (NÃO deve assumir Roteiro)
+  const execUnknownFailed = {
+    task_id: 't_unk_fail',
+    pipeline_stage: 'UNKNOWN_INSPECTION',
+    status: 'FAILED',
+    error: 'Etapa personalizada abortada',
+  };
+  const stFail = computeStationStates(execUnknownFailed, 'FAILED');
+  assert.strictEqual(stFail.length, 6);
+  for (const st of stFail) {
+    assert.strictEqual(st.pose, 'idle');
+    assert.strictEqual(st.bgPos, '0px 0px');
+    assert.strictEqual(st.isWorking, false);
+    assert.strictEqual(st.barPct, 0);
+    assert.strictEqual(st.bubble, null);
+  }
+});
+
+// -----------------------------------------------------------------------------
+// 8. Poses por estação em falha (FAILED) e fallback de motivo
+// -----------------------------------------------------------------------------
+test('8. computeStationStates marks failure station as error (-432px) and falls back safely', () => {
+  // Failed at SAFETY com gate_reason
+  const execWithReason = {
     task_id: 't2',
     pipeline_stage: 'SAFETY',
     gate_reason: 'Roteiro viola moderação prévia',
   };
 
-  const stations = computeStationStates(exec, 'FAILED');
+  const stations = computeStationStates(execWithReason, 'FAILED');
   assert.strictEqual(stations.length, 6);
 
   // 0, 1, 2, 3: completed -> happy
@@ -212,7 +302,7 @@ test('6. computeStationStates marks failure station as error (-432px) with error
     assert.strictEqual(stations[i].bgPos, '-288px 0px');
   }
 
-  // 4: Gates -> error (-432px)
+  // 4: Gates -> error (-432px) com motivo
   assert.strictEqual(stations[4].pose, 'error');
   assert.strictEqual(stations[4].bgPos, '-432px 0px');
   assert.strictEqual(stations[4].isWorking, false);
@@ -221,12 +311,21 @@ test('6. computeStationStates marks failure station as error (-432px) with error
   // 5: Publicar -> idle
   assert.strictEqual(stations[5].pose, 'idle');
   assert.strictEqual(stations[5].bgPos, '0px 0px');
+
+  // Failed at SCRIPT sem gate_reason nem error -> fallback "Motivo não informado pela fábrica"
+  const execNoReason = {
+    task_id: 't3',
+    pipeline_stage: 'SCRIPT',
+  };
+  const stNoReason = computeStationStates(execNoReason, 'FAILED');
+  assert.strictEqual(stNoReason[0].pose, 'error');
+  assert.strictEqual(stNoReason[0].bubble, 'Motivo não informado pela fábrica');
 });
 
 // -----------------------------------------------------------------------------
-// 7. Poses em estado de espera (IDLE)
+// 9. Poses em estado de espera (IDLE)
 // -----------------------------------------------------------------------------
-test('7. computeStationStates sets all stations to idle (0px 0px) when IDLE', () => {
+test('9. computeStationStates sets all stations to idle (0px 0px) when IDLE', () => {
   const stations = computeStationStates(null, 'IDLE');
   assert.strictEqual(stations.length, 6);
   for (const st of stations) {
@@ -238,9 +337,9 @@ test('7. computeStationStates sets all stations to idle (0px 0px) when IDLE', ()
 });
 
 // -----------------------------------------------------------------------------
-// 8. Cálculo de tempo decorrido formatElapsedTime
+// 10. Cálculo de tempo decorrido formatElapsedTime
 // -----------------------------------------------------------------------------
-test('8. formatElapsedTime calculates human readable elapsed time accurately', () => {
+test('10. formatElapsedTime calculates human readable elapsed time accurately', () => {
   const now = 1761400000000;
 
   // 35 segundos atrás
@@ -262,19 +361,29 @@ test('8. formatElapsedTime calculates human readable elapsed time accurately', (
 });
 
 // -----------------------------------------------------------------------------
-// 9. Estado e coordenadas do courier
+// 11. Estado e coordenadas do courier (incluindo posição inicial para etapa desconhecida)
 // -----------------------------------------------------------------------------
-test('9. computeCourierState positions courier at active station coordinates with initials', () => {
+test('11. computeCourierState positions courier at active station or initial position when unknown', () => {
   const exec = {
     channel_name: 'Fatos Curiosos',
     provider: 'Google Flow',
   };
 
+  // Estação 2: pos = [580, 40] -> left: 582px, top: 102px
   const courier = computeCourierState(exec, 'RUNNING', 2);
-  // Station 2: pos = [580, 40] -> left: 582px, top: 102px
   assert.strictEqual(courier.left, '582px');
   assert.strictEqual(courier.top, '102px');
   assert.strictEqual(courier.ini, 'FC');
   assert.strictEqual(courier.chipColor, '#C7A9FF'); // Flow purple chip
-  assert.strictEqual(courier.bgPos, '-304px 0px'); // Frame 4 (stopped)
+  assert.strictEqual(courier.bgPos, '-304px 0px'); // Frame 4 (parado)
+
+  // Estágio desconhecido (-1): Courier fica na posição inicial (Estação 0: pos = [20, 40] -> left: 22px, top: 102px)
+  const courierUnknown = computeCourierState(exec, 'RUNNING', -1);
+  assert.strictEqual(courierUnknown.left, '22px');
+  assert.strictEqual(courierUnknown.top, '102px');
+
+  // Sem índice (undefined) -> Posição inicial (Estação 0)
+  const courierDefault = computeCourierState(exec, 'IDLE', undefined);
+  assert.strictEqual(courierDefault.left, '22px');
+  assert.strictEqual(courierDefault.top, '102px');
 });

@@ -155,16 +155,15 @@ export default function Workshop({ fleetSummary = null }) {
   }, [activeExecution, fleetSummary]);
 
   const activeStationIdx = useMemo(() => {
-    if (mode === 'IDLE' || !activeExecution) return 0;
-    const idx = stageToStationIndex(activeExecution.pipeline_stage);
-    return idx >= 0 ? idx : 0;
+    if (mode === 'IDLE' || !activeExecution) return -1;
+    return stageToStationIndex(activeExecution.pipeline_stage);
   }, [mode, activeExecution]);
 
   // 5. Animação de caminhada do courier quando o estágio mudar
   useEffect(() => {
-    if (mode === 'IDLE' || !activeExecution) {
+    if (mode === 'IDLE' || !activeExecution || activeStationIdx < 0) {
       setIsWalking(false);
-      prevStationIdxRef.current = 0;
+      prevStationIdxRef.current = activeStationIdx;
       return;
     }
 
@@ -200,12 +199,21 @@ export default function Workshop({ fleetSummary = null }) {
       return 'Oficina ao vivo: Nenhum canal produzindo agora.';
     }
     const chName = activeExecution.channel_name || activeExecution.profile_name || 'Canal';
-    const stLabel = activeExecution.pipeline_stage_label || activeExecution.pipeline_stage || 'Etapa';
+    const stLabel =
+      activeExecution.pipeline_stage_label || activeExecution.pipeline_stage || 'Etapa';
     if (mode === 'FAILED') {
-      const reason = activeExecution.gate_reason || activeExecution.error || '';
+      const reason =
+        activeExecution.gate_reason ||
+        activeExecution.gates?.gate_reason ||
+        activeExecution.error ||
+        'Motivo não informado pela fábrica';
       return `Oficina ao vivo: Canal ${chName} com falha na etapa ${stLabel}. ${reason}`;
     }
-    return `Oficina ao vivo: Canal ${chName}, etapa ${stLabel}, progresso ${activeExecution.progress || 0}%.`;
+    const progText =
+      typeof activeExecution.progress === 'number' && !Number.isNaN(activeExecution.progress)
+        ? `, progresso ${activeExecution.progress}%`
+        : '';
+    return `Oficina ao vivo: Canal ${chName}, etapa ${stLabel}${progText}.`;
   }, [mode, activeExecution]);
 
   return (
@@ -309,18 +317,20 @@ export default function Workshop({ fleetSummary = null }) {
                       {st.numLabel}
                     </span>
                     <span className="fleet-ws-station-bar-track">
-                      <span
-                        className="fleet-ws-station-bar-fill"
-                        style={{
-                          width: `${st.barPct}%`,
-                          backgroundColor:
-                            st.pose === 'error'
-                              ? '#FF5A4D'
-                              : st.pose === 'happy'
-                              ? '#34D399'
-                              : st.color,
-                        }}
-                      />
+                      {st.barPct > 0 ? (
+                        <span
+                          className="fleet-ws-station-bar-fill"
+                          style={{
+                            width: `${st.barPct}%`,
+                            backgroundColor:
+                              st.pose === 'error'
+                                ? '#FF5A4D'
+                                : st.pose === 'happy'
+                                ? '#34D399'
+                                : st.color,
+                          }}
+                        />
+                      ) : null}
                     </span>
                   </div>
                 </div>
@@ -365,7 +375,7 @@ export default function Workshop({ fleetSummary = null }) {
               )}
               {mode === 'FAILED' && (
                 <span className="fleet-ws-status-badge fleet-ws-status-failed fleet-mono">
-                  REJEITADO
+                  FALHA
                 </span>
               )}
               {mode === 'IDLE' && (
@@ -403,9 +413,9 @@ export default function Workshop({ fleetSummary = null }) {
                         {activeExecution.provider}
                       </span>
                     )}
-                    {activeExecution.pipeline_stage_label && (
+                    {(activeExecution.pipeline_stage_label || activeExecution.pipeline_stage) && (
                       <span className="fleet-mono">
-                        {activeExecution.pipeline_stage_label}
+                        {activeExecution.pipeline_stage_label || activeExecution.pipeline_stage}
                       </span>
                     )}
                   </div>
@@ -419,31 +429,35 @@ export default function Workshop({ fleetSummary = null }) {
                 )}
 
                 {/* Barra de Progresso */}
-                {typeof activeExecution.progress === 'number' && (
-                  <div className="fleet-ws-card-progress-row">
-                    <span className="fleet-ws-card-progress-track">
-                      <span
-                        className="fleet-ws-card-progress-fill"
-                        style={{
-                          width: `${Math.min(100, Math.max(0, activeExecution.progress))}%`,
-                          backgroundColor: mode === 'FAILED' ? '#FF5A4D' : '#6AA8FF',
-                        }}
-                      />
-                    </span>
-                    <span className="fleet-ws-card-progress-val fleet-mono">
-                      {Math.round(activeExecution.progress)}%
-                    </span>
-                  </div>
-                )}
+                {typeof activeExecution.progress === 'number' &&
+                  !Number.isNaN(activeExecution.progress) && (
+                    <div className="fleet-ws-card-progress-row">
+                      <span className="fleet-ws-card-progress-track">
+                        <span
+                          className="fleet-ws-card-progress-fill"
+                          style={{
+                            width: `${Math.min(100, Math.max(0, activeExecution.progress))}%`,
+                            backgroundColor: mode === 'FAILED' ? '#FF5A4D' : '#6AA8FF',
+                          }}
+                        />
+                      </span>
+                      <span className="fleet-ws-card-progress-val fleet-mono">
+                        {Math.round(activeExecution.progress)}%
+                      </span>
+                    </div>
+                  )}
 
-                {/* Bloco de Falha / Rejeição em destaque */}
-                {mode === 'FAILED' && (activeExecution.gate_reason || activeExecution.error) && (
+                {/* Bloco de Falha em destaque */}
+                {mode === 'FAILED' && (
                   <div className="fleet-ws-card-error-box" role="alert">
                     <div className="fleet-ws-card-error-title">
-                      Motivo da rejeição:
+                      Motivo da falha:
                     </div>
                     <div>
-                      {activeExecution.gate_reason || activeExecution.error}
+                      {activeExecution.gate_reason ||
+                        activeExecution.gates?.gate_reason ||
+                        activeExecution.error ||
+                        'Motivo não informado pela fábrica'}
                     </div>
                   </div>
                 )}

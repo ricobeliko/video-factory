@@ -205,9 +205,24 @@ export function computeStationStates(activeExecution, mode) {
   }
 
   const rawStage = activeExecution.pipeline_stage;
-  let currIdx = stageToStationIndex(rawStage);
+  const currIdx = stageToStationIndex(rawStage);
+
+  // Se o estágio não for reconhecido, NÃO assume Roteiro: todas as estações ficam em idle
   if (currIdx < 0) {
-    currIdx = 0;
+    return STATIONS_CONFIG.map((st) => ({
+      index: st.index,
+      id: st.id,
+      name: st.name,
+      numLabel: st.numLabel,
+      sprite: st.sprite,
+      pose: 'idle',
+      bgPos: '0px 0px',
+      isWorking: false,
+      alt: `${st.name}: aguardando`,
+      barPct: 0,
+      color: '#3A4262',
+      bubble: null,
+    }));
   }
 
   if (mode === 'RUNNING') {
@@ -231,7 +246,12 @@ export function computeStationStates(activeExecution, mode) {
       }
       if (i === currIdx) {
         const bubble = formatStationBubble(st, activeExecution);
-        const progressVal = typeof activeExecution.progress === 'number' ? activeExecution.progress : 50;
+        const hasValidProgress =
+          typeof activeExecution.progress === 'number' &&
+          !Number.isNaN(activeExecution.progress);
+        const barPct = hasValidProgress
+          ? Math.min(100, Math.max(0, activeExecution.progress))
+          : 0;
         return {
           index: i,
           id: st.id,
@@ -242,7 +262,7 @@ export function computeStationStates(activeExecution, mode) {
           bgPos: '-144px 0px',
           isWorking: true,
           alt: `${st.name}: em andamento`,
-          barPct: Math.min(100, Math.max(5, progressVal)),
+          barPct,
           color: st.hue,
           bubble,
         };
@@ -288,7 +308,7 @@ export function computeStationStates(activeExecution, mode) {
           activeExecution.gate_reason ||
           activeExecution.gates?.gate_reason ||
           activeExecution.error ||
-          'rejeitado na etapa';
+          'Motivo não informado pela fábrica';
         return {
           index: i,
           id: st.id,
@@ -366,7 +386,10 @@ export function formatElapsedTime(startedAt, now = Date.now()) {
  * Retorna as coordenadas e visual do courier (entregador) entre as estações.
  */
 export function computeCourierState(activeExecution, mode, activeStationIdx) {
-  const safeIdx = Math.max(0, Math.min(5, typeof activeStationIdx === 'number' ? activeStationIdx : 0));
+  const safeIdx =
+    typeof activeStationIdx === 'number' && activeStationIdx >= 0 && activeStationIdx <= 5
+      ? activeStationIdx
+      : 0;
   const stConfig = STATIONS_CONFIG[safeIdx] || STATIONS_CONFIG[0];
   const pos = stConfig.pos;
 

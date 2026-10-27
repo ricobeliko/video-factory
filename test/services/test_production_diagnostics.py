@@ -953,3 +953,124 @@ def test_static_guard_against_monkeypatching():
     assert not matches, f"Encontrado monkeypatch proibido em {src_path.name}: {matches}"
 
 
+def test_forced_stock_failure_handled_as_unknown():
+    """Garante que falha na obtenção do estoque canônico não vira 0, marca status UNKNOWN, não dispara NO_GENERATION_GAP e adiciona aviso."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_stock_fail.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 18, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        past_14h_iso = (now - timedelta(hours=14)).isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-stock-err", "Canal Erro Estoque", "chan-stock-err", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                ("task-stock-01", "chan-stock-err", past_14h_iso),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'Geração antiga', '{"profile_id": "chan-stock-err"}')
+                """,
+                (past_14h_iso, "task-stock-01"),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        def _failing_stock_fetcher(**kwargs):
+            raise RuntimeError("Falha simulada na leitura do estoque canônico")
+
+        res = production_diagnostics.get_diagnostics_overview(
+            db_path=db_file,
+            now=now,
+            _stock_fetcher=_failing_stock_fetcher,
+        )
+
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-stock-err")
+
+        # 1. ready_stock.count e target são None (null no JSON)
+        assert chan["ready_stock"]["count"] is None
+        assert chan["ready_stock"]["target"] is None
+        assert chan["ready_stock"]["status"] == production_diagnostics.STATUS_UNKNOWN
+
+        # 2. JSON serializado contém "count": null e não "count": 0
+        json_output = json.dumps(chan["ready_stock"])
+        assert '"count": null' in json_output
+        assert '"count": 0' not in json_output
+
+        # 3. NO_GENERATION_GAP NÃO dispara mesmo com última geração há 14h
+        diag_codes = [d["code"] for d in chan["diagnoses"]]
+        assert production_diagnostics.CODE_NO_GENERATION_GAP not in diag_codes
+
+        # 4. Canal não é considerado OK quando o estoque é desconhecido
+        assert chan["status"] != production_diagnostics.STATUS_OK
+        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+
+        # 5. Aviso explícito presente em warnings
+        assert len(chan["warnings"]) > 0
+        assert any("Falha simulada na leitura do estoque canônico" in w for w in chan["warnings"])
+
+
+def test_target_stock_equals_canonical_minimum_threshold():
+    """Garante que a meta de estoque usada pelo diagnóstico é exatamente a mesma (minimum_threshold) de get_canonical_ready_stock."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_meta_unica.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-override", "Canal Com Override", "chan-override", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-default", "Canal Com Default", "chan-default", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_target_ready_stock:chan-override", "10",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Verifica retorno canônico direto
+        canonical_override = operator_console.get_canonical_ready_stock(db_path=db_file, profile_id="chan-override")
+        canonical_default = operator_console.get_canonical_ready_stock(db_path=db_file, profile_id="chan-default")
+
+        assert canonical_override["minimum_threshold"] == 10
+        assert canonical_default["minimum_threshold"] == 3
+
+        # Diagnóstico deve refletir a mesma meta exata
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file)
+        chan_override_diag = next(c for c in res["channels"] if c["profile_id"] == "chan-override")
+        chan_default_diag = next(c for c in res["channels"] if c["profile_id"] == "chan-default")
+
+        assert chan_override_diag["ready_stock"]["target"] == 10
+        assert chan_override_diag["ready_stock"]["target"] == canonical_override["minimum_threshold"]
+
+        assert chan_default_diag["ready_stock"]["target"] == 3
+        assert chan_default_diag["ready_stock"]["target"] == canonical_default["minimum_threshold"]
+
+
+

@@ -365,7 +365,7 @@ export default function DiagnosticsView({ onNavigate }) {
                     <div className="diag-metric-item">
                       <span className="diag-metric-label">Estoque / Meta</span>
                       <span className="diag-metric-val">
-                        {chan.ready_stock?.count ?? 0} / {chan.ready_stock?.target ?? 0}
+                        {formatSafeValue(chan.ready_stock?.count)} / {formatSafeValue(chan.ready_stock?.target)}
                       </span>
                     </div>
                     <div className="diag-metric-item">
@@ -391,6 +391,31 @@ export default function DiagnosticsView({ onNavigate }) {
                       </span>
                     </div>
                   </div>
+
+                  {/* Avisos do Canal (ex.: falha de estoque canônico) */}
+                  {Array.isArray(chan.warnings) && chan.warnings.length > 0 && (
+                    <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {chan.warnings.map((w, wIdx) => (
+                        <div
+                          key={wIdx}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            background: 'rgba(245, 158, 11, 0.1)',
+                            border: '1px solid rgba(245, 158, 11, 0.25)',
+                            color: '#f59e0b',
+                            fontSize: '12px',
+                          }}
+                        >
+                          <span aria-hidden="true">⚠️</span>
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Seção de Diagnósticos e Problemas */}
                   <div className="diag-problems-section">

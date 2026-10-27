@@ -195,6 +195,7 @@ def get_diagnostics_overview(
     db_path: Optional[str] = None,
     task_base_dir: Optional[str] = None,
     now: Optional[datetime] = None,
+    _stock_fetcher: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Retorna visão consolidada e detalhada de diagnóstico da fábrica e de cada canal."""
     effective_db = scheduler.get_db_path(db_path)
@@ -439,33 +440,68 @@ def get_diagnostics_overview(
         chan_events = events_by_channel.get(pid, [])
         is_channel_active = bool(prof.get("is_active", 1))
 
-        # Meta de estoque lida passivamente
-        target_val = auto_settings.get(f"autonomous_target_ready_stock:{pid}") or auto_settings.get("autonomous_target_ready_stock")
-        try:
-            target_stock = int(target_val) if target_val is not None else 3
-        except (ValueError, TypeError):
-            target_stock = 3
-
         # Cota de tentativas 24h reaproveitando regras canônicas de autonomous_production.get_max_attempts_24h
         max_attempts_24h = resolve_channel_max_attempts(pid, auto_settings)
 
         # -------------------------------------------------------------
-        # Estoque Canônico (mesma fonte da tela Produção / production_overview)
+        # Estoque Canônico e Meta Única (mesma fonte da tela Produção / laço autônomo)
         # -------------------------------------------------------------
         # Os init_* idempotentes (CREATE TABLE IF NOT EXISTS) disparados internamente por
         # get_canonical_ready_stock são o comportamento padrão aceito em todos os endpoints V2.
+        stock_count: Optional[int] = None
+        target_stock: Optional[int] = None
+        stock_status: str = STATUS_UNKNOWN
+        stock_error: Optional[str] = None
+        ready_task_ids: Set[str] = set()
+
         try:
-            stock_info = operator_console.get_canonical_ready_stock(
-                task_base_dir=task_base_dir,
-                db_path=effective_db,
-                profile_id=pid,
-            )
+            if _stock_fetcher is not None:
+                stock_info = _stock_fetcher(
+                    task_base_dir=task_base_dir,
+                    db_path=effective_db,
+                    profile_id=pid,
+                )
+            else:
+                stock_info = operator_console.get_canonical_ready_stock(
+                    task_base_dir=task_base_dir,
+                    db_path=effective_db,
+                    profile_id=pid,
+                )
+
+            if isinstance(stock_info, dict):
+                raw_count = stock_info.get("total_ready")
+                if raw_count is None:
+                    raw_count = stock_info.get("ready_count")
+                if raw_count is not None:
+                    stock_count = int(raw_count)
+
+                # Meta única: obtida diretamente de minimum_threshold devolvido por get_canonical_ready_stock
+                raw_target = stock_info.get("minimum_threshold")
+                if raw_target is None:
+                    raw_target = stock_info.get("target_stock")
+                if raw_target is not None:
+                    target_stock = int(raw_target)
+
+                stock_status = "OK"
+                ready_task_ids = {
+                    it.get("task_id")
+                    for it in stock_info.get("youtube_ready", [])
+                    if isinstance(it, dict) and it.get("task_id")
+                }
+            else:
+                stock_error = f"Resposta inesperada de estoque canônico: {type(stock_info)}"
         except Exception as exc:
             logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao obter estoque canônico para perfil {pid}: {exc}")
-            stock_info = {"total_ready": 0, "youtube_ready": []}
+            stock_error = str(exc)
+            stock_status = STATUS_UNKNOWN
+            stock_count = None
+            target_stock = None
+            ready_task_ids = set()
 
-        stock_count = int(stock_info.get("total_ready", 0))
-        ready_task_ids = {it.get("task_id") for it in stock_info.get("youtube_ready", []) if it.get("task_id")}
+        channel_warnings: List[str] = []
+        if stock_status == STATUS_UNKNOWN:
+            msg = f"Estoque canônico indisponível: {stock_error}" if stock_error else "Estoque canônico indisponível"
+            channel_warnings.append(msg)
 
         # -------------------------------------------------------------
         # Reconstrução das Gerações do Canal e Contadores 24h
@@ -665,7 +701,7 @@ def get_diagnostics_overview(
         # Detector 4: NO_GENERATION_GAP
         # Canal sem generation_started há mais de X horas, com fábrica não pausada e estoque abaixo da meta
         # -------------------------------------------------------------
-        if not is_factory_paused and is_channel_active:
+        if not is_factory_paused and is_channel_active and stock_status != STATUS_UNKNOWN and stock_count is not None and target_stock is not None:
             if stock_count < target_stock:
                 gap_hours = (
                     (now_utc - last_gen_at).total_seconds() / 3600.0
@@ -788,6 +824,9 @@ def get_diagnostics_overview(
             channel_status = STATUS_PARADO
         elif any(d["severity"] == SEVERITY_WARNING for d in diagnoses):
             channel_status = STATUS_ATENCAO
+        elif stock_status == STATUS_UNKNOWN:
+            # Se o estoque canônico for desconhecido, o canal não pode ser considerado OK
+            channel_status = STATUS_ATENCAO
         elif any(d["severity"] == SEVERITY_INFO for d in diagnoses) or len(diagnoses) == 0:
             channel_status = STATUS_OK
         else:
@@ -819,9 +858,11 @@ def get_diagnostics_overview(
             "ready_stock": {
                 "count": stock_count,
                 "target": target_stock,
+                "status": stock_status,
             },
             "recent_generations": formatted_recent,
             "diagnoses": diagnoses,
+            "warnings": channel_warnings,
         })
 
     return {

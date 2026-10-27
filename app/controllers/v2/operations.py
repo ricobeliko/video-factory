@@ -277,11 +277,19 @@ class UpdateScheduleRequest(BaseModel):
     posts_per_day: Optional[int] = Field(None, ge=1, le=10, description="Publicações diárias")
 
 
+class UpdateVoiceSettingsRequest(BaseModel):
+    voice_name: Optional[str] = Field(None, description="Identificador da voz TTS homologada pt-BR")
+    voice_rate: Optional[float] = Field(None, description="Velocidade da voz (0.5 a 2.0)")
+    voice_volume: Optional[float] = Field(None, description="Volume da voz (0.0 a 1.0)")
+    tts_server: Optional[str] = Field(None, description="Provedor de TTS (ex: azure-tts-v1, elevenlabs)")
+
+
 class UpdateProfileSettingsRequest(BaseModel):
     growth_mode: Optional[str] = Field(None, description="Modo de crescimento (warmup | scale)")
     autonomous_enabled: Optional[bool] = Field(None, description="Status de autonomia operacional")
     quotas: Optional[UpdateQuotasRequest] = Field(None, description="Configurações de quotas e limites")
     schedule: Optional[UpdateScheduleRequest] = Field(None, description="Configurações de agendamento e janela")
+    voice: Optional[UpdateVoiceSettingsRequest] = Field(None, description="Configurações de voz por canal")
 
 
 @router.patch(
@@ -420,7 +428,8 @@ def disable_profile_autonomous(request: Request, profile_id: str):
 )
 def get_channel_settings(request: Request, profile_id: str):
     request_id = base.get_task_id(request)
-    profile = profile_manager.get_profile(profile_id)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
     if not profile:
         raise HttpException(
             task_id=request_id,
@@ -428,10 +437,11 @@ def get_channel_settings(request: Request, profile_id: str):
             message=f"Profile '{profile_id}' not found",
         )
     clean_p = profile.get("id", profile_id)
-    quotas = profile_manager.get_profile_quotas(clean_p)
-    schedule_model = profile_manager.get_profile_schedule(clean_p)
-    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p)
-    ws_settings = profile_manager.get_profile_settings(clean_p)
+    quotas = profile_manager.get_profile_quotas(clean_p, db_path=db_path)
+    schedule_model = profile_manager.get_profile_schedule(clean_p, db_path=db_path)
+    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p, db_path=db_path)
+    ws_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+    effective_v = profile_manager.get_effective_voice_settings(clean_p, db_path=db_path)
 
     data = {
         "profile_id": clean_p,
@@ -441,6 +451,7 @@ def get_channel_settings(request: Request, profile_id: str):
         "quotas": quotas,
         "schedule": schedule_model.model_dump(),
         "workspace_settings": ws_settings.model_dump(),
+        "effective_voice": effective_v,
     }
     return utils.get_response(200, data)
 
@@ -672,6 +683,95 @@ def update_channel_schedule(
         )
 
     return utils.get_response(200, res.model_dump(), message="Profile schedule updated successfully")
+
+
+@router.patch(
+    "/channels/{profile_id}/voice",
+    summary="Update voice settings for a channel/profile (M6a)",
+)
+@router.patch(
+    "/profiles/{profile_id}/voice",
+    summary="Update voice settings for a channel/profile (alias)",
+)
+def update_channel_voice(
+    request: Request,
+    profile_id: str,
+    payload: UpdateVoiceSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile voice ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile voice ({exc})",
+        )
+
+    try:
+        v_dict = payload.model_dump(exclude_unset=True)
+        old_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+        old_voice_dict = {
+            "voice_name": old_settings.voice.voice_name,
+            "voice_rate": old_settings.voice.voice_rate,
+            "voice_volume": old_settings.voice.voice_volume,
+            "tts_server": getattr(old_settings.voice, "tts_server", None),
+        }
+        res = profile_manager.update_profile_voice_settings(clean_p, v_dict, db_path=db_path)
+        new_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+        new_voice_dict = {
+            "voice_name": new_settings.voice.voice_name,
+            "voice_rate": new_settings.voice.voice_rate,
+            "voice_volume": new_settings.voice.voice_volume,
+            "tts_server": getattr(new_settings.voice, "tts_server", None),
+        }
+        for k in v_dict.keys():
+            old_v = old_voice_dict.get(k)
+            new_v = new_voice_dict.get(k)
+            if old_v != new_v:
+                operator_console.log_operational_event(
+                    component="profile_manager",
+                    severity=operator_console.SEVERITY_INFO,
+                    event_type="PROFILE_VOICE_UPDATED",
+                    message=f"Voice setting '{k}' updated for profile '{clean_p}': {old_v} -> {new_v}",
+                    metadata={
+                        "profile_id": clean_p,
+                        "field": k,
+                        "old_value": old_v,
+                        "new_value": new_v,
+                    },
+                    db_path=db_path,
+                )
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile voice: {exc}",
+        )
+
+    return utils.get_response(200, res, message="Profile voice updated successfully")
 
 
 @router.get(

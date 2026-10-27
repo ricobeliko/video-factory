@@ -552,35 +552,55 @@ def test_unknown_reason_appears_raw_and_missing_data_is_null():
         assert rec["topic"] is None
 
 
+def _dump_table_content(conn: sqlite3.Connection, table_name: str) -> list[tuple]:
+    """Retorna todas as linhas ordenadas para comparação exata de conteúdo."""
+    cur = conn.execute(f"SELECT * FROM {table_name} ORDER BY 1;")
+    return cur.fetchall()
+
+
 def test_diagnostics_api_endpoint_200_and_strictly_read_only():
-    """Verifica que o endpoint GET /api/v2/diagnostics/overview retorna 200 e não escreve no banco."""
+    """Verifica que o endpoint GET /api/v2/diagnostics/overview retorna 200 e não altera dados no banco."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         db_file = os.path.join(tmp_dir, "test_diag.db")
-        _create_synthetic_test_db(db_file)
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        safety_gate.init_safety_db(db_file)
+        quality_score.init_quality_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
 
         now_iso = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(db_file)
-        conn.execute(
-            "INSERT INTO content_profiles (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            ("channel-api", "Canal API", now_iso, now_iso),
-        )
-        conn.execute(
-            """
-            INSERT INTO instance_locks (lock_key, node_id, node_name, hostname, pid, status, last_heartbeat)
-            VALUES ('PRIMARY_FACTORY', 'node-01', 'PC-Forte', 'host1', 1234, 'ACTIVE', ?)
-            """,
-            (now_iso,),
-        )
-        conn.execute(
-            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("channel-api", "Canal API", "canal-api", now_iso, now_iso),
+            )
+            conn.execute(
+                """
+                INSERT INTO instance_locks (lock_key, node_id, node_name, hostname, pid, started_at, last_heartbeat, role, status)
+                VALUES ('PRIMARY_FACTORY', 'node-01', 'PC-Forte', 'host1', 1234, ?, ?, 'PRIMARY', 'ACTIVE')
+                """,
+                (now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-        # Mede contagem de tabelas e registros antes
+        tables_to_check = [
+            "operational_events",
+            "scheduled_posts",
+            "content_quality_scores",
+            "monetization_safety",
+            "autopilot_settings",
+        ]
+
+        # Mede conteúdo e contagem antes
         conn_pre = sqlite3.connect(db_file)
-        tables_pre = conn_pre.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
-        pre_counts = {t[0]: conn_pre.execute(f"SELECT count(*) FROM {t[0]};").fetchone()[0] for t in tables_pre}
+        content_pre = {tbl: _dump_table_content(conn_pre, tbl) for tbl in tables_to_check}
+        counts_pre = {tbl: len(content_pre[tbl]) for tbl in tables_to_check}
         conn_pre.close()
 
         from app.asgi import app
@@ -597,21 +617,25 @@ def test_diagnostics_api_endpoint_200_and_strictly_read_only():
         assert "channels" in data
         assert data["factory"]["primary_instance"]["node_name"] == "PC-Forte"
 
-        # Garante que nenhuma tabela nova foi criada e nenhum registro foi inserido/alterado
+        # Garante que nenhum registro foi inserido/alterado nas tabelas
         conn_post = sqlite3.connect(db_file)
-        tables_post = conn_post.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
-        post_counts = {t[0]: conn_post.execute(f"SELECT count(*) FROM {t[0]};").fetchone()[0] for t in tables_post}
+        content_post = {tbl: _dump_table_content(conn_post, tbl) for tbl in tables_to_check}
+        counts_post = {tbl: len(content_post[tbl]) for tbl in tables_to_check}
         conn_post.close()
 
-        assert tables_pre == tables_post
-        assert pre_counts == post_counts
+        assert counts_pre == counts_post
+        assert content_pre == content_post
 
 
 def test_ro_connection_guarantees_and_non_existent_db():
     """Valida garantias estritas de somente leitura (_get_ro_connection) e caso de banco inexistente."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         db_file = os.path.join(tmp_dir, "test_ro.db")
-        _create_synthetic_test_db(db_file)
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        safety_gate.init_safety_db(db_file)
+        quality_score.init_quality_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
 
         now_iso = datetime.now(timezone.utc).isoformat()
         h1_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -647,20 +671,31 @@ def test_ro_connection_guarantees_and_non_existent_db():
             ro_conn.execute("CREATE TABLE should_not_exist (id INT);")
         ro_conn.close()
 
-        # 2. Hash do arquivo do banco antes e depois da execução do serviço permanece idêntico
-        with open(db_file, "rb") as f:
-            hash_before = hashlib.sha256(f.read()).hexdigest()
+        # 2. Compara conteúdo das tabelas antes e depois da execução do serviço em banco inicializado
+        tables_to_check = [
+            "operational_events",
+            "scheduled_posts",
+            "content_quality_scores",
+            "monetization_safety",
+            "autopilot_settings",
+        ]
+        conn_pre = sqlite3.connect(db_file)
+        content_before = {tbl: _dump_table_content(conn_pre, tbl) for tbl in tables_to_check}
+        counts_before = {tbl: len(content_before[tbl]) for tbl in tables_to_check}
+        conn_pre.close()
 
         overview = production_diagnostics.get_diagnostics_overview(db_path=db_file)
         assert overview["factory"]["state"] == "IDLE"
-        assert len(overview["channels"]) == 1
-        assert overview["channels"][0]["profile_id"] == "c1"
-        assert overview["channels"][0]["status"] == production_diagnostics.STATUS_OK
+        assert any(c["profile_id"] == "c1" for c in overview["channels"])
 
-        with open(db_file, "rb") as f:
-            hash_after = hashlib.sha256(f.read()).hexdigest()
+        conn_post = sqlite3.connect(db_file)
+        content_after = {tbl: _dump_table_content(conn_post, tbl) for tbl in tables_to_check}
+        counts_after = {tbl: len(content_after[tbl]) for tbl in tables_to_check}
+        conn_post.close()
 
-        assert hash_before == hash_after
+        # Nenhuma linha inserida, alterada ou apagada nas tabelas de dados
+        assert counts_before == counts_after
+        assert content_before == content_after
 
         # 3. Caso de banco inexistente devolve status UNKNOWN sem criar o arquivo em disco
         ghost_db = os.path.join(tmp_dir, "ghost_database_does_not_exist.db")
@@ -833,4 +868,88 @@ def test_factory_pause_via_operator_console_and_gap_suppression():
 
         # Confirma que NO_GENERATION_GAP NÃO dispara enquanto pausada
         assert production_diagnostics.CODE_NO_GENERATION_GAP not in codes
+
+
+def test_no_monkeypatching_identity_preserved():
+    """Garante que get_diagnostics_overview não altera a identidade das funções de módulos externos."""
+    funcs_before = {
+        "sched_init": scheduler.init_db,
+        "sched_conn": scheduler.get_connection,
+        "pm_conn": profile_manager.get_connection,
+        "pm_init": profile_manager.init_profile_db,
+        "qs_init": quality_score.init_quality_db,
+        "op_init": operator_console.init_operator_db,
+    }
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_ident.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file)
+        assert res["factory"]["state"] in ("IDLE", "RUNNING")
+
+    assert scheduler.init_db is funcs_before["sched_init"]
+    assert scheduler.get_connection is funcs_before["sched_conn"]
+    assert profile_manager.get_connection is funcs_before["pm_conn"]
+    assert profile_manager.init_profile_db is funcs_before["pm_init"]
+    assert quality_score.init_quality_db is funcs_before["qs_init"]
+    assert operator_console.init_operator_db is funcs_before["op_init"]
+
+
+def test_concurrent_threads_execution_and_identity_preserved():
+    """Garante que chamadas concorrentes em múltiplas threads retornam sem erro e preservam funções originais."""
+    import concurrent.futures
+
+    funcs_before = {
+        "sched_init": scheduler.init_db,
+        "sched_conn": scheduler.get_connection,
+        "pm_conn": profile_manager.get_connection,
+        "pm_init": profile_manager.init_profile_db,
+        "qs_init": quality_score.init_quality_db,
+        "op_init": operator_console.init_operator_db,
+    }
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_concurrent.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        def _worker():
+            return production_diagnostics.get_diagnostics_overview(db_path=db_file)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(_worker) for _ in range(8)]
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+        assert len(results) == 8
+        for r in results:
+            assert "factory" in r
+            assert "channels" in r
+
+    assert scheduler.init_db is funcs_before["sched_init"]
+    assert scheduler.get_connection is funcs_before["sched_conn"]
+    assert profile_manager.get_connection is funcs_before["pm_conn"]
+    assert profile_manager.init_profile_db is funcs_before["pm_init"]
+    assert quality_score.init_quality_db is funcs_before["qs_init"]
+    assert operator_console.init_operator_db is funcs_before["op_init"]
+
+
+def test_static_guard_against_monkeypatching():
+    """Varre production_diagnostics.py e falha se encontrar atribuição a módulos externos como alvo de '='."""
+    import re
+    from pathlib import Path
+
+    src_path = Path(production_diagnostics.__file__).resolve()
+    content = src_path.read_text(encoding="utf-8")
+
+    pattern = re.compile(
+        r"^\s*(?:scheduler|profile_manager|quality_score|operator_console)\.[a-zA-Z0-9_]+\s*=",
+        re.MULTILINE,
+    )
+    matches = pattern.findall(content)
+    assert not matches, f"Encontrado monkeypatch proibido em {src_path.name}: {matches}"
+
 

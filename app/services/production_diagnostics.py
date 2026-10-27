@@ -13,7 +13,6 @@ import json
 import os
 import re
 import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -25,7 +24,6 @@ from app.services import (
     autonomous_production,
     operator_console,
     profile_manager,
-    quality_score,
     scheduler,
 )
 
@@ -91,46 +89,6 @@ def _get_ro_connection(target_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only=ON;")
     return conn
-
-
-@contextmanager
-def _read_only_stock_isolation():
-    """Garante que a chamada ao estoque canônico execute estritamente em modo de leitura,
-
-    interceptando chamadas acidentais a init_db / CREATE TABLE sem modificar tabelas
-    e garantindo que conexões internas rodem com PRAGMA query_only=ON em mode=ro.
-    """
-    orig_sched_init = scheduler.init_db
-    orig_qs_init = quality_score.init_quality_db
-    orig_pm_init = profile_manager.init_profile_db
-    orig_op_init = operator_console.init_operator_db
-    orig_sched_conn = scheduler.get_connection
-    orig_pm_conn = profile_manager.get_connection
-
-    @contextmanager
-    def _ro_conn_gen(db_path=None):
-        path = scheduler.get_db_path(db_path)
-        conn = _get_ro_connection(path)
-        try:
-            yield conn
-        finally:
-            conn.close()
-
-    try:
-        scheduler.init_db = lambda *args, **kwargs: None
-        quality_score.init_quality_db = lambda *args, **kwargs: None
-        profile_manager.init_profile_db = lambda *args, **kwargs: None
-        operator_console.init_operator_db = lambda *args, **kwargs: None
-        scheduler.get_connection = _ro_conn_gen
-        profile_manager.get_connection = _ro_conn_gen
-        yield
-    finally:
-        scheduler.init_db = orig_sched_init
-        quality_score.init_quality_db = orig_qs_init
-        profile_manager.init_profile_db = orig_pm_init
-        operator_console.init_operator_db = orig_op_init
-        scheduler.get_connection = orig_sched_conn
-        profile_manager.get_connection = orig_pm_conn
 
 
 def resolve_channel_max_attempts(pid: str, auto_settings: Dict[str, str]) -> int:
@@ -494,13 +452,14 @@ def get_diagnostics_overview(
         # -------------------------------------------------------------
         # Estoque Canônico (mesma fonte da tela Produção / production_overview)
         # -------------------------------------------------------------
+        # Os init_* idempotentes (CREATE TABLE IF NOT EXISTS) disparados internamente por
+        # get_canonical_ready_stock são o comportamento padrão aceito em todos os endpoints V2.
         try:
-            with _read_only_stock_isolation():
-                stock_info = operator_console.get_canonical_ready_stock(
-                    task_base_dir=task_base_dir,
-                    db_path=effective_db,
-                    profile_id=pid,
-                )
+            stock_info = operator_console.get_canonical_ready_stock(
+                task_base_dir=task_base_dir,
+                db_path=effective_db,
+                profile_id=pid,
+            )
         except Exception as exc:
             logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao obter estoque canônico para perfil {pid}: {exc}")
             stock_info = {"total_ready": 0, "youtube_ready": []}

@@ -7,6 +7,8 @@ import {
   getProfileSettings,
   updateProfileQuotas,
   updateProfileSchedule,
+  updateProfileVoice,
+  getAllowedVoices,
   pauseFactory,
   resumeFactory,
 } from '../../api';
@@ -27,6 +29,15 @@ import {
   buildPatchPayloads,
   formatDiffValueDisplay,
 } from './systemEditLogic';
+import {
+  getVoiceSourceInfo,
+  validateVoiceField,
+  validateVoiceForm,
+  calculateVoiceDiff,
+  buildVoicePatchPayload,
+  formatVoiceDiffDisplay,
+  QUIZ_VOICE_RATE_NOTICE,
+} from './voiceEditLogic';
 import '../Fleet/fleet.css';
 import './system.css';
 
@@ -53,6 +64,8 @@ export default function SystemView({ onNavigate }) {
   const [channelFormErrors, setChannelFormErrors] = useState({});
   const [channelConfirmDialog, setChannelConfirmDialog] = useState(null); // { profileId, profileName, diffList, payloads }
   const [isSavingChannel, setIsSavingChannel] = useState(false);
+  const [allowedVoices, setAllowedVoices] = useState([]);
+  const [pinnedVoiceFields, setPinnedVoiceFields] = useState(new Set());
 
   // Temporizadores
   const [lastFetchTime, setLastFetchTime] = useState(null);
@@ -65,11 +78,12 @@ export default function SystemView({ onNavigate }) {
     isFetchingRef.current = true;
 
     try {
-      const [sysRes, provRes, healthRes, chanRes] = await Promise.allSettled([
+      const [sysRes, provRes, healthRes, chanRes, voiceRes] = await Promise.allSettled([
         getSystemStatus(),
         getProviderHealth(),
         getHealth(),
         getChannelsOverview(),
+        getAllowedVoices(),
       ]);
 
       if (sysRes.status === 'fulfilled' && sysRes.value) {
@@ -80,6 +94,10 @@ export default function SystemView({ onNavigate }) {
       }
       if (healthRes.status === 'fulfilled' && healthRes.value) {
         setApiHealth(healthRes.value.data || healthRes.value);
+      }
+      if (voiceRes.status === 'fulfilled' && voiceRes.value) {
+        const rawV = voiceRes.value.data || voiceRes.value || [];
+        setAllowedVoices(Array.isArray(rawV) ? rawV : []);
       }
       if (chanRes.status === 'fulfilled' && chanRes.value) {
         const rawChannels = chanRes.value.data?.channels || chanRes.value.channels || [];
@@ -234,41 +252,109 @@ export default function SystemView({ onNavigate }) {
     const fullSettings = channelSettingsMap[pid] || channel.settings || {};
     const quotas = fullSettings.quotas || channel.quotas || {};
     const schedule = fullSettings.schedule || channel.schedule || {};
+    const effVoice = fullSettings.effective_voice || {};
+    const isQuiz = Boolean(fullSettings.is_quiz ?? channel.is_quiz);
 
     setEditingChannelId(pid);
+    setPinnedVoiceFields(new Set());
     setChannelFormData({
       target_ready_stock: quotas.target_ready_stock ?? 3,
       posts_per_day: quotas.posts_per_day ?? schedule.posts_per_day ?? 1,
       publish_start_hour: schedule.publish_start_hour ?? 10,
       publish_end_hour: schedule.publish_end_hour ?? 22,
       min_interval_hours: schedule.min_interval_hours ?? 4,
+      voice_name: effVoice.voice_name?.value || (allowedVoices[0]?.id || ''),
+      voice_rate: isQuiz ? null : (effVoice.voice_rate?.value ?? 1.0),
+      voice_volume: effVoice.voice_volume?.value ?? 1.0,
     });
     setChannelFormErrors({});
   };
 
   const handleCancelEdit = () => {
     setEditingChannelId(null);
+    setPinnedVoiceFields(new Set());
     setChannelFormData({});
     setChannelFormErrors({});
+  };
+
+  const handleTogglePinVoice = (field) => {
+    setPinnedVoiceFields((prev) => {
+      const next = new Set(prev);
+      if (next.has(field)) {
+        next.delete(field);
+      } else {
+        next.add(field);
+      }
+      return next;
+    });
+  };
+
+  const handleResetVoiceInherit = (field) => {
+    setChannelFormData((prev) => ({
+      ...prev,
+      [field]: null,
+    }));
+    setChannelFormErrors((prev) => {
+      const copy = { ...prev };
+      delete copy[field];
+      return copy;
+    });
   };
 
   const handleFieldChange = (field, value) => {
     const updated = { ...channelFormData, [field]: value };
     setChannelFormData(updated);
 
-    const valResult = validateChannelForm(updated);
-    setChannelFormErrors(valResult.errors);
+    if (['voice_name', 'voice_rate', 'voice_volume'].includes(field)) {
+      const activeChannel = channelsData.find((c) => (c.profile_id || c.channel_id) === editingChannelId);
+      const fullSettings = channelSettingsMap[editingChannelId] || activeChannel?.settings || {};
+      const isQuiz = Boolean(fullSettings.is_quiz ?? activeChannel?.is_quiz);
+      const valRes = validateVoiceField(field, value, {
+        isQuiz,
+        allowedVoiceIds: allowedVoices.map((v) => v.id),
+      });
+      setChannelFormErrors((prev) => {
+        const copy = { ...prev };
+        if (valRes.isValid) {
+          delete copy[field];
+        } else {
+          copy[field] = valRes.error;
+        }
+        return copy;
+      });
+    } else {
+      const valResult = validateChannelForm(updated);
+      setChannelFormErrors((prev) => {
+        const copy = { ...prev };
+        // Atualiza erros de cota e agendamento
+        for (const k of ['target_ready_stock', 'posts_per_day', 'publish_start_hour', 'publish_end_hour', 'min_interval_hours']) {
+          if (valResult.errors[k]) {
+            copy[k] = valResult.errors[k];
+          } else {
+            delete copy[k];
+          }
+        }
+        return copy;
+      });
+    }
   };
 
   const handleSaveClick = (channel) => {
     const valResult = validateChannelForm(channelFormData);
-    if (!valResult.isValid) {
-      setChannelFormErrors(valResult.errors);
+    const pid = channel.profile_id || channel.channel_id;
+    const fullSettings = channelSettingsMap[pid] || channel.settings || {};
+    const isQuiz = Boolean(fullSettings.is_quiz ?? channel.is_quiz);
+    const voiceValResult = validateVoiceForm(channelFormData, {
+      isQuiz,
+      allowedVoiceIds: allowedVoices.map((v) => v.id),
+    });
+
+    const combinedErrors = { ...valResult.errors, ...voiceValResult.errors };
+    if (Object.keys(combinedErrors).length > 0) {
+      setChannelFormErrors(combinedErrors);
       return;
     }
 
-    const pid = channel.profile_id || channel.channel_id;
-    const fullSettings = channelSettingsMap[pid] || channel.settings || {};
     const origQuotas = fullSettings.quotas || channel.quotas || {};
     const origSchedule = fullSettings.schedule || channel.schedule || {};
     const orig = {
@@ -279,8 +365,13 @@ export default function SystemView({ onNavigate }) {
       min_interval_hours: origSchedule.min_interval_hours ?? 4,
     };
 
-    const diffList = calculateSettingsDiff(orig, channelFormData);
-    if (diffList.length === 0) {
+    const settingsDiffList = calculateSettingsDiff(orig, channelFormData);
+    const voiceDiffList = calculateVoiceDiff(fullSettings.effective_voice, channelFormData, {
+      isQuiz,
+      pinned: pinnedVoiceFields,
+    });
+
+    if (settingsDiffList.length === 0 && voiceDiffList.length === 0) {
       setActionFeedback({
         type: 'error',
         text: 'Nenhum campo foi alterado.',
@@ -288,12 +379,17 @@ export default function SystemView({ onNavigate }) {
       return;
     }
 
-    const payloads = buildPatchPayloads(diffList);
+    const payloads = buildPatchPayloads(settingsDiffList);
+    const voicePayloadResult = buildVoicePatchPayload(voiceDiffList);
+
     setChannelConfirmDialog({
       profileId: pid,
       profileName: channel.name || pid,
-      diffList,
-      payloads,
+      diffList: [...settingsDiffList, ...voiceDiffList],
+      payloads: {
+        ...payloads,
+        voicePayload: voicePayloadResult.payload,
+      },
     });
   };
 
@@ -318,6 +414,9 @@ export default function SystemView({ onNavigate }) {
       if (payloads.schedulePayload) {
         await updateProfileSchedule(profileId, payloads.schedulePayload);
       }
+      if (payloads.voicePayload) {
+        await updateProfileVoice(profileId, payloads.voicePayload);
+      }
 
       setActionFeedback({
         type: 'success',
@@ -325,6 +424,7 @@ export default function SystemView({ onNavigate }) {
       });
       setChannelConfirmDialog(null);
       setEditingChannelId(null);
+      setPinnedVoiceFields(new Set());
       setChannelFormData({});
       setChannelFormErrors({});
       await fetchData();
@@ -724,6 +824,23 @@ export default function SystemView({ onNavigate }) {
                 const growthMode = fullSettings.growth_mode || ch.growth_mode || 'WARMUP';
                 const isAuto = Boolean(fullSettings.autonomous_enabled ?? ch.autonomous_enabled);
                 const isWarmup = String(growthMode).toUpperCase() === 'WARMUP';
+                const isQuiz = Boolean(fullSettings.is_quiz ?? ch.is_quiz);
+                const effVoice = fullSettings.effective_voice || {};
+                const voiceSourceInfo = getVoiceSourceInfo(effVoice.voice_name?.source);
+                const rateSourceInfo = getVoiceSourceInfo(effVoice.voice_rate?.source);
+                const volSourceInfo = getVoiceSourceInfo(effVoice.voice_volume?.source);
+
+                const isVoicePinned = pinnedVoiceFields.has('voice_name');
+                const isVoiceValChanged = String(channelFormData.voice_name || '').trim() !== String(effVoice.voice_name?.value || '').trim();
+                const showVoicePinned = voiceSourceInfo.isInherited && (isVoicePinned || isVoiceValChanged);
+
+                const isRatePinned = pinnedVoiceFields.has('voice_rate');
+                const isRateValChanged = Math.abs(Number(channelFormData.voice_rate) - Number(effVoice.voice_rate?.value)) > 0.001;
+                const showRatePinned = rateSourceInfo.isInherited && (isRatePinned || isRateValChanged);
+
+                const isVolPinned = pinnedVoiceFields.has('voice_volume');
+                const isVolValChanged = Math.abs(Number(channelFormData.voice_volume) - Number(effVoice.voice_volume?.value)) > 0.001;
+                const showVolPinned = volSourceInfo.isInherited && (isVolPinned || isVolValChanged);
 
                 return (
                   <article
@@ -933,14 +1050,225 @@ export default function SystemView({ onNavigate }) {
                         </div>
                       )}
 
+                      {/* Subseção de Voz e Velocidade (Missão M6b) */}
+                      <h4 className="sys-channel-group-title">Voz e Velocidade</h4>
+                      {isEditing ? (
+                        <div className="sys-input-group">
+                          {/* Campo Voz */}
+                          <div className="sys-edit-row">
+                            <label htmlFor={`voice-${pid}`} className="sys-stat-label">
+                              Voz
+                            </label>
+                            <div className="sys-voice-field-group">
+                              <select
+                                id={`voice-${pid}`}
+                                className={`sys-select ${channelFormErrors.voice_name ? 'sys-input--error' : ''}`}
+                                value={channelFormData.voice_name ?? ''}
+                                onChange={(e) => handleFieldChange('voice_name', e.target.value)}
+                              >
+                                {allowedVoices.map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    {v.name}
+                                  </option>
+                                ))}
+                                {allowedVoices.length === 0 && (
+                                  <option value={channelFormData.voice_name || ''}>
+                                    {channelFormData.voice_name || 'Carregando...'}
+                                  </option>
+                                )}
+                              </select>
+                              {channelFormData.voice_name === null ? (
+                                <span className="sys-badge sys-badge-global">Global (herdado)</span>
+                              ) : showVoicePinned ? (
+                                <span className="sys-badge sys-badge-pinned">Será fixado no canal</span>
+                              ) : (
+                                <span className={`sys-badge ${voiceSourceInfo.badgeClass}`}>
+                                  {voiceSourceInfo.label}{voiceSourceInfo.isInherited ? ' (herdado)' : ''}
+                                </span>
+                              )}
+                              {voiceSourceInfo.canReset && channelFormData.voice_name !== null && (
+                                <button
+                                  type="button"
+                                  className="sys-btn-reset-inherit"
+                                  onClick={() => handleResetVoiceInherit('voice_name')}
+                                  title="Voltar a herdar voz global"
+                                >
+                                  Voltar a herdar
+                                </button>
+                              )}
+                              {!voiceSourceInfo.canReset && channelFormData.voice_name !== null && (
+                                <button
+                                  type="button"
+                                  className={`sys-btn-pin-channel ${isVoicePinned ? 'sys-btn-pin-channel--active' : ''}`}
+                                  onClick={() => handleTogglePinVoice('voice_name')}
+                                  title={isVoicePinned ? 'Desfazer fixação no canal' : 'Fixar este valor diretamente no canal'}
+                                >
+                                  {isVoicePinned ? 'Desfazer fixação' : 'Fixar no canal'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {channelFormErrors.voice_name && (
+                            <span className="sys-field-error">{channelFormErrors.voice_name}</span>
+                          )}
+
+                          {/* Campo Velocidade */}
+                          {isQuiz ? (
+                            <div className="sys-edit-row">
+                              <span className="sys-stat-label">Velocidade</span>
+                              <span className="sys-quiz-notice">{QUIZ_VOICE_RATE_NOTICE}</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="sys-edit-row">
+                                <label htmlFor={`rate-${pid}`} className="sys-stat-label">
+                                  Velocidade (0.5–2.0x)
+                                </label>
+                                <div className="sys-voice-field-group">
+                                  <input
+                                    id={`rate-${pid}`}
+                                    type="number"
+                                    step="0.05"
+                                    min="0.5"
+                                    max="2.0"
+                                    className={`sys-input ${channelFormErrors.voice_rate ? 'sys-input--error' : ''}`}
+                                    value={channelFormData.voice_rate ?? ''}
+                                    onChange={(e) => handleFieldChange('voice_rate', e.target.value)}
+                                  />
+                                  {channelFormData.voice_rate === null ? (
+                                    <span className="sys-badge sys-badge-global">Global (herdado)</span>
+                                  ) : showRatePinned ? (
+                                    <span className="sys-badge sys-badge-pinned">Será fixado no canal</span>
+                                  ) : (
+                                    <span className={`sys-badge ${rateSourceInfo.badgeClass}`}>
+                                      {rateSourceInfo.label}{rateSourceInfo.isInherited ? ' (herdado)' : ''}
+                                    </span>
+                                  )}
+                                  {rateSourceInfo.canReset && channelFormData.voice_rate !== null && (
+                                    <button
+                                      type="button"
+                                      className="sys-btn-reset-inherit"
+                                      onClick={() => handleResetVoiceInherit('voice_rate')}
+                                      title="Voltar a herdar velocidade global"
+                                    >
+                                      Voltar a herdar
+                                    </button>
+                                  )}
+                                  {!rateSourceInfo.canReset && channelFormData.voice_rate !== null && (
+                                    <button
+                                      type="button"
+                                      className={`sys-btn-pin-channel ${isRatePinned ? 'sys-btn-pin-channel--active' : ''}`}
+                                      onClick={() => handleTogglePinVoice('voice_rate')}
+                                      title={isRatePinned ? 'Desfazer fixação no canal' : 'Fixar este valor diretamente no canal'}
+                                    >
+                                      {isRatePinned ? 'Desfazer fixação' : 'Fixar no canal'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              {channelFormErrors.voice_rate && (
+                                <span className="sys-field-error">{channelFormErrors.voice_rate}</span>
+                              )}
+                            </>
+                          )}
+
+                          {/* Campo Volume */}
+                          <div className="sys-edit-row">
+                            <label htmlFor={`vol-${pid}`} className="sys-stat-label">
+                              Volume (0.0–1.0)
+                            </label>
+                            <div className="sys-voice-field-group">
+                              <input
+                                id={`vol-${pid}`}
+                                type="number"
+                                step="0.05"
+                                min="0.0"
+                                max="1.0"
+                                className={`sys-input ${channelFormErrors.voice_volume ? 'sys-input--error' : ''}`}
+                                value={channelFormData.voice_volume ?? ''}
+                                onChange={(e) => handleFieldChange('voice_volume', e.target.value)}
+                              />
+                              {channelFormData.voice_volume === null ? (
+                                <span className="sys-badge sys-badge-global">Global (herdado)</span>
+                              ) : showVolPinned ? (
+                                <span className="sys-badge sys-badge-pinned">Será fixado no canal</span>
+                              ) : (
+                                <span className={`sys-badge ${volSourceInfo.badgeClass}`}>
+                                  {volSourceInfo.label}{volSourceInfo.isInherited ? ' (herdado)' : ''}
+                                </span>
+                              )}
+                              {volSourceInfo.canReset && channelFormData.voice_volume !== null && (
+                                <button
+                                  type="button"
+                                  className="sys-btn-reset-inherit"
+                                  onClick={() => handleResetVoiceInherit('voice_volume')}
+                                  title="Voltar a herdar volume global"
+                                >
+                                  Voltar a herdar
+                                </button>
+                              )}
+                              {!volSourceInfo.canReset && channelFormData.voice_volume !== null && (
+                                <button
+                                  type="button"
+                                  className={`sys-btn-pin-channel ${isVolPinned ? 'sys-btn-pin-channel--active' : ''}`}
+                                  onClick={() => handleTogglePinVoice('voice_volume')}
+                                  title={isVolPinned ? 'Desfazer fixação no canal' : 'Fixar este valor diretamente no canal'}
+                                >
+                                  {isVolPinned ? 'Desfazer fixação' : 'Fixar no canal'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {channelFormErrors.voice_volume && (
+                            <span className="sys-field-error">{channelFormErrors.voice_volume}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Voz</span>
+                            <div className="sys-voice-field-group">
+                              <span className="sys-stat-value">
+                                {formatVoiceDiffDisplay('voice_name', effVoice.voice_name?.value, allowedVoices)}
+                              </span>
+                              <span className={`sys-badge ${voiceSourceInfo.badgeClass}`}>
+                                {voiceSourceInfo.label}{voiceSourceInfo.isInherited ? ' (herdado)' : ''}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Velocidade</span>
+                            {isQuiz ? (
+                              <span className="sys-quiz-notice">{QUIZ_VOICE_RATE_NOTICE}</span>
+                            ) : (
+                              <div className="sys-voice-field-group">
+                                <span className="sys-stat-value">
+                                  {effVoice.voice_rate?.value != null ? `${Number(effVoice.voice_rate.value).toFixed(2)}x` : '—'}
+                                </span>
+                                <span className={`sys-badge ${rateSourceInfo.badgeClass}`}>
+                                  {rateSourceInfo.label}{rateSourceInfo.isInherited ? ' (herdado)' : ''}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Volume</span>
+                            <div className="sys-voice-field-group">
+                              <span className="sys-stat-value">
+                                {effVoice.voice_volume?.value != null ? `${Math.round(Number(effVoice.voice_volume.value) * 100)}%` : '—'}
+                              </span>
+                              <span className={`sys-badge ${volSourceInfo.badgeClass}`}>
+                                {volSourceInfo.label}{volSourceInfo.isInherited ? ' (herdado)' : ''}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Subseção de Workspace (Somente Leitura) */}
                       <h4 className="sys-channel-group-title">Configurações de Workspace</h4>
-                      <div className="sys-stat-row">
-                        <span className="sys-stat-label">Voz Narrador</span>
-                        <span className="sys-stat-value">
-                          {formatProviderValue(ws.voice?.voice_name)}
-                        </span>
-                      </div>
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Visual Director / Flow</span>
                         <span className="sys-stat-value">
@@ -1072,14 +1400,42 @@ export default function SystemView({ onNavigate }) {
                 </tr>
               </thead>
               <tbody>
-                {channelConfirmDialog.diffList.map((item) => (
-                  <tr key={item.field}>
-                    <td><strong>{item.label}</strong></td>
-                    <td className="sys-diff-before">{formatDiffValueDisplay(item.field, item.oldValue)}</td>
-                    <td className="sys-diff-arrow">→</td>
-                    <td className="sys-diff-after">{formatDiffValueDisplay(item.field, item.newValue)}</td>
-                  </tr>
-                ))}
+                {channelConfirmDialog.diffList.map((item) => {
+                  const isVoice = ['voice_name', 'voice_rate', 'voice_volume'].includes(item.field);
+                  const isPinSameVal = item.isPin && (
+                    item.field === 'voice_name'
+                      ? String(item.oldValue || '').trim() === String(item.newValue || '').trim()
+                      : Math.abs(Number(item.oldValue) - Number(item.newValue)) < 0.001
+                  );
+
+                  if (isPinSameVal) {
+                    return (
+                      <tr key={item.field}>
+                        <td><strong>{item.label}</strong></td>
+                        <td colSpan="3" className="sys-diff-after">
+                          Fixar no canal: {formatVoiceDiffDisplay(item.field, item.newValue, allowedVoices)}
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return (
+                    <tr key={item.field}>
+                      <td><strong>{item.label}</strong></td>
+                      <td className="sys-diff-before">
+                        {isVoice
+                          ? formatVoiceDiffDisplay(item.field, item.oldValue, allowedVoices)
+                          : formatDiffValueDisplay(item.field, item.oldValue)}
+                      </td>
+                      <td className="sys-diff-arrow">→</td>
+                      <td className="sys-diff-after">
+                        {isVoice
+                          ? formatVoiceDiffDisplay(item.field, item.newValue, allowedVoices)
+                          : formatDiffValueDisplay(item.field, item.newValue)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
 

@@ -354,6 +354,49 @@ class TestApiV2VoicePerChannelEndpoints(unittest.TestCase):
         quotas = profile_manager.get_profile_quotas("profile-curiosidades", db_path=self.db_path)
         self.assertEqual(quotas["target_ready_stock"], 5)
 
+    def test_get_allowed_voices_endpoint(self):
+        """GET /api/v2/voices/allowed retorna vozes aprovadas para pt-BR com rótulos amigáveis."""
+        resp = self.client.get("/api/v2/voices/allowed")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 4)
+
+        voice_ids = [v["id"] for v in data]
+        self.assertIn("pt-BR-FranciscaNeural", voice_ids)
+        self.assertIn("pt-BR-AntonioNeural", voice_ids)
+        self.assertIn("pt-BR-ThalitaMultilingualNeural", voice_ids)
+        self.assertIn("en-US-BrianMultilingualNeural", voice_ids)
+
+        for v in data:
+            self.assertIn("id", v)
+            self.assertIn("name", v)
+            self.assertIn("gender", v)
+            self.assertIn("locale", v)
+            self.assertTrue(autonomous_production.is_valid_pt_br_voice(v["id"]))
+
+    def test_channel_settings_exposes_is_quiz_flag(self):
+        """GET /api/v2/channels/{profile_id}/settings expõe 'is_quiz' corretamente."""
+        # Canal tradicional não é quiz
+        resp1 = self.client.get("/api/v2/channels/profile-curiosidades/settings")
+        self.assertEqual(resp1.status_code, 200)
+        self.assertFalse(resp1.json()["data"]["is_quiz"])
+
+        # Canal de quiz é reconhecido como quiz
+        profile_manager.create_profile(
+            profile_id="profile-quiz-teste",
+            name="Canal Quiz Dilema",
+            slug="canal-quiz-dilema",
+            db_path=self.db_path,
+        )
+        settings = profile_manager.get_profile_settings("profile-quiz-teste", db_path=self.db_path)
+        settings.editorial.video_format = "quiz_dilemma"
+        profile_manager.update_profile_settings("profile-quiz-teste", settings.model_dump(), db_path=self.db_path)
+
+        resp2 = self.client.get("/api/v2/channels/profile-quiz-teste/settings")
+        self.assertEqual(resp2.status_code, 200)
+        self.assertTrue(resp2.json()["data"]["is_quiz"])
+
 
 class TestQuizVoiceEnforcement(unittest.TestCase):
     """Testa que o Quiz Engine exige voz explícita do canal e não usa fallback silencioso Antonio."""

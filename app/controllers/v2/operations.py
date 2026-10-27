@@ -198,6 +198,7 @@ def get_channels_overview(request: Request):
         channels_data.append({
             "channel_id": pid,
             "profile_id": pid,
+            "is_quiz": profile_manager.is_quiz_profile(pid),
             "name": p.get("name"),
             "slug": p.get("slug"),
             "niche": p.get("niche") or "—",
@@ -452,6 +453,7 @@ def get_channel_settings(request: Request, profile_id: str):
         "schedule": schedule_model.model_dump(),
         "workspace_settings": ws_settings.model_dump(),
         "effective_voice": effective_v,
+        "is_quiz": profile_manager.is_quiz_profile(clean_p, db_path=db_path),
     }
     return utils.get_response(200, data)
 
@@ -889,3 +891,10 @@ def get_v2_health(request: Request):
     )
 
 
+@router.get(
+    "/voices/allowed",
+    summary="Get list of approved TTS voices for channels (M6b)",
+)
+def get_allowed_voices(request: Request):
+    voices = profile_manager.get_allowed_voices()
+    return utils.get_response(200, voices)

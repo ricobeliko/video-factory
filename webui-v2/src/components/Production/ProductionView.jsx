@@ -172,6 +172,13 @@ export default function ProductionView({ onNavigate }) {
           <button type="button" className="fleet-nav-link active">
             Produção
           </button>
+          <button
+            type="button"
+            className="fleet-nav-link"
+            onClick={() => handleNavClick('diagnostico')}
+          >
+            Diagnóstico
+          </button>
           <button type="button" className="fleet-nav-link" disabled title="Em breve">
             <span>Publicação</span>
             <span className="fleet-nav-soon">em breve</span>

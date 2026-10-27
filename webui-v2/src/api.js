@@ -325,3 +325,13 @@ export async function getProductionOverview(profileId = null, limitPerSection = 
   const qs = params.toString() ? `?${params.toString()}` : '';
   return fetchJson(`/api/v2/production/overview${qs}`);
 }
+
+/**
+ * GET /api/v2/diagnostics/overview — Diagnóstico de produção V2 (Missão SIS3).
+ */
+export async function getDiagnosticsOverview(profileId = null) {
+  const params = new URLSearchParams();
+  if (profileId) params.set('profile_id', profileId);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return fetchJson(`/api/v2/diagnostics/overview${qs}`);
+}

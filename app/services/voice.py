@@ -1071,24 +1071,24 @@ def resolve_quiz_voice_rate(raw_rate: Any, default_rate: str = "+12%") -> str:
     """
     Resolve a taxa de voz para engines de quiz (paper quiz / dilemas).
 
-    Preserva as regras de negócio:
-    - String já formatada com '%' (ex.: '+15%', '-10%'): mantém inalterada.
-    - None / ausente / não numérico: retorna default_rate ('+20%' no paper, '+12%' no dilema).
-    - Numérico == 1.0: retorna default_rate (preserva ritmo acelerado original do quiz).
-    - Numérico <= 0 ou não finito (NaN, Inf): retorna default_rate (fallback defensivo).
-    - Numérico válido != 1.0 (ex.: 0.8 -> '-20%', 1.2 -> '+20%'): converte via convert_rate_to_percent.
+    Princípio de arquitetura:
+    Ritmo de fala é uma propriedade intrínseca de cada formato de vídeo, calibrado
+    rigorosamente para atingir a meta de duração de 60-65s (+20% no paper quiz, +12%
+    no quiz de dilemas). Velocidades de voz globais ou herdadas de perfil numérico
+    (como voice_rate = 0.8 do config global) NÃO se aplicam aos formatos de quiz e
+    são intencionalmente ignoradas em favor do default calibrado do formato.
+
+    Regras:
+    - String explicitamente formatada com '%' (ex.: '+15%', '-10%'): mantida inalterada
+      (permite override explícito e validado do formato/template).
+    - Qualquer outro caso (float/int global como 0.8, 1.0, 1.2, None, 0, NaN, tipos inválidos):
+      retorna sempre default_rate do formato (+20% paper / +12% dilema).
+
+    Configuração granular por canal/formato será formalizada na Missão M6.
     """
     if isinstance(raw_rate, str) and "%" in raw_rate:
         return raw_rate
-    if raw_rate is None:
-        return default_rate
-    try:
-        f_rate = float(raw_rate)
-    except (TypeError, ValueError):
-        return default_rate
-    if not math.isfinite(f_rate) or f_rate <= 0 or f_rate == 1.0:
-        return default_rate
-    return convert_rate_to_percent(f_rate)
+    return default_rate
 
 
 def ensure_file_path_exists(file_path: str) -> None:

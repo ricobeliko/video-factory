@@ -1257,6 +1257,7 @@ def evaluate_copyright_provenance_gate(
         "quiz_engine",
         "pillow",
         "quiz_asset_manager",
+        "local_fallback",
     })
     v_format = str(
         params_data.get("video_format")

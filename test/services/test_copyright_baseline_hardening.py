@@ -354,3 +354,74 @@ def test_8_no_publish_api_or_real_network():
         mock_get.assert_not_called()
         mock_post.assert_not_called()
         mock_sched.assert_not_called()
+
+
+def test_quiz_local_fallback_card_passes_copyright_gate():
+    """Quiz com clipe provider 'local_fallback' passa no copyright gate."""
+    prov = {
+        "bgm": {"enabled": False, "source": "none", "provenance_status": "SAFE_NO_BGM"},
+        "visual_clips": [{
+            "provider": "local_fallback",
+            "local_file": "card1.jpg",
+            "source_url": "internal://video-factory/stylized-card",
+            "license": "Internal Generated / Video Factory",
+        }],
+        "provenance_status": "SAFE_NO_BGM",
+    }
+    passed, reason, metrics = copyright_gate.evaluate_copyright_provenance_gate(
+        task_id="task-quiz-fallback-pass",
+        task_data={
+            "params": {"video_format": "quiz_dilemma", "bgm_type": "none"},
+            "asset_provenance": prov,
+        },
+    )
+    assert passed is True
+    assert metrics.get("copyright_provenance_gate") == "PASS"
+
+
+def test_non_quiz_local_fallback_rejected_by_copyright_gate():
+    """Vídeo NÃO-quiz com clipe 'local_fallback' continua reprovado."""
+    prov = {
+        "bgm": {"enabled": False, "source": "none", "provenance_status": "SAFE_NO_BGM"},
+        "visual_clips": [{
+            "provider": "local_fallback",
+            "local_file": "card1.jpg",
+            "source_url": "internal://video-factory/stylized-card",
+            "license": "Internal Generated / Video Factory",
+        }],
+        "provenance_status": "SAFE_NO_BGM",
+    }
+    passed, reason, metrics = copyright_gate.evaluate_copyright_provenance_gate(
+        task_id="task-non-quiz-fallback-fail",
+        task_data={
+            "params": {"video_format": "traditional", "bgm_type": "none"},
+            "asset_provenance": prov,
+        },
+    )
+    assert passed is False
+    assert metrics.get("copyright_provenance_gate") == "FAIL"
+    assert "local_fallback" in reason
+
+
+def test_quiz_unknown_provider_random_site_rejected_by_copyright_gate():
+    """Quiz com provedor desconhecido (ex.: 'random_site') continua reprovado."""
+    prov = {
+        "bgm": {"enabled": False, "source": "none", "provenance_status": "SAFE_NO_BGM"},
+        "visual_clips": [{
+            "provider": "random_site",
+            "local_file": "card1.jpg",
+            "source_url": "https://random.site/pic.jpg",
+            "license": "Unknown",
+        }],
+        "provenance_status": "SAFE_NO_BGM",
+    }
+    passed, reason, metrics = copyright_gate.evaluate_copyright_provenance_gate(
+        task_id="task-quiz-unknown-fail",
+        task_data={
+            "params": {"video_format": "quiz_dilemma", "bgm_type": "none"},
+            "asset_provenance": prov,
+        },
+    )
+    assert passed is False
+    assert metrics.get("copyright_provenance_gate") == "FAIL"
+    assert "random_site" in reason

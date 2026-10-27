@@ -536,7 +536,8 @@ def update_channel_quotas(
     payload: UpdateQuotasRequest,
 ):
     request_id = base.get_task_id(request)
-    profile = profile_manager.get_profile(profile_id)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
     if not profile:
         raise HttpException(
             task_id=request_id,
@@ -546,7 +547,7 @@ def update_channel_quotas(
     clean_p = profile.get("id", profile_id)
 
     try:
-        operator_console.require_primary_instance()
+        operator_console.require_primary_instance(db_path=db_path)
     except PermissionError as exc:
         raise HttpException(
             task_id=request_id,
@@ -562,7 +563,24 @@ def update_channel_quotas(
 
     try:
         q_dict = payload.model_dump(exclude_unset=True)
-        res = profile_manager.update_profile_quotas(clean_p, q_dict)
+        old_quotas = profile_manager.get_profile_quotas(clean_p, db_path=db_path)
+        res = profile_manager.update_profile_quotas(clean_p, q_dict, db_path=db_path)
+        for k, v in q_dict.items():
+            old_v = old_quotas.get(k)
+            if old_v != v:
+                operator_console.log_operational_event(
+                    component="profile_manager",
+                    severity=operator_console.SEVERITY_INFO,
+                    event_type="PROFILE_QUOTAS_UPDATED",
+                    message=f"Quota '{k}' updated for profile '{clean_p}': {old_v} -> {v}",
+                    metadata={
+                        "profile_id": clean_p,
+                        "field": k,
+                        "old_value": old_v,
+                        "new_value": v,
+                    },
+                    db_path=db_path,
+                )
     except ValueError as exc:
         raise HttpException(
             task_id=request_id,
@@ -593,7 +611,8 @@ def update_channel_schedule(
     payload: UpdateScheduleRequest,
 ):
     request_id = base.get_task_id(request)
-    profile = profile_manager.get_profile(profile_id)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
     if not profile:
         raise HttpException(
             task_id=request_id,
@@ -603,7 +622,7 @@ def update_channel_schedule(
     clean_p = profile.get("id", profile_id)
 
     try:
-        operator_console.require_primary_instance()
+        operator_console.require_primary_instance(db_path=db_path)
     except PermissionError as exc:
         raise HttpException(
             task_id=request_id,
@@ -619,9 +638,26 @@ def update_channel_schedule(
 
     try:
         s_dict = payload.model_dump(exclude_unset=True)
-        cur_sched = profile_manager.get_profile_schedule(clean_p).model_dump()
+        old_schedule = profile_manager.get_profile_schedule(clean_p, db_path=db_path).model_dump()
+        cur_sched = dict(old_schedule)
         cur_sched.update(s_dict)
-        res = profile_manager.update_profile_schedule(clean_p, cur_sched)
+        res = profile_manager.update_profile_schedule(clean_p, cur_sched, db_path=db_path)
+        for k, v in s_dict.items():
+            old_v = old_schedule.get(k)
+            if old_v != v:
+                operator_console.log_operational_event(
+                    component="profile_manager",
+                    severity=operator_console.SEVERITY_INFO,
+                    event_type="PROFILE_SCHEDULE_UPDATED",
+                    message=f"Schedule '{k}' updated for profile '{clean_p}': {old_v} -> {v}",
+                    metadata={
+                        "profile_id": clean_p,
+                        "field": k,
+                        "old_value": old_v,
+                        "new_value": v,
+                    },
+                    db_path=db_path,
+                )
     except ValueError as exc:
         raise HttpException(
             task_id=request_id,

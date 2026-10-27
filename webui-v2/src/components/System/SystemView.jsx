@@ -5,6 +5,8 @@ import {
   getHealth,
   getChannelsOverview,
   getProfileSettings,
+  updateProfileQuotas,
+  updateProfileSchedule,
   pauseFactory,
   resumeFactory,
 } from '../../api';
@@ -18,6 +20,13 @@ import {
   formatQuotasDisplay,
   formatScheduleDisplay,
 } from './systemLogic';
+import {
+  validateChannelField,
+  validateChannelForm,
+  calculateSettingsDiff,
+  buildPatchPayloads,
+  formatDiffValueDisplay,
+} from './systemEditLogic';
 import '../Fleet/fleet.css';
 import './system.css';
 
@@ -37,6 +46,13 @@ export default function SystemView({ onNavigate }) {
   const [actionFeedback, setActionFeedback] = useState(null);
   const [isActionPending, setIsActionPending] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState(null); // { type: 'pause' | 'resume' }
+
+  // Estados de Edição de Ajustes por Canal (SIS2)
+  const [editingChannelId, setEditingChannelId] = useState(null);
+  const [channelFormData, setChannelFormData] = useState({});
+  const [channelFormErrors, setChannelFormErrors] = useState({});
+  const [channelConfirmDialog, setChannelConfirmDialog] = useState(null); // { profileId, profileName, diffList, payloads }
+  const [isSavingChannel, setIsSavingChannel] = useState(false);
 
   // Temporizadores
   const [lastFetchTime, setLastFetchTime] = useState(null);
@@ -110,18 +126,19 @@ export default function SystemView({ onNavigate }) {
     }
   }, []);
 
-  // Polling a cada 15 segundos, pausado com aba oculta
+  // Polling a cada 15 segundos, pausado com aba oculta ou enquanto edita
   useEffect(() => {
     fetchData();
 
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      // Não sobrescreve enquanto o usuário estiver ativamente editando um canal
+      if (document.visibilityState === 'visible' && !editingChannelId) {
         fetchData();
       }
     }, POLL_INTERVAL_MS);
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !editingChannelId) {
         fetchData();
       }
     };
@@ -131,7 +148,7 @@ export default function SystemView({ onNavigate }) {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchData]);
+  }, [fetchData, editingChannelId]);
 
   // Contador de segundos desde a última sincronização
   useEffect(() => {
@@ -203,6 +220,123 @@ export default function SystemView({ onNavigate }) {
       setConfirmDialog(null);
     } finally {
       setIsActionPending(false);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Handlers de Edição de Ajustes por Canal (SIS2)
+  // -------------------------------------------------------------
+  const handleStartEdit = (channel) => {
+    if (!togglePermission.canToggle) return;
+    setActionFeedback(null);
+
+    const pid = channel.profile_id || channel.channel_id;
+    const fullSettings = channelSettingsMap[pid] || channel.settings || {};
+    const quotas = fullSettings.quotas || channel.quotas || {};
+    const schedule = fullSettings.schedule || channel.schedule || {};
+
+    setEditingChannelId(pid);
+    setChannelFormData({
+      target_ready_stock: quotas.target_ready_stock ?? 3,
+      posts_per_day: quotas.posts_per_day ?? schedule.posts_per_day ?? 1,
+      publish_start_hour: schedule.publish_start_hour ?? 10,
+      publish_end_hour: schedule.publish_end_hour ?? 22,
+      min_interval_hours: schedule.min_interval_hours ?? 4,
+    });
+    setChannelFormErrors({});
+  };
+
+  const handleCancelEdit = () => {
+    setEditingChannelId(null);
+    setChannelFormData({});
+    setChannelFormErrors({});
+  };
+
+  const handleFieldChange = (field, value) => {
+    const updated = { ...channelFormData, [field]: value };
+    setChannelFormData(updated);
+
+    const valResult = validateChannelForm(updated);
+    setChannelFormErrors(valResult.errors);
+  };
+
+  const handleSaveClick = (channel) => {
+    const valResult = validateChannelForm(channelFormData);
+    if (!valResult.isValid) {
+      setChannelFormErrors(valResult.errors);
+      return;
+    }
+
+    const pid = channel.profile_id || channel.channel_id;
+    const fullSettings = channelSettingsMap[pid] || channel.settings || {};
+    const origQuotas = fullSettings.quotas || channel.quotas || {};
+    const origSchedule = fullSettings.schedule || channel.schedule || {};
+    const orig = {
+      target_ready_stock: origQuotas.target_ready_stock ?? 3,
+      posts_per_day: origQuotas.posts_per_day ?? origSchedule.posts_per_day ?? 1,
+      publish_start_hour: origSchedule.publish_start_hour ?? 10,
+      publish_end_hour: origSchedule.publish_end_hour ?? 22,
+      min_interval_hours: origSchedule.min_interval_hours ?? 4,
+    };
+
+    const diffList = calculateSettingsDiff(orig, channelFormData);
+    if (diffList.length === 0) {
+      setActionFeedback({
+        type: 'error',
+        text: 'Nenhum campo foi alterado.',
+      });
+      return;
+    }
+
+    const payloads = buildPatchPayloads(diffList);
+    setChannelConfirmDialog({
+      profileId: pid,
+      profileName: channel.name || pid,
+      diffList,
+      payloads,
+    });
+  };
+
+  const handleCloseChannelConfirm = () => {
+    if (!isSavingChannel) {
+      setChannelConfirmDialog(null);
+    }
+  };
+
+  const handleConfirmSaveChannel = async () => {
+    if (!channelConfirmDialog) return;
+    setIsSavingChannel(true);
+    setActionFeedback(null);
+
+    const { profileId, profileName, payloads } = channelConfirmDialog;
+
+    try {
+      // Dispara PATCH apenas para as seções que sofreram alteração
+      if (payloads.quotasPayload) {
+        await updateProfileQuotas(profileId, payloads.quotasPayload);
+      }
+      if (payloads.schedulePayload) {
+        await updateProfileSchedule(profileId, payloads.schedulePayload);
+      }
+
+      setActionFeedback({
+        type: 'success',
+        text: `Ajustes do canal "${profileName}" gravados com sucesso! Entram em vigor imediatamente no próximo ciclo.`,
+      });
+      setChannelConfirmDialog(null);
+      setEditingChannelId(null);
+      setChannelFormData({});
+      setChannelFormErrors({});
+      await fetchData();
+    } catch (err) {
+      const errText = formatApiError(err, `gravar ajustes do canal "${profileName}"`);
+      setActionFeedback({
+        type: 'error',
+        text: errText,
+      });
+      setChannelConfirmDialog(null);
+    } finally {
+      setIsSavingChannel(false);
     }
   };
 
@@ -567,39 +701,66 @@ export default function SystemView({ onNavigate }) {
           </div>
         </section>
 
-        {/* 5. Seção 4: Ajustes por canal (somente leitura) */}
+        {/* 5. Seção 4: Ajustes por canal */}
         <section className="sys-section" aria-labelledby="section-channels-title">
           <div className="sys-section-header">
             <h2 id="section-channels-title" className="sys-section-title">
-              <span>⚙️</span> Ajustes por Canal (Somente Leitura)
+              <span>⚙️</span> Ajustes por Canal
             </h2>
-            <span className="sys-badge-readonly">Edição chega na próxima missão</span>
+            <span className="fleet-muted" style={{ fontSize: '13px' }}>
+              Valores entram em vigor no próximo ciclo
+            </span>
           </div>
 
           <div className="sys-channels-grid">
             {channelsData.length > 0 ? (
               channelsData.map((ch) => {
                 const pid = ch.profile_id || ch.channel_id;
+                const isEditing = editingChannelId === pid;
                 const fullSettings = channelSettingsMap[pid] || ch.settings || {};
                 const quotas = formatQuotasDisplay(fullSettings.quotas || ch.quotas);
                 const schedule = formatScheduleDisplay(fullSettings.schedule || ch.schedule);
                 const ws = fullSettings.workspace_settings || {};
                 const growthMode = fullSettings.growth_mode || ch.growth_mode || 'WARMUP';
                 const isAuto = Boolean(fullSettings.autonomous_enabled ?? ch.autonomous_enabled);
+                const isWarmup = String(growthMode).toUpperCase() === 'WARMUP';
 
                 return (
-                  <article key={pid} className="sys-channel-card" aria-label={`Ajustes do canal ${ch.name || pid}`}>
+                  <article
+                    key={pid}
+                    className={`sys-channel-card ${isEditing ? 'sys-channel-card--editing' : ''}`}
+                    aria-label={`Ajustes do canal ${ch.name || pid}`}
+                  >
                     <div className="sys-channel-header">
-                      <div>
+                      <div className="sys-channel-header-left">
                         <h3 className="sys-channel-name">{ch.name || pid}</h3>
                         <span className="sys-channel-id">{pid}</span>
                       </div>
-                      <span className="sys-role-badge">
-                        {String(growthMode).toUpperCase()}
-                      </span>
+                      <div className="sys-channel-header-right">
+                        <span className="sys-role-badge">
+                          {String(growthMode).toUpperCase()}
+                        </span>
+                        {!isEditing && (
+                          <button
+                            type="button"
+                            className="sys-btn-edit"
+                            disabled={!togglePermission.canToggle}
+                            onClick={() => handleStartEdit(ch)}
+                            title={
+                              togglePermission.canToggle
+                                ? 'Editar cotas e horários deste canal'
+                                : 'Apenas o nó primário (PRIMARY) pode editar ajustes de canal. Instância secundária em modo somente leitura.'
+                            }
+                            aria-label={`Editar canal ${ch.name || pid}`}
+                          >
+                            ✎ Editar
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="sys-card-body">
+                      {/* Campos Somente Leitura (Imutáveis) */}
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Modo Autônomo</span>
                         <span className="sys-stat-value">
@@ -614,43 +775,165 @@ export default function SystemView({ onNavigate }) {
                         </span>
                       </div>
 
-                      {/* Subseção de Cotas */}
+                      {/* Subseção de Cotas Operacionais */}
                       <h4 className="sys-channel-group-title">Cotas Operacionais</h4>
-                      <div className="sys-channel-stats-grid">
-                        <div className="sys-stat-row">
-                          <span className="sys-stat-label">Meta Estoque</span>
-                          <span className="sys-stat-value">{quotas.target_ready_stock}</span>
-                        </div>
-                        <div className="sys-stat-row">
-                          <span className="sys-stat-label">Gerações/24h</span>
-                          <span className="sys-stat-value">{quotas.max_generations_24h}</span>
-                        </div>
-                        <div className="sys-stat-row">
-                          <span className="sys-stat-label">Tentativas/24h</span>
-                          <span className="sys-stat-value">{quotas.max_attempts_24h}</span>
-                        </div>
-                        <div className="sys-stat-row">
-                          <span className="sys-stat-label">Posts/Dia</span>
-                          <span className="sys-stat-value">{quotas.posts_per_day}</span>
-                        </div>
-                      </div>
+                      {isEditing ? (
+                        <div className="sys-input-group">
+                          <div className="sys-edit-row">
+                            <label htmlFor={`target-${pid}`} className="sys-stat-label">
+                              Meta Estoque (1–10 vídeos)
+                            </label>
+                            <input
+                              id={`target-${pid}`}
+                              type="number"
+                              min="1"
+                              max="10"
+                              className={`sys-input ${channelFormErrors.target_ready_stock ? 'sys-input--error' : ''}`}
+                              value={channelFormData.target_ready_stock ?? ''}
+                              onChange={(e) => handleFieldChange('target_ready_stock', e.target.value)}
+                            />
+                          </div>
+                          {channelFormErrors.target_ready_stock && (
+                            <span className="sys-field-error">{channelFormErrors.target_ready_stock}</span>
+                          )}
 
-                      {/* Subseção de Agendamento */}
+                          <div className="sys-edit-row">
+                            <label htmlFor={`posts-${pid}`} className="sys-stat-label">
+                              Posts por Dia (1–10)
+                            </label>
+                            <input
+                              id={`posts-${pid}`}
+                              type="number"
+                              min="1"
+                              max="10"
+                              className={`sys-input ${channelFormErrors.posts_per_day ? 'sys-input--error' : ''}`}
+                              value={channelFormData.posts_per_day ?? ''}
+                              onChange={(e) => handleFieldChange('posts_per_day', e.target.value)}
+                            />
+                          </div>
+                          {channelFormErrors.posts_per_day && (
+                            <span className="sys-field-error">{channelFormErrors.posts_per_day}</span>
+                          )}
+                          {isWarmup && (
+                            <div className="sys-warn-note">
+                              ℹ O modo de crescimento do canal ({growthMode}) pode limitar este valor.
+                            </div>
+                          )}
+
+                          {/* Cotas Somente-Leitura */}
+                          <div className="sys-channel-stats-grid" style={{ marginTop: '6px' }}>
+                            <div className="sys-stat-row">
+                              <span className="sys-stat-label">Gerações/24h</span>
+                              <span className="sys-stat-value">{quotas.max_generations_24h}</span>
+                            </div>
+                            <div className="sys-stat-row">
+                              <span className="sys-stat-label">Tentativas/24h</span>
+                              <span className="sys-stat-value">{quotas.max_attempts_24h}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="sys-channel-stats-grid">
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Meta Estoque</span>
+                            <span className="sys-stat-value">{quotas.target_ready_stock}</span>
+                          </div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Posts/Dia</span>
+                            <span className="sys-stat-value">{quotas.posts_per_day}</span>
+                          </div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Gerações/24h</span>
+                            <span className="sys-stat-value">{quotas.max_generations_24h}</span>
+                          </div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Tentativas/24h</span>
+                            <span className="sys-stat-value">{quotas.max_attempts_24h}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Subseção de Janela de Publicação */}
                       <h4 className="sys-channel-group-title">Janela de Publicação</h4>
-                      <div className="sys-stat-row">
-                        <span className="sys-stat-label">Janela Horária</span>
-                        <span className="sys-stat-value">{schedule.window}</span>
-                      </div>
-                      <div className="sys-stat-row">
-                        <span className="sys-stat-label">Fuso Horário</span>
-                        <span className="sys-stat-value">{schedule.timezone}</span>
-                      </div>
-                      <div className="sys-stat-row">
-                        <span className="sys-stat-label">Intervalo Mínimo</span>
-                        <span className="sys-stat-value">{schedule.min_interval_hours}</span>
-                      </div>
+                      {isEditing ? (
+                        <div className="sys-input-group">
+                          <div className="sys-edit-row">
+                            <label htmlFor={`start-${pid}`} className="sys-stat-label">
+                              Início da Janela (0–23h)
+                            </label>
+                            <input
+                              id={`start-${pid}`}
+                              type="number"
+                              min="0"
+                              max="23"
+                              className={`sys-input ${channelFormErrors.publish_start_hour ? 'sys-input--error' : ''}`}
+                              value={channelFormData.publish_start_hour ?? ''}
+                              onChange={(e) => handleFieldChange('publish_start_hour', e.target.value)}
+                            />
+                          </div>
+                          {channelFormErrors.publish_start_hour && (
+                            <span className="sys-field-error">{channelFormErrors.publish_start_hour}</span>
+                          )}
 
-                      {/* Subseção de Workspace (Editorial, Voz, Visual) */}
+                          <div className="sys-edit-row">
+                            <label htmlFor={`end-${pid}`} className="sys-stat-label">
+                              Fim da Janela (0–23h)
+                            </label>
+                            <input
+                              id={`end-${pid}`}
+                              type="number"
+                              min="0"
+                              max="23"
+                              className={`sys-input ${channelFormErrors.publish_end_hour ? 'sys-input--error' : ''}`}
+                              value={channelFormData.publish_end_hour ?? ''}
+                              onChange={(e) => handleFieldChange('publish_end_hour', e.target.value)}
+                            />
+                          </div>
+                          {channelFormErrors.publish_end_hour && (
+                            <span className="sys-field-error">{channelFormErrors.publish_end_hour}</span>
+                          )}
+
+                          <div className="sys-edit-row">
+                            <label htmlFor={`interval-${pid}`} className="sys-stat-label">
+                              Intervalo Mínimo (1–24h)
+                            </label>
+                            <input
+                              id={`interval-${pid}`}
+                              type="number"
+                              min="1"
+                              max="24"
+                              className={`sys-input ${channelFormErrors.min_interval_hours ? 'sys-input--error' : ''}`}
+                              value={channelFormData.min_interval_hours ?? ''}
+                              onChange={(e) => handleFieldChange('min_interval_hours', e.target.value)}
+                            />
+                          </div>
+                          {channelFormErrors.min_interval_hours && (
+                            <span className="sys-field-error">{channelFormErrors.min_interval_hours}</span>
+                          )}
+
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Fuso Horário</span>
+                            <span className="sys-stat-value">America/Sao_Paulo (imutável)</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Janela Horária</span>
+                            <span className="sys-stat-value">{schedule.window}</span>
+                          </div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Fuso Horário</span>
+                            <span className="sys-stat-value">{schedule.timezone}</span>
+                          </div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Intervalo Mínimo</span>
+                            <span className="sys-stat-value">{schedule.min_interval_hours}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Subseção de Workspace (Somente Leitura) */}
                       <h4 className="sys-channel-group-title">Configurações de Workspace</h4>
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Voz Narrador</span>
@@ -668,6 +951,27 @@ export default function SystemView({ onNavigate }) {
                             : '—'}
                         </span>
                       </div>
+
+                      {/* Botões de Ação na Edição */}
+                      {isEditing && (
+                        <div className="sys-edit-actions">
+                          <button
+                            type="button"
+                            className="sys-btn-cancel-edit"
+                            onClick={handleCancelEdit}
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            className="sys-btn-save"
+                            disabled={Object.keys(channelFormErrors).length > 0 || isSavingChannel}
+                            onClick={() => handleSaveClick(ch)}
+                          >
+                            Salvar
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </article>
                 );
@@ -681,7 +985,7 @@ export default function SystemView({ onNavigate }) {
         </section>
       </main>
 
-      {/* Diálogo de Confirmação para Pausar / Retomar */}
+      {/* Diálogo de Confirmação para Pausar / Retomar Fábrica */}
       {confirmDialog && (
         <div
           className="sys-modal-backdrop"
@@ -735,6 +1039,71 @@ export default function SystemView({ onNavigate }) {
                   : confirmDialog === 'pause'
                   ? 'Confirmar Pausa'
                   : 'Confirmar Retomada'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diálogo de Confirmação para Salvar Ajustes de Canal (SIS2) */}
+      {channelConfirmDialog && (
+        <div
+          className="sys-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-channel-title"
+        >
+          <div className="sys-modal">
+            <h3 id="confirm-channel-title" className="sys-modal-title">
+              Confirmar Alterações de Ajustes
+            </h3>
+
+            <p className="sys-modal-text">
+              Canal: <strong className="sys-modal-highlight">{channelConfirmDialog.profileName}</strong>
+            </p>
+
+            <table className="sys-diff-table" aria-label="Campos alterados">
+              <thead>
+                <tr>
+                  <th scope="col">Campo</th>
+                  <th scope="col">Antes</th>
+                  <th scope="col" aria-hidden="true"></th>
+                  <th scope="col">Depois</th>
+                </tr>
+              </thead>
+              <tbody>
+                {channelConfirmDialog.diffList.map((item) => (
+                  <tr key={item.field}>
+                    <td><strong>{item.label}</strong></td>
+                    <td className="sys-diff-before">{formatDiffValueDisplay(item.field, item.oldValue)}</td>
+                    <td className="sys-diff-arrow">→</td>
+                    <td className="sys-diff-after">{formatDiffValueDisplay(item.field, item.newValue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <p className="sys-modal-text" style={{ fontSize: '13px', color: 'var(--fleet-muted)' }}>
+              ℹ As alterações entram em vigor imediatamente no próximo ciclo operacional (sem necessidade de reiniciar o motor).
+            </p>
+
+            <div className="sys-modal-actions">
+              <button
+                type="button"
+                className="sys-btn-cancel"
+                onClick={handleCloseChannelConfirm}
+                disabled={isSavingChannel}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="sys-btn-confirm-save"
+                onClick={handleConfirmSaveChannel}
+                disabled={isSavingChannel}
+              >
+                {isSavingChannel ? 'Gravando...' : 'Confirmar e Gravar'}
               </button>
             </div>
           </div>

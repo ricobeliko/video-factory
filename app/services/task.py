@@ -3034,7 +3034,7 @@ def _run_quiz_pipeline(
         try:
             from scripts.poc_quiz_paper_render import PaperQuizEngine, DurationGateError
             raw_rate = getattr(params, "voice_rate", None)
-            v_rate_str = (f"+{int(round((raw_rate - 1.0) * 100))}%" if isinstance(raw_rate, (int, float)) and raw_rate != 1.0 else (str(raw_rate) if isinstance(raw_rate, str) and "%" in raw_rate else "+20%"))
+            v_rate_str = voice.resolve_quiz_voice_rate(raw_rate, default_rate="+20%")
             paper_cfg = generator.export_to_paper_quiz_config(
                 raw_quiz=processed_quiz,
                 output_json_path=quiz_config_path,
@@ -3058,7 +3058,7 @@ def _run_quiz_pipeline(
         try:
             from scripts.poc_quiz_render import QuizConfig, QuizEngine
             raw_rate = getattr(params, "voice_rate", None)
-            v_rate_str = (f"+{int(round((raw_rate - 1.0) * 100))}%" if isinstance(raw_rate, (int, float)) and raw_rate != 1.0 else (str(raw_rate) if isinstance(raw_rate, str) and "%" in raw_rate else "+12%"))
+            v_rate_str = voice.resolve_quiz_voice_rate(raw_rate, default_rate="+12%")
             quiz_cfg = generator.export_to_quiz_config(
                 raw_quiz=processed_quiz,
                 output_json_path=quiz_config_path,

@@ -15,7 +15,7 @@ import time
 import unicodedata
 import wave
 from datetime import datetime, timedelta
-from typing import Union
+from typing import Any, Union
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape, unescape
 
@@ -1065,6 +1065,30 @@ def convert_rate_to_percent(rate: float) -> str:
     if percent >= 0:
         return f"+{percent}%"
     return f"{percent}%"
+
+
+def resolve_quiz_voice_rate(raw_rate: Any, default_rate: str = "+12%") -> str:
+    """
+    Resolve a taxa de voz para engines de quiz (paper quiz / dilemas).
+
+    Princípio de arquitetura:
+    Ritmo de fala é uma propriedade intrínseca de cada formato de vídeo, calibrado
+    rigorosamente para atingir a meta de duração de 60-65s (+20% no paper quiz, +12%
+    no quiz de dilemas). Velocidades de voz globais ou herdadas de perfil numérico
+    (como voice_rate = 0.8 do config global) NÃO se aplicam aos formatos de quiz e
+    são intencionalmente ignoradas em favor do default calibrado do formato.
+
+    Regras:
+    - String explicitamente formatada com '%' (ex.: '+15%', '-10%'): mantida inalterada
+      (permite override explícito e validado do formato/template).
+    - Qualquer outro caso (float/int global como 0.8, 1.0, 1.2, None, 0, NaN, tipos inválidos):
+      retorna sempre default_rate do formato (+20% paper / +12% dilema).
+
+    Configuração granular por canal/formato será formalizada na Missão M6.
+    """
+    if isinstance(raw_rate, str) and "%" in raw_rate:
+        return raw_rate
+    return default_rate
 
 
 def ensure_file_path_exists(file_path: str) -> None:

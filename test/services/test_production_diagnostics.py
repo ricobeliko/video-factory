@@ -10,6 +10,7 @@ Testes direcionados para o serviço de Diagnósticos de Produção (Missão SIS3
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -21,7 +22,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.models import const
-from app.services import production_diagnostics
+from app.services import (
+    autonomous_production,
+    operator_console,
+    production_diagnostics,
+    production_overview,
+    profile_manager,
+    quality_score,
+    safety_gate,
+    scheduler,
+)
 
 
 def _create_synthetic_test_db(db_path: str) -> None:
@@ -111,6 +121,15 @@ def _create_synthetic_test_db(db_path: str) -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS publication_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                status TEXT NOT NULL,
+                published_at TEXT,
+                metadata_json TEXT
             );
             """
         )
@@ -586,3 +605,232 @@ def test_diagnostics_api_endpoint_200_and_strictly_read_only():
 
         assert tables_pre == tables_post
         assert pre_counts == post_counts
+
+
+def test_ro_connection_guarantees_and_non_existent_db():
+    """Valida garantias estritas de somente leitura (_get_ro_connection) e caso de banco inexistente."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_ro.db")
+        _create_synthetic_test_db(db_file)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        h1_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES ('c1', 'Canal 1', 'canal-1', ?, ?)",
+                (now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES ('t-recent-1', 'c1', ?)",
+                (h1_ago,),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 't-recent-1', 'Iniciando', ?)
+                """,
+                (h1_ago, json.dumps({"topic": "Tema Recente", "profile_id": "c1"})),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # 1. Tentativa de escrita pela conexão RO falha
+        ro_conn = production_diagnostics._get_ro_connection(db_file)
+        with pytest.raises(sqlite3.OperationalError):
+            ro_conn.execute("INSERT INTO autopilot_settings (key, value) VALUES ('hacked', 'yes');")
+        with pytest.raises(sqlite3.OperationalError):
+            ro_conn.execute("CREATE TABLE should_not_exist (id INT);")
+        ro_conn.close()
+
+        # 2. Hash do arquivo do banco antes e depois da execução do serviço permanece idêntico
+        with open(db_file, "rb") as f:
+            hash_before = hashlib.sha256(f.read()).hexdigest()
+
+        overview = production_diagnostics.get_diagnostics_overview(db_path=db_file)
+        assert overview["factory"]["state"] == "IDLE"
+        assert len(overview["channels"]) == 1
+        assert overview["channels"][0]["profile_id"] == "c1"
+        assert overview["channels"][0]["status"] == production_diagnostics.STATUS_OK
+
+        with open(db_file, "rb") as f:
+            hash_after = hashlib.sha256(f.read()).hexdigest()
+
+        assert hash_before == hash_after
+
+        # 3. Caso de banco inexistente devolve status UNKNOWN sem criar o arquivo em disco
+        ghost_db = os.path.join(tmp_dir, "ghost_database_does_not_exist.db")
+        assert not os.path.exists(ghost_db)
+
+        ghost_overview = production_diagnostics.get_diagnostics_overview(db_path=ghost_db)
+        assert ghost_overview["factory"]["state"] == production_diagnostics.STATUS_UNKNOWN
+        assert not os.path.exists(ghost_db)
+
+
+def test_ready_stock_canonical_and_older_than_24h():
+    """Valida que estoque canônico inclui vídeo pronto >24h e é idêntico ao production_overview."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_stock.db")
+        tasks_dir = os.path.join(tmp_dir, "tasks")
+        os.makedirs(tasks_dir, exist_ok=True)
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        safety_gate.init_safety_db(db_file)
+        quality_score.init_quality_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        old_time = now - timedelta(hours=36)
+        old_iso = old_time.isoformat()
+
+        task_id = "task-ready-old-36h"
+        task_path = os.path.join(tasks_dir, task_id)
+        os.makedirs(task_path, exist_ok=True)
+        with open(os.path.join(task_path, "final-1.mp4"), "wb") as f:
+            f.write(b"video mp4 bytes")
+        with open(os.path.join(task_path, "script.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "params": {"bgm_type": "none", "video_subject": "Fatos sobre Saturno"},
+                "material_sources": [{"provider": "pexels", "local_file": "v1.mp4"}]
+            }, f)
+
+        safety_gate.save_safety_assessment(
+            {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},
+            db_path=db_file,
+        )
+        with scheduler.get_connection(db_file) as conn:
+            conn.execute(
+                "UPDATE monetization_safety SET checked_at = ? WHERE task_id = ?",
+                (old_iso, task_id),
+            )
+            conn.execute(
+                "INSERT INTO content_quality_scores "
+                "(task_id, topic, quality_score, quality_label, created_at) VALUES (?, ?, 82.0, 'GOOD', ?)",
+                (task_id, "Fatos sobre Saturno", old_iso),
+            )
+        scheduler.save_task_platforms(task_id, ["youtube"], db_path=db_file)
+        profile_manager.save_task_profile(task_id, "default", db_path=db_file)
+        operator_console.invalidate_render_pass_cache()
+
+        # Executa com task_dir apontando para tasks_dir
+        with patch("app.utils.utils.task_dir", return_value=tasks_dir):
+            # Diagnóstico de produção
+            diag_res = production_diagnostics.get_diagnostics_overview(
+                db_path=db_file,
+                task_base_dir=tasks_dir,
+                now=now,
+            )
+            chan_diag = next(c for c in diag_res["channels"] if c["profile_id"] == "default")
+            # Vídeo pronto há 36h DEVE estar no estoque do diagnóstico
+            assert chan_diag["ready_stock"]["count"] == 1
+
+            # Overview da tela Produção
+            production_overview.clear_production_overview_cache()
+            overview_res = production_overview.get_production_overview(
+                profile_id="default",
+                db_path=db_file,
+                use_cache=False,
+            )
+            chan_overview = next(c for c in overview_res["channels"] if c["profile_id"] == "default")
+
+            # O estoque do diagnóstico deve ser idêntico ao que a tela Produção mostra para o mesmo canal
+            assert chan_diag["ready_stock"]["count"] == chan_overview["ready_stock"]["total"]
+            assert chan_diag["ready_stock"]["count"] == overview_res["totals"]["total_ready"]
+
+
+def test_max_attempts_24h_quota_canonical_logic():
+    """Valida resolução da cota max_attempts_24h conforme regra canônica de autonomous_production."""
+    # 1. Perfil default sem override -> 15 (DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H)
+    assert production_diagnostics.resolve_channel_max_attempts(
+        "default", {}
+    ) == autonomous_production.DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H
+    assert production_diagnostics.resolve_channel_max_attempts(
+        None, {}
+    ) == autonomous_production.DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H
+    assert production_diagnostics.resolve_channel_max_attempts(
+        "", {}
+    ) == autonomous_production.DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H
+
+    # 2. Canal secundário sem override -> 8
+    assert production_diagnostics.resolve_channel_max_attempts(
+        "channel-secundario", {}
+    ) == 8
+
+    # 3. Canal secundário com override -> valor do override (ex.: 30)
+    settings_override_sec = {
+        f"{autonomous_production.KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:channel-secundario": "30"
+    }
+    assert production_diagnostics.resolve_channel_max_attempts(
+        "channel-secundario", settings_override_sec
+    ) == 30
+
+    # 4. Canal default com override -> valor do override (ex.: 25)
+    settings_override_def = {
+        f"{autonomous_production.KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:default": "25"
+    }
+    assert production_diagnostics.resolve_channel_max_attempts(
+        "default", settings_override_def
+    ) == 25
+
+
+def test_factory_pause_via_operator_console_and_gap_suppression():
+    """Valida que pause_factory() de operator_console gera FACTORY_PAUSED_OR_ERROR e suprime NO_GENERATION_GAP."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_pause.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        old_time = (now - timedelta(hours=14)).isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("channel-paused-test", "Canal Pausa", "canal-pausa", now_iso, now_iso),
+            )
+            task_id = "task-pause-01"
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                (task_id, "channel-paused-test", old_time),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'Iniciando', ?)
+                """,
+                (old_time, task_id, json.dumps({"topic": "Tema Antigo", "profile_id": "channel-paused-test"})),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Pausa a fábrica chamando a função real usada pela tela Sistema / API
+        with patch("app.services.operator_console.is_primary_instance", return_value=True):
+            operator_console.pause_factory(db_path=db_file)
+
+        diag_res = production_diagnostics.get_diagnostics_overview(
+            db_path=db_file,
+            now=now,
+        )
+
+        assert diag_res["factory"]["state"] == "PAUSED"
+        assert diag_res["factory"]["is_paused"] is True
+        chan = next(c for c in diag_res["channels"] if c["profile_id"] == "channel-paused-test")
+        assert chan["status"] == production_diagnostics.STATUS_PAUSADO
+
+        codes = [d["code"] for d in chan["diagnoses"]]
+        # Confirma que FACTORY_PAUSED_OR_ERROR com severidade info está presente
+        assert production_diagnostics.CODE_FACTORY_PAUSED_OR_ERROR in codes
+        p_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_FACTORY_PAUSED_OR_ERROR)
+        assert p_diag["severity"] == production_diagnostics.SEVERITY_INFO
+
+        # Confirma que NO_GENERATION_GAP NÃO dispara enquanto pausada
+        assert production_diagnostics.CODE_NO_GENERATION_GAP not in codes
+

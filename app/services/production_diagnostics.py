@@ -1,4 +1,4 @@
-"""Production Diagnostics Service (Web UI V2 - Missão SIS3).
+"""Production Diagnostics Service (Web UI V2 - Missão SIS3 / SIS3b).
 
 Fornece diagnóstico estruturado e em tempo real sobre a produção de vídeos:
 - Detecta por que canais não estão produzindo ou estão com estoque baixo
@@ -13,15 +13,19 @@ import json
 import os
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
 from app.models import const
 from app.services import (
+    autonomous_production,
     operator_console,
     profile_manager,
+    quality_score,
     scheduler,
 )
 
@@ -70,18 +74,91 @@ CODE_THROTTLED_NORMAL: str = "THROTTLED_NORMAL"
 
 
 def _get_ro_connection(target_path: str) -> sqlite3.Connection:
-    """Abre conexão SQLite em modo somente leitura (mode=ro) com fallback seguro."""
-    abs_path = os.path.abspath(target_path)
-    if os.path.isfile(abs_path):
-        try:
-            conn = sqlite3.connect(f"file:{abs_path}?mode=ro", uri=True, timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            return conn
-        except Exception:
-            pass
-    conn = sqlite3.connect(abs_path, timeout=5.0)
+    """Abre conexão SQLite estritamente em modo somente leitura (mode=ro).
+
+    Regras de robustez:
+    - Monta URI via Path(target_path).resolve().as_uri() + "?mode=ro"
+    - Executa PRAGMA query_only=ON
+    - SEM fallback gravável
+    - Se o arquivo não existir ou conexão falhar, lança exceção para tratamento seguro
+    """
+    p = Path(target_path).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"Arquivo de banco de dados não encontrado: {p}")
+
+    uri = p.as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON;")
     return conn
+
+
+@contextmanager
+def _read_only_stock_isolation():
+    """Garante que a chamada ao estoque canônico execute estritamente em modo de leitura,
+
+    interceptando chamadas acidentais a init_db / CREATE TABLE sem modificar tabelas
+    e garantindo que conexões internas rodem com PRAGMA query_only=ON em mode=ro.
+    """
+    orig_sched_init = scheduler.init_db
+    orig_qs_init = quality_score.init_quality_db
+    orig_pm_init = profile_manager.init_profile_db
+    orig_op_init = operator_console.init_operator_db
+    orig_sched_conn = scheduler.get_connection
+    orig_pm_conn = profile_manager.get_connection
+
+    @contextmanager
+    def _ro_conn_gen(db_path=None):
+        path = scheduler.get_db_path(db_path)
+        conn = _get_ro_connection(path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    try:
+        scheduler.init_db = lambda *args, **kwargs: None
+        quality_score.init_quality_db = lambda *args, **kwargs: None
+        profile_manager.init_profile_db = lambda *args, **kwargs: None
+        operator_console.init_operator_db = lambda *args, **kwargs: None
+        scheduler.get_connection = _ro_conn_gen
+        profile_manager.get_connection = _ro_conn_gen
+        yield
+    finally:
+        scheduler.init_db = orig_sched_init
+        quality_score.init_quality_db = orig_qs_init
+        profile_manager.init_profile_db = orig_pm_init
+        operator_console.init_operator_db = orig_op_init
+        scheduler.get_connection = orig_sched_conn
+        profile_manager.get_connection = orig_pm_conn
+
+
+def resolve_channel_max_attempts(pid: str, auto_settings: Dict[str, str]) -> int:
+    """Calcula o teto de tentativas 24h do canal conforme a lógica real de autonomous_production.get_max_attempts_24h.
+
+    - Perfil default: DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H (15) se não houver override.
+    - Canais secundários: 8 se não houver override.
+    - Override na chave autonomous_max_attempts_24h:<profile_id> tem precedência.
+    """
+    clean_p = str(pid or "").strip()
+    is_default = (not clean_p) or (clean_p in (profile_manager.DEFAULT_PROFILE_ID, "default"))
+
+    stored = None
+    if not is_default:
+        stored = auto_settings.get(f"{autonomous_production.KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_p}")
+    else:
+        if clean_p:
+            stored = auto_settings.get(f"{autonomous_production.KEY_AUTONOMOUS_MAX_ATTEMPTS_24H}:{clean_p}")
+        if stored is None:
+            stored = auto_settings.get(autonomous_production.KEY_AUTONOMOUS_MAX_ATTEMPTS_24H)
+
+    if stored is not None:
+        try:
+            return max(1, int(stored))
+        except (ValueError, TypeError):
+            pass
+
+    return autonomous_production.DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H if is_default else 8
 
 
 def _parse_iso_to_utc(dt_str: Optional[str]) -> Optional[datetime]:
@@ -113,27 +190,22 @@ def _format_iso_utc(dt: Optional[datetime]) -> Optional[str]:
 
 def _extract_rejection_reason(msg: str, metadata: Dict[str, Any]) -> str:
     """Extrai motivo cru e fidedigno de reprovação a partir dos metadados e mensagem do evento."""
-    # 1. Provedor não autorizado ou sem proveniência comprovada
     unauth = metadata.get("unauthorized_provider")
     if unauth:
         return f"Provedor visual não autorizado: '{unauth}'"
 
-    # 2. Falha de proveniência do Google Flow
     flow_fail = metadata.get("flow_validation_failure")
     if flow_fail:
         return f"Falha de proveniência Google Flow: {flow_fail}"
 
-    # 3. Copyright reason
     cp_reason = metadata.get("copyright_reason") or metadata.get("rejection_reason")
     if cp_reason:
         return str(cp_reason).strip()
 
-    # 4. Falha de BGM
     bgm_status = metadata.get("bgm_status")
     if bgm_status and bgm_status not in ("SAFE_NO_BGM", "SAFE_PROCEDURAL"):
         return f"BGM não aprovada: {bgm_status}"
 
-    # 5. Extração de trecho da mensagem crua
     if msg:
         raw_msg = str(msg).strip()
         if "reprovada nos Gates:" in raw_msg:
@@ -179,7 +251,40 @@ def get_diagnostics_overview(
 
     clean_filter_pid = str(profile_id).strip() if profile_id else None
 
-    conn = _get_ro_connection(effective_db)
+    # Verifica se arquivo existe antes de tentar abrir; nunca cria arquivo se inexistente
+    p_db = Path(effective_db).resolve()
+    if not p_db.is_file():
+        return {
+            "factory": {
+                "state": STATUS_UNKNOWN,
+                "is_paused": False,
+                "message": f"Banco de dados não encontrado: {p_db}",
+                "last_error": None,
+                "primary_instance": {
+                    "node_id": None, "node_name": None, "hostname": None,
+                    "pid": None, "status": None, "last_heartbeat": None,
+                },
+            },
+            "channels": [],
+        }
+
+    try:
+        conn = _get_ro_connection(effective_db)
+    except Exception as exc:
+        return {
+            "factory": {
+                "state": STATUS_UNKNOWN,
+                "is_paused": False,
+                "message": f"Não foi possível abrir o banco em modo somente leitura: {exc}",
+                "last_error": str(exc),
+                "primary_instance": {
+                    "node_id": None, "node_name": None, "hostname": None,
+                    "pid": None, "status": None, "last_heartbeat": None,
+                },
+            },
+            "channels": [],
+        }
+
     try:
         existing_tables = {
             r[0] for r in conn.execute(
@@ -215,18 +320,33 @@ def get_diagnostics_overview(
                     "last_heartbeat": _format_iso_utc(_parse_iso_to_utc(lr.get("last_heartbeat"))),
                 }
 
-        # Leitura puramente passiva de configurações autônomas
+        # Leitura puramente passiva de configurações operacionais da mesma fonte de Pausar/Retomar
         auto_settings: Dict[str, str] = {}
         if "autopilot_settings" in existing_tables:
             s_rows = conn.execute("SELECT key, value FROM autopilot_settings;").fetchall()
             auto_settings = {r[0]: str(r[1]) for r in s_rows if r[0]}
 
-        factory_state = str(auto_settings.get("autonomous_state") or "IDLE").upper()
+        # A tela Sistema e operator_console gravam 'factory_state' em autopilot_settings (operator_console.py:977)
+        factory_state_setting = str(auto_settings.get("factory_state") or "").upper().strip()
+        auto_state_setting = str(auto_settings.get("autonomous_state") or "").upper().strip()
         enabled_val = str(auto_settings.get("autonomous_mode_enabled") or "true").lower()
         is_factory_enabled = enabled_val in ("1", "true", "yes")
+
+        is_factory_paused = (
+            factory_state_setting == operator_console.FACTORY_STATE_PAUSED
+            or auto_state_setting == "PAUSED"
+            or not is_factory_enabled
+        )
+
+        if is_factory_paused:
+            factory_state = "PAUSED"
+        elif auto_state_setting == "ERROR":
+            factory_state = "ERROR"
+        else:
+            factory_state = auto_state_setting or "IDLE"
+
         factory_msg = str(auto_settings.get("autonomous_message") or "")
         factory_error = auto_settings.get("autonomous_last_error")
-        is_factory_paused = (factory_state == "PAUSED" or not is_factory_enabled)
 
         # -----------------------------------------------------------------
         # 2. Leitura de Perfis / Canais
@@ -361,36 +481,32 @@ def get_diagnostics_overview(
         chan_events = events_by_channel.get(pid, [])
         is_channel_active = bool(prof.get("is_active", 1))
 
-        # Cotas lidas passivamente
+        # Meta de estoque lida passivamente
         target_val = auto_settings.get(f"autonomous_target_ready_stock:{pid}") or auto_settings.get("autonomous_target_ready_stock")
         try:
             target_stock = int(target_val) if target_val is not None else 3
         except (ValueError, TypeError):
             target_stock = 3
 
-        max_att_val = auto_settings.get(f"autonomous_max_attempts_24h:{pid}") or auto_settings.get("autonomous_max_attempts_24h")
+        # Cota de tentativas 24h reaproveitando regras canônicas de autonomous_production.get_max_attempts_24h
+        max_attempts_24h = resolve_channel_max_attempts(pid, auto_settings)
+
+        # -------------------------------------------------------------
+        # Estoque Canônico (mesma fonte da tela Produção / production_overview)
+        # -------------------------------------------------------------
         try:
-            max_attempts_24h = int(max_att_val) if max_att_val is not None else 8
-        except (ValueError, TypeError):
-            max_attempts_24h = 8
+            with _read_only_stock_isolation():
+                stock_info = operator_console.get_canonical_ready_stock(
+                    task_base_dir=task_base_dir,
+                    db_path=effective_db,
+                    profile_id=pid,
+                )
+        except Exception as exc:
+            logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao obter estoque canônico para perfil {pid}: {exc}")
+            stock_info = {"total_ready": 0, "youtube_ready": []}
 
-        # Estoque pronto canônico calculado de forma somente leitura em memória
-        stock_count = 0
-        ready_task_ids: Set[str] = set()
-
-        for s_tid, s_rec in safety_map.items():
-            if s_rec.get("safety_status") == const.SAFETY_STATUS_PASS:
-                t_pid = task_profile_map.get(s_tid)
-                if t_pid == pid:
-                    q_rec = quality_map.get(s_tid)
-                    if q_rec and q_rec.get("quality_score", 0) >= 70:
-                        if q_rec.get("quality_label") in ("GOOD", "STRONG", "PASS"):
-                            sp = scheduled_tasks.get(s_tid)
-                            if not (sp and sp.get("status") in ("published", "cancelled")):
-                                final_v = scheduler.get_task_final_video(s_tid, task_base_dir=task_base_dir)
-                                if final_v and os.path.isfile(final_v) and os.path.getsize(final_v) > 0:
-                                    stock_count += 1
-                                    ready_task_ids.add(s_tid)
+        stock_count = int(stock_info.get("total_ready", 0))
+        ready_task_ids = {it.get("task_id") for it in stock_info.get("youtube_ready", []) if it.get("task_id")}
 
         # -------------------------------------------------------------
         # Reconstrução das Gerações do Canal e Contadores 24h
@@ -667,7 +783,7 @@ def get_diagnostics_overview(
                 "code": CODE_FACTORY_PAUSED_OR_ERROR,
                 "severity": SEVERITY_INFO,
                 "title": "Fábrica pausada operacionalmente",
-                "detail": factory_msg or "A produção autônoma está pausada ou desativada para a fábrica.",
+                "detail": factory_msg or "A fábrica está pausada operacionalmente (factory_state='PAUSED'). Novas execuções e gerações estão bloqueadas.",
                 "since": None,
                 "evidence": {"task_ids": [], "event_ids": []},
                 "suggested_action": "Retomar a fábrica através da barra superior para reativar o agendamento.",

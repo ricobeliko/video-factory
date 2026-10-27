@@ -813,3 +813,33 @@
   align-items: center;
   gap: 8px;
 }
+
+.sys-badge-pinned {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.sys-btn-pin-channel {
+  background: transparent;
+  border: 1px dashed rgba(96, 165, 250, 0.4);
+  color: #60A5FA;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.sys-btn-pin-channel:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: #3B82F6;
+  color: #93C5FD;
+}
+
+.sys-btn-pin-channel--active {
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid #3B82F6;
+  color: #BFDBFE;
+}

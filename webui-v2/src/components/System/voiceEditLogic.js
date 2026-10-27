@@ -132,11 +132,19 @@ export function validateVoiceForm(formData, { isQuiz = false, allowedVoiceIds = 
  * effectiveVoice: { voice_name: { value, source }, voice_rate: { value, source }, voice_volume: { value, source } }
  * formData: { voice_name, voice_rate, voice_volume }
  */
-export function calculateVoiceDiff(effectiveVoice, formData, { isQuiz = false } = {}) {
+export function calculateVoiceDiff(effectiveVoice, formData, { isQuiz = false, pinned } = {}) {
   if (!formData) return [];
 
   const diffs = [];
   const fields = isQuiz ? ['voice_name', 'voice_volume'] : ['voice_name', 'voice_rate', 'voice_volume'];
+
+  const isFieldPinned = (field) => {
+    if (!pinned) return false;
+    if (pinned instanceof Set) return pinned.has(field);
+    if (Array.isArray(pinned)) return pinned.includes(field);
+    if (typeof pinned === 'object') return Boolean(pinned[field]);
+    return false;
+  };
 
   for (const field of fields) {
     const currentEff = effectiveVoice && effectiveVoice[field] ? effectiveVoice[field].value : undefined;
@@ -156,12 +164,13 @@ export function calculateVoiceDiff(effectiveVoice, formData, { isQuiz = false } 
           oldValue: currentEff,
           newValue: null,
           isReset: true,
+          isPin: false,
         });
       }
       continue;
     }
 
-    // Caso 2: Edição comum (valor alterado em relação ao efetivo atual)
+    // Caso 2: Edição comum ou Fixação no canal (isPin)
     let isChanged = false;
     if (field === 'voice_name') {
       isChanged = String(formVal).trim() !== String(currentEff || '').trim();
@@ -175,13 +184,25 @@ export function calculateVoiceDiff(effectiveVoice, formData, { isQuiz = false } 
       }
     }
 
-    if (isChanged) {
+    const formattedNewVal = field === 'voice_name' ? String(formVal).trim() : Number(formVal);
+
+    if (currentSource !== 'channel' && isFieldPinned(field)) {
       diffs.push({
         field,
         label: VOICE_FIELD_LABELS[field] || field,
         oldValue: currentEff,
-        newValue: field === 'voice_name' ? String(formVal).trim() : Number(formVal),
+        newValue: formattedNewVal,
         isReset: false,
+        isPin: true,
+      });
+    } else if (isChanged) {
+      diffs.push({
+        field,
+        label: VOICE_FIELD_LABELS[field] || field,
+        oldValue: currentEff,
+        newValue: formattedNewVal,
+        isReset: false,
+        isPin: false,
       });
     }
   }

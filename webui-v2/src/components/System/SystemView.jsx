@@ -65,6 +65,7 @@ export default function SystemView({ onNavigate }) {
   const [channelConfirmDialog, setChannelConfirmDialog] = useState(null); // { profileId, profileName, diffList, payloads }
   const [isSavingChannel, setIsSavingChannel] = useState(false);
   const [allowedVoices, setAllowedVoices] = useState([]);
+  const [pinnedVoiceFields, setPinnedVoiceFields] = useState(new Set());
 
   // Temporizadores
   const [lastFetchTime, setLastFetchTime] = useState(null);
@@ -255,6 +256,7 @@ export default function SystemView({ onNavigate }) {
     const isQuiz = Boolean(fullSettings.is_quiz ?? channel.is_quiz);
 
     setEditingChannelId(pid);
+    setPinnedVoiceFields(new Set());
     setChannelFormData({
       target_ready_stock: quotas.target_ready_stock ?? 3,
       posts_per_day: quotas.posts_per_day ?? schedule.posts_per_day ?? 1,
@@ -270,8 +272,21 @@ export default function SystemView({ onNavigate }) {
 
   const handleCancelEdit = () => {
     setEditingChannelId(null);
+    setPinnedVoiceFields(new Set());
     setChannelFormData({});
     setChannelFormErrors({});
+  };
+
+  const handleTogglePinVoice = (field) => {
+    setPinnedVoiceFields((prev) => {
+      const next = new Set(prev);
+      if (next.has(field)) {
+        next.delete(field);
+      } else {
+        next.add(field);
+      }
+      return next;
+    });
   };
 
   const handleResetVoiceInherit = (field) => {
@@ -351,7 +366,10 @@ export default function SystemView({ onNavigate }) {
     };
 
     const settingsDiffList = calculateSettingsDiff(orig, channelFormData);
-    const voiceDiffList = calculateVoiceDiff(fullSettings.effective_voice, channelFormData, { isQuiz });
+    const voiceDiffList = calculateVoiceDiff(fullSettings.effective_voice, channelFormData, {
+      isQuiz,
+      pinned: pinnedVoiceFields,
+    });
 
     if (settingsDiffList.length === 0 && voiceDiffList.length === 0) {
       setActionFeedback({
@@ -406,6 +424,7 @@ export default function SystemView({ onNavigate }) {
       });
       setChannelConfirmDialog(null);
       setEditingChannelId(null);
+      setPinnedVoiceFields(new Set());
       setChannelFormData({});
       setChannelFormErrors({});
       await fetchData();
@@ -811,6 +830,18 @@ export default function SystemView({ onNavigate }) {
                 const rateSourceInfo = getVoiceSourceInfo(effVoice.voice_rate?.source);
                 const volSourceInfo = getVoiceSourceInfo(effVoice.voice_volume?.source);
 
+                const isVoicePinned = pinnedVoiceFields.has('voice_name');
+                const isVoiceValChanged = String(channelFormData.voice_name || '').trim() !== String(effVoice.voice_name?.value || '').trim();
+                const showVoicePinned = voiceSourceInfo.isInherited && (isVoicePinned || isVoiceValChanged);
+
+                const isRatePinned = pinnedVoiceFields.has('voice_rate');
+                const isRateValChanged = Math.abs(Number(channelFormData.voice_rate) - Number(effVoice.voice_rate?.value)) > 0.001;
+                const showRatePinned = rateSourceInfo.isInherited && (isRatePinned || isRateValChanged);
+
+                const isVolPinned = pinnedVoiceFields.has('voice_volume');
+                const isVolValChanged = Math.abs(Number(channelFormData.voice_volume) - Number(effVoice.voice_volume?.value)) > 0.001;
+                const showVolPinned = volSourceInfo.isInherited && (isVolPinned || isVolValChanged);
+
                 return (
                   <article
                     key={pid}
@@ -1048,6 +1079,8 @@ export default function SystemView({ onNavigate }) {
                               </select>
                               {channelFormData.voice_name === null ? (
                                 <span className="sys-badge sys-badge-global">Global (herdado)</span>
+                              ) : showVoicePinned ? (
+                                <span className="sys-badge sys-badge-pinned">Será fixado no canal</span>
                               ) : (
                                 <span className={`sys-badge ${voiceSourceInfo.badgeClass}`}>
                                   {voiceSourceInfo.label}{voiceSourceInfo.isInherited ? ' (herdado)' : ''}
@@ -1061,6 +1094,16 @@ export default function SystemView({ onNavigate }) {
                                   title="Voltar a herdar voz global"
                                 >
                                   Voltar a herdar
+                                </button>
+                              )}
+                              {!voiceSourceInfo.canReset && channelFormData.voice_name !== null && (
+                                <button
+                                  type="button"
+                                  className={`sys-btn-pin-channel ${isVoicePinned ? 'sys-btn-pin-channel--active' : ''}`}
+                                  onClick={() => handleTogglePinVoice('voice_name')}
+                                  title={isVoicePinned ? 'Desfazer fixação no canal' : 'Fixar este valor diretamente no canal'}
+                                >
+                                  {isVoicePinned ? 'Desfazer fixação' : 'Fixar no canal'}
                                 </button>
                               )}
                             </div>
@@ -1094,6 +1137,8 @@ export default function SystemView({ onNavigate }) {
                                   />
                                   {channelFormData.voice_rate === null ? (
                                     <span className="sys-badge sys-badge-global">Global (herdado)</span>
+                                  ) : showRatePinned ? (
+                                    <span className="sys-badge sys-badge-pinned">Será fixado no canal</span>
                                   ) : (
                                     <span className={`sys-badge ${rateSourceInfo.badgeClass}`}>
                                       {rateSourceInfo.label}{rateSourceInfo.isInherited ? ' (herdado)' : ''}
@@ -1107,6 +1152,16 @@ export default function SystemView({ onNavigate }) {
                                       title="Voltar a herdar velocidade global"
                                     >
                                       Voltar a herdar
+                                    </button>
+                                  )}
+                                  {!rateSourceInfo.canReset && channelFormData.voice_rate !== null && (
+                                    <button
+                                      type="button"
+                                      className={`sys-btn-pin-channel ${isRatePinned ? 'sys-btn-pin-channel--active' : ''}`}
+                                      onClick={() => handleTogglePinVoice('voice_rate')}
+                                      title={isRatePinned ? 'Desfazer fixação no canal' : 'Fixar este valor diretamente no canal'}
+                                    >
+                                      {isRatePinned ? 'Desfazer fixação' : 'Fixar no canal'}
                                     </button>
                                   )}
                                 </div>
@@ -1135,6 +1190,8 @@ export default function SystemView({ onNavigate }) {
                               />
                               {channelFormData.voice_volume === null ? (
                                 <span className="sys-badge sys-badge-global">Global (herdado)</span>
+                              ) : showVolPinned ? (
+                                <span className="sys-badge sys-badge-pinned">Será fixado no canal</span>
                               ) : (
                                 <span className={`sys-badge ${volSourceInfo.badgeClass}`}>
                                   {volSourceInfo.label}{volSourceInfo.isInherited ? ' (herdado)' : ''}
@@ -1148,6 +1205,16 @@ export default function SystemView({ onNavigate }) {
                                   title="Voltar a herdar volume global"
                                 >
                                   Voltar a herdar
+                                </button>
+                              )}
+                              {!volSourceInfo.canReset && channelFormData.voice_volume !== null && (
+                                <button
+                                  type="button"
+                                  className={`sys-btn-pin-channel ${isVolPinned ? 'sys-btn-pin-channel--active' : ''}`}
+                                  onClick={() => handleTogglePinVoice('voice_volume')}
+                                  title={isVolPinned ? 'Desfazer fixação no canal' : 'Fixar este valor diretamente no canal'}
+                                >
+                                  {isVolPinned ? 'Desfazer fixação' : 'Fixar no canal'}
                                 </button>
                               )}
                             </div>
@@ -1335,6 +1402,23 @@ export default function SystemView({ onNavigate }) {
               <tbody>
                 {channelConfirmDialog.diffList.map((item) => {
                   const isVoice = ['voice_name', 'voice_rate', 'voice_volume'].includes(item.field);
+                  const isPinSameVal = item.isPin && (
+                    item.field === 'voice_name'
+                      ? String(item.oldValue || '').trim() === String(item.newValue || '').trim()
+                      : Math.abs(Number(item.oldValue) - Number(item.newValue)) < 0.001
+                  );
+
+                  if (isPinSameVal) {
+                    return (
+                      <tr key={item.field}>
+                        <td><strong>{item.label}</strong></td>
+                        <td colSpan="3" className="sys-diff-after">
+                          Fixar no canal: {formatVoiceDiffDisplay(item.field, item.newValue, allowedVoices)}
+                        </td>
+                      </tr>
+                    );
+                  }
+
                   return (
                     <tr key={item.field}>
                       <td><strong>{item.label}</strong></td>

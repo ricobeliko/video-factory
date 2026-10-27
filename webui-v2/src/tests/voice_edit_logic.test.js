@@ -170,3 +170,75 @@ test('8. formatVoiceDiffDisplay: formata rótulos amigáveis e percentuais', () 
   assert.equal(formatVoiceDiffDisplay('voice_volume', 0.8), '80%');
   assert.equal(formatVoiceDiffDisplay('voice_volume', null), 'Voltar a herdar (global)');
 });
+
+test('9. calculateVoiceDiff e buildVoicePatchPayload: campo herdado com mesmo valor + pinned gera diff isPin e payload com o campo', () => {
+  const effective = {
+    voice_name: { value: 'en-US-BrianMultilingualNeural', source: 'global' },
+    voice_rate: { value: 1.0, source: 'global' },
+    voice_volume: { value: 1.0, source: 'default' },
+  };
+
+  const diff = calculateVoiceDiff(
+    effective,
+    { voice_name: 'en-US-BrianMultilingualNeural', voice_rate: 1.0, voice_volume: 1.0 },
+    { pinned: new Set(['voice_name']) }
+  );
+
+  assert.equal(diff.length, 1);
+  assert.equal(diff[0].field, 'voice_name');
+  assert.equal(diff[0].isPin, true);
+  assert.equal(diff[0].oldValue, 'en-US-BrianMultilingualNeural');
+  assert.equal(diff[0].newValue, 'en-US-BrianMultilingualNeural');
+
+  const { payload, hasChanges } = buildVoicePatchPayload(diff);
+  assert.equal(hasChanges, true);
+  assert.deepEqual(payload, { voice_name: 'en-US-BrianMultilingualNeural' });
+});
+
+test('10. calculateVoiceDiff: mesmo caso herdado com mesmo valor SEM pinned não gera diff', () => {
+  const effective = {
+    voice_name: { value: 'en-US-BrianMultilingualNeural', source: 'global' },
+    voice_rate: { value: 1.0, source: 'global' },
+    voice_volume: { value: 1.0, source: 'default' },
+  };
+
+  const diff = calculateVoiceDiff(
+    effective,
+    { voice_name: 'en-US-BrianMultilingualNeural', voice_rate: 1.0, voice_volume: 1.0 },
+    { pinned: new Set() }
+  );
+
+  assert.equal(diff.length, 0);
+});
+
+test('11. calculateVoiceDiff: campo com source "channel" e mesmo valor + pinned não gera diff', () => {
+  const effective = {
+    voice_name: { value: 'pt-BR-AntonioNeural', source: 'channel' },
+    voice_rate: { value: 1.1, source: 'channel' },
+    voice_volume: { value: 1.0, source: 'channel' },
+  };
+
+  const diff = calculateVoiceDiff(
+    effective,
+    { voice_name: 'pt-BR-AntonioNeural', voice_rate: 1.1, voice_volume: 1.0 },
+    { pinned: new Set(['voice_name', 'voice_rate']) }
+  );
+
+  assert.equal(diff.length, 0);
+});
+
+test('12. calculateVoiceDiff: quiz com pinned em voice_rate não gera diff de velocidade', () => {
+  const effective = {
+    voice_name: { value: 'pt-BR-FranciscaNeural', source: 'global' },
+    voice_rate: { value: 1.0, source: 'global' },
+    voice_volume: { value: 1.0, source: 'default' },
+  };
+
+  const diff = calculateVoiceDiff(
+    effective,
+    { voice_name: 'pt-BR-FranciscaNeural', voice_rate: 1.0, voice_volume: 1.0 },
+    { isQuiz: true, pinned: new Set(['voice_rate']) }
+  );
+
+  assert.equal(diff.length, 0);
+});

@@ -15,7 +15,7 @@ import time
 import unicodedata
 import wave
 from datetime import datetime, timedelta
-from typing import Union
+from typing import Any, Union
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape, unescape
 
@@ -1065,6 +1065,30 @@ def convert_rate_to_percent(rate: float) -> str:
     if percent >= 0:
         return f"+{percent}%"
     return f"{percent}%"
+
+
+def resolve_quiz_voice_rate(raw_rate: Any, default_rate: str = "+12%") -> str:
+    """
+    Resolve a taxa de voz para engines de quiz (paper quiz / dilemas).
+
+    Preserva as regras de negócio:
+    - String já formatada com '%' (ex.: '+15%', '-10%'): mantém inalterada.
+    - None / ausente / não numérico: retorna default_rate ('+20%' no paper, '+12%' no dilema).
+    - Numérico == 1.0: retorna default_rate (preserva ritmo acelerado original do quiz).
+    - Numérico <= 0 ou não finito (NaN, Inf): retorna default_rate (fallback defensivo).
+    - Numérico válido != 1.0 (ex.: 0.8 -> '-20%', 1.2 -> '+20%'): converte via convert_rate_to_percent.
+    """
+    if isinstance(raw_rate, str) and "%" in raw_rate:
+        return raw_rate
+    if raw_rate is None:
+        return default_rate
+    try:
+        f_rate = float(raw_rate)
+    except (TypeError, ValueError):
+        return default_rate
+    if not math.isfinite(f_rate) or f_rate <= 0 or f_rate == 1.0:
+        return default_rate
+    return convert_rate_to_percent(f_rate)
 
 
 def ensure_file_path_exists(file_path: str) -> None:

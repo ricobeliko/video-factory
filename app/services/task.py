@@ -3030,6 +3030,22 @@ def _run_quiz_pipeline(
         bgm_resolution=bgm_resolution,
     )
 
+    from app.services import profile_manager
+    task_profile_id = getattr(params, "profile_id", None)
+    if not task_profile_id and task_id:
+        task_profile_id = profile_manager.get_task_profile_id(task_id)
+
+    raw_quiz_voice = getattr(params, "voice_name", None)
+    if not raw_quiz_voice or not str(raw_quiz_voice).strip():
+        effective_v = profile_manager.get_effective_voice_settings(task_profile_id)
+        raw_quiz_voice = effective_v.get("voice_name", {}).get("value")
+
+    if not raw_quiz_voice or not str(raw_quiz_voice).strip():
+        logger.error(f"[QUIZ_PIPELINE][VOICE_ERROR] task_id={task_id}: voz do canal não definida")
+        return _mark_task_failed(task_id, "video", "voz do canal não definida")
+
+    quiz_voice_name = str(raw_quiz_voice).strip()
+
     if is_paper_quiz:
         try:
             from scripts.poc_quiz_paper_render import PaperQuizEngine, DurationGateError
@@ -3041,7 +3057,7 @@ def _run_quiz_pipeline(
                 output_video_path=final_video_path,
                 output_thumbnail_path=thumbnail_path,
                 temp_dir=temp_quiz_dir,
-                voice_name=getattr(params, "voice_name", None),
+                voice_name=quiz_voice_name,
                 voice_rate=v_rate_str,
                 bgm_path=resolved_bgm_path,
                 bgm_volume=0.14,
@@ -3051,6 +3067,9 @@ def _run_quiz_pipeline(
         except DurationGateError as dur_err:
             logger.error(f"[QUIZ_PAPER][DURATION_GATE_ERROR] task_id={task_id}: {dur_err}")
             return _mark_task_failed(task_id, "duration_safety", f"Duration safety blocked: {dur_err}")
+        except ValueError as val_err:
+            logger.error(f"[QUIZ_PAPER][VOICE_ERROR] task_id={task_id}: {val_err}")
+            return _mark_task_failed(task_id, "video", str(val_err))
         except Exception as exc:
             logger.error(f"[QUIZ_PAPER][ERROR] task_id={task_id}: {exc}")
             return _mark_task_failed(task_id, "video", f"Paper quiz render failed: {exc}")
@@ -3066,13 +3085,16 @@ def _run_quiz_pipeline(
                 output_thumbnail_path=thumbnail_path,
                 temp_dir=temp_quiz_dir,
                 images_dir=images_dir,
-                voice_name=getattr(params, "voice_name", None),
+                voice_name=quiz_voice_name,
                 voice_rate=v_rate_str,
                 bgm_path=resolved_bgm_path,
                 bgm_volume=0.14,
             )
             engine = QuizEngine(config=quiz_cfg)
             render_result = engine.render()
+        except ValueError as val_err:
+            logger.error(f"[QUIZ_ENGINE][VOICE_ERROR] task_id={task_id}: {val_err}")
+            return _mark_task_failed(task_id, "video", str(val_err))
         except Exception as exc:
             logger.error(f"[QUIZ_ENGINE][ERROR] task_id={task_id}: {exc}")
             return _mark_task_failed(task_id, "video", f"Quiz render failed: {exc}")

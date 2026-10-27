@@ -1740,6 +1740,11 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             },
         }
 
+        clean_voice = str(voice_name or "").strip()
+        if not clean_voice:
+            logger.error("[QUIZ_CONFIG] voz do canal não definida")
+            raise ValueError("voz do canal não definida")
+
         config_data = {
             "niche": niche,
             "quiz_title": title,
@@ -1758,7 +1763,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 "bgm_volume": bgm_volume if bgm_path else 0.0,
             },
             "voice_settings": {
-                "voice_name": voice_name or "pt-BR-AntonioNeural",
+                "voice_name": clean_voice,
                 "voice_rate": voice_rate or "+12%",
             },
             "countdown_settings": {
@@ -2141,9 +2146,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
         config_data["max_target_duration_sec"] = 65.0
         config_data["target_duration_range"] = [60.0, 65.0]
 
+        clean_paper_voice = str(voice_name or "").strip()
+        if not clean_paper_voice:
+            logger.error("[QUIZ_PAPER_CONFIG] voz do canal não definida")
+            raise ValueError("voz do canal não definida")
+
         if "voice_settings" not in config_data:
             config_data["voice_settings"] = {}
-        config_data["voice_settings"]["voice_name"] = voice_name or config_data["voice_settings"].get("voice_name") or "pt-BR-AntonioNeural"
+        config_data["voice_settings"]["voice_name"] = clean_paper_voice
         config_data["voice_settings"]["voice_rate"] = voice_rate or "+20%"
 
         if "video_settings" not in config_data:

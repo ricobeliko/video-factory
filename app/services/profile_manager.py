@@ -66,6 +66,7 @@ class VoiceSettings(BaseModel):
     voice_name: Optional[str] = None
     voice_rate: Optional[float] = None
     voice_volume: Optional[float] = None
+    tts_server: Optional[str] = None
 
 
 class VisualSettings(BaseModel):
@@ -914,6 +915,220 @@ def set_active_profile(profile_id: str, db_path: Optional[str] = None) -> Dict[s
 set_active_profile_id = set_active_profile
 
 
+def get_effective_voice_settings(
+    profile_id: str,
+    db_path: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Resolve as configurações efetivas de voz para um canal, aplicando a precedência:
+    Canal (settings.voice.*) > Global (config.ui.*) > Padrão do Sistema (config.app.* / fallback).
+
+    Retorna para cada campo {value, source} com source in ('channel', 'global', 'default').
+    """
+    from app.services import voice
+    from app.config import config
+
+    clean_id = str(profile_id or "").strip()
+    settings = get_profile_settings(clean_id, db_path=db_path) if clean_id else ChannelWorkspaceSettings()
+
+    # 1. voice_name: Canal > Global UI > Padrão App > Fallback Brian
+    channel_v = (
+        str(settings.voice.voice_name).strip()
+        if (settings and settings.voice and settings.voice.voice_name and str(settings.voice.voice_name).strip())
+        else None
+    )
+    global_v = (
+        str(config.ui.get("voice_name")).strip()
+        if (config.ui.get("voice_name") and str(config.ui.get("voice_name")).strip())
+        else None
+    )
+    default_v = (
+        str(config.app.get("voice_name")).strip()
+        if (config.app.get("voice_name") and str(config.app.get("voice_name")).strip())
+        else "en-US-BrianMultilingualNeural"
+    )
+
+    if channel_v:
+        c_name = voice.canonicalize_voice_name(channel_v)
+        if c_name.endswith(("-Male", "-Female")):
+            c_name = voice.parse_voice_name(c_name)
+        effective_v_name = c_name or channel_v
+        v_name_source = "channel"
+    elif global_v:
+        c_name = voice.canonicalize_voice_name(global_v)
+        if c_name.endswith(("-Male", "-Female")):
+            c_name = voice.parse_voice_name(c_name)
+        effective_v_name = c_name or global_v
+        v_name_source = "global"
+    else:
+        c_name = voice.canonicalize_voice_name(default_v)
+        if c_name.endswith(("-Male", "-Female")):
+            c_name = voice.parse_voice_name(c_name)
+        effective_v_name = c_name or default_v or "en-US-BrianMultilingualNeural"
+        v_name_source = "default"
+
+    # 2. voice_rate: Canal > Global UI > Padrão App > Fallback 1.0
+    channel_r = settings.voice.voice_rate if (settings and settings.voice and settings.voice.voice_rate is not None) else None
+    global_r = config.ui.get("voice_rate")
+    default_r = config.app.get("voice_rate")
+
+    if channel_r is not None:
+        try:
+            effective_rate = float(channel_r)
+        except (ValueError, TypeError):
+            effective_rate = 1.0
+        rate_source = "channel"
+    elif global_r is not None:
+        try:
+            effective_rate = float(global_r)
+        except (ValueError, TypeError):
+            effective_rate = 1.0
+        rate_source = "global"
+    else:
+        try:
+            effective_rate = float(default_r) if default_r is not None else 1.0
+        except (ValueError, TypeError):
+            effective_rate = 1.0
+        rate_source = "default"
+
+    # 3. voice_volume: Canal > Global UI > Padrão App > Fallback 1.0
+    channel_vol = settings.voice.voice_volume if (settings and settings.voice and settings.voice.voice_volume is not None) else None
+    global_vol = config.ui.get("voice_volume")
+    default_vol = config.app.get("voice_volume")
+
+    if channel_vol is not None:
+        try:
+            effective_volume = float(channel_vol)
+        except (ValueError, TypeError):
+            effective_volume = 1.0
+        volume_source = "channel"
+    elif global_vol is not None:
+        try:
+            effective_volume = float(global_vol)
+        except (ValueError, TypeError):
+            effective_volume = 1.0
+        volume_source = "global"
+    else:
+        try:
+            effective_volume = float(default_vol) if default_vol is not None else 1.0
+        except (ValueError, TypeError):
+            effective_volume = 1.0
+        volume_source = "default"
+
+    # 4. tts_server: Canal > Global UI > Padrão App > Fallback 'azure-tts-v1'
+    channel_srv = (
+        str(settings.voice.tts_server).strip()
+        if (settings and settings.voice and getattr(settings.voice, "tts_server", None) and str(settings.voice.tts_server).strip())
+        else None
+    )
+    global_srv = (
+        str(config.ui.get("tts_server")).strip()
+        if (config.ui.get("tts_server") and str(config.ui.get("tts_server")).strip())
+        else None
+    )
+    default_srv = (
+        str(config.app.get("tts_server")).strip()
+        if (config.app.get("tts_server") and str(config.app.get("tts_server")).strip())
+        else "azure-tts-v1"
+    )
+
+    if channel_srv:
+        effective_srv = channel_srv
+        srv_source = "channel"
+    elif global_srv:
+        effective_srv = global_srv
+        srv_source = "global"
+    else:
+        effective_srv = default_srv
+        srv_source = "default"
+
+    return {
+        "voice_name": {"value": effective_v_name, "source": v_name_source},
+        "voice_rate": {"value": effective_rate, "source": rate_source},
+        "voice_volume": {"value": effective_volume, "source": volume_source},
+        "tts_server": {"value": effective_srv, "source": srv_source},
+    }
+
+
+def update_profile_voice_settings(
+    profile_id: str,
+    voice_data: Dict[str, Any],
+    db_path: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Atualiza as configurações de voz do canal (profile) no settings_json.
+
+    Valida:
+    - voice_name via is_valid_pt_br_voice e canonicalize_voice_name
+    - voice_rate numérico entre 0.5 e 2.0
+    - voice_volume numérico entre 0.0 e 1.0
+    - tts_server opcional
+    """
+    import math
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    clean_id = str(profile_id or "").strip()
+    prof = get_profile(clean_id, db_path=db_path)
+    if not prof:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    current_settings = get_profile_settings(clean_id, db_path=db_path)
+
+    if "voice_name" in voice_data:
+        v_name = voice_data["voice_name"]
+        if v_name is not None:
+            from app.services import autonomous_production, voice
+            if not autonomous_production.is_valid_pt_br_voice(v_name):
+                raise ValueError(f"Voz '{v_name}' inválida ou não homologada para pt-BR. Use uma voz pt-BR-* ou en-US-BrianMultilingualNeural.")
+            clean_voice = voice.canonicalize_voice_name(v_name)
+            if clean_voice.endswith(("-Male", "-Female")):
+                clean_voice = voice.parse_voice_name(clean_voice)
+            if not autonomous_production.is_valid_pt_br_voice(clean_voice):
+                raise ValueError(f"Voz '{v_name}' inválida ou não homologada para pt-BR.")
+            current_settings.voice.voice_name = clean_voice
+        else:
+            current_settings.voice.voice_name = None
+
+    if "voice_rate" in voice_data:
+        v_rate = voice_data["voice_rate"]
+        if v_rate is not None:
+            try:
+                f_rate = float(v_rate)
+            except (ValueError, TypeError):
+                raise ValueError(f"Velocidade de voz deve ser um número entre 0.5 e 2.0 (recebido: {v_rate})")
+            if not math.isfinite(f_rate) or f_rate < 0.5 or f_rate > 2.0:
+                raise ValueError(f"Velocidade de voz deve ser um número entre 0.5 e 2.0 (recebido: {v_rate})")
+            current_settings.voice.voice_rate = f_rate
+        else:
+            current_settings.voice.voice_rate = None
+
+    if "voice_volume" in voice_data:
+        v_vol = voice_data["voice_volume"]
+        if v_vol is not None:
+            try:
+                f_vol = float(v_vol)
+            except (ValueError, TypeError):
+                raise ValueError(f"Volume de voz deve ser um número entre 0.0 e 1.0 (recebido: {v_vol})")
+            if not math.isfinite(f_vol) or f_vol < 0.0 or f_vol > 1.0:
+                raise ValueError(f"Volume de voz deve ser um número entre 0.0 e 1.0 (recebido: {v_vol})")
+            current_settings.voice.voice_volume = f_vol
+        else:
+            current_settings.voice.voice_volume = None
+
+    if "tts_server" in voice_data:
+        t_serv = voice_data["tts_server"]
+        current_settings.voice.tts_server = str(t_serv).strip() if t_serv is not None and str(t_serv).strip() else None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    json_str = current_settings.to_json()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE content_profiles SET settings_json = ?, updated_at = ? WHERE id = ?;",
+            (json_str, now_iso, clean_id),
+        )
+
+    return get_effective_voice_settings(clean_id, db_path=db_path)
+
+
 def get_profile_settings(profile_id: str, db_path: Optional[str] = None) -> ChannelWorkspaceSettings:
     """Recupera as configurações tipadas de um perfil. Se inexistente ou vazio, retorna defaults seguros."""
     init_profile_db(db_path)
@@ -1401,34 +1616,12 @@ def get_generation_profile_context(
     fallback_preset = const.DEFAULT_MONETIZATION_PRESET
     fallback_growth = const.DEFAULT_GROWTH_MODE
 
-    # 1. Voice - Precedência: Global UI (Voz Global da Fábrica) -> Profile Settings -> Global App -> Safe Default
-    # O controle 'Voz Global da Fábrica' na Channel Factory define a voz TTS única utilizada por todos os canais.
-    global_voice = (
-        str(config.ui.get("voice_name")).strip()
-        if (config.ui.get("voice_name") and str(config.ui.get("voice_name")).strip())
-        else None
-    )
-    profile_voice = (
-        str(settings.voice.voice_name).strip()
-        if (settings and settings.voice and settings.voice.voice_name and str(settings.voice.voice_name).strip())
-        else None
-    )
-    fallback_voice = config.app.get("voice_name") or "en-US-BrianMultilingualNeural"
-    raw_voice = global_voice or profile_voice or fallback_voice
-    from app.services import voice
-    voice_name = voice.canonicalize_voice_name(raw_voice) or "en-US-BrianMultilingualNeural"
-
-    global_rate = config.ui.get("voice_rate") or config.app.get("voice_rate") or 1.0
-    try:
-        voice_rate = settings.voice.voice_rate if settings.voice.voice_rate is not None else float(global_rate)
-    except (ValueError, TypeError):
-        voice_rate = 1.0
-
-    global_volume = config.ui.get("voice_volume") or config.app.get("voice_volume") or 1.0
-    try:
-        voice_volume = settings.voice.voice_volume if settings.voice.voice_volume is not None else float(global_volume)
-    except (ValueError, TypeError):
-        voice_volume = 1.0
+    # 1. Voice - Precedência: Canal (settings.voice.*) > Global UI (config.ui.*) > Padrão App (config.app.*) > Fallback Brian
+    effective_voice = get_effective_voice_settings(pid, db_path=db_path)
+    voice_name = effective_voice["voice_name"]["value"]
+    voice_rate = effective_voice["voice_rate"]["value"]
+    voice_volume = effective_voice["voice_volume"]["value"]
+    tts_server = effective_voice["tts_server"]["value"]
 
     # 2. Resolução Canônica de Formato e Estrutura Narrativa
     raw_fmt = str(settings.editorial.video_format or "").strip().lower()
@@ -1498,6 +1691,8 @@ def get_generation_profile_context(
         "voice_name": voice_name,
         "voice_rate": voice_rate,
         "voice_volume": voice_volume,
+        "tts_server": tts_server,
+        "effective_voice": effective_voice,
         "visual_director_enabled": visual_director_enabled,
         "flow_enabled": flow_enabled,
         "flow_scene_count": flow_scene_count,

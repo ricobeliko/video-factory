@@ -226,6 +226,21 @@ export async function updateProfileSchedule(profileId, schedule) {
   });
 }
 
+export async function updateProfileVoice(profileId, voiceSettings) {
+  if (!profileId) throw new Error('profileId é obrigatório');
+  return fetchJson(`/api/v2/channels/${encodeURIComponent(profileId)}/voice`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(voiceSettings),
+  });
+}
+
+export async function getAllowedVoices() {
+  return fetchJson('/api/v2/voices/allowed');
+}
+
 export async function getHealth() {
   return fetchJson('/api/v2/health');
 }

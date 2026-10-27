@@ -2047,3 +2047,82 @@ def get_all_channel_filter_options(db_path: Optional[str] = None, upcoming_posts
 
     sorted_discovered = sorted(list(discovered))
     return options + sorted_discovered
+
+
+def is_quiz_profile(profile_id: str, db_path: Optional[str] = None) -> bool:
+    """Verifica se o perfil/canal está configurado com formato de quiz (quiz_dilemma ou quiz_paper).
+
+    Identificação baseada na resolução canônica de video_format e editorial settings (L1627-1639).
+    """
+    clean_id = str(profile_id or "").strip()
+    if not clean_id:
+        return False
+    try:
+        ctx = get_generation_profile_context(clean_id, db_path=db_path)
+        return ctx.get("video_format") in (
+            const.VIDEO_FORMAT_QUIZ_DILEMMA,
+            const.VIDEO_FORMAT_QUIZ_PAPER,
+            "quiz_dilemma",
+            "quiz_paper",
+        )
+    except Exception:
+        try:
+            settings = get_profile_settings(clean_id, db_path=db_path)
+            raw_fmt = str(settings.editorial.video_format or "").strip().lower()
+            raw_style = str(settings.editorial.narrative_structure or settings.editorial.content_style or "").strip().lower()
+            quiz_keywords = ("quiz_dilemma", "quiz", "quiz_escolhas_impossiveis", "quiz_paper", "paper")
+            return any(raw_fmt.startswith(k) or raw_style.startswith(k) for k in quiz_keywords)
+        except Exception:
+            return False
+
+
+def get_allowed_voices() -> List[Dict[str, str]]:
+    """Retorna lista de vozes TTS homologadas para pt-BR com identificadores e rótulos amigáveis."""
+    from app.services import autonomous_production, voice
+
+    approved_map = {
+        "pt-BR-FranciscaNeural": {"name": "Francisca (pt-BR, Feminina)", "gender": "Female", "locale": "pt-BR"},
+        "pt-BR-AntonioNeural": {"name": "Antônio (pt-BR, Masculina)", "gender": "Male", "locale": "pt-BR"},
+        "pt-BR-ThalitaMultilingualNeural": {"name": "Thalita (pt-BR, Multilíngue, Feminina)", "gender": "Female", "locale": "pt-BR"},
+        "en-US-BrianMultilingualNeural": {"name": "Brian (Multilíngue, Masculina)", "gender": "Male", "locale": "en-US"},
+    }
+
+    voices_json_path = os.path.join(os.path.dirname(__file__), "data", "azure_voices.json")
+    candidates = []
+    if os.path.exists(voices_json_path):
+        try:
+            with open(voices_json_path, "r", encoding="utf-8") as f:
+                items = json.load(f)
+                for item in items:
+                    raw_name = item.get("name")
+                    if raw_name and autonomous_production.is_valid_pt_br_voice(raw_name):
+                        c_name = voice.canonicalize_voice_name(raw_name)
+                        if c_name.endswith(("-Male", "-Female")):
+                            c_name = voice.parse_voice_name(c_name)
+                        if c_name not in candidates:
+                            candidates.append(c_name)
+        except Exception:
+            pass
+
+    for static_id in ("pt-BR-FranciscaNeural", "pt-BR-AntonioNeural", "pt-BR-ThalitaMultilingualNeural", "en-US-BrianMultilingualNeural"):
+        if static_id not in candidates and autonomous_production.is_valid_pt_br_voice(static_id):
+            candidates.append(static_id)
+
+    result = []
+    for v_id in candidates:
+        if v_id in approved_map:
+            info = approved_map[v_id]
+            result.append({
+                "id": v_id,
+                "name": info["name"],
+                "gender": info["gender"],
+                "locale": info["locale"],
+            })
+        else:
+            result.append({
+                "id": v_id,
+                "name": v_id,
+                "gender": "Unknown",
+                "locale": "pt-BR" if v_id.startswith("pt-BR") else "Unknown",
+            })
+    return result

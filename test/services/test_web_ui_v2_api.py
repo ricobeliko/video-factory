@@ -473,7 +473,7 @@ class TestWebUiV2Api(unittest.TestCase):
         paths = openapi_schema.get("paths", {})
         self.assertIn("/api/v2/channels/{profile_id}/settings", paths)
         self.assertIn("get", paths["/api/v2/channels/{profile_id}/settings"])
-        self.assertIn("patch", paths["/api/v2/channels/{profile_id}/settings"])
+        self.assertNotIn("patch", paths["/api/v2/channels/{profile_id}/settings"])
         self.assertIn("/api/v2/channels/{profile_id}/quotas", paths)
         self.assertIn("patch", paths["/api/v2/channels/{profile_id}/quotas"])
         self.assertIn("/api/v2/channels/{profile_id}/schedule", paths)

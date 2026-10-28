@@ -249,7 +249,7 @@ export function buildPatchPayloads(diffList) {
     } else if (field === 'posts_per_day') {
       // posts_per_day existe em quotas e schedule; o backend sincroniza ambos
       quotas.posts_per_day = newValue;
-      schedule.posts_per_day = newValue;
+
     } else if (field === 'publish_start_hour') {
       schedule.publish_start_hour = newValue;
     } else if (field === 'publish_end_hour') {

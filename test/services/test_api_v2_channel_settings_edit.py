@@ -1,11 +1,13 @@
-"""Testes para edição de quotas e schedule de canais (SIS2).
+"""Testes para edição de quotas e schedule de canais (SIS2 + API Sem Duplicidade).
 
 Valida que:
 - PATCH altera SOMENTE os campos enviados
 - NÃO altera autonomous_enabled nem growth_mode
-- Rejeita valores fora da faixa e janelas inválidas (start > end)
+- Rejeita valores fora da faixa (target_ready_stock 3..10) e janelas inválidas (start > end)
 - Retorna 403 quando executado em nó SECONDARY
-- Registra eventos operacionais em operational_events
+- Registra eventos operacionais em operational_events (incluindo PROFILE_QUOTAS_UPDATED)
+- Rotas e campos duplicados (/profiles/{id}/..., PATCH /channels/{id}/settings, /autonomous/enable|disable,
+  posts_per_day em UpdateScheduleRequest) foram removidos da API V2.
 """
 
 import json
@@ -19,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from app import asgi
 from app.config import config
-from app.models import const
+from app.controllers.v2 import operations as v2_operations
 from app.services import (
     autonomous_production,
     operator_console,
@@ -181,20 +183,23 @@ class TestApiV2ChannelSettingsEdit(unittest.TestCase):
         self.assertEqual(sched["posts_per_day"], 3)
 
     def test_rejects_out_of_range_and_invalid_window(self):
-        """4. Rejeita valores fora da faixa permitida e janela onde end < start."""
-        # target_ready_stock < 1 (espera 400 ou 422 de validação)
-        resp_low = self.client.patch(
-            "/api/v2/channels/profile-gtavi/quotas",
-            json={"target_ready_stock": 0},
-        )
-        self.assertIn(resp_low.status_code, (400, 422))
+        """4. Rejeita valores fora da faixa permitida (3..10 para target_ready_stock) e janela onde end < start."""
+        # target_ready_stock < 3 (ex.: 0 e 2)
+        for bad_target in (0, 2):
+            resp_low = self.client.patch(
+                "/api/v2/channels/profile-gtavi/quotas",
+                json={"target_ready_stock": bad_target},
+            )
+            self.assertEqual(resp_low.status_code, 400)
+            self.assertIn("entre 3 e 10", resp_low.json().get("message", ""))
 
         # target_ready_stock > 10
         resp_high = self.client.patch(
             "/api/v2/channels/profile-gtavi/quotas",
             json={"target_ready_stock": 15},
         )
-        self.assertIn(resp_high.status_code, (400, 422))
+        self.assertEqual(resp_high.status_code, 400)
+        self.assertIn("entre 3 e 10", resp_high.json().get("message", ""))
 
         # publish_start_hour > 23
         resp_hr = self.client.patch(
@@ -237,3 +242,38 @@ class TestApiV2ChannelSettingsEdit(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 404)
         self.assertIn("not found", resp.json().get("message", "").lower())
+
+    def test_single_route_per_control_no_duplicate_aliases_or_composite_patch(self):
+        """7. Um controle = uma rota: aliases /profiles/... e PATCH /channels/{id}/settings não existem mais."""
+        routes = {
+            (r.path, tuple(sorted(r.methods or [])))
+            for r in v2_operations.router.routes
+            if hasattr(r, "path")
+        }
+        paths_only = {p for p, _ in routes}
+
+        # Aliases /api/v2/profiles/{profile_id}/... duplicados de /api/v2/channels/{profile_id}/... removidos
+        self.assertNotIn("/api/v2/profiles/{profile_id}/voice", paths_only)
+        self.assertNotIn("/api/v2/profiles/{profile_id}/growth-mode", paths_only)
+        self.assertNotIn("/api/v2/profiles/{profile_id}/autonomous", paths_only)
+        self.assertNotIn("/api/v2/profiles/{profile_id}/quotas", paths_only)
+        self.assertNotIn("/api/v2/profiles/{profile_id}/schedule", paths_only)
+        self.assertNotIn("/api/v2/profiles/{profile_id}/settings", paths_only)
+
+        # Atalhos POST duplicados de autonomous removidos
+        self.assertNotIn("/api/v2/channels/{profile_id}/autonomous/enable", paths_only)
+        self.assertNotIn("/api/v2/channels/{profile_id}/autonomous/disable", paths_only)
+
+        # /api/v2/channels/{profile_id}/settings é somente GET (rota composta PATCH removida)
+        settings_methods = [m for p, ms in routes if p == "/api/v2/channels/{profile_id}/settings" for m in ms]
+        self.assertEqual(settings_methods, ["GET"])
+        self.assertIn("/api/v2/channels/{profile_id}/voice", paths_only)
+        self.assertIn("/api/v2/channels/{profile_id}/growth-mode", paths_only)
+        self.assertIn("/api/v2/channels/{profile_id}/autonomous", paths_only)
+        self.assertIn("/api/v2/channels/{profile_id}/quotas", paths_only)
+        self.assertIn("/api/v2/channels/{profile_id}/schedule", paths_only)
+        self.assertFalse(hasattr(v2_operations, "UpdateProfileSettingsRequest"))
+
+        # posts_per_day vive em UpdateQuotasRequest e não em UpdateScheduleRequest
+        self.assertIn("posts_per_day", v2_operations.UpdateQuotasRequest.model_fields)
+        self.assertNotIn("posts_per_day", v2_operations.UpdateScheduleRequest.model_fields)

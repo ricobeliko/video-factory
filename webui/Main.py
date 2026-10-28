@@ -11,6 +11,7 @@ import sys
 import time
 import webbrowser
 from collections.abc import Mapping
+from typing import Any
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -50,6 +51,7 @@ from app.services import bgm as bgm_service
 from app.services import (
     analytics,
     autopilot,
+    autonomous_production,
     cache_manager,
     content_strategy,
     llm,
@@ -407,6 +409,113 @@ def _saved_ui_text(key, default="", max_length=None):
     if max_length is not None:
         value = value[:max_length]
     return value
+
+
+VOICE_RATE_MIN = 0.8
+VOICE_RATE_MAX = 2.0
+
+
+def is_valid_ui_voice_rate(val: Any) -> bool:
+    """Verifica se voice_rate é um valor finito dentro da faixa [0.8, 2.0] suportada pelo painel."""
+    try:
+        f = float(val)
+        return math.isfinite(f) and (VOICE_RATE_MIN <= f <= VOICE_RATE_MAX)
+    except (TypeError, ValueError):
+        return False
+
+
+def resolve_initial_voice_selection(
+    saved_voice_name: str,
+    friendly_names: Mapping[str, str],
+    selected_tts_server: str,
+) -> int:
+    """Calcula o índice inicial do seletor 'Voiceover Voice'.
+
+    Critérios de negócio (hotfix/voz-painel-validada):
+    1. Usa a voz salva se ela for válida pelo contrato pt-BR (autonomous_production.is_valid_pt_br_voice)
+       e existir no catálogo da interface (friendly_names).
+    2. Senão, seleciona obrigatoriamente en-US-BrianMultilingualNeural (canônico ou representação de catálogo).
+    3. Nunca usa 'primeira da lista' (índice 0 cego) nem 'primeira do idioma da UI'.
+    """
+    options = list(friendly_names.keys())
+    if not options:
+        return 0
+
+    # Verifica se a voz salva é válida para pt-BR e existe no catálogo
+    canonical_saved = voice.canonicalize_voice_name(saved_voice_name, selected_tts_server)
+    if saved_voice_name in friendly_names and autonomous_production.is_valid_pt_br_voice(canonical_saved):
+        return options.index(saved_voice_name)
+
+    # Senão, busca en-US-BrianMultilingualNeural no catálogo
+    brian_candidate = next(
+        (
+            candidate
+            for candidate in options
+            if voice.canonicalize_voice_name(candidate, selected_tts_server) == "en-US-BrianMultilingualNeural"
+            or voice.parse_voice_name(candidate) == "en-US-BrianMultilingualNeural"
+            or candidate == "en-US-BrianMultilingualNeural"
+        ),
+        None,
+    )
+    if brian_candidate is not None:
+        return options.index(brian_candidate)
+
+    # Se Brian não existir neste servidor TTS (ex.: provider sem catálogo Azure),
+    # busca a primeira voz válida pt-BR disponível
+    fallback_pt_br = next(
+        (
+            candidate
+            for candidate in options
+            if autonomous_production.is_valid_pt_br_voice(
+                voice.canonicalize_voice_name(candidate, selected_tts_server)
+            )
+        ),
+        None,
+    )
+    if fallback_pt_br is not None:
+        return options.index(fallback_pt_br)
+
+    # Apenas se nenhuma voz válida existir no catálogo de friendly_names
+    return 0
+
+
+def save_validated_voice_name(voice_name: str, selected_tts_server: str) -> bool:
+    """Valida e persiste config.ui['voice_name'] de forma fail-closed e idempotente."""
+    if voice.is_no_voice(voice_name):
+        return False
+    canonical_voice = voice.canonicalize_voice_name(voice_name, selected_tts_server)
+    if not autonomous_production.is_valid_pt_br_voice(canonical_voice):
+        logger.warning(
+            f"Gravação de voice_name recusada no painel WebUI: voz '{canonical_voice}' inválida para o contrato pt-BR."
+        )
+        return False
+
+    current_saved = config.ui.get("voice_name")
+    if canonical_voice != current_saved:
+        _set_runtime_config("ui", "voice_name", canonical_voice)
+        return True
+    return False
+
+
+def save_validated_voice_rate(voice_rate: Any) -> bool:
+    """Valida e persiste config.ui['voice_rate'] de forma fail-closed e idempotente."""
+    if not is_valid_ui_voice_rate(voice_rate):
+        logger.warning(
+            f"Gravação de voice_rate recusada no painel WebUI: valor '{voice_rate}' fora da faixa [{VOICE_RATE_MIN}, {VOICE_RATE_MAX}] ou não finito."
+        )
+        return False
+
+    rate_val = float(voice_rate)
+    current_saved = config.ui.get("voice_rate")
+    try:
+        current_saved_float = float(current_saved) if current_saved is not None else None
+    except (TypeError, ValueError):
+        current_saved_float = None
+
+    if current_saved_float is None or not math.isclose(rate_val, current_saved_float, abs_tol=1e-4):
+        _set_runtime_config("ui", "voice_rate", rate_val)
+        return True
+    return False
 
 
 def _run_llm_read_operation(operation_name, operation):
@@ -7066,23 +7175,9 @@ def _render_audio_settings(panel, params):
                     saved_voice_name,
                 )
 
-            saved_voice_name_index = 0
-
-            # 检查保存的声音是否在当前筛选的声音列表中
-            if saved_voice_name in friendly_names:
-                saved_voice_name_index = list(friendly_names.keys()).index(
-                    saved_voice_name
-                )
-            else:
-                # 如果不在，则根据当前UI语言选择一个默认声音
-                for i, v in enumerate(filtered_voices):
-                    if v.lower().startswith(st.session_state["ui_language"].lower()):
-                        saved_voice_name_index = i
-                        break
-
-            # 如果没有找到匹配的声音，使用第一个声音
-            if saved_voice_name_index >= len(friendly_names) and friendly_names:
-                saved_voice_name_index = 0
+            saved_voice_name_index = resolve_initial_voice_selection(
+                saved_voice_name, friendly_names, selected_tts_server
+            )
 
             # 确保有声音可选
             if tts_mode_enabled and friendly_names:
@@ -7115,10 +7210,7 @@ def _render_audio_settings(panel, params):
                 if not voice.is_no_voice(voice_name):
                     # 占位 sentinel 仅用于非自动模式的禁用展示，不覆盖用户上一次
                     # 真正选择的音色，切回自动配音后可以恢复原设置。
-                    canonical_voice_to_save = voice.canonicalize_voice_name(
-                        voice_name, selected_tts_server
-                    )
-                    _set_runtime_config("ui", "voice_name", canonical_voice_to_save)
+                    save_validated_voice_name(voice_name, selected_tts_server)
             elif tts_mode_enabled:
                 # 如果没有声音可选，显示提示信息
                 st.warning(
@@ -7128,7 +7220,9 @@ def _render_audio_settings(panel, params):
                 )
                 voice_name = ""
                 params.voice_name = ""
-                _set_runtime_config("ui", "voice_name", "")
+                logger.warning(
+                    "Gravação de voice_name recusada no painel WebUI: nenhuma voz disponível para o servidor TTS selecionado."
+                )
             else:
                 # 非自动配音模式不显示音色控件，只复用保存值维持参数结构稳定。
                 voice_name = saved_voice_name or voice.NO_VOICE_NAME
@@ -7453,7 +7547,7 @@ def _render_audio_settings(panel, params):
                         disabled=is_voxcpm,
                     )
                 _set_runtime_config("ui", "voice_volume", params.voice_volume)
-                _set_runtime_config("ui", "voice_rate", params.voice_rate)
+                save_validated_voice_rate(params.voice_rate)
 
                 # 试听必须位于音量和语速控件之后，确保调用使用当前控件值。
                 _render_voice_preview(

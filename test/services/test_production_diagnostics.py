@@ -196,7 +196,7 @@ def test_detector_task_stuck_after_render_real_case_e9630f19():
         assert stuck_d["severity"] == production_diagnostics.SEVERITY_CRITICAL
         assert "e9630f19" in stuck_d["evidence"]["task_ids"]
         assert "e9630f19" in stuck_d["detail"]
-        assert channel_diag["status"] == production_diagnostics.STATUS_PARADO
+        assert channel_diag["status"] == production_diagnostics.STATUS_BLOCKED
 
 
 def test_detector_false_interruption_likely():
@@ -488,7 +488,7 @@ def test_detector_factory_paused_and_error():
 
         res_paused = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         chan_paused = res_paused["channels"][0]
-        assert chan_paused["status"] == production_diagnostics.STATUS_PAUSADO
+        assert chan_paused["status"] == production_diagnostics.STATUS_PAUSED
         p_diag = next(d for d in chan_paused["diagnoses"] if d["code"] == production_diagnostics.CODE_FACTORY_PAUSED_OR_ERROR)
         assert p_diag["severity"] == production_diagnostics.SEVERITY_INFO
 
@@ -500,7 +500,7 @@ def test_detector_factory_paused_and_error():
 
         res_error = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         chan_error = res_error["channels"][0]
-        assert chan_error["status"] == production_diagnostics.STATUS_PARADO
+        assert chan_error["status"] == production_diagnostics.STATUS_BLOCKED
         e_diag = next(d for d in chan_error["diagnoses"] if d["code"] == production_diagnostics.CODE_FACTORY_PAUSED_OR_ERROR)
         assert e_diag["severity"] == production_diagnostics.SEVERITY_CRITICAL
         assert "Crash inesperado de driver FFmpeg" in e_diag["detail"]
@@ -860,7 +860,7 @@ def test_factory_pause_via_operator_console_and_gap_suppression():
         assert diag_res["factory"]["state"] == "PAUSED"
         assert diag_res["factory"]["is_paused"] is True
         chan = next(c for c in diag_res["channels"] if c["profile_id"] == "channel-paused-test")
-        assert chan["status"] == production_diagnostics.STATUS_PAUSADO
+        assert chan["status"] == production_diagnostics.STATUS_PAUSED
 
         codes = [d["code"] for d in chan["diagnoses"]]
         # Confirma que FACTORY_PAUSED_OR_ERROR com severidade info está presente
@@ -1018,7 +1018,7 @@ def test_forced_stock_failure_handled_as_unknown():
 
         # 4. Canal não é considerado OK quando o estoque é desconhecido
         assert chan["status"] != production_diagnostics.STATUS_OK
-        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+        assert chan["status"] == production_diagnostics.STATUS_ATTENTION
 
         # 5. Aviso explícito presente em warnings
         assert len(chan["warnings"]) > 0
@@ -1130,7 +1130,7 @@ def test_detector_autonomous_disabled_and_gap_suppression():
         chan = next(c for c in res["channels"] if c["profile_id"] == "chan-gta")
 
         # Status deve ser PAUSADO porque a produção está desligada para o canal
-        assert chan["status"] == production_diagnostics.STATUS_PAUSADO
+        assert chan["status"] == production_diagnostics.STATUS_PAUSED
         assert chan["limits"]["autonomous_enabled"] is False
 
         diag_codes = [d["code"] for d in chan["diagnoses"]]
@@ -1321,7 +1321,7 @@ def test_detector_approved_cap_exceeded():
         assert "3/2" in exc_diag["title"]
 
         # Warning rebaixa o canal para ATENCAO
-        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+        assert chan["status"] == production_diagnostics.STATUS_ATTENTION
 
 
 def test_detector_rejection_breaker_warning_and_critical():
@@ -1379,13 +1379,13 @@ def test_detector_rejection_breaker_warning_and_critical():
         diag_w = next(d for d in chan_warn["diagnoses"] if d["code"] == production_diagnostics.CODE_REJECTION_BREAKER)
         assert diag_w["severity"] == production_diagnostics.SEVERITY_WARNING
         assert "5/10" in diag_w["title"]
-        assert chan_warn["status"] == production_diagnostics.STATUS_ATENCAO
+        assert chan_warn["status"] == production_diagnostics.STATUS_ATTENTION
 
         diag_c = next(d for d in chan_crit["diagnoses"] if d["code"] == production_diagnostics.CODE_REJECTION_BREAKER)
         assert diag_c["severity"] == production_diagnostics.SEVERITY_CRITICAL
         assert "Proteção de custo ativa" in diag_c["detail"]
         assert "10/10" in diag_c["title"]
-        assert chan_crit["status"] == production_diagnostics.STATUS_PARADO
+        assert chan_crit["status"] == production_diagnostics.STATUS_BLOCKED
 
 
 def test_detector_global_cost_guard_warning_and_critical():
@@ -1439,7 +1439,7 @@ def test_detector_global_cost_guard_warning_and_critical():
         diag_80 = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_GLOBAL_COST_GUARD)
         assert diag_80["severity"] == production_diagnostics.SEVERITY_WARNING
         assert "80%" in diag_80["title"]
-        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+        assert chan["status"] == production_diagnostics.STATUS_ATTENTION
 
         # Insere mais 20 tentativas para bater 100/100 (100% em 24h)
         conn = sqlite3.connect(db_file)
@@ -1463,7 +1463,7 @@ def test_detector_global_cost_guard_warning_and_critical():
         diag_100 = next(d for d in chan_100["diagnoses"] if d["code"] == production_diagnostics.CODE_GLOBAL_COST_GUARD)
         assert diag_100["severity"] == production_diagnostics.SEVERITY_CRITICAL
         assert "100%" in diag_100["title"]
-        assert chan_100["status"] == production_diagnostics.STATUS_PARADO
+        assert chan_100["status"] == production_diagnostics.STATUS_BLOCKED
 
 
 def test_detector_generation_failure_streak():
@@ -1514,7 +1514,7 @@ def test_detector_generation_failure_streak():
         assert streak_diag["severity"] == production_diagnostics.SEVERITY_WARNING
         # Texto cru fidedigno preservado sem suposições
         assert raw_error_msg in streak_diag["detail"]
-        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+        assert chan["status"] == production_diagnostics.STATUS_ATTENTION
 
 
 def test_channel_limits_equal_to_autonomous_production_functions():
@@ -1617,7 +1617,7 @@ def test_limit_query_failure_returns_null_and_warning_without_failing_channel():
 
         # Warning adicionado sem derrubar o canal
         assert any("Falha simulada ao ler limites operacionais" in w for w in chan["warnings"])
-        assert chan["status"] in (production_diagnostics.STATUS_OK, production_diagnostics.STATUS_ATENCAO)
+        assert chan["status"] in (production_diagnostics.STATUS_OK, production_diagnostics.STATUS_ATTENTION)
 
 
 
@@ -1761,3 +1761,76 @@ def test_case_real_stock_none_is_attention():
         assert chan["status"] == "attention"
         assert chan["status_label"] == "Atenção"
         assert chan["reason_code"] == "STOCK_UNKNOWN"
+
+
+def test_unassigned_events_exposed_separately_not_in_channels():
+    """Garante que eventos órfãos (Sem Canal) não são tratados como canal e são expostos à parte."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_unassigned.db")
+        _create_synthetic_test_db(db_file)
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        # Cria um canal real cadastrado
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("channel-real", "Canal Real", now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-real', 'true'), ('autonomous_state', 'IDLE');"
+        )
+        # Cria evento com canal real
+        conn.execute(
+            """
+            INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+            VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'task-real-01', 'Tema Real', '{"profile_id": "channel-real"}')
+            """,
+            (now_iso,),
+        )
+        # Cria evento ÓRFÃO sem canal e sem task_profile
+        conn.execute(
+            """
+            INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+            VALUES (?, 'autonomous_production', 'WARNING', 'orphan_alert', 'task-orphan-01', 'Alerta de tarefa órfã', NULL)
+            """,
+            (now_iso,),
+        )
+        conn.commit()
+        conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+
+        # 1. Canais contém apenas o canal real cadastrado (Sem Canal NÃO entra em channels)
+        channel_ids = [c["profile_id"] for c in res["channels"]]
+        assert "channel-real" in channel_ids
+        assert "unassigned" not in channel_ids
+        assert len(res["channels"]) == 1
+
+        # 2. unassigned_events exposto à parte com contagem
+        assert "unassigned_events" in res
+        assert res["unassigned_events"]["count"] == 1
+        assert isinstance(res["unassigned_events"]["diagnoses"], list)
+
+
+def test_no_unassigned_events_key_when_empty():
+    """Garante que a chave unassigned_events NÃO é incluída no retorno quando não há eventos órfãos."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_no_unassigned.db")
+        _create_synthetic_test_db(db_file)
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("channel-real", "Canal Real", now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-real', 'true'), ('autonomous_state', 'IDLE');"
+        )
+        conn.commit()
+        conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        assert "unassigned_events" not in res

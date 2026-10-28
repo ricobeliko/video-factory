@@ -57,12 +57,13 @@ SEVERITY_WEIGHT: Dict[str, int] = {
 }
 
 STATUS_OK: str = "ok"
-STATUS_ATENCAO: str = "attention"
+STATUS_ATTENTION: str = "attention"
 STATUS_BLOCKED: str = "blocked"
-STATUS_PARADO: str = "blocked"
 STATUS_RUNNING: str = "running"
-STATUS_PAUSADO: str = "paused"
-STATUS_UNKNOWN: str = "attention"
+STATUS_PAUSED: str = "paused"
+
+# Constante para valor/estado desconhecido (separada dos status de canal; usada em factory.state e ready_stock.status)
+STATUS_UNKNOWN: str = "UNKNOWN"
 
 # Códigos Padronizados de Diagnóstico
 CODE_TASK_STUCK_AFTER_RENDER: str = "TASK_STUCK_AFTER_RENDER"
@@ -467,15 +468,8 @@ def get_diagnostics_overview(
         if ev.get("event_type") == "PROFILE_GROWTH_LIMIT_BLOCK":
             growth_limit_events_by_channel.setdefault(target_channel_key, []).append(ev)
 
+    # Processa estritamente os canais cadastrados (Sem Canal não é canal)
     channels_to_process = list(profiles)
-
-    # Se houver tarefas com eventos em "unassigned", adiciona entrada especial "Sem Canal"
-    if "unassigned" in events_by_channel and not clean_filter_pid:
-        channels_to_process.append({
-            "id": "unassigned",
-            "name": "Sem Canal",
-            "is_active": 1,
-        })
 
     channels_output: List[Dict[str, Any]] = []
 
@@ -1207,7 +1201,85 @@ def get_diagnostics_overview(
             "warnings": channel_warnings,
         })
 
-    return {
+    # -----------------------------------------------------------------
+    # Processamento de Eventos sem Canal (unassigned)
+    # Exposto à parte (não é canal, não entra nos totais da frota)
+    # -----------------------------------------------------------------
+    unassigned_info: Optional[Dict[str, Any]] = None
+    u_events = events_by_channel.get("unassigned", [])
+    if u_events and not clean_filter_pid:
+        u_diagnoses: List[Dict[str, Any]] = []
+
+        # Agrupa eventos de tarefas não atribuídas
+        u_task_events: Dict[str, List[Dict[str, Any]]] = {}
+        for ev in u_events:
+            t_id = ev.get("task_id")
+            if t_id:
+                u_task_events.setdefault(t_id, []).append(ev)
+
+        # Detectores de tarefas presas / falsas interrupções em tarefas sem canal
+        for tid, t_evs in u_task_events.items():
+            final_vid = scheduler.get_task_final_video(tid, task_base_dir=task_base_dir)
+            has_final_vid = bool(final_vid and os.path.isfile(final_vid) and os.path.getsize(final_vid) > 0)
+            safety_record = safety_map.get(tid)
+            has_safety_pass = bool(safety_record and safety_record.get("safety_status") == const.SAFETY_STATUS_PASS)
+
+            has_score = tid in quality_map
+            is_scheduled = tid in scheduled_tasks
+            is_ready = False
+
+            if has_final_vid and has_safety_pass and not has_score and not is_scheduled and not is_ready:
+                last_ev_time = max((_parse_iso_to_utc(e["timestamp"]) for e in t_evs), default=now_utc)
+                mins_stuck = max(0.0, (now_utc - last_ev_time).total_seconds() / 60.0)
+                if mins_stuck >= DEFAULT_STUCK_AFTER_RENDER_MINUTES:
+                    u_diagnoses.append({
+                        "code": CODE_TASK_STUCK_AFTER_RENDER,
+                        "severity": SEVERITY_CRITICAL,
+                        "title": f"Tarefa sem canal {tid} concluída e aprovada, mas não pontuada/agendada",
+                        "detail": (
+                            f"O vídeo final da tarefa {tid} foi gerado e aprovado no Safety Gate há {mins_stuck:.0f} minutos, "
+                            f"mas a tarefa não possui canal associado e não avançou para pontuação de qualidade."
+                        ),
+                        "since": _format_iso_utc(last_ev_time),
+                        "evidence": {"task_ids": [tid], "event_ids": [e["id"] for e in t_evs if "id" in e]},
+                        "suggested_action": "Atribuir um canal à tarefa ou recuperar via painel operacional.",
+                    })
+
+            has_interruption = next((e for e in reversed(t_evs) if e["event_type"] == "generation_interrupted_recovery"), None)
+            if has_interruption and has_final_vid:
+                u_diagnoses.append({
+                    "code": CODE_FALSE_INTERRUPTION_LIKELY,
+                    "severity": SEVERITY_CRITICAL,
+                    "title": f"Falso positivo de interrupção na tarefa sem canal {tid}",
+                    "detail": f"A tarefa {tid} foi registrada como interrompida, porém o arquivo de vídeo final já existe no disco.",
+                    "since": has_interruption.get("timestamp"),
+                    "evidence": {"task_ids": [tid], "event_ids": [has_interruption.get("id")] if "id" in has_interruption else []},
+                    "suggested_action": "Reaproveitar o vídeo renderizado e vincular a um canal.",
+                })
+
+        # Detector de tópico inválido em eventos unassigned
+        for ev in u_events:
+            if ev.get("event_type") == "generation_started":
+                raw_topic = _extract_topic_from_event(ev.get("message", ""), ev.get("metadata"))
+                if raw_topic and any(p in raw_topic.lower() for p in ("errno", "getaddrinfo", "failed to establish a new connection", "traceback")):
+                    u_diagnoses.append({
+                        "code": CODE_INVALID_TOPIC,
+                        "severity": SEVERITY_CRITICAL,
+                        "title": "Geração iniciada com mensagem de erro de rede como tema (sem canal)",
+                        "detail": f"O tema da geração contém erro técnico de rede: '{raw_topic}'.",
+                        "since": ev.get("timestamp"),
+                        "evidence": {"task_ids": [ev.get("task_id")] if ev.get("task_id") else [], "event_ids": [ev.get("id")] if "id" in ev else []},
+                        "suggested_action": "Verificar conectividade com provedores externos de LLM/temas.",
+                    })
+
+        u_diagnoses.sort(key=lambda d: SEVERITY_WEIGHT.get(d.get("severity", SEVERITY_INFO), 99))
+
+        unassigned_info = {
+            "count": len(u_events),
+            "diagnoses": u_diagnoses,
+        }
+
+    overview: Dict[str, Any] = {
         "factory": {
             "state": factory_state,
             "is_paused": is_factory_paused,
@@ -1219,3 +1291,7 @@ def get_diagnostics_overview(
         "limits": global_limits,
         "channels": channels_output,
     }
+    if unassigned_info is not None:
+        overview["unassigned_events"] = unassigned_info
+
+    return overview

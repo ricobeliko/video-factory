@@ -197,3 +197,24 @@ test('getSeverityBadgeInfo: severidade info nunca é classificada como alerta (i
   assert.equal(criticalBadge.isAlert, true);
 });
 
+
+
+test('calculateFactorySummary: totaliza estritamente os canais cadastrados sem contar eventos sem canal', () => {
+  const channels = [
+    { profile_id: 'chan-01', status: 'ok', diagnoses: [] },
+    { profile_id: 'chan-02', status: 'running', diagnoses: [] },
+    { profile_id: 'chan-03', status: 'attention', diagnoses: [{ severity: 'warning' }] },
+    { profile_id: 'chan-04', status: 'blocked', diagnoses: [{ severity: 'critical' }] },
+    { profile_id: 'chan-05', status: 'paused', diagnoses: [] },
+  ];
+
+  const summary = calculateFactorySummary(channels);
+  assert.equal(summary.total, 5);
+  assert.equal(summary.ok, 1);
+  assert.equal(summary.running, 1);
+  assert.equal(summary.attention, 1);
+  assert.equal(summary.blocked, 1);
+  assert.equal(summary.paused, 1);
+  assert.equal(summary.criticalCount, 1);
+  assert.equal(summary.warningCount, 1);
+});

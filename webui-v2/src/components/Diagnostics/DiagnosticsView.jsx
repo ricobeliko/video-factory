@@ -295,6 +295,34 @@ export default function DiagnosticsView({ onNavigate }) {
             </div>
           )}
 
+          {/* Aviso discreto de Eventos sem canal (somente quando houver) */}
+          {data?.unassigned_events && data.unassigned_events.count > 0 && (
+            <div className="diag-unassigned-notice" role="status">
+              <div className="diag-unassigned-header">
+                <span className="diag-unassigned-icon" aria-hidden="true">ℹ️</span>
+                <strong className="diag-unassigned-title">Eventos sem canal:</strong>
+                <span className="diag-unassigned-count">
+                  {data.unassigned_events.count} {data.unassigned_events.count === 1 ? 'evento operacional não associado' : 'eventos operacionais não associados'} a nenhum canal
+                </span>
+              </div>
+              {Array.isArray(data.unassigned_events.diagnoses) && data.unassigned_events.diagnoses.length > 0 && (
+                <div className="diag-unassigned-diagnoses">
+                  {data.unassigned_events.diagnoses.map((diag, idx) => (
+                    <div key={idx} className={`diag-unassigned-item ${diag.severity || 'info'}`}>
+                      <span className={`diag-badge-severity ${diag.severity || 'info'}`}>
+                        {(diag.severity || 'info').toUpperCase()}
+                      </span>
+                      <span className="diag-unassigned-diag-title">{diag.title}</span>
+                      {diag.detail && (
+                        <span className="diag-unassigned-diag-detail">— {diag.detail}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Seletor de Filtro de Canais */}
           {rawChannels.length > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '4px' }}>

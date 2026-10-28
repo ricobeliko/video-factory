@@ -880,7 +880,22 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                     LEFT JOIN scheduled_posts sp ON sp.task_id = o.task_id
                     LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
                     WHERE o.component = 'autonomous_production'
-                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND (
+                          o.event_type = 'generation_approved'
+                          OR (
+                              o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM operational_events og
+                                  WHERE og.component = 'autonomous_production'
+                                    AND og.event_type = 'generation_started'
+                                    AND og.task_id = o.task_id
+                                    AND og.task_id IS NOT NULL
+                                    AND og.task_id != ''
+                                    AND og.timestamp >= ?
+                              )
+                          )
+                      )
                       AND (
                           sp.channel_id = ?
                           OR (o.metadata_json IS NOT NULL AND json_extract(o.metadata_json, '$.channel_id') = ?)
@@ -900,6 +915,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                       AND o.timestamp >= ?;
                     """,
                     (
+                        since_iso,
                         clean_channel,
                         clean_channel,
                         clean_channel,
@@ -912,10 +928,25 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                     SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
                     FROM operational_events o
                     WHERE o.component = 'autonomous_production'
-                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND (
+                          o.event_type = 'generation_approved'
+                          OR (
+                              o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM operational_events og
+                                  WHERE og.component = 'autonomous_production'
+                                    AND og.event_type = 'generation_started'
+                                    AND og.task_id = o.task_id
+                                    AND og.task_id IS NOT NULL
+                                    AND og.task_id != ''
+                                    AND og.timestamp >= ?
+                              )
+                          )
+                      )
                       AND o.timestamp >= ?;
                     """,
-                    (since_iso,),
+                    (since_iso, since_iso),
                 ).fetchone()
             elif is_default:
                 row = conn.execute(
@@ -924,11 +955,26 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                     FROM operational_events o
                     LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
                     WHERE o.component = 'autonomous_production'
-                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND (
+                          o.event_type = 'generation_approved'
+                          OR (
+                              o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM operational_events og
+                                  WHERE og.component = 'autonomous_production'
+                                    AND og.event_type = 'generation_started'
+                                    AND og.task_id = o.task_id
+                                    AND og.task_id IS NOT NULL
+                                    AND og.task_id != ''
+                                    AND og.timestamp >= ?
+                              )
+                          )
+                      )
                       AND (tp.profile_id = ? OR tp.profile_id IS NULL OR tp.profile_id = 'default')
                       AND o.timestamp >= ?;
                     """,
-                    (profile_manager.DEFAULT_PROFILE_ID, since_iso),
+                    (since_iso, profile_manager.DEFAULT_PROFILE_ID, since_iso),
                 ).fetchone()
             else:
                 row = conn.execute(
@@ -937,11 +983,26 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                     FROM operational_events o
                     JOIN task_profiles tp ON tp.task_id = o.task_id
                     WHERE o.component = 'autonomous_production'
-                      AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                      AND (
+                          o.event_type = 'generation_approved'
+                          OR (
+                              o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM operational_events og
+                                  WHERE og.component = 'autonomous_production'
+                                    AND og.event_type = 'generation_started'
+                                    AND og.task_id = o.task_id
+                                    AND og.task_id IS NOT NULL
+                                    AND og.task_id != ''
+                                    AND og.timestamp >= ?
+                              )
+                          )
+                      )
                       AND tp.profile_id = ?
                       AND o.timestamp >= ?;
                     """,
-                    (clean_profile, since_iso),
+                    (since_iso, clean_profile, since_iso),
                 ).fetchone()
             return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:
@@ -1024,10 +1085,25 @@ def count_all_profiles_generations_24h(now: Optional[datetime] = None, db_path: 
                 SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
                 FROM operational_events o
                 WHERE o.component = 'autonomous_production'
-                  AND o.event_type IN ('generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule')
+                  AND (
+                      o.event_type = 'generation_approved'
+                      OR (
+                          o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                          AND EXISTS (
+                              SELECT 1
+                              FROM operational_events og
+                              WHERE og.component = 'autonomous_production'
+                                AND og.event_type = 'generation_started'
+                                AND og.task_id = o.task_id
+                                AND og.task_id IS NOT NULL
+                                AND og.task_id != ''
+                                AND og.timestamp >= ?
+                          )
+                      )
+                  )
                   AND o.timestamp >= ?;
                 """,
-                (since_iso,),
+                (since_iso, since_iso),
             ).fetchone()
             return int(row[0]) if (row and row[0] is not None) else 0
     except Exception as exc:

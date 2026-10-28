@@ -14,6 +14,7 @@ import {
   buildSystemChannelHash,
   parseSystemChannelFromHash,
 } from './components/System/systemEditLogic';
+import DiagnosticsView from './components/Diagnostics/DiagnosticsView';
 import './styles.css';
 
 /**
@@ -31,6 +32,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
       if (window.location.hash.startsWith('#sistema')) return 'sistema';
+      if (window.location.hash === '#diagnostico') return 'diagnostico';
       if (window.location.hash === '#producao') return 'producao';
       if (window.location.hash === '#factory-live') return 'factory-live';
       if (window.location.hash === '#agent-ops') return 'agent-ops';
@@ -41,92 +43,78 @@ export default function App() {
   });
 
   const [systemFocusChannelId, setSystemFocusChannelId] = useState(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && window.location.hash.startsWith('#sistema')) {
       return parseSystemChannelFromHash(window.location.hash);
     }
     return null;
   });
 
-  const [channels, setChannels] = useState([]);
+  const [liveData, setLiveData] = useState({
+    channels: [],
+    pipeline_stages: [],
+    last_event: null,
+  });
   const [systemStatus, setSystemStatus] = useState(null);
-  const [flowPool, setFlowPool] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [isApiOnline, setIsApiOnline] = useState(true);
-
-  // Focus selection for the detailed pipeline below
   const [userSelectedChannelId, setUserSelectedChannelId] = useState(null);
   const [hasUserManuallySelected, setHasUserManuallySelected] = useState(false);
-
-  // Drawer state
-  const [drawerChannel, setDrawerChannel] = useState(null);
-  const [drawerTaskId, setDrawerTaskId] = useState(null);
-  const [drawerStage, setDrawerStage] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Polling loop for live execution and system status
-  const pollData = useCallback(async () => {
+  // Poll live execution data every 2 seconds
+  const fetchLiveData = useCallback(async () => {
     try {
-      const [liveRes, statusRes] = await Promise.all([
-        getLiveExecutions(),
-        getSystemStatus(),
-      ]);
-
-      const channelsList = liveRes?.channels || liveRes?.data?.channels;
-      if (Array.isArray(channelsList)) {
-        setChannels(channelsList);
+      const res = await getLiveExecutions();
+      if (res && res.data) {
+        setLiveData(res.data);
       }
-
-      const poolData = liveRes?.flow_accounts || liveRes?.data?.flow_accounts || liveRes?.flow_pool || liveRes?.data?.flow_pool;
-      if (poolData) {
-        setFlowPool(poolData);
-      }
-
-      const sysData = statusRes?.data || statusRes;
-      if (sysData) {
-        setSystemStatus(sysData);
-      }
-
-      setLastUpdated(new Date());
-      setIsApiOnline(true);
     } catch (err) {
-      console.warn('Live API poll failed, keeping memory snapshot:', err.message);
-      setIsApiOnline(false);
+      console.error('Failed to fetch live executions:', err);
+      setError('Falha ao sincronizar estado da fábrica');
+    }
+  }, []);
+
+  // Poll general system status
+  const fetchSystemData = useCallback(async () => {
+    try {
+      const res = await getSystemStatus();
+      if (res && res.data) {
+        setSystemStatus(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch system status:', err);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'frota' || activeTab === 'producao' || activeTab === 'sistema') {
-      return;
-    }
-    pollData();
-    const interval = setInterval(pollData, 3000);
+    fetchLiveData();
+    fetchSystemData();
+
+    const interval = setInterval(() => {
+      fetchLiveData();
+      fetchSystemData();
+    }, 2000);
+
     return () => clearInterval(interval);
-  }, [pollData, activeTab]);
+  }, [fetchLiveData, fetchSystemData]);
 
-  // Set default initial channel ID once loaded
-  useEffect(() => {
-    if (!userSelectedChannelId && channels.length > 0) {
-      const initialRunning = channels.find(
-        (c) => c.execution?.status === 'RUNNING' || c.status === 'RUNNING'
-      );
-      const initial = initialRunning || channels[0];
-      setUserSelectedChannelId(initial.channel_id || initial.profile_id);
-    }
-  }, [channels, userSelectedChannelId]);
+  const channels = liveData.channels || [];
 
-  // Deterministic focused channel resolution (Requirement 1)
+  // 1. Single-Focus Deterministic Resolution
   const focusedChannel = useMemo(() => {
     if (!channels || channels.length === 0) return null;
 
-    // 1. If operator explicitly clicked a channel, honor that manual selection
+    // 1. Manual user override has highest precedence if channel still exists
     if (hasUserManuallySelected && userSelectedChannelId) {
-      const found = channels.find(
+      const match = channels.find(
         (c) => (c.channel_id || c.profile_id) === userSelectedChannelId
       );
-      if (found) return found;
+      if (match) return match;
     }
 
-    // 2. Dynamic tracking: prefer channel with active running or retrying task
+    // 2. Deterministic priority: Any RUNNING or RETRYING channel
     const active = channels.find(
       (c) =>
         c.execution?.status === 'RUNNING' ||
@@ -156,16 +144,21 @@ export default function App() {
         if (hash.startsWith('#sistema')) {
           setActiveTab('sistema');
           setSystemFocusChannelId(parseSystemChannelFromHash(hash));
-        } else if (hash === '#producao') {
-          setActiveTab('producao');
-        } else if (hash === '#agent-ops') {
-          setActiveTab('agent-ops');
-        } else if (hash === '#video-review') {
-          setActiveTab('video-review');
-        } else if (hash === '#factory-live') {
-          setActiveTab('factory-live');
         } else {
-          setActiveTab('frota');
+          setSystemFocusChannelId(null);
+          if (hash === '#diagnostico') {
+            setActiveTab('diagnostico');
+          } else if (hash === '#producao') {
+            setActiveTab('producao');
+          } else if (hash === '#agent-ops') {
+            setActiveTab('agent-ops');
+          } else if (hash === '#video-review') {
+            setActiveTab('video-review');
+          } else if (hash === '#factory-live') {
+            setActiveTab('factory-live');
+          } else {
+            setActiveTab('frota');
+          }
         }
       }
     };
@@ -182,6 +175,8 @@ export default function App() {
       window.location.hash =
         tab === 'sistema'
           ? '#sistema'
+          : tab === 'diagnostico'
+          ? '#diagnostico'
           : tab === 'producao'
           ? '#producao'
           : tab === 'agent-ops'
@@ -194,31 +189,37 @@ export default function App() {
     }
   };
 
-  const handleEditInSystem = (profileId) => {
-    setIsDrawerOpen(false);
-    setSystemFocusChannelId(profileId || null);
+  const handleNavigateToSystemChannel = (channelId) => {
+    const targetChannelId = channelId || null;
+    setSystemFocusChannelId(targetChannelId);
     setActiveTab('sistema');
     if (typeof window !== 'undefined') {
-      window.location.hash = buildSystemChannelHash(profileId);
+      window.location.hash = buildSystemChannelHash(targetChannelId);
     }
   };
 
-  const handleSelectFocus = (channel) => {
-    const id = channel.channel_id || channel.profile_id;
-    setUserSelectedChannelId(id);
+  const handleSelectChannel = (channelId) => {
+    setUserSelectedChannelId(channelId);
     setHasUserManuallySelected(true);
   };
 
-  const handleOpenDrawer = (channel, taskId = null, stage = null) => {
-    setDrawerChannel(channel);
-    setDrawerTaskId(taskId || channel?.execution?.task_id);
-    setDrawerStage(stage || channel?.execution?.pipeline_stage);
+  const handleOpenDrawer = (channel) => {
+    const cid = channel.channel_id || channel.profile_id;
+    setUserSelectedChannelId(cid);
+    setHasUserManuallySelected(true);
     setIsDrawerOpen(true);
   };
 
+  const handleCloseDrawer = () => {
+    setIsDrawerOpen(false);
+  };
+
+  // If user selected 'frota', render full Fleet screen view
   if (activeTab === 'frota') {
     return <FleetView onNavigate={handleSelectTab} />;
   }
+
+  // If user selected 'producao', render unified Production screen view
   if (activeTab === 'producao') {
     return <ProductionView onNavigate={handleSelectTab} />;
   }
@@ -230,148 +231,100 @@ export default function App() {
       />
     );
   }
+  if (activeTab === 'diagnostico') {
+    return <DiagnosticsView onNavigate={handleSelectTab} />;
+  }
 
   return (
     <div className="app-container">
-      {/* 1. Header with Navigation & System Health */}
+      {/* Global Factory Header */}
       <FactoryHeader
         systemStatus={systemStatus}
-        lastUpdated={lastUpdated}
-        isApiOnline={isApiOnline}
-        onRefresh={pollData}
+        liveData={liveData}
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
       />
 
-      {/* 2. Main View: Factory Live vs Agent Ops vs Video Review */}
-      {activeTab === 'agent-ops' ? (
-        <AgentOpsView />
-      ) : activeTab === 'video-review' ? (
-        <VideoReviewView />
-      ) : (
-        <>
-          {/* Top Channels Deck — Dynamic Multi-Channel Overview */}
-          <div className="channels-deck-section">
-            <div className="section-title-bar">
-              <div className="deck-title-group">
-                <span className="section-title-icon">📡</span>
-                <span className="section-title">Canais Monitorados</span>
-                <span className="channels-count-pill">
-                  {channels.length} {channels.length === 1 ? 'canal' : 'canais'}
-                </span>
-                <span className="section-subtitle">
-                  Clique em um canal para alternar o pipeline em tempo real
-                </span>
-                {hasUserManuallySelected ? (
-                  <button
-                    type="button"
-                    className="auto-track-toggle-btn manual"
-                    onClick={() => setHasUserManuallySelected(false)}
-                    title="Clique para voltar a focar automaticamente no canal com tarefa em execução"
-                    style={{
-                      fontSize: '11px',
-                      padding: '2px 8px',
-                      borderRadius: '12px',
-                      border: '1px solid rgba(56, 189, 248, 0.4)',
-                      backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                      color: '#38bdf8',
-                      cursor: 'pointer',
-                      marginLeft: '8px',
-                    }}
-                  >
-                    🎯 Foco Manual [Voltar para Auto]
-                  </button>
-                ) : (
-                  <span
-                    style={{
-                      fontSize: '11px',
-                      color: '#34d399',
-                      backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                      padding: '2px 8px',
-                      borderRadius: '12px',
-                      marginLeft: '8px',
-                    }}
-                    title="O pipeline acompanha automaticamente o canal com tarefa em andamento"
-                  >
-                    ● Rastreamento Dinâmico Ativo
-                  </span>
-                )}
+      {/* Main Content Workspace */}
+      <main className="main-content">
+        {error && (
+          <div className="app-error-banner" role="alert">
+            <span className="error-icon">⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {activeTab === 'video-review' ? (
+          <VideoReviewView
+            onNavigateToLive={() => handleSelectTab('factory-live')}
+          />
+        ) : activeTab === 'agent-ops' ? (
+          <AgentOpsView
+            channels={channels}
+            onSelectChannel={handleSelectChannel}
+            onOpenDrawer={handleOpenDrawer}
+          />
+        ) : (
+          <>
+            {/* Top Channel Deck Cards */}
+            <section
+              className="channel-deck-section"
+              aria-label="Canais Ativos"
+            >
+              <div className="channel-deck">
+                {channels.map((channel) => {
+                  const channelKey =
+                    channel.channel_id ||
+                    channel.profile_id ||
+                    `chan-${channel.name}`;
+                  const isFocused =
+                    focusedChannel &&
+                    (focusedChannel.channel_id === channel.channel_id ||
+                      focusedChannel.profile_id === channel.profile_id);
+
+                  return (
+                    <ChannelCard
+                      key={channelKey}
+                      channel={channel}
+                      isFocused={isFocused}
+                      onSelectChannel={handleSelectChannel}
+                      onOpenDrawer={handleOpenDrawer}
+                    />
+                  );
+                })}
               </div>
-              {channels.length > 2 && (
-                <div className="deck-scroll-hint">
-                  <span>← Deslize para explorar ({channels.length}) →</span>
-                </div>
-              )}
-            </div>
+            </section>
 
-        <div className="channels-deck">
-          {channels.length === 0 ? (
-            <div style={{ padding: '16px', color: '#64748b', fontSize: '12px' }}>
-              {isApiOnline ? 'Carregando canais operacionais...' : 'Nenhum canal disponível em memória.'}
-            </div>
-          ) : (
-            channels.map((channel) => {
-              const channelKey = channel.channel_id || channel.profile_id;
-              const isFocused = (focusedChannel?.channel_id || focusedChannel?.profile_id) === channelKey;
+            {/* Middle Pipeline Live Graph Area for Focused Channel */}
+            <section
+              className="pipeline-graph-section"
+              aria-label="Grafo de Execução em Tempo Real"
+            >
+              <FactoryLiveGraph
+                focusedChannel={focusedChannel}
+                pipelineStages={liveData.pipeline_stages}
+                onOpenDrawer={handleOpenDrawer}
+              />
+            </section>
 
-              return (
-                <ChannelCard
-                  key={channelKey}
-                  channel={channel}
-                  isFocused={isFocused}
-                  onSelectFocus={() => handleSelectFocus(channel)}
-                  onOpenDrawer={() => handleOpenDrawer(channel)}
-                />
-              );
-            })
-          )}
-        </div>
-      </div>
+            {/* Bottom Flow Accounts & Quotas Section */}
+            <section
+              className="flow-accounts-container"
+              aria-label="Painel de Contas e Cotas"
+            >
+              <FlowAccountsSection />
+            </section>
+          </>
+        )}
+      </main>
 
-      {/* 3. Google Flow Multi-Account Pool Deck */}
-      <FlowAccountsSection flowPool={flowPool} />
-
-      {/* 4. Factory Live Graph — Single-Focus 2x6 Snake Pipeline */}
-      <div className="live-pipeline-section">
-        <div className="section-title-bar pipeline-title-bar">
-          <div className="title-left">
-            <span className="section-title-icon">⚡</span>
-            <span className="section-title">Pipeline em Tempo Real</span>
-            {focusedChannel && (
-              <span className="focused-channel-tag">
-                Canal: <strong>{focusedChannel.channel_name || focusedChannel.profile_name}</strong>
-              </span>
-            )}
-          </div>
-          <div className="title-right">
-            <span className="pipeline-legend">
-              <span className="legend-dot running" /> Em Execução
-              <span className="legend-dot success" /> Concluído
-              <span className="legend-dot pending" /> Pendente
-            </span>
-          </div>
-        </div>
-
-        <FactoryLiveGraph
-          channel={focusedChannel}
-          onSelectChannelTask={handleOpenDrawer}
-        />
-      </div>
-
-      {/* 5. Execution Lateral Drawer — Mission Control Narrative */}
+      {/* Slide-over Detailed Narrative Execution Drawer */}
       <ExecutionDrawer
         isOpen={isDrawerOpen}
-        onClose={() => setIsDrawerOpen(false)}
-        channelData={drawerChannel}
-        taskId={drawerTaskId}
-        selectedStage={drawerStage}
-        onRefresh={pollData}
-        isPaused={Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED')}
-        onEditInSystem={handleEditInSystem}
+        channel={focusedChannel}
+        onClose={handleCloseDrawer}
+        onNavigateToSystem={handleNavigateToSystemChannel}
       />
-        </>
-      )}
     </div>
   );
 }

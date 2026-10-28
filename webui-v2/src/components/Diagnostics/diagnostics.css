@@ -1,0 +1,391 @@
+/* diagnostics.css — Estilos da Tela de Diagnóstico (Missão SIS3) */
+
+.diag-summary-banner {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.diag-summary-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.diag-factory-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.diag-factory-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.diag-node-badge {
+  font-size: 12px;
+  font-family: monospace;
+  color: #94a3b8;
+  background: rgba(30, 41, 59, 0.6);
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(51, 65, 85, 0.4);
+}
+
+.diag-summary-counters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diag-counter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+}
+
+.diag-counter-pill.ok {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
+.diag-counter-pill.atencao {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+}
+
+.diag-counter-pill.parado {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #f87171;
+}
+
+.diag-counter-pill.pausado {
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+}
+
+.diag-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+.diag-card {
+  background: #0f172a;
+  border: 1px solid rgba(51, 65, 85, 0.4);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: border-color 0.2s ease;
+}
+
+.diag-card:hover {
+  border-color: rgba(100, 116, 139, 0.5);
+}
+
+.diag-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.3);
+  padding-bottom: 12px;
+}
+
+.diag-card-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diag-channel-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.diag-channel-meta {
+  font-size: 12px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.diag-channel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 16px;
+}
+
+.diag-metrics-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(51, 65, 85, 0.25);
+}
+
+.diag-metric-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 90px;
+}
+
+.diag-metric-label {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.diag-metric-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  font-family: monospace;
+}
+
+/* Lista de Diagnósticos e Problemas */
+.diag-problems-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.diag-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #94a3b8;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diag-empty-problems {
+  background: rgba(16, 185, 129, 0.05);
+  border: 1px dashed rgba(16, 185, 129, 0.2);
+  border-radius: 6px;
+  padding: 12px 16px;
+  color: #34d399;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diag-problem-item {
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid;
+}
+
+.diag-problem-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diag-problem-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.diag-problem-since {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.diag-problem-detail {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.diag-suggested-action {
+  background: rgba(30, 41, 59, 0.7);
+  border-left: 3px solid #38bdf8;
+  border-radius: 0 4px 4px 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #bae6fd;
+}
+
+.diag-action-label {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* Timeline de Gerações Recentes */
+.diag-timeline-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid rgba(51, 65, 85, 0.25);
+  padding-top: 12px;
+}
+
+.diag-timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diag-timeline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: rgba(30, 41, 59, 0.35);
+  border-radius: 4px;
+  font-size: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.diag-timeline-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.diag-task-mono {
+  font-family: monospace;
+  font-size: 11px;
+  color: #94a3b8;
+  background: rgba(51, 65, 85, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.diag-topic-text {
+  color: #e2e8f0;
+  max-width: 380px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diag-timeline-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.diag-reason-text {
+  color: #f87171;
+  font-size: 11px;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diag-outcome-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+/* =====================================================================
+   Novos estilos: Limites do canal, canal desligado e tetos globais (SIS3e)
+   ===================================================================== */
+.diag-card.is-disabled {
+  opacity: 0.72;
+  filter: grayscale(0.25);
+  border-color: rgba(51, 65, 85, 0.25);
+}
+
+.diag-badge-off {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #94a3b8;
+}
+
+.diag-limits-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: rgba(15, 23, 42, 0.25);
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(51, 65, 85, 0.2);
+}
+
+.diag-global-limits {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(51, 65, 85, 0.35);
+  font-size: 12px;
+}
+
+.diag-global-limit-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+}
+
+.diag-global-limit-label {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.diag-global-limit-val {
+  font-family: monospace;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+

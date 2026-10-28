@@ -7,18 +7,26 @@ Valida os requisitos da missão hotfix/voz-painel-validada:
 4. voice_rate fora da faixa [0.8, 2.0] ou não finito é recusado; dentro da faixa é gravado.
 5. Índice inicial do seletor: voz salva válida > Brian; nunca a primeira da lista (ex: af-ZA) nem idioma da UI.
 6. Emissão de log WARNING em gravações recusadas sem vazamento de dados sensíveis.
+7. Renderizar sem interação NÃO chama _set_runtime_config para voice_rate (mesmo com 0.8 em session_state).
+8. Mudança explícita do operador via callback (_on_voice_rate_changed) para valor válido grava com idempotência.
+9. Valor inválido via callback (_on_voice_rate_changed) é recusado e não altera config.ui["voice_rate"].
 """
 
 import math
 from unittest.mock import patch, MagicMock
 
 import pytest
+import streamlit as st
 
 from app.config import config
+from app.models.schema import VideoParams
 from webui.Main import (
     VOICE_RATE_MIN,
     VOICE_RATE_MAX,
+    _on_voice_rate_changed,
+    _render_audio_settings,
     is_valid_ui_voice_rate,
+    localized_widget_key,
     resolve_initial_voice_selection,
     save_validated_voice_name,
     save_validated_voice_rate,
@@ -27,9 +35,14 @@ from webui.Main import (
 
 @pytest.fixture(autouse=True)
 def restore_ui_config():
-    """Garante restauração do estado original de config.ui após cada teste."""
+    """Garante restauração do estado original de config.ui e session_state após cada teste."""
     orig_voice_name = config.ui.get("voice_name")
     orig_voice_rate = config.ui.get("voice_rate")
+    rate_wkey = localized_widget_key("voice_rate_select")
+    had_wkey = rate_wkey in st.session_state
+    orig_wkey_val = st.session_state.get(rate_wkey)
+    had_raw_key = "voice_rate_select" in st.session_state
+    orig_raw_val = st.session_state.get("voice_rate_select")
     yield
     if orig_voice_name is not None:
         config.ui["voice_name"] = orig_voice_name
@@ -40,6 +53,16 @@ def restore_ui_config():
         config.ui["voice_rate"] = orig_voice_rate
     else:
         config.ui.pop("voice_rate", None)
+
+    if had_wkey:
+        st.session_state[rate_wkey] = orig_wkey_val
+    else:
+        st.session_state.pop(rate_wkey, None)
+
+    if had_raw_key:
+        st.session_state["voice_rate_select"] = orig_raw_val
+    else:
+        st.session_state.pop("voice_rate_select", None)
 
 
 def _apply_runtime_config(section, key, val):
@@ -142,7 +165,6 @@ def test_initial_index_valid_saved_voice_over_brian():
         "en-US-BrianMultilingualNeural-Male": "Brian",
         "pt-BR-AntonioNeural-Male": "Antonio",
     }
-    # Voz salva válida presente no catálogo
     idx = resolve_initial_voice_selection("pt-BR-AntonioNeural-Male", catalog, "azure-tts-v1")
     assert idx == 2  # Antonio
 
@@ -154,7 +176,6 @@ def test_initial_index_invalid_saved_voice_falls_back_to_brian_never_first_of_li
         "en-US-BrianMultilingualNeural-Male": "Brian",  # Índice 1 (fallback obrigatório)
         "pt-BR-AntonioNeural-Male": "Antonio",  # Índice 2
     }
-    # af-ZA é inválida para pt-BR
     idx = resolve_initial_voice_selection("af-ZA-AdriNeural-Female", catalog, "azure-tts-v1")
     assert idx == 1  # Brian!
     assert idx != 0  # NUNCA a primeira da lista!
@@ -167,7 +188,6 @@ def test_initial_index_unknown_or_missing_saved_voice_falls_back_to_brian():
         "en-US-BrianMultilingualNeural-Male": "Brian",
         "pt-BR-AntonioNeural-Male": "Antonio",
     }
-    # Voz vazia ou inexistente
     assert resolve_initial_voice_selection("", catalog, "azure-tts-v1") == 1
     assert resolve_initial_voice_selection("non-existent-voice", catalog, "azure-tts-v1") == 1
 
@@ -183,3 +203,85 @@ def test_warnings_logged_when_writes_refused():
         save_validated_voice_rate(0.5)
         assert mock_warn_rate.called
         assert "0.5" in mock_warn_rate.call_args[0][0]
+
+
+def test_render_without_interaction_does_not_write_voice_rate():
+    """9. Renderizar o painel de áudio sem interação NÃO chama _set_runtime_config para voice_rate."""
+    config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+    config.ui["voice_rate"] = 1.1
+
+    # Simula aba antiga ou tarefa restaurada com 0.8 no session_state da sessão
+    rate_wkey = localized_widget_key("voice_rate_select")
+    st.session_state[rate_wkey] = 0.8
+
+    captured_selectbox_kwargs = {}
+
+    def _fake_selectbox(label, options, **kwargs):
+        key = kwargs.get("key")
+        if key == rate_wkey:
+            captured_selectbox_kwargs.update(kwargs)
+        return st.session_state.get(key, options[0])
+
+    params = VideoParams(video_subject="")
+    with (
+        patch("webui.Main._set_runtime_config", side_effect=_apply_runtime_config) as mock_set_cfg,
+        patch("webui.Main.stable_segmented_control", return_value="tts"),
+        patch("webui.Main.st.selectbox", side_effect=_fake_selectbox),
+        patch("webui.Main.st.columns", side_effect=lambda spec, **kw: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]),
+        patch("webui.Main.st.container", return_value=MagicMock()),
+        patch("webui.Main.st.write"),
+        patch("webui.Main.st.info"),
+        patch("webui.Main._render_voice_preview"),
+        patch("webui.Main._render_background_music_settings", return_value=None),
+        patch("webui.Main.voice.get_all_azure_voices", return_value=["en-US-BrianMultilingualNeural-Male"]),
+    ):
+        _render_audio_settings(MagicMock(), params)
+
+    # Verifica que nenhuma chamada a _set_runtime_config tentou gravar voice_rate durante o render
+    voice_rate_writes = [
+        call for call in mock_set_cfg.call_args_list
+        if len(call.args) >= 2 and call.args[0] == "ui" and call.args[1] == "voice_rate"
+    ]
+    assert voice_rate_writes == []
+    # O valor salvo globalmente permanece 1.1 (não foi sobrescrito pelo 0.8 da sessão)
+    assert math.isclose(float(config.ui["voice_rate"]), 1.1)
+    # O selectbox de velocidade registrou o callback on_change=_on_voice_rate_changed
+    assert captured_selectbox_kwargs.get("on_change") is _on_voice_rate_changed
+
+
+def test_explicit_operator_change_callback_saves_valid_voice_rate():
+    """10. Mudança explícita do operador (callback _on_voice_rate_changed) para valor válido grava."""
+    config.ui["voice_rate"] = 1.1
+    rate_wkey = localized_widget_key("voice_rate_select")
+    st.session_state[rate_wkey] = 1.3
+
+    with patch("webui.Main._set_runtime_config", side_effect=_apply_runtime_config) as mock_set_cfg:
+        result = _on_voice_rate_changed()
+        assert result is True
+        mock_set_cfg.assert_called_once_with("ui", "voice_rate", 1.3)
+        assert math.isclose(float(config.ui["voice_rate"]), 1.3)
+
+        # Idempotência: chamar novamente com o mesmo valor não regrava
+        mock_set_cfg.reset_mock()
+        result_again = _on_voice_rate_changed()
+        assert result_again is False
+        mock_set_cfg.assert_not_called()
+
+
+def test_invalid_voice_rate_via_callback_is_refused():
+    """11. Valor inválido via callback (_on_voice_rate_changed) é recusado e emite WARNING."""
+    config.ui["voice_rate"] = 1.1
+    rate_wkey = localized_widget_key("voice_rate_select")
+
+    invalid_values = [0.5, 0.79, 2.01, -1.0, float("nan"), float("inf"), "invalid", None]
+    with (
+        patch("webui.Main._set_runtime_config") as mock_set_cfg,
+        patch("webui.Main.logger.warning") as mock_warn,
+    ):
+        for bad_val in invalid_values:
+            st.session_state[rate_wkey] = bad_val
+            assert _on_voice_rate_changed() is False
+
+        mock_set_cfg.assert_not_called()
+        assert mock_warn.call_count == len(invalid_values)
+        assert math.isclose(float(config.ui["voice_rate"]), 1.1)

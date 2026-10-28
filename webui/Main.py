@@ -518,6 +518,16 @@ def save_validated_voice_rate(voice_rate: Any) -> bool:
     return False
 
 
+def _on_voice_rate_changed() -> bool:
+    """Persiste voice_rate somente quando o operador altera explicitamente o seletor."""
+    widget_key = localized_widget_key("voice_rate_select")
+    if widget_key in st.session_state:
+        selected_rate = st.session_state.get(widget_key)
+    else:
+        selected_rate = st.session_state.get("voice_rate_select")
+    return save_validated_voice_rate(selected_rate)
+
+
 def _run_llm_read_operation(operation_name, operation):
     """
     使用稳定的当前 LLM 配置执行只读请求，并避免等待视频生成任务。
@@ -7545,9 +7555,9 @@ def _render_audio_settings(panel, params):
                             else tr("Voiceover Speed Help")
                         ),
                         disabled=is_voxcpm,
+                        on_change=_on_voice_rate_changed,
                     )
                 _set_runtime_config("ui", "voice_volume", params.voice_volume)
-                save_validated_voice_rate(params.voice_rate)
 
                 # 试听必须位于音量和语速控件之后，确保调用使用当前控件值。
                 _render_voice_preview(

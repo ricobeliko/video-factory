@@ -4165,12 +4165,15 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         sched_count = scheduled_counts.get(pid, 0)
         pub_today_count = published_today.get(pid, 0)
 
-        # 3. Contagens 24h (approved_24h, attempts_24h) via funções canônicas de autonomous_production
+        # 3. Contagens 24h (approved_24h, attempts_24h) e teto diário via funções canônicas de autonomous_production
         app_cnt = autonomous_production.count_generations_in_last_24h(
             now=now_utc, db_path=effective_db, profile_id=pid
         )
         att_cnt = autonomous_production.count_generation_attempts_in_last_24h(
             now=now_utc, db_path=effective_db, profile_id=pid
+        )
+        max_gen_24h = autonomous_production.get_max_generations_24h(
+            profile_id=pid, db_path=effective_db
         )
         approval_rate_24h = round(app_cnt / att_cnt, 2) if att_cnt > 0 else None
 
@@ -4206,43 +4209,30 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
 
         is_active = bool(p.get("is_active", True))
 
-        # Determinação determinística de status e issue
-        if is_factory_paused:
-            status = "paused"
-            issue = "Fábrica pausada pelo operador"
-        elif not is_active:
-            status = "paused"
-            issue = "Canal desativado pelo operador"
-        elif not autonomous_enabled:
-            status = "paused"
-            issue = "Modo autônomo desligado"
-        elif consec_rejections >= max_rejections:
-            status = "blocked"
-            issue = f"Disjuntor acionado: {consec_rejections} rejeições consecutivas"
-        elif auto_state in ("blocked", "error"):
-            status = "blocked"
-            issue = auto_msg or auto_err or "Produção autônoma bloqueada"
-        elif auto_state in ("generating", "planning") or pending_proc > 0:
-            status = "running"
-            issue = None
-        elif auto_state == "cooldown":
-            status = "attention"
-            issue = "Em período de espera (cooldown)"
-        elif ready_stock is None:
-            status = "attention"
-            issue = "Estoque desconhecido (falha na leitura)"
-        elif ready_stock == 0:
-            status = "attention"
-            issue = "Estoque esgotado (0 vídeos prontos)"
-        elif ready_stock < target_stock:
-            status = "attention"
-            issue = f"Estoque abaixo da meta ({ready_stock}/{target_stock})"
-        elif failed_count > 0:
-            status = "attention"
-            issue = f"Atenção: {failed_count} falha(s) registrada(s)"
-        else:
-            status = "ok"
-            issue = None
+        # Determinação determinística de status via função canônica única
+        from app.services.channel_status import evaluate_canonical_channel_status
+
+        status_eval = evaluate_canonical_channel_status(
+            is_factory_paused=is_factory_paused,
+            factory_state=factory_state,
+            is_channel_active=is_active,
+            autonomous_enabled=autonomous_enabled,
+            auto_state=auto_state,
+            auto_message=auto_msg,
+            auto_last_error=auto_err,
+            ready_stock=ready_stock,
+            target_stock=target_stock,
+            pending_proc=pending_proc,
+            consec_rejections=consec_rejections,
+            max_rejections=max_rejections,
+            approved_24h=app_cnt,
+            max_generations_24h=max_gen_24h,
+            failed_24h=failed_count,
+        )
+        status = status_eval["status"]
+        reason_code = status_eval["reason_code"]
+        reason = status_eval["reason"]
+        issue = reason
 
         channels_data.append({
             "profile_id": pid,
@@ -4261,10 +4251,14 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             "published_today": pub_today_count,
             "goal_today": goal_today,
             "approved_24h": app_cnt,
+            "max_generations_24h": max_gen_24h,
             "attempts_24h": att_cnt,
             "approval_rate_24h": approval_rate_24h,
             "last_run_at": last_run_at,
             "status": status,
+            "status_label": status_eval["label"],
+            "reason_code": reason_code,
+            "reason": reason,
             "issue": issue,
         })
 

@@ -750,7 +750,7 @@ def get_autonomous_status(
     state = _get_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED if not enabled else STATE_IDLE, profile_id=target_profile, db_path=db_path)
     sched_settings = scheduler.get_all_settings(db_path=db_path)
     is_sched = bool(sched_settings.get("scheduler_enabled", False))
-    if not enabled and not is_sched and state != STATE_BLOCKED:
+    if not enabled:
         state = STATE_DISABLED
     default_msg = "Aguardando próximo ciclo" if enabled else (
         f"Agendamento ativo para perfil '{target_profile}' (produção autônoma pausada)." if is_sched
@@ -799,10 +799,23 @@ def get_autonomous_status(
     max_att = get_max_attempts_24h(profile_id=target_profile, db_path=db_path)
     consecutive_rejections = get_consecutive_rejections(db_path=db_path, profile_id=target_profile)
 
-    # Estoque atual e meta (estritamente elegível para YouTube e para o perfil selecionado)
-    stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
-    target_stock = stock_info["target_stock"]
-    ready_count = stock_info["ready_count"]
+    # Estoque atual e meta (estritamente elegível para YouTube e para o perfil selecionado).
+    # Não mascarar falha de leitura de estoque como 0: propagar None.
+    try:
+        stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
+        target_stock = stock_info["target_stock"]
+        ready_count = stock_info["ready_count"]
+        yt_ready_count = stock_info["youtube_count"]
+        is_below_target = stock_info["is_below_target"]
+    except Exception as exc:
+        logger.warning(f"[AUTONOMOUS] Falha ao ler estoque pronto para o perfil '{target_profile}': {exc}")
+        try:
+            target_stock = get_target_ready_stock(profile_id=target_profile, db_path=db_path)
+        except Exception:
+            target_stock = 3
+        ready_count = None
+        yt_ready_count = None
+        is_below_target = None
 
     # Global Cost Guard snapshot
     global_approved = count_all_profiles_generations_24h(db_path=db_path)
@@ -833,8 +846,8 @@ def get_autonomous_status(
         "waiting_task_id": waiting_task_id,
         "ready_stock_total": ready_count,
         "target_ready_stock": target_stock,
-        "youtube_ready_count": stock_info["youtube_count"],
-        "is_below_target": stock_info["is_below_target"],
+        "youtube_ready_count": yt_ready_count,
+        "is_below_target": is_below_target,
         "generated_today_24h": generated_today,
         "max_generations_24h": max_24h,
         "generation_attempts_24h": attempts_today,

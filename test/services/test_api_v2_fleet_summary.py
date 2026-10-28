@@ -247,14 +247,14 @@ class TestApiV2FleetSummary(unittest.TestCase):
                 "profile_id", "name", "slug", "niche", "format", "is_active",
                 "autonomous_enabled", "growth_mode", "ready_stock", "target_stock",
                 "pending_processing", "failed", "scheduled", "published_today",
-                "goal_today", "approval_rate_24h", "last_run_at", "status", "issue"
+                "goal_today", "approval_rate_24h", "last_run_at", "status", "reason_code", "reason", "issue"
             }
             allowed_statuses = {"ok", "running", "attention", "blocked", "paused"}
 
             for ch in channels:
                 self.assertTrue(required_keys.issubset(set(ch.keys())), f"Chaves faltando no canal {ch.get('profile_id')}")
                 self.assertIn(ch["status"], allowed_statuses)
-                if ch["status"] == "ok":
+                if ch["status"] == "ok" and ch.get("reason_code") != "DAILY_GOAL_REACHED":
                     self.assertIsNone(ch["issue"])
                 else:
                     self.assertIsInstance(ch["issue"], str)

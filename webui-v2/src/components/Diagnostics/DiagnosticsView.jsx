@@ -272,6 +272,24 @@ export default function DiagnosticsView({ onNavigate }) {
             </div>
           </div>
 
+          {/* Tetos Globais da Fábrica (Global Cost Guard) */}
+          {(data?.limits || factory?.limits) && (
+            <div className="diag-global-limits">
+              <span className="diag-global-limit-item">
+                <span className="diag-global-limit-label">Teto Global Tentativas:</span>
+                <span className="diag-global-limit-val">
+                  {formatSafeValue((data?.limits || factory?.limits)?.attempts_24h?.used)} / {formatSafeValue((data?.limits || factory?.limits)?.attempts_24h?.cap)}
+                </span>
+              </span>
+              <span className="diag-global-limit-item">
+                <span className="diag-global-limit-label">Teto Global Aprovados:</span>
+                <span className="diag-global-limit-val">
+                  {formatSafeValue((data?.limits || factory?.limits)?.approved_24h?.used)} / {formatSafeValue((data?.limits || factory?.limits)?.approved_24h?.cap)}
+                </span>
+              </span>
+            </div>
+          )}
+
           {/* Seletor de Filtro de Canais */}
           {rawChannels.length > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '4px' }}>
@@ -331,9 +349,10 @@ export default function DiagnosticsView({ onNavigate }) {
               const statusBadge = getStatusBadgeInfo(chan.status);
               const sortedDiagnoses = sortDiagnosesBySeverity(chan.diagnoses || []);
               const recentGens = chan.recent_generations || [];
+              const isOff = chan.limits?.autonomous_enabled === false;
 
               return (
-                <div key={chan.profile_id} className="diag-card">
+                <div key={chan.profile_id} className={`diag-card ${isOff ? 'is-disabled' : ''}`}>
                   {/* Cabeçalho do Cartão */}
                   <div className="diag-card-header">
                     <div className="diag-card-title-group">
@@ -347,17 +366,24 @@ export default function DiagnosticsView({ onNavigate }) {
                       </div>
                     </div>
 
-                    <span
-                      className="diag-channel-badge"
-                      style={{
-                        backgroundColor: statusBadge.bg,
-                        color: statusBadge.color,
-                        border: `1px solid ${statusBadge.border}`,
-                      }}
-                    >
-                      <span aria-hidden="true">{statusBadge.icon}</span>
-                      <span>{statusBadge.label}</span>
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {isOff && (
+                        <span className="diag-badge-off" title="Produção autônoma desativada pelo operador">
+                          ⏻ Desligado
+                        </span>
+                      )}
+                      <span
+                        className="diag-channel-badge"
+                        style={{
+                          backgroundColor: statusBadge.bg,
+                          color: statusBadge.color,
+                          border: `1px solid ${statusBadge.border}`,
+                        }}
+                      >
+                        <span aria-hidden="true">{statusBadge.icon}</span>
+                        <span>{statusBadge.label}</span>
+                      </span>
+                    </div>
                   </div>
 
                   {/* Barra de Métricas 24h e Estoque */}
@@ -388,6 +414,34 @@ export default function DiagnosticsView({ onNavigate }) {
                       <span className="diag-metric-label">Interrompidas 24h</span>
                       <span className="diag-metric-val" style={{ color: chan.counts_24h?.interrupted ? '#fbbf24' : '#94a3b8' }}>
                         {chan.counts_24h?.interrupted ?? 0}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Linha de Limites do Canal (Guardas 5.1–5.4) */}
+                  <div className="diag-limits-bar">
+                    <div className="diag-metric-item">
+                      <span className="diag-metric-label">Modo</span>
+                      <span className="diag-metric-val">
+                        {chan.limits?.growth_mode ? String(chan.limits.growth_mode).toUpperCase() : '—'}
+                      </span>
+                    </div>
+                    <div className="diag-metric-item">
+                      <span className="diag-metric-label">Aprovados 24h</span>
+                      <span className="diag-metric-val">
+                        {formatSafeValue(chan.limits?.approved_24h?.used)} / {formatSafeValue(chan.limits?.approved_24h?.cap)}
+                      </span>
+                    </div>
+                    <div className="diag-metric-item">
+                      <span className="diag-metric-label">Tentativas 24h</span>
+                      <span className="diag-metric-val">
+                        {formatSafeValue(chan.limits?.attempts_24h?.used)} / {formatSafeValue(chan.limits?.attempts_24h?.cap)}
+                      </span>
+                    </div>
+                    <div className="diag-metric-item">
+                      <span className="diag-metric-label">Rejeições Seguidas</span>
+                      <span className="diag-metric-val">
+                        {formatSafeValue(chan.limits?.consecutive_rejections?.used)} / {formatSafeValue(chan.limits?.consecutive_rejections?.limit)}
                       </span>
                     </div>
                   </div>

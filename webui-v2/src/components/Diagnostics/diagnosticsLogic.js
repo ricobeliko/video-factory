@@ -226,3 +226,59 @@ export function calculateFactorySummary(channels) {
     warningCount,
   };
 }
+
+/**
+ * Formata os limites de um canal de forma determinística e segura.
+ * Valores ausentes ou nulos viram '—'.
+ * @param {Object} limits
+ */
+export function formatLimits(limits) {
+  const approvedUsed = formatSafeValue(limits?.approved_24h?.used);
+  const approvedCap = formatSafeValue(limits?.approved_24h?.cap);
+  const attemptsUsed = formatSafeValue(limits?.attempts_24h?.used);
+  const attemptsCap = formatSafeValue(limits?.attempts_24h?.cap);
+  const crUsed = formatSafeValue(limits?.consecutive_rejections?.used);
+  const crLimit = formatSafeValue(limits?.consecutive_rejections?.limit);
+  const growthMode = limits?.growth_mode ? String(limits.growth_mode).toUpperCase().trim() : '—';
+  const isAutonomousEnabled = limits?.autonomous_enabled === true;
+  const isAutonomousDisabled = limits?.autonomous_enabled === false;
+
+  return {
+    approvedText: `${approvedUsed} / ${approvedCap}`,
+    attemptsText: `${attemptsUsed} / ${attemptsCap}`,
+    rejectionsText: `${crUsed} / ${crLimit}`,
+    growthMode,
+    isAutonomousEnabled,
+    isAutonomousDisabled,
+  };
+}
+
+/**
+ * Retorna dados visuais para o selo de canal autônomo desligado.
+ * @param {boolean|null} autonomousEnabled
+ */
+export function getAutonomousSwitchBadge(autonomousEnabled) {
+  if (autonomousEnabled === false) {
+    return {
+      label: 'Desligado',
+      icon: '⏻',
+      isOff: true,
+      className: 'badge-desligado',
+    };
+  }
+  if (autonomousEnabled === true) {
+    return {
+      label: 'Ativo',
+      icon: '⚡',
+      isOff: false,
+      className: 'badge-ligado',
+    };
+  }
+  return {
+    label: '—',
+    icon: '',
+    isOff: false,
+    className: 'badge-unknown',
+  };
+}
+

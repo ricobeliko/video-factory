@@ -9,6 +9,8 @@ import {
   formatOutcome,
   formatSafeValue,
   calculateFactorySummary,
+  formatLimits,
+  getAutonomousSwitchBadge,
 } from '../components/Diagnostics/diagnosticsLogic.js';
 
 test('sortDiagnosesBySeverity: ordena estritamente critical > warning > info', () => {
@@ -133,3 +135,61 @@ test('calculateFactorySummary: totaliza corretamente canais e severidades', () =
   assert.equal(summary.criticalCount, 1);
   assert.equal(summary.warningCount, 2);
 });
+
+test('formatLimits: formata valores nulos com "—" e preserva valores preenchidos', () => {
+  // Limites vazios / nulos
+  const emptyRes = formatLimits(null);
+  assert.equal(emptyRes.approvedText, '— / —');
+  assert.equal(emptyRes.attemptsText, '— / —');
+  assert.equal(emptyRes.rejectionsText, '— / —');
+  assert.equal(emptyRes.growthMode, '—');
+  assert.equal(emptyRes.isAutonomousDisabled, false);
+
+  // Limites preenchidos (caso Quiz 10/10)
+  const fullRes = formatLimits({
+    growth_mode: 'scale',
+    autonomous_enabled: true,
+    approved_24h: { used: 10, cap: 10 },
+    attempts_24h: { used: 15, cap: 30 },
+    consecutive_rejections: { used: 2, limit: 10 },
+  });
+  assert.equal(fullRes.approvedText, '10 / 10');
+  assert.equal(fullRes.attemptsText, '15 / 30');
+  assert.equal(fullRes.rejectionsText, '2 / 10');
+  assert.equal(fullRes.growthMode, 'SCALE');
+  assert.equal(fullRes.isAutonomousEnabled, true);
+  assert.equal(fullRes.isAutonomousDisabled, false);
+
+  // Canal desligado
+  const offRes = formatLimits({
+    autonomous_enabled: false,
+    growth_mode: 'warmup',
+  });
+  assert.equal(offRes.isAutonomousDisabled, true);
+});
+
+test('getAutonomousSwitchBadge: retorna selo Desligado para false e Ativo para true', () => {
+  const off = getAutonomousSwitchBadge(false);
+  assert.equal(off.label, 'Desligado');
+  assert.equal(off.isOff, true);
+
+  const on = getAutonomousSwitchBadge(true);
+  assert.equal(on.label, 'Ativo');
+  assert.equal(on.isOff, false);
+
+  const unknown = getAutonomousSwitchBadge(null);
+  assert.equal(unknown.label, '—');
+  assert.equal(unknown.isOff, false);
+});
+
+test('getSeverityBadgeInfo: severidade info nunca é classificada como alerta (isAlert=false)', () => {
+  const infoBadge = getSeverityBadgeInfo('info');
+  assert.equal(infoBadge.isAlert, false, 'Diagnóstico info não pode disparar alerta visual');
+
+  const warningBadge = getSeverityBadgeInfo('warning');
+  assert.equal(warningBadge.isAlert, true);
+
+  const criticalBadge = getSeverityBadgeInfo('critical');
+  assert.equal(criticalBadge.isAlert, true);
+});
+

@@ -328,3 +328,64 @@
   padding: 2px 8px;
   border-radius: 12px;
 }
+
+/* =====================================================================
+   Novos estilos: Limites do canal, canal desligado e tetos globais (SIS3e)
+   ===================================================================== */
+.diag-card.is-disabled {
+  opacity: 0.72;
+  filter: grayscale(0.25);
+  border-color: rgba(51, 65, 85, 0.25);
+}
+
+.diag-badge-off {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #94a3b8;
+}
+
+.diag-limits-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: rgba(15, 23, 42, 0.25);
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(51, 65, 85, 0.2);
+}
+
+.diag-global-limits {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(51, 65, 85, 0.35);
+  font-size: 12px;
+}
+
+.diag-global-limit-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+}
+
+.diag-global-limit-label {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.diag-global-limit-val {
+  font-family: monospace;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+

@@ -1073,4 +1073,550 @@ def test_target_stock_equals_canonical_minimum_threshold():
         assert chan_default_diag["ready_stock"]["target"] == canonical_default["minimum_threshold"]
 
 
+def test_detector_autonomous_disabled_and_gap_suppression():
+    """Garante que canal com modo autônomo desligado recebe status PAUSADO, AUTONOMOUS_DISABLED (info) e suprime NO_GENERATION_GAP."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_auto_off.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 18, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        toggle_time_iso = (now - timedelta(hours=5)).isoformat()
+        past_14h_iso = (now - timedelta(hours=14)).isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-gta", "GTA VI Channel", "chan-gta", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                ("task-gta-01", "chan-gta", past_14h_iso),
+            )
+            # Evento toggle de desligamento
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'profile_autonomous_mode_toggled', NULL, 'Desativado pelo operador', '{"profile_id": "chan-gta", "enabled": false}')
+                """,
+                (toggle_time_iso,),
+            )
+            # Evento de geração antiga (14h atrás)
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'task-gta-01', 'GTA VI Trailer', '{"profile_id": "chan-gta"}')
+                """,
+                (past_14h_iso,),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_mode_enabled:chan-gta", "False",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-gta")
+
+        # Status deve ser PAUSADO porque a produção está desligada para o canal
+        assert chan["status"] == production_diagnostics.STATUS_PAUSADO
+        assert chan["limits"]["autonomous_enabled"] is False
+
+        diag_codes = [d["code"] for d in chan["diagnoses"]]
+        assert production_diagnostics.CODE_AUTONOMOUS_DISABLED in diag_codes
+        # NO_GENERATION_GAP NÃO pode disparar para canal desligado
+        assert production_diagnostics.CODE_NO_GENERATION_GAP not in diag_codes
+
+        dis_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_AUTONOMOUS_DISABLED)
+        assert dis_diag["severity"] == production_diagnostics.SEVERITY_INFO
+        assert dis_diag["since"] is not None
+
+
+def test_detector_daily_approved_cap_reached():
+    """Garante que canal atingindo o teto diário de aprovações emite DAILY_APPROVED_CAP_REACHED (info), calcula liberação e mantém status OK."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_app_cap.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 20, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        oldest_app_time = now - timedelta(hours=8)
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, growth_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("chan-quiz", "Quiz_Quiz", "chan-quiz", "scale", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_mode_enabled:chan-quiz", "True",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            # Insere 10 tarefas aprovadas nas últimas 24h (cap no modo scale procedural é 10)
+            for i in range(10):
+                tid = f"task-quiz-{i}"
+                t_dt = (oldest_app_time + timedelta(minutes=i * 30)).isoformat()
+                conn.execute(
+                    "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                    (tid, "chan-quiz", t_dt),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                    VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', ?, 'Aprovado', '{"profile_id": "chan-quiz"}')
+                    """,
+                    (t_dt, tid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-quiz")
+
+        assert chan["limits"]["approved_24h"]["used"] == 10
+        assert chan["limits"]["approved_24h"]["cap"] == 10
+
+        diag_codes = [d["code"] for d in chan["diagnoses"]]
+        assert production_diagnostics.CODE_DAILY_APPROVED_CAP_REACHED in diag_codes
+
+        app_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_DAILY_APPROVED_CAP_REACHED)
+        assert app_diag["severity"] == production_diagnostics.SEVERITY_INFO
+        assert "SCALE" in app_diag["detail"]
+        assert "10/10" in app_diag["detail"]
+        assert "Próxima liberação estimada" in app_diag["detail"]
+
+        # Severidade info nunca rebaixa para ATENCAO
+        assert chan["status"] == production_diagnostics.STATUS_OK
+
+
+def test_detector_daily_attempt_cap_reached():
+    """Garante que canal atingindo o teto de tentativas emite DAILY_ATTEMPT_CAP_REACHED (info)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_att_cap.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 20, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, growth_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("chan-warmup", "Canal Warmup", "chan-warmup", "warmup", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_mode_enabled:chan-warmup", "True",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            # Insere 8 tentativas de geração (teto no modo warmup é 8)
+            for i in range(8):
+                tid = f"task-warm-{i}"
+                t_dt = (now - timedelta(hours=4, minutes=i * 10)).isoformat()
+                conn.execute(
+                    "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                    (tid, "chan-warmup", t_dt),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                    VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'Iniciando', '{"profile_id": "chan-warmup"}')
+                    """,
+                    (t_dt, tid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-warmup")
+
+        assert chan["limits"]["attempts_24h"]["used"] == 8
+        assert chan["limits"]["attempts_24h"]["cap"] == 8
+
+        diag_codes = [d["code"] for d in chan["diagnoses"]]
+        assert production_diagnostics.CODE_DAILY_ATTEMPT_CAP_REACHED in diag_codes
+        att_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_DAILY_ATTEMPT_CAP_REACHED)
+        assert att_diag["severity"] == production_diagnostics.SEVERITY_INFO
+        assert "8/8" in att_diag["detail"]
+
+
+def test_detector_approved_cap_exceeded():
+    """Garante que quando used > cap (caso Escolhas 11/10) é emitido APPROVED_CAP_EXCEEDED (warning) e canal fica em ATENCAO."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_cap_exceeded.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 20, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, growth_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("chan-escolhas", "Escolhas Impossíveis", "chan-escolhas", "warmup", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_mode_enabled:chan-escolhas", "True",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            # Insere 3 gerações aprovadas em warmup (cap de warmup é 2, gerando 3/2)
+            for i in range(3):
+                tid = f"task-esc-{i}"
+                t_dt = (now - timedelta(hours=2, minutes=i * 20)).isoformat()
+                conn.execute(
+                    "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                    (tid, "chan-escolhas", t_dt),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                    VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', ?, 'Aprovado', '{"profile_id": "chan-escolhas"}')
+                    """,
+                    (t_dt, tid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-escolhas")
+
+        assert chan["limits"]["approved_24h"]["used"] == 3
+        assert chan["limits"]["approved_24h"]["cap"] == 2
+
+        diag_codes = [d["code"] for d in chan["diagnoses"]]
+        assert production_diagnostics.CODE_APPROVED_CAP_EXCEEDED in diag_codes
+        exc_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_APPROVED_CAP_EXCEEDED)
+        assert exc_diag["severity"] == production_diagnostics.SEVERITY_WARNING
+        assert "3/2" in exc_diag["title"]
+
+        # Warning rebaixa o canal para ATENCAO
+        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+
+
+def test_detector_rejection_breaker_warning_and_critical():
+    """Garante que REJECTION_BREAKER emite warning em 50% e critical no limite total."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_rej_breaker.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 20, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        recent_iso = (now - timedelta(hours=1)).isoformat()
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-warn", "Canal 50% Rej", "chan-warn", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-crit", "Canal 100% Rej", "chan-crit", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?), (?, ?, ?)",
+                ("task-w-01", "chan-warn", recent_iso, "task-c-01", "chan-crit", recent_iso),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'task-w-01', 'Recent W', '{"profile_id": "chan-warn"}'),
+                       (?, 'autonomous_production', 'INFO', 'generation_started', 'task-c-01', 'Recent C', '{"profile_id": "chan-crit"}')
+                """,
+                (recent_iso, recent_iso),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?), (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_consecutive_rejections:chan-warn", "5",
+                    "autonomous_consecutive_rejections:chan-crit", "10",
+                    "autonomous_mode_enabled:chan-warn", "true",
+                    "autonomous_mode_enabled:chan-crit", "true",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan_warn = next(c for c in res["channels"] if c["profile_id"] == "chan-warn")
+        chan_crit = next(c for c in res["channels"] if c["profile_id"] == "chan-crit")
+
+        diag_w = next(d for d in chan_warn["diagnoses"] if d["code"] == production_diagnostics.CODE_REJECTION_BREAKER)
+        assert diag_w["severity"] == production_diagnostics.SEVERITY_WARNING
+        assert "5/10" in diag_w["title"]
+        assert chan_warn["status"] == production_diagnostics.STATUS_ATENCAO
+
+        diag_c = next(d for d in chan_crit["diagnoses"] if d["code"] == production_diagnostics.CODE_REJECTION_BREAKER)
+        assert diag_c["severity"] == production_diagnostics.SEVERITY_CRITICAL
+        assert "Proteção de custo ativa" in diag_c["detail"]
+        assert "10/10" in diag_c["title"]
+        assert chan_crit["status"] == production_diagnostics.STATUS_PARADO
+
+
+def test_detector_global_cost_guard_warning_and_critical():
+    """Garante que GLOBAL_COST_GUARD emite warning em 80% do teto global e critical em 100%."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_global_guard.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 20, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        recent_iso = (now - timedelta(hours=1)).isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-guard", "Canal Guard", "chan-guard", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                ("task-guard-01", "chan-guard", recent_iso),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_mode_enabled:chan-guard", "true",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            # Insere 80 tentativas globais em 20h (teto padrão 100 -> 80% do teto global em 24h)
+            for i in range(80):
+                tid = f"task-glob-{i}"
+                t_dt = (now - timedelta(hours=1, minutes=i * 15)).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                    VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'Start', '{"profile_id": "chan-guard"}')
+                    """,
+                    (t_dt, tid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # 80% deve disparar warning
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-guard")
+        diag_80 = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_GLOBAL_COST_GUARD)
+        assert diag_80["severity"] == production_diagnostics.SEVERITY_WARNING
+        assert "80%" in diag_80["title"]
+        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+
+        # Insere mais 20 tentativas para bater 100/100 (100% em 24h)
+        conn = sqlite3.connect(db_file)
+        try:
+            for i in range(80, 100):
+                tid = f"task-glob-{i}"
+                t_dt = (now - timedelta(minutes=(i - 80) * 3 + 10)).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                    VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'Start', '{"profile_id": "chan-guard"}')
+                    """,
+                    (t_dt, tid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res_100 = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan_100 = next(c for c in res_100["channels"] if c["profile_id"] == "chan-guard")
+        diag_100 = next(d for d in chan_100["diagnoses"] if d["code"] == production_diagnostics.CODE_GLOBAL_COST_GUARD)
+        assert diag_100["severity"] == production_diagnostics.SEVERITY_CRITICAL
+        assert "100%" in diag_100["title"]
+        assert chan_100["status"] == production_diagnostics.STATUS_PARADO
+
+
+def test_detector_generation_failure_streak():
+    """Garante que 3+ generation_failed seguidos disparam GENERATION_FAILURE_STREAK com texto cru da mensagem."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_fail_streak.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 20, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+        raw_error_msg = "RuntimeError: CUDA out of memory. Tried to allocate 2.4 GiB"
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-fail", "Canal Falhas", "chan-fail", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            )
+            for i in range(3):
+                tid = f"task-fail-{i}"
+                t_dt = (now - timedelta(hours=1, minutes=i * 10)).isoformat()
+                conn.execute(
+                    "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                    (tid, "chan-fail", t_dt),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                    VALUES (?, 'autonomous_production', 'ERROR', 'generation_failed', ?, ?, '{"profile_id": "chan-fail"}')
+                    """,
+                    (t_dt, tid, raw_error_msg),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-fail")
+
+        diag_codes = [d["code"] for d in chan["diagnoses"]]
+        assert production_diagnostics.CODE_GENERATION_FAILURE_STREAK in diag_codes
+        streak_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_GENERATION_FAILURE_STREAK)
+        assert streak_diag["severity"] == production_diagnostics.SEVERITY_WARNING
+        # Texto cru fidedigno preservado sem suposições
+        assert raw_error_msg in streak_diag["detail"]
+        assert chan["status"] == production_diagnostics.STATUS_ATENCAO
+
+
+def test_channel_limits_equal_to_autonomous_production_functions():
+    """Garante que os valores do bloco limits coincidem perfeitamente com as funções do laço autônomo."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_limits_sync.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, growth_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("chan-sync", "Canal Sincronizado", "chan-sync", "scale", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES (?, ?), (?, ?), (?, ?), (?, ?), (?, ?), (?, ?);",
+                (
+                    "autonomous_max_generations_24h:chan-sync", "4",
+                    "autonomous_max_attempts_24h:chan-sync", "12",
+                    "autonomous_consecutive_rejections:chan-sync", "3",
+                    "autonomous_mode_enabled:chan-sync", "true",
+                    "autonomous_mode_enabled", "true",
+                    "autonomous_state", "IDLE",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-sync")
+
+        # Compara com funções reais de autonomous_production
+        assert chan["limits"]["growth_mode"] == autonomous_production.get_profile_growth_mode("chan-sync", db_path=db_file)
+        assert chan["limits"]["autonomous_enabled"] == autonomous_production.is_profile_autonomous_mode_enabled("chan-sync", db_path=db_file)
+        assert chan["limits"]["approved_24h"]["cap"] == autonomous_production.get_max_generations_24h("chan-sync", db_path=db_file)
+        assert chan["limits"]["attempts_24h"]["cap"] == autonomous_production.get_max_attempts_24h("chan-sync", db_path=db_file)
+        assert chan["limits"]["consecutive_rejections"]["used"] == autonomous_production.get_consecutive_rejections(db_path=db_file, profile_id="chan-sync")
+        assert chan["limits"]["consecutive_rejections"]["limit"] == autonomous_production.DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS
+
+        # Bloco global
+        assert res["limits"]["attempts_24h"]["cap"] == autonomous_production.get_global_max_attempts_24h(db_path=db_file)
+        assert res["limits"]["approved_24h"]["cap"] == autonomous_production.get_global_max_generations_24h(db_path=db_file)
+
+
+def test_limit_query_failure_returns_null_and_warning_without_failing_channel():
+    """Garante que falha em consulta de limite vira null e gera warning sem quebrar o retorno do canal."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_limits_fail.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        recent_iso = (now - timedelta(hours=1)).isoformat()
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-err-lim", "Canal Erro Limite", "chan-err-lim", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, ?, ?)",
+                ("task-recent-01", "chan-err-lim", recent_iso),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'task-recent-01', 'Recent Topic', '{"profile_id": "chan-err-lim"}')
+                """,
+                (recent_iso,),
+            )
+            conn.execute(
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        def _failing_limits(**kwargs):
+            raise RuntimeError("Falha simulada ao ler limites operacionais")
+
+        res = production_diagnostics.get_diagnostics_overview(
+            db_path=db_file,
+            now=now,
+            _limits_fetcher=_failing_limits,
+        )
+        chan = next(c for c in res["channels"] if c["profile_id"] == "chan-err-lim")
+
+        # Campos de limites viram null/None
+        assert chan["limits"]["approved_24h"]["used"] is None
+        assert chan["limits"]["attempts_24h"]["used"] is None
+        assert chan["limits"]["growth_mode"] is None
+
+        # Warning adicionado sem derrubar o canal
+        assert any("Falha simulada ao ler limites operacionais" in w for w in chan["warnings"])
+        assert chan["status"] in (production_diagnostics.STATUS_OK, production_diagnostics.STATUS_ATENCAO)
+
+
+
 

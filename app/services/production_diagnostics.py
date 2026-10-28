@@ -70,6 +70,15 @@ CODE_INVALID_TOPIC: str = "INVALID_TOPIC"
 CODE_FACTORY_PAUSED_OR_ERROR: str = "FACTORY_PAUSED_OR_ERROR"
 CODE_THROTTLED_NORMAL: str = "THROTTLED_NORMAL"
 
+# Novos detectores operacionais (Missão SIS3e)
+CODE_AUTONOMOUS_DISABLED: str = "AUTONOMOUS_DISABLED"
+CODE_DAILY_APPROVED_CAP_REACHED: str = "DAILY_APPROVED_CAP_REACHED"
+CODE_DAILY_ATTEMPT_CAP_REACHED: str = "DAILY_ATTEMPT_CAP_REACHED"
+CODE_APPROVED_CAP_EXCEEDED: str = "APPROVED_CAP_EXCEEDED"
+CODE_REJECTION_BREAKER: str = "REJECTION_BREAKER"
+CODE_GLOBAL_COST_GUARD: str = "GLOBAL_COST_GUARD"
+CODE_GENERATION_FAILURE_STREAK: str = "GENERATION_FAILURE_STREAK"
+
 
 def _get_ro_connection(target_path: str) -> sqlite3.Connection:
     """Abre conexão SQLite estritamente em modo somente leitura (mode=ro).
@@ -196,6 +205,7 @@ def get_diagnostics_overview(
     task_base_dir: Optional[str] = None,
     now: Optional[datetime] = None,
     _stock_fetcher: Optional[Any] = None,
+    _limits_fetcher: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Retorna visão consolidada e detalhada de diagnóstico da fábrica e de cada canal."""
     effective_db = scheduler.get_db_path(db_path)
@@ -402,7 +412,40 @@ def get_diagnostics_overview(
         conn.close()
 
     # -----------------------------------------------------------------
-    # 4. Agrupamento de Eventos por Canal
+    # 4. Tetos e Limites Globais (Global Cost Guard)
+    # -----------------------------------------------------------------
+    global_att_cap: Optional[int] = None
+    global_att_used: Optional[int] = None
+    global_gen_cap: Optional[int] = None
+    global_gen_used: Optional[int] = None
+
+    try:
+        global_att_cap = autonomous_production.get_global_max_attempts_24h(db_path=effective_db)
+    except Exception as exc:
+        logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao obter teto global de tentativas: {exc}")
+
+    try:
+        global_att_used = autonomous_production.count_all_profiles_attempts_24h(now=now_utc, db_path=effective_db)
+    except Exception as exc:
+        logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao contar tentativas globais 24h: {exc}")
+
+    try:
+        global_gen_cap = autonomous_production.get_global_max_generations_24h(db_path=effective_db)
+    except Exception as exc:
+        logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao obter teto global de gerações aprovadas: {exc}")
+
+    try:
+        global_gen_used = autonomous_production.count_all_profiles_generations_24h(now=now_utc, db_path=effective_db)
+    except Exception as exc:
+        logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro ao contar gerações globais aprovadas 24h: {exc}")
+
+    global_limits: Dict[str, Any] = {
+        "attempts_24h": {"used": global_att_used, "cap": global_att_cap},
+        "approved_24h": {"used": global_gen_used, "cap": global_gen_cap},
+    }
+
+    # -----------------------------------------------------------------
+    # 5. Agrupamento de Eventos por Canal
     # -----------------------------------------------------------------
     events_by_channel: Dict[str, List[Dict[str, Any]]] = {}
     growth_limit_events_by_channel: Dict[str, List[Dict[str, Any]]] = {}
@@ -440,8 +483,92 @@ def get_diagnostics_overview(
         chan_events = events_by_channel.get(pid, [])
         is_channel_active = bool(prof.get("is_active", 1))
 
+        channel_warnings: List[str] = []
+
+        # -------------------------------------------------------------
+        # Limites do Canal (Guardas 5.1–5.4 do laço autônomo)
+        # -------------------------------------------------------------
+        growth_mode: Optional[str] = None
+        autonomous_enabled: Optional[bool] = None
+        app_used: Optional[int] = None
+        app_cap: Optional[int] = None
+        att_used: Optional[int] = None
+        att_cap: Optional[int] = None
+        cr_used: Optional[int] = None
+        cr_limit: Optional[int] = autonomous_production.DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS
+
+        if _limits_fetcher is not None:
+            try:
+                lf_data = _limits_fetcher(profile_id=pid, db_path=effective_db, now=now_utc)
+                if isinstance(lf_data, dict):
+                    growth_mode = lf_data.get("growth_mode")
+                    autonomous_enabled = lf_data.get("autonomous_enabled")
+                    if "approved_24h" in lf_data and isinstance(lf_data["approved_24h"], dict):
+                        app_used = lf_data["approved_24h"].get("used")
+                        app_cap = lf_data["approved_24h"].get("cap")
+                    if "attempts_24h" in lf_data and isinstance(lf_data["attempts_24h"], dict):
+                        att_used = lf_data["attempts_24h"].get("used")
+                        att_cap = lf_data["attempts_24h"].get("cap")
+                    if "consecutive_rejections" in lf_data and isinstance(lf_data["consecutive_rejections"], dict):
+                        cr_used = lf_data["consecutive_rejections"].get("used")
+                        cr_limit = lf_data["consecutive_rejections"].get("limit", cr_limit)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao consultar limites do canal: {exc}")
+        elif pid != "unassigned":
+            try:
+                growth_mode = autonomous_production.get_profile_growth_mode(profile_id=pid, db_path=effective_db)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao obter modo de crescimento: {exc}")
+
+            try:
+                if pid in (profile_manager.DEFAULT_PROFILE_ID, "default"):
+                    autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=effective_db)
+                elif f"{autonomous_production.KEY_AUTONOMOUS_ENABLED}:{pid}" in auto_settings:
+                    autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=effective_db)
+                else:
+                    autonomous_enabled = is_factory_enabled
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao consultar modo autônomo do perfil: {exc}")
+
+            try:
+                app_cap = autonomous_production.get_max_generations_24h(profile_id=pid, db_path=effective_db)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao obter teto de aprovações 24h: {exc}")
+
+            try:
+                yt_channel = autonomous_production.resolve_autonomous_youtube_channel(pid, db_path=effective_db)
+                app_used = autonomous_production.count_generations_in_last_24h(now=now_utc, db_path=effective_db, profile_id=pid, channel_id=yt_channel)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao contar gerações aprovadas 24h: {exc}")
+
+            try:
+                att_cap = autonomous_production.get_max_attempts_24h(profile_id=pid, db_path=effective_db)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao obter teto de tentativas 24h: {exc}")
+
+            try:
+                att_used = autonomous_production.count_generation_attempts_in_last_24h(now=now_utc, db_path=effective_db, profile_id=pid)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao contar tentativas 24h: {exc}")
+
+            try:
+                cr_used = autonomous_production.get_consecutive_rejections(db_path=effective_db, profile_id=pid)
+            except Exception as exc:
+                channel_warnings.append(f"Erro ao consultar rejeições consecutivas: {exc}")
+
+        channel_limits = {
+            "growth_mode": growth_mode,
+            "autonomous_enabled": autonomous_enabled,
+            "approved_24h": {"used": app_used, "cap": app_cap},
+            "attempts_24h": {"used": att_used, "cap": att_cap},
+            "consecutive_rejections": {"used": cr_used, "limit": cr_limit},
+        }
+
         # Cota de tentativas 24h reaproveitando regras canônicas de autonomous_production.get_max_attempts_24h
-        max_attempts_24h = resolve_channel_max_attempts(pid, auto_settings)
+        if att_cap is not None:
+            max_attempts_24h = att_cap
+        else:
+            max_attempts_24h = resolve_channel_max_attempts(pid, auto_settings)
 
         # -------------------------------------------------------------
         # Estoque Canônico e Meta Única (mesma fonte da tela Produção / laço autônomo)
@@ -498,7 +625,6 @@ def get_diagnostics_overview(
             target_stock = None
             ready_task_ids = set()
 
-        channel_warnings: List[str] = []
         if stock_status == STATUS_UNKNOWN:
             msg = f"Estoque canônico indisponível: {stock_error}" if stock_error else "Estoque canônico indisponível"
             channel_warnings.append(msg)
@@ -701,7 +827,7 @@ def get_diagnostics_overview(
         # Detector 4: NO_GENERATION_GAP
         # Canal sem generation_started há mais de X horas, com fábrica não pausada e estoque abaixo da meta
         # -------------------------------------------------------------
-        if not is_factory_paused and is_channel_active and stock_status != STATUS_UNKNOWN and stock_count is not None and target_stock is not None:
+        if not is_factory_paused and is_channel_active and autonomous_enabled is not False and stock_status != STATUS_UNKNOWN and stock_count is not None and target_stock is not None:
             if stock_count < target_stock:
                 gap_hours = (
                     (now_utc - last_gen_at).total_seconds() / 3600.0
@@ -812,16 +938,208 @@ def get_diagnostics_overview(
                 "suggested_action": "Nenhuma ação corretiva necessária. As tentativas serão liberadas com o avanço da janela de 24h.",
             })
 
+        # -------------------------------------------------------------
+        # Detector 8: AUTONOMOUS_DISABLED (info)
+        # Produção autônoma desligada para o canal
+        # -------------------------------------------------------------
+        if autonomous_enabled is False:
+            toggle_ev = next(
+                (e for e in reversed(chan_events) if e.get("event_type") in ("profile_autonomous_mode_toggled", "autonomous_mode_toggled")),
+                None,
+            )
+            toggle_since = _format_iso_utc(_parse_iso_to_utc(toggle_ev["timestamp"])) if toggle_ev else None
+            diagnoses.append({
+                "code": CODE_AUTONOMOUS_DISABLED,
+                "severity": SEVERITY_INFO,
+                "title": "Produção autônoma desativada para este canal",
+                "detail": "A produção autônoma está desligada pelo operador para o canal. Nenhuma geração automática será iniciada.",
+                "since": toggle_since,
+                "evidence": {
+                    "task_ids": [],
+                    "event_ids": [toggle_ev["id"]] if (toggle_ev and "id" in toggle_ev) else [],
+                },
+                "suggested_action": "Ativar a produção autônoma do canal na tela Sistema ou configurações de perfil quando desejar produzir.",
+            })
+
+        # -------------------------------------------------------------
+        # Detector 9: DAILY_APPROVED_CAP_REACHED (info) e APPROVED_CAP_EXCEEDED (warning)
+        # -------------------------------------------------------------
+        if app_used is not None and app_cap is not None:
+            if app_used >= app_cap:
+                approved_events = [
+                    e for e in chan_events
+                    if e.get("event_type") in ("generation_approved", "task_approved_and_scheduled", "task_waiting_schedule")
+                ]
+                release_info = ""
+                if approved_events:
+                    approved_events_sorted = sorted(approved_events, key=lambda x: x["timestamp"])
+                    oldest_approved_dt = _parse_iso_to_utc(approved_events_sorted[0]["timestamp"])
+                    if oldest_approved_dt:
+                        est_release_dt = oldest_approved_dt + timedelta(hours=24)
+                        release_info = f" Próxima liberação estimada em {_format_iso_utc(est_release_dt)}."
+
+                mode_label = growth_mode.upper() if growth_mode else "NORMAL"
+                diagnoses.append({
+                    "code": CODE_DAILY_APPROVED_CAP_REACHED,
+                    "severity": SEVERITY_INFO,
+                    "title": f"Limite diário de aprovações atingido ({app_used}/{app_cap})",
+                    "detail": (
+                        f"O canal atingiu o teto diário de aprovações no modo {mode_label} ({app_used}/{app_cap} em 24h). "
+                        f"A produção autônoma libera novas vagas quando as aprovações mais antigas saírem da janela de 24h.{release_info}"
+                    ),
+                    "since": None,
+                    "evidence": {"task_ids": [], "event_ids": []},
+                    "suggested_action": "Aguardar a janela de 24h avançar ou aumentar o teto de aprovações do perfil se desejado.",
+                })
+
+            if app_used > app_cap:
+                diagnoses.append({
+                    "code": CODE_APPROVED_CAP_EXCEEDED,
+                    "severity": SEVERITY_WARNING,
+                    "title": f"Teto diário de aprovações excedido ({app_used}/{app_cap})",
+                    "detail": (
+                        f"O canal possui {app_used} gerações aprovadas nas últimas 24h, excedendo o teto configurado de {app_cap}. "
+                        f"Isso ocorre normalmente quando o teto é reduzido pelo operador enquanto havia vídeos gerados ou por intervenções pontuais."
+                    ),
+                    "since": None,
+                    "evidence": {"task_ids": [], "event_ids": []},
+                    "suggested_action": "Verificar se o teto de aprovações precisa ser ajustado ou aguardar a janela de 24h.",
+                })
+
+        # -------------------------------------------------------------
+        # Detector 10: DAILY_ATTEMPT_CAP_REACHED (info)
+        # -------------------------------------------------------------
+        if att_used is not None and att_cap is not None and att_used >= att_cap:
+            diagnoses.append({
+                "code": CODE_DAILY_ATTEMPT_CAP_REACHED,
+                "severity": SEVERITY_INFO,
+                "title": f"Teto diário de tentativas atingido ({att_used}/{att_cap})",
+                "detail": (
+                    f"O canal realizou {att_used} tentativas de {att_cap} autorizadas em 24h ({att_used}/{att_cap}). "
+                    f"Novas tentativas de geração estão em pausa de proteção até a liberação de cotas na janela de 24h."
+                ),
+                "since": None,
+                "evidence": {"task_ids": [], "event_ids": []},
+                "suggested_action": "Aguardar o ciclo da janela de 24h para liberação natural de novas tentativas de produção.",
+            })
+
+        # -------------------------------------------------------------
+        # Detector 11: REJECTION_BREAKER (warning quando used >= 50% do limite; critical quando used >= limite)
+        # -------------------------------------------------------------
+        if cr_used is not None and cr_limit is not None and cr_limit > 0:
+            if cr_used >= cr_limit:
+                diagnoses.append({
+                    "code": CODE_REJECTION_BREAKER,
+                    "severity": SEVERITY_CRITICAL,
+                    "title": f"Circuit breaker ativado: {cr_used}/{cr_limit} rejeições consecutivas",
+                    "detail": (
+                        f"Proteção de custo ativa: produção bloqueada até uma aprovação resetar o contador. "
+                        f"O canal acumulou {cr_used} rejeições seguidas nos Gates (limite de bloqueio: {cr_limit})."
+                    ),
+                    "since": None,
+                    "evidence": {"task_ids": [], "event_ids": []},
+                    "suggested_action": "Investigar e corrigir as causas de reprovação nos gates e validar uma aprovação para reiniciar o ciclo.",
+                })
+            elif cr_used >= int(round(cr_limit * 0.5)):
+                diagnoses.append({
+                    "code": CODE_REJECTION_BREAKER,
+                    "severity": SEVERITY_WARNING,
+                    "title": f"Alerta de rejeições consecutivas: {cr_used}/{cr_limit} nos gates",
+                    "detail": (
+                        f"O canal acumulou {cr_used} rejeições consecutivas nos Gates (50% ou mais do limite de {cr_limit}). "
+                        f"A produção autônoma será bloqueada se atingir {cr_limit} rejeições."
+                    ),
+                    "since": None,
+                    "evidence": {"task_ids": [], "event_ids": []},
+                    "suggested_action": "Revisar logs de reprovação e ajustes de prompt/mídia antes que o circuit breaker dispare.",
+                })
+
+        # -------------------------------------------------------------
+        # Detector 12: GLOBAL_COST_GUARD (warning >= 80% de qualquer teto global; critical >= 100%)
+        # -------------------------------------------------------------
+        att_ratio = (global_att_used / global_att_cap) if (global_att_used is not None and global_att_cap and global_att_cap > 0) else 0.0
+        gen_ratio = (global_gen_used / global_gen_cap) if (global_gen_used is not None and global_gen_cap and global_gen_cap > 0) else 0.0
+        max_global_ratio = max(att_ratio, gen_ratio)
+
+        if max_global_ratio >= 1.0:
+            diagnoses.append({
+                "code": CODE_GLOBAL_COST_GUARD,
+                "severity": SEVERITY_CRITICAL,
+                "title": "Global Cost Guard: teto global de custo atingido (100%)",
+                "detail": (
+                    f"A fábrica atingiu o teto global de produção autônoma "
+                    f"(Tentativas: {global_att_used}/{global_att_cap}, Aprovações: {global_gen_used}/{global_gen_cap}). "
+                    f"A produção autônoma de todos os canais está bloqueada por proteção de custos."
+                ),
+                "since": None,
+                "evidence": {"task_ids": [], "event_ids": []},
+                "suggested_action": "Aguardar a liberação de cotas na janela de 24h ou ajustar os tetos globais da fábrica.",
+            })
+        elif max_global_ratio >= 0.8:
+            which_teto = "tentativas" if att_ratio >= gen_ratio else "aprovações"
+            used_val = global_att_used if att_ratio >= gen_ratio else global_gen_used
+            cap_val = global_att_cap if att_ratio >= gen_ratio else global_gen_cap
+            diagnoses.append({
+                "code": CODE_GLOBAL_COST_GUARD,
+                "severity": SEVERITY_WARNING,
+                "title": f"Global Cost Guard: consumo global próximo do teto ({max_global_ratio:.0%})",
+                "detail": (
+                    f"O consumo global da fábrica atingiu {max_global_ratio:.0%} do teto de {which_teto} "
+                    f"({used_val}/{cap_val} em 24h). A produção será interrompida preventivamente ao atingir 100%."
+                ),
+                "since": None,
+                "evidence": {"task_ids": [], "event_ids": []},
+                "suggested_action": "Monitorar o volume global de produção para evitar bloqueio preventivo.",
+            })
+
+        # -------------------------------------------------------------
+        # Detector 13: GENERATION_FAILURE_STREAK (warning)
+        # 3+ eventos generation_failed seguidos do canal; texto cru da falha mais recente
+        # -------------------------------------------------------------
+        failed_streak = 0
+        most_recent_failed_msg = None
+        failed_ev_ids = []
+        failed_task_ids = []
+        for e in sorted(chan_events, key=lambda x: x["timestamp"], reverse=True):
+            etype = e.get("event_type")
+            if etype == "generation_failed":
+                failed_streak += 1
+                if not most_recent_failed_msg:
+                    most_recent_failed_msg = e.get("message")
+                if "id" in e:
+                    failed_ev_ids.append(e["id"])
+                if e.get("task_id"):
+                    failed_task_ids.append(e["task_id"])
+            elif etype in ("generation_approved", "task_approved_and_scheduled", "task_gate_rejected", "generation_interrupted_recovery"):
+                break
+
+        if failed_streak >= 3:
+            diagnoses.append({
+                "code": CODE_GENERATION_FAILURE_STREAK,
+                "severity": SEVERITY_WARNING,
+                "title": f"Sequência de {failed_streak} falhas consecutivas de geração",
+                "detail": (
+                    f"O canal registrou {failed_streak} falhas técnicas consecutivas na etapa de geração. "
+                    f"Mensagem da falha mais recente: '{most_recent_failed_msg or 'Erro técnico na geração'}'."
+                ),
+                "since": None,
+                "evidence": {
+                    "task_ids": failed_task_ids,
+                    "event_ids": failed_ev_ids,
+                },
+                "suggested_action": "Inspecionar os logs de erro técnico e verificar recursos locais como GPU, disco e dependências de render.",
+            })
+
         # Ordena diagnósticos por severidade (critical > warning > info)
         diagnoses.sort(key=lambda d: SEVERITY_WEIGHT.get(d.get("severity", SEVERITY_INFO), 99))
 
         # -------------------------------------------------------------
         # Determinação do Status Geral do Canal
         # -------------------------------------------------------------
-        if is_factory_paused or not is_channel_active:
-            channel_status = STATUS_PAUSADO
-        elif any(d["severity"] == SEVERITY_CRITICAL for d in diagnoses) or factory_state == "ERROR":
+        if any(d["severity"] == SEVERITY_CRITICAL for d in diagnoses) or factory_state == "ERROR":
             channel_status = STATUS_PARADO
+        elif is_factory_paused or not is_channel_active or autonomous_enabled is False:
+            channel_status = STATUS_PAUSADO
         elif any(d["severity"] == SEVERITY_WARNING for d in diagnoses):
             channel_status = STATUS_ATENCAO
         elif stock_status == STATUS_UNKNOWN:
@@ -860,6 +1178,7 @@ def get_diagnostics_overview(
                 "target": target_stock,
                 "status": stock_status,
             },
+            "limits": channel_limits,
             "recent_generations": formatted_recent,
             "diagnoses": diagnoses,
             "warnings": channel_warnings,
@@ -872,6 +1191,8 @@ def get_diagnostics_overview(
             "message": factory_msg,
             "last_error": factory_error,
             "primary_instance": primary_inst,
+            "limits": global_limits,
         },
+        "limits": global_limits,
         "channels": channels_output,
     }

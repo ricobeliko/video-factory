@@ -65,19 +65,23 @@ test('formatTimeAgo: formata intervalos em pt-BR corretamente', () => {
 });
 
 test('getStatusBadgeInfo: retorna rótulo, ícone e cores corretas para cada status', () => {
-  const ok = getStatusBadgeInfo('OK');
-  assert.equal(ok.label, 'Normal');
+  const ok = getStatusBadgeInfo('ok');
+  assert.equal(ok.label, 'OK');
   assert.equal(ok.color, '#10b981');
 
-  const atencao = getStatusBadgeInfo('ATENCAO');
+  const running = getStatusBadgeInfo('running');
+  assert.equal(running.label, 'Gerando');
+  assert.equal(running.color, '#38bdf8');
+
+  const atencao = getStatusBadgeInfo('attention');
   assert.equal(atencao.label, 'Atenção');
   assert.equal(atencao.color, '#f59e0b');
 
-  const parado = getStatusBadgeInfo('PARADO');
-  assert.equal(parado.label, 'Parado');
+  const parado = getStatusBadgeInfo('blocked');
+  assert.equal(parado.label, 'Bloqueado');
   assert.equal(parado.color, '#ef4444');
 
-  const pausado = getStatusBadgeInfo('PAUSADO');
+  const pausado = getStatusBadgeInfo('paused');
   assert.equal(pausado.label, 'Pausado');
   assert.equal(pausado.color, '#94a3b8');
 

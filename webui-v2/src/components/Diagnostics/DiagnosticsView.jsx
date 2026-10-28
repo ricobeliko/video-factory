@@ -252,21 +252,26 @@ export default function DiagnosticsView({ onNavigate }) {
 
             <div className="diag-summary-counters">
               <span className="diag-counter-pill ok">
-                ✓ {summary.ok} {summary.ok === 1 ? 'canal normal' : 'canais normais'}
+                ✓ {summary.ok} OK
               </span>
-              {summary.atencao > 0 && (
+              {(summary.running || 0) > 0 && (
+                <span className="diag-counter-pill running" style={{ color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.25)', background: 'rgba(56, 189, 248, 0.1)' }}>
+                  ▶ {summary.running} gerando
+                </span>
+              )}
+              {(summary.attention || summary.atencao || 0) > 0 && (
                 <span className="diag-counter-pill atencao">
-                  ⚠ {summary.atencao} em atenção
+                  ⚠ {summary.attention || summary.atencao} em atenção
                 </span>
               )}
-              {summary.parado > 0 && (
+              {(summary.blocked || summary.parado || 0) > 0 && (
                 <span className="diag-counter-pill parado">
-                  ⏹ {summary.parado} {summary.parado === 1 ? 'canal parado' : 'canais parados'}
+                  ⏹ {summary.blocked || summary.parado} {((summary.blocked || summary.parado) === 1) ? 'canal bloqueado' : 'canais bloqueados'}
                 </span>
               )}
-              {summary.pausado > 0 && (
+              {(summary.paused || summary.pausado || 0) > 0 && (
                 <span className="diag-counter-pill pausado">
-                  ⏸ {summary.pausado} pausados
+                  ⏸ {summary.paused || summary.pausado} pausados
                 </span>
               )}
             </div>

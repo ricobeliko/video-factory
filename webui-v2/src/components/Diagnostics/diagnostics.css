@@ -66,19 +66,28 @@
   color: #34d399;
 }
 
-.diag-counter-pill.atencao {
+.diag-counter-pill.running {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+}
+
+.diag-counter-pill.atencao,
+.diag-counter-pill.attention {
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.25);
   color: #fbbf24;
 }
 
-.diag-counter-pill.parado {
+.diag-counter-pill.parado,
+.diag-counter-pill.blocked {
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.25);
   color: #f87171;
 }
 
-.diag-counter-pill.pausado {
+.diag-counter-pill.pausado,
+.diag-counter-pill.paused {
   background: rgba(148, 163, 184, 0.1);
   border-color: rgba(148, 163, 184, 0.25);
   color: #94a3b8;

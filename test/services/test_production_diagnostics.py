@@ -177,7 +177,7 @@ def test_detector_task_stuck_after_render_real_case_e9630f19():
             (stuck_time_iso, task_id, json.dumps({"topic": "Dilema Moral 01", "profile_id": "channel-escolhas"})),
         )
         conn.execute(
-            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-escolhas', 'true'), ('autonomous_state', 'IDLE');"
         )
         conn.commit()
         conn.close()
@@ -309,6 +309,7 @@ def test_detector_rejection_streak_real_case_quizzes_local_fallback():
         res = production_diagnostics.get_diagnostics_overview(
             db_path=db_file,
             now=now,
+            _stock_fetcher=lambda **kw: {"total_ready": 3, "minimum_threshold": 3},
         )
 
         channel_diag = next(c for c in res["channels"] if c["profile_id"] == "channel-quiz")
@@ -401,7 +402,7 @@ def test_detector_no_generation_gap_real_case_12h():
             (old_time, task_id, json.dumps({"topic": "Tema Antigo", "profile_id": "channel-gap"})),
         )
         conn.execute(
-            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-gap', 'true'), ('autonomous_state', 'IDLE');"
         )
         conn.commit()
         conn.close()
@@ -441,7 +442,7 @@ def test_detector_throttled_normal_never_warning_or_critical():
             (now_iso, json.dumps({"profile_id": "channel-growth", "growth_mode": "WARMUP"})),
         )
         conn.execute(
-            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-growth', 'true'), ('autonomous_state', 'IDLE');"
         )
         conn.commit()
         conn.close()
@@ -449,6 +450,7 @@ def test_detector_throttled_normal_never_warning_or_critical():
         res = production_diagnostics.get_diagnostics_overview(
             db_path=db_file,
             now=now,
+            _stock_fetcher=lambda **kw: {"total_ready": 3, "minimum_threshold": 3},
         )
 
         channel_diag = next(c for c in res["channels"] if c["profile_id"] == "channel-growth")
@@ -492,7 +494,7 @@ def test_detector_factory_paused_and_error():
 
         # Cenário B: Fábrica com Erro Crítico
         conn = sqlite3.connect(db_file)
-        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES ('autonomous_state', 'ERROR'), ('autonomous_last_error', 'Crash inesperado de driver FFmpeg');")
+        conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled:channel-test', 'true'), ('autonomous_state', 'ERROR'), ('autonomous_last_error', 'Crash inesperado de driver FFmpeg');")
         conn.commit()
         conn.close()
 
@@ -983,7 +985,7 @@ def test_forced_stock_failure_handled_as_unknown():
                 (past_14h_iso, "task-stock-01"),
             )
             conn.execute(
-                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:chan-stock-err', 'true'), ('autonomous_state', 'IDLE');"
             )
             conn.commit()
         finally:
@@ -1483,7 +1485,7 @@ def test_detector_generation_failure_streak():
                 ("chan-fail", "Canal Falhas", "chan-fail", now_iso, now_iso),
             )
             conn.execute(
-                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:chan-fail', 'true'), ('autonomous_state', 'IDLE');"
             )
             for i in range(3):
                 tid = f"task-fail-{i}"
@@ -1592,7 +1594,7 @@ def test_limit_query_failure_returns_null_and_warning_without_failing_channel():
                 (recent_iso,),
             )
             conn.execute(
-                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_state', 'IDLE');"
+                "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:chan-err-lim', 'true'), ('autonomous_state', 'IDLE');"
             )
             conn.commit()
         finally:
@@ -1620,3 +1622,142 @@ def test_limit_query_failure_returns_null_and_warning_without_failing_channel():
 
 
 
+
+
+
+# =============================================================================
+# Casos Reais Canônicos (Missão Passo 2)
+# =============================================================================
+
+def test_case_real_escolhas_autonomous_disabled_is_paused():
+    """Caso real Escolhas: autonomous_enabled=False resulta estritamente em status='paused'."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_escolhas.db")
+        _create_synthetic_test_db(db_file)
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("channel-escolhas", "Escolhas Impossíveis", now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-escolhas', 'false'), ('autonomous_state', 'IDLE');"
+        )
+        conn.commit()
+        conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "channel-escolhas")
+        assert chan["status"] == "paused"
+        assert chan["status_label"] == "Pausado"
+        assert chan["reason_code"] == "AUTONOMOUS_DISABLED"
+
+
+def test_case_real_quiz_quiz_daily_goal_reached_is_ok():
+    """Caso real Quiz_Quiz: meta diária atingida (10/10) com estoque abaixo da meta resulta em status='ok'."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_quiz.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("channel-quiz", "Quiz Master", "channel-quiz", now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-quiz', 'true'), ('autonomous_state', 'IDLE');"
+        )
+        conn.commit()
+        conn.close()
+
+        def _limits_mock(**kwargs):
+            return {
+                "growth_mode": "NORMAL",
+                "autonomous_enabled": True,
+                "target_ready_stock": 5,
+                "approved_24h": {"used": 10, "limit": 10, "cap": 10},
+                "attempts_24h": {"used": 10, "limit": 20, "cap": 20},
+                "consecutive_rejections": {"used": 0, "limit": 10},
+            }
+
+        def _stock_mock(**kwargs):
+            return {"total_ready": 1, "minimum_threshold": 5, "status": "ok"}
+
+        res = production_diagnostics.get_diagnostics_overview(
+            db_path=db_file,
+            now=now,
+            _limits_fetcher=_limits_mock,
+            _stock_fetcher=_stock_mock,
+        )
+        chan = next(c for c in res["channels"] if c["profile_id"] == "channel-quiz")
+        assert chan["status"] == "ok"
+        assert chan["status_label"] == "OK"
+        assert chan["reason_code"] == "DAILY_GOAL_REACHED"
+        assert chan["reason"] == "Meta diária atingida"
+
+
+def test_case_real_gtavi_inactive_is_paused():
+    """Caso real GTA VI: canal inativo (is_active=0) resulta estritamente em status='paused'."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_gtavi.db")
+        _create_synthetic_test_db(db_file)
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("channel-gtavi", "GTA VI Channel", 0, now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-gtavi', 'true'), ('autonomous_state', 'IDLE');"
+        )
+        conn.commit()
+        conn.close()
+
+        res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
+        chan = next(c for c in res["channels"] if c["profile_id"] == "channel-gtavi")
+        assert chan["status"] == "paused"
+        assert chan["status_label"] == "Pausado"
+        assert chan["reason_code"] == "CHANNEL_INACTIVE"
+
+
+def test_case_real_stock_none_is_attention():
+    """Caso real estoque None: falha ao ler estoque canônico resulta em status='attention' (nunca 'ok')."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_stock_none.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("channel-stock-none", "Canal Sem Estoque", "channel-stock-none", now_iso, now_iso),
+        )
+        conn.execute(
+            "INSERT INTO autopilot_settings (key, value) VALUES ('autonomous_mode_enabled', 'true'), ('autonomous_mode_enabled:channel-stock-none', 'true'), ('autonomous_state', 'IDLE');"
+        )
+        conn.commit()
+        conn.close()
+
+        def _stock_fail(**kwargs):
+            raise RuntimeError("Falha de conexão com SQLite canônico")
+
+        res = production_diagnostics.get_diagnostics_overview(
+            db_path=db_file,
+            now=now,
+            _stock_fetcher=_stock_fail,
+        )
+        chan = next(c for c in res["channels"] if c["profile_id"] == "channel-stock-none")
+        assert chan["status"] == "attention"
+        assert chan["status_label"] == "Atenção"
+        assert chan["reason_code"] == "STOCK_UNKNOWN"

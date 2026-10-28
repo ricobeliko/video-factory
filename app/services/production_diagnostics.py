@@ -26,6 +26,7 @@ from app.services import (
     profile_manager,
     scheduler,
 )
+from app.services.channel_status import evaluate_canonical_channel_status
 
 # =====================================================================
 # Limiares de Detecção de Diagnósticos (Missão SIS3)
@@ -55,11 +56,13 @@ SEVERITY_WEIGHT: Dict[str, int] = {
     SEVERITY_INFO: 2,
 }
 
-STATUS_OK: str = "OK"
-STATUS_ATENCAO: str = "ATENCAO"
-STATUS_PARADO: str = "PARADO"
-STATUS_PAUSADO: str = "PAUSADO"
-STATUS_UNKNOWN: str = "UNKNOWN"
+STATUS_OK: str = "ok"
+STATUS_ATENCAO: str = "attention"
+STATUS_BLOCKED: str = "blocked"
+STATUS_PARADO: str = "blocked"
+STATUS_RUNNING: str = "running"
+STATUS_PAUSADO: str = "paused"
+STATUS_UNKNOWN: str = "attention"
 
 # Códigos Padronizados de Diagnóstico
 CODE_TASK_STUCK_AFTER_RENDER: str = "TASK_STUCK_AFTER_RENDER"
@@ -521,12 +524,7 @@ def get_diagnostics_overview(
                 channel_warnings.append(f"Erro ao obter modo de crescimento: {exc}")
 
             try:
-                if pid in (profile_manager.DEFAULT_PROFILE_ID, "default"):
-                    autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=effective_db)
-                elif f"{autonomous_production.KEY_AUTONOMOUS_ENABLED}:{pid}" in auto_settings:
-                    autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=effective_db)
-                else:
-                    autonomous_enabled = is_factory_enabled
+                autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=effective_db)
             except Exception as exc:
                 channel_warnings.append(f"Erro ao consultar modo autônomo do perfil: {exc}")
 
@@ -555,6 +553,12 @@ def get_diagnostics_overview(
                 cr_used = autonomous_production.get_consecutive_rejections(db_path=effective_db, profile_id=pid)
             except Exception as exc:
                 channel_warnings.append(f"Erro ao consultar rejeições consecutivas: {exc}")
+
+        if autonomous_enabled is None and pid != "unassigned":
+            try:
+                autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=effective_db)
+            except Exception:
+                pass
 
         channel_limits = {
             "growth_mode": growth_mode,
@@ -827,7 +831,8 @@ def get_diagnostics_overview(
         # Detector 4: NO_GENERATION_GAP
         # Canal sem generation_started há mais de X horas, com fábrica não pausada e estoque abaixo da meta
         # -------------------------------------------------------------
-        if not is_factory_paused and is_channel_active and autonomous_enabled is not False and stock_status != STATUS_UNKNOWN and stock_count is not None and target_stock is not None:
+        is_approved_cap_reached = bool(app_cap is not None and app_used is not None and app_cap > 0 and app_used >= app_cap)
+        if not is_factory_paused and is_channel_active and autonomous_enabled is not False and stock_status != STATUS_UNKNOWN and stock_count is not None and target_stock is not None and not is_approved_cap_reached:
             if stock_count < target_stock:
                 gap_hours = (
                     (now_utc - last_gen_at).total_seconds() / 3600.0
@@ -1134,21 +1139,36 @@ def get_diagnostics_overview(
         diagnoses.sort(key=lambda d: SEVERITY_WEIGHT.get(d.get("severity", SEVERITY_INFO), 99))
 
         # -------------------------------------------------------------
-        # Determinação do Status Geral do Canal
+        # Determinação do Status Geral do Canal via Função Canônica Única
         # -------------------------------------------------------------
-        if any(d["severity"] == SEVERITY_CRITICAL for d in diagnoses) or factory_state == "ERROR":
-            channel_status = STATUS_PARADO
-        elif is_factory_paused or not is_channel_active or autonomous_enabled is False:
-            channel_status = STATUS_PAUSADO
-        elif any(d["severity"] == SEVERITY_WARNING for d in diagnoses):
-            channel_status = STATUS_ATENCAO
-        elif stock_status == STATUS_UNKNOWN:
-            # Se o estoque canônico for desconhecido, o canal não pode ser considerado OK
-            channel_status = STATUS_ATENCAO
-        elif any(d["severity"] == SEVERITY_INFO for d in diagnoses) or len(diagnoses) == 0:
-            channel_status = STATUS_OK
-        else:
-            channel_status = STATUS_UNKNOWN
+        c_auto_state = str(auto_settings.get("autonomous_state" if pid in ("default", profile_manager.DEFAULT_PROFILE_ID) else f"autonomous_state:{pid}", "")).lower().strip()
+        c_auto_msg = str(auto_settings.get("autonomous_message" if pid in ("default", profile_manager.DEFAULT_PROFILE_ID) else f"autonomous_message:{pid}", "")).strip()
+        c_auto_err = str(auto_settings.get("autonomous_last_error" if pid in ("default", profile_manager.DEFAULT_PROFILE_ID) else f"autonomous_last_error:{pid}", "")).strip()
+
+        # Falhas nas últimas 24h
+        failed_count_24h = counts_interrupted + sum(1 for e in chan_events if e.get("event_type") == "generation_failed")
+
+        status_eval = evaluate_canonical_channel_status(
+            is_factory_paused=is_factory_paused,
+            factory_state=factory_state,
+            is_channel_active=is_channel_active,
+            autonomous_enabled=bool(autonomous_enabled),
+            auto_state=c_auto_state,
+            auto_message=c_auto_msg,
+            auto_last_error=c_auto_err,
+            ready_stock=stock_count if stock_status != STATUS_UNKNOWN else None,
+            target_stock=target_stock if target_stock is not None else 3,
+            consec_rejections=cr_used or 0,
+            max_rejections=cr_limit if cr_limit is not None else 10,
+            approved_24h=app_used or counts_approved or 0,
+            max_generations_24h=app_cap or 0,
+            failed_24h=failed_count_24h,
+            diagnoses=diagnoses,
+        )
+        channel_status = status_eval["status"]
+        channel_status_label = status_eval.get("label", channel_status.capitalize())
+        channel_reason_code = status_eval.get("reason_code", "")
+        channel_reason = status_eval.get("reason", "")
 
         formatted_recent = [
             {
@@ -1165,6 +1185,9 @@ def get_diagnostics_overview(
             "profile_id": pid,
             "name": pname,
             "status": channel_status,
+            "status_label": channel_status_label,
+            "reason_code": channel_reason_code,
+            "reason": channel_reason,
             "last_generation_at": _format_iso_utc(last_gen_at),
             "last_outcome": last_outcome,
             "counts_24h": {

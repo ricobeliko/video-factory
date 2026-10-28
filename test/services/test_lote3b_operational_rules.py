@@ -154,6 +154,169 @@ class TestLote3BOperationalRules(unittest.TestCase):
         self.assertEqual(count_b, 1, "Canal B deve ter exatamente 1 aprovação em 24h")
         self.assertEqual(count_all, 3, "Total global deve somar 3 aprovações")
 
+    def _log_op_event(
+        self,
+        event_type: str,
+        task_id: str,
+        timestamp_iso: str,
+        message: str = "Test operational event",
+        metadata: dict = None,
+    ):
+        eid = operator_console.log_operational_event(
+            component="autonomous_production",
+            severity=operator_console.SEVERITY_INFO,
+            event_type=event_type,
+            message=message,
+            task_id=task_id,
+            metadata=metadata,
+            db_path=self.db_path,
+        )
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute("UPDATE operational_events SET timestamp = ? WHERE id = ?", (timestamp_iso, eid))
+        return eid
+
+    def test_approved_generations_case_a_new_task_started_and_approved_counts_one(self):
+        """(a) Tarefa nova com generation_started + generation_approved na janela conta 1."""
+        now = self.now
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+        iso_1h = (now - timedelta(hours=1)).isoformat()
+
+        self._log_op_event("generation_started", "task_new_a", iso_2h)
+        self._log_op_event("generation_approved", "task_new_a", iso_1h)
+
+        count = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path)
+        self.assertEqual(count, 1, "Tarefa nova com generation_started + generation_approved deve contar 1")
+
+    def test_approved_generations_case_b_old_task_rescheduled_counts_zero(self):
+        """(b) Tarefa antiga (generation_started há 3 dias) com só task_approved_and_scheduled na janela conta 0."""
+        now = self.now
+        iso_3d = (now - timedelta(days=3)).isoformat()
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+
+        self._log_op_event("generation_started", "task_old_b", iso_3d)
+        self._log_op_event("generation_approved", "task_old_b", iso_3d)
+        self._log_op_event("task_approved_and_scheduled", "task_old_b", iso_2h, message="Persisted approval scheduled.")
+
+        count = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path)
+        self.assertEqual(count, 0, "Tarefa antiga somente reagendada NÃO deve contar como nova geração aprovada")
+
+    def test_approved_generations_case_c_legacy_task_started_and_scheduled_counts_one(self):
+        """(c) Tarefa com generation_started na janela + só task_approved_and_scheduled (sem generation_approved) conta 1."""
+        now = self.now
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+        iso_1h = (now - timedelta(hours=1)).isoformat()
+
+        self._log_op_event("generation_started", "task_leg_c", iso_2h)
+        self._log_op_event("task_approved_and_scheduled", "task_leg_c", iso_1h)
+
+        count = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path)
+        self.assertEqual(count, 1, "Fluxo legado gerado e agendado na mesma janela deve contar 1")
+
+    def test_approved_generations_case_d_same_task_all_three_events_counts_distinct_one(self):
+        """(d) A mesma tarefa com os três eventos conta 1 (distinta)."""
+        now = self.now
+        iso_3h = (now - timedelta(hours=3)).isoformat()
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+        iso_1h = (now - timedelta(hours=1)).isoformat()
+
+        self._log_op_event("generation_started", "task_all_d", iso_3h)
+        self._log_op_event("generation_approved", "task_all_d", iso_2h)
+        self._log_op_event("task_approved_and_scheduled", "task_all_d", iso_1h)
+
+        count = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path)
+        self.assertEqual(count, 1, "Tarefa com os três eventos na mesma janela deve contar exatamente 1 (distinta)")
+
+    def test_approved_generations_case_e_profile_and_channel_isolation(self):
+        """(e) Isolamento por perfil/canal preservado."""
+        now = self.now
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+        iso_1h = (now - timedelta(hours=1)).isoformat()
+
+        prof_a = profile_manager.create_profile(name="Canal Alpha", slug="canal-alpha", db_path=self.db_path)
+        prof_b = profile_manager.create_profile(name="Canal Beta", slug="canal-beta", db_path=self.db_path)
+        pid_a = prof_a["id"]
+        pid_b = prof_b["id"]
+        ch_a = "ch-alpha-id"
+        ch_b = "ch-beta-id"
+
+        profile_manager.save_task_profile("task_alpha", pid_a, db_path=self.db_path)
+        profile_manager.save_task_profile("task_beta", pid_b, db_path=self.db_path)
+
+        self._log_op_event("generation_started", "task_alpha", iso_2h, metadata={"channel_id": ch_a, "profile_id": pid_a})
+        self._log_op_event("generation_approved", "task_alpha", iso_1h, metadata={"channel_id": ch_a, "profile_id": pid_a})
+
+        self._log_op_event("generation_started", "task_beta", iso_2h, metadata={"channel_id": ch_b, "profile_id": pid_b})
+        self._log_op_event("generation_approved", "task_beta", iso_1h, metadata={"channel_id": ch_b, "profile_id": pid_b})
+
+        # Contagem isolada por canal
+        count_ch_a = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path, channel_id=ch_a)
+        count_ch_b = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path, channel_id=ch_b)
+        self.assertEqual(count_ch_a, 1, "Canal Alpha deve ter 1 geração aprovada")
+        self.assertEqual(count_ch_b, 1, "Canal Beta deve ter 1 geração aprovada")
+
+        # Contagem isolada por perfil
+        count_p_a = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path, profile_id=pid_a)
+        count_p_b = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path, profile_id=pid_b)
+        self.assertEqual(count_p_a, 1, "Perfil Alpha deve ter 1 geração aprovada")
+        self.assertEqual(count_p_b, 1, "Perfil Beta deve ter 1 geração aprovada")
+
+    def test_approved_generations_case_f_global_total_coherent_sum(self):
+        """(f) O total global é a soma coerente dos perfis (excluindo reagendamentos antigos)."""
+        now = self.now
+        iso_3d = (now - timedelta(days=3)).isoformat()
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+
+        # Tarefa 1 (Perfil A): nova geração aprovada
+        self._log_op_event("generation_started", "task_glob_1", iso_2h)
+        self._log_op_event("generation_approved", "task_glob_1", iso_2h)
+
+        # Tarefa 2 (Perfil B): nova geração aprovada
+        self._log_op_event("generation_started", "task_glob_2", iso_2h)
+        self._log_op_event("generation_approved", "task_glob_2", iso_2h)
+
+        # Tarefa 3 (Perfil C): vídeo antigo reagendado (started há 3 dias)
+        self._log_op_event("generation_started", "task_glob_3", iso_3d)
+        self._log_op_event("task_approved_and_scheduled", "task_glob_3", iso_2h, message="Persisted approval scheduled.")
+
+        global_count = autonomous_production.count_all_profiles_generations_24h(now=now, db_path=self.db_path)
+        self.assertEqual(global_count, 2, "Global deve somar exatamente as 2 novas gerações, ignorando reagendamento antigo")
+
+    def test_approved_generations_case_g_historias_warmup_allows_generation(self):
+        """(g) Caso Histórias: 1 nova + 1 antiga reagendada = 1 (abaixo do teto 2, deixa gerar)."""
+        now = self.now
+        iso_3d = (now - timedelta(days=3)).isoformat()
+        iso_4h = (now - timedelta(hours=4)).isoformat()
+        iso_3h = (now - timedelta(hours=3)).isoformat()
+        iso_2h = (now - timedelta(hours=2)).isoformat()
+
+        prof = profile_manager.create_profile(
+            name="Dose Diária de Histórias",
+            slug="historias",
+            growth_mode=const.GROWTH_MODE_WARMUP,
+            db_path=self.db_path,
+        )
+        pid = prof["id"]
+
+        # Tarefa antiga reagendada
+        profile_manager.save_task_profile("task_hist_old", pid, db_path=self.db_path)
+        self._log_op_event("generation_started", "task_hist_old", iso_3d, metadata={"profile_id": pid})
+        self._log_op_event("generation_approved", "task_hist_old", iso_3d, metadata={"profile_id": pid})
+        self._log_op_event("task_approved_and_scheduled", "task_hist_old", iso_2h, message="Persisted approval scheduled.", metadata={"profile_id": pid})
+
+        # Tarefa nova gerada e aprovada hoje
+        profile_manager.save_task_profile("task_hist_new", pid, db_path=self.db_path)
+        self._log_op_event("generation_started", "task_hist_new", iso_4h, metadata={"profile_id": pid})
+        self._log_op_event("generation_approved", "task_hist_new", iso_3h, metadata={"profile_id": pid})
+
+        # Contagem de gerações aprovadas em 24h
+        gen_today = autonomous_production.count_generations_in_last_24h(now=now, db_path=self.db_path, profile_id=pid)
+        cap = autonomous_production.get_max_generations_24h(profile_id=pid, db_path=self.db_path)
+
+        self.assertEqual(cap, 2, "Modo WARMUP possui teto canônico de 2 gerações por 24h")
+        self.assertEqual(gen_today, 1, "Histórias deve contar apenas 1 geração nova (reagendada não conta)")
+        self.assertLess(gen_today, cap, "Com gen_today (1) < cap (2), a Guarda 5.3 não bloqueia e permite gerar!")
+
+
     # =========================================================================
     # RN-02: Human Approval Sovereignty (Score 55-69)
     # =========================================================================

@@ -1294,8 +1294,8 @@ def update_profile_quotas(
 
     if "target_ready_stock" in quotas and quotas["target_ready_stock"] is not None:
         target = int(quotas["target_ready_stock"])
-        if target < 1:
-            raise ValueError("target_ready_stock deve ser >= 1.")
+        if target < 3 or target > 10:
+            raise ValueError("A meta de estoque pronto (target_ready_stock) deve estar entre 3 e 10.")
         autonomous_production.set_target_ready_stock(target, profile_id=clean_id, db_path=db_path)
         current_settings.automation.target_ready_stock = target
 

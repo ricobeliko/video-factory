@@ -490,7 +490,7 @@ export default function FleetView({ onNavigate }) {
                         </span>
                       </div>
                       <div className="fleet-attention-issue">
-                        {ch.issue || 'Verifique o status do canal.'}
+                        {ch.reason || ch.issue || 'Verifique o status do canal.'}
                       </div>
                     </div>
                     <button
@@ -667,12 +667,16 @@ export default function FleetView({ onNavigate }) {
                         </span>
 
                         {/* Status */}
-                        <span className="fleet-badge-status" style={{ color: st.color }}>
+                        <span
+                          className="fleet-badge-status"
+                          style={{ color: st.color }}
+                          title={ch.reason || ch.issue || st.label}
+                        >
                           <span
                             className={`fleet-dot-indicator ${ch.status === 'running' ? 'fleet-pulse' : ''}`}
                             style={{ backgroundColor: st.color }}
                           />
-                          <span>{st.label}</span>
+                          <span>{st.label}{ch.reason && ch.status === 'ok' ? ` · ${ch.reason}` : ''}</span>
                         </span>
 
                         {/* Estoque */}
@@ -792,8 +796,8 @@ export default function FleetView({ onNavigate }) {
                 );
               })()}
 
-              {/* Issue box if any */}
-              {selectedChannel.issue && (
+              {/* Reason / Issue box if any */}
+              {(selectedChannel.reason || selectedChannel.issue) && (
                 <div
                   className="fleet-drawer-issue-box"
                   style={{
@@ -805,9 +809,11 @@ export default function FleetView({ onNavigate }) {
                     className="fleet-drawer-issue-title"
                     style={{ color: formatStatus(selectedChannel.status).color }}
                   >
-                    {selectedChannel.status === 'blocked' ? 'Bloqueado' : 'Atenção'}
+                    {formatStatus(selectedChannel.status).label}
                   </div>
-                  <div style={{ color: '#D4D9E3' }}>{selectedChannel.issue}</div>
+                  <div style={{ color: '#D4D9E3' }}>
+                    {selectedChannel.reason || selectedChannel.issue}
+                  </div>
                 </div>
               )}
 

@@ -68,17 +68,26 @@ export function formatTimeAgo(isoString, now = new Date()) {
  * @param {string} status
  */
 export function getStatusBadgeInfo(status) {
-  const norm = String(status || '').toUpperCase().trim();
+  const norm = String(status || '').toLowerCase().trim();
   switch (norm) {
-    case 'OK':
+    case 'ok':
       return {
-        label: 'Normal',
+        label: 'OK',
         icon: '✓',
         color: '#10b981',
         bg: 'rgba(16, 185, 129, 0.12)',
         border: 'rgba(16, 185, 129, 0.35)',
       };
-    case 'ATENCAO':
+    case 'running':
+      return {
+        label: 'Gerando',
+        icon: '▶',
+        color: '#38bdf8',
+        bg: 'rgba(56, 189, 248, 0.12)',
+        border: 'rgba(56, 189, 248, 0.35)',
+      };
+    case 'attention':
+    case 'atencao':
       return {
         label: 'Atenção',
         icon: '⚠',
@@ -86,15 +95,17 @@ export function getStatusBadgeInfo(status) {
         bg: 'rgba(245, 158, 11, 0.12)',
         border: 'rgba(245, 158, 11, 0.35)',
       };
-    case 'PARADO':
+    case 'blocked':
+    case 'parado':
       return {
-        label: 'Parado',
+        label: 'Bloqueado',
         icon: '⏹',
         color: '#ef4444',
         bg: 'rgba(239, 68, 68, 0.14)',
         border: 'rgba(239, 68, 68, 0.4)',
       };
-    case 'PAUSADO':
+    case 'paused':
+    case 'pausado':
       return {
         label: 'Pausado',
         icon: '⏸',
@@ -192,22 +203,24 @@ export function formatSafeValue(val, fallback = '—') {
  */
 export function calculateFactorySummary(channels) {
   if (!Array.isArray(channels)) {
-    return { total: 0, ok: 0, atencao: 0, parado: 0, pausado: 0, criticalCount: 0, warningCount: 0 };
+    return { total: 0, ok: 0, running: 0, attention: 0, atencao: 0, blocked: 0, parado: 0, paused: 0, pausado: 0, criticalCount: 0, warningCount: 0 };
   }
 
   let ok = 0;
-  let atencao = 0;
-  let parado = 0;
-  let pausado = 0;
+  let running = 0;
+  let attention = 0;
+  let blocked = 0;
+  let paused = 0;
   let criticalCount = 0;
   let warningCount = 0;
 
   for (const c of channels) {
-    const st = String(c?.status || '').toUpperCase().trim();
-    if (st === 'OK') ok++;
-    else if (st === 'ATENCAO') atencao++;
-    else if (st === 'PARADO') parado++;
-    else if (st === 'PAUSADO') pausado++;
+    const st = String(c?.status || '').toLowerCase().trim();
+    if (st === 'ok') ok++;
+    else if (st === 'running') running++;
+    else if (st === 'attention' || st === 'atencao') attention++;
+    else if (st === 'blocked' || st === 'parado') blocked++;
+    else if (st === 'paused' || st === 'pausado') paused++;
 
     const diags = Array.isArray(c?.diagnoses) ? c.diagnoses : [];
     for (const d of diags) {
@@ -219,9 +232,13 @@ export function calculateFactorySummary(channels) {
   return {
     total: channels.length,
     ok,
-    atencao,
-    parado,
-    pausado,
+    running,
+    attention,
+    atencao: attention,
+    blocked,
+    parado: blocked,
+    paused,
+    pausado: paused,
     criticalCount,
     warningCount,
   };

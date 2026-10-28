@@ -252,21 +252,26 @@ export default function DiagnosticsView({ onNavigate }) {
 
             <div className="diag-summary-counters">
               <span className="diag-counter-pill ok">
-                ✓ {summary.ok} {summary.ok === 1 ? 'canal normal' : 'canais normais'}
+                ✓ {summary.ok} OK
               </span>
-              {summary.atencao > 0 && (
+              {(summary.running || 0) > 0 && (
+                <span className="diag-counter-pill running" style={{ color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.25)', background: 'rgba(56, 189, 248, 0.1)' }}>
+                  ▶ {summary.running} gerando
+                </span>
+              )}
+              {(summary.attention || summary.atencao || 0) > 0 && (
                 <span className="diag-counter-pill atencao">
-                  ⚠ {summary.atencao} em atenção
+                  ⚠ {summary.attention || summary.atencao} em atenção
                 </span>
               )}
-              {summary.parado > 0 && (
+              {(summary.blocked || summary.parado || 0) > 0 && (
                 <span className="diag-counter-pill parado">
-                  ⏹ {summary.parado} {summary.parado === 1 ? 'canal parado' : 'canais parados'}
+                  ⏹ {summary.blocked || summary.parado} {((summary.blocked || summary.parado) === 1) ? 'canal bloqueado' : 'canais bloqueados'}
                 </span>
               )}
-              {summary.pausado > 0 && (
+              {(summary.paused || summary.pausado || 0) > 0 && (
                 <span className="diag-counter-pill pausado">
-                  ⏸ {summary.pausado} pausados
+                  ⏸ {summary.paused || summary.pausado} pausados
                 </span>
               )}
             </div>
@@ -287,6 +292,34 @@ export default function DiagnosticsView({ onNavigate }) {
                   {formatSafeValue((data?.limits || factory?.limits)?.approved_24h?.used)} / {formatSafeValue((data?.limits || factory?.limits)?.approved_24h?.cap)}
                 </span>
               </span>
+            </div>
+          )}
+
+          {/* Aviso discreto de Eventos sem canal (somente quando houver) */}
+          {data?.unassigned_events && data.unassigned_events.count > 0 && (
+            <div className="diag-unassigned-notice" role="status">
+              <div className="diag-unassigned-header">
+                <span className="diag-unassigned-icon" aria-hidden="true">ℹ️</span>
+                <strong className="diag-unassigned-title">Eventos sem canal:</strong>
+                <span className="diag-unassigned-count">
+                  {data.unassigned_events.count} {data.unassigned_events.count === 1 ? 'evento operacional não associado' : 'eventos operacionais não associados'} a nenhum canal
+                </span>
+              </div>
+              {Array.isArray(data.unassigned_events.diagnoses) && data.unassigned_events.diagnoses.length > 0 && (
+                <div className="diag-unassigned-diagnoses">
+                  {data.unassigned_events.diagnoses.map((diag, idx) => (
+                    <div key={idx} className={`diag-unassigned-item ${diag.severity || 'info'}`}>
+                      <span className={`diag-badge-severity ${diag.severity || 'info'}`}>
+                        {(diag.severity || 'info').toUpperCase()}
+                      </span>
+                      <span className="diag-unassigned-diag-title">{diag.title}</span>
+                      {diag.detail && (
+                        <span className="diag-unassigned-diag-detail">— {diag.detail}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

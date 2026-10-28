@@ -66,19 +66,28 @@
   color: #34d399;
 }
 
-.diag-counter-pill.atencao {
+.diag-counter-pill.running {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+}
+
+.diag-counter-pill.atencao,
+.diag-counter-pill.attention {
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.25);
   color: #fbbf24;
 }
 
-.diag-counter-pill.parado {
+.diag-counter-pill.parado,
+.diag-counter-pill.blocked {
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.25);
   color: #f87171;
 }
 
-.diag-counter-pill.pausado {
+.diag-counter-pill.pausado,
+.diag-counter-pill.paused {
   background: rgba(148, 163, 184, 0.1);
   border-color: rgba(148, 163, 184, 0.25);
   color: #94a3b8;
@@ -389,3 +398,59 @@
   color: #cbd5e1;
 }
 
+
+
+/* Aviso discreto de Eventos Sem Canal (Missão SIS3) */
+.diag-unassigned-notice {
+  margin: 12px 0 6px 0;
+  padding: 10px 14px;
+  background: rgba(30, 41, 59, 0.45);
+  border: 1px solid rgba(100, 116, 139, 0.25);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.diag-unassigned-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diag-unassigned-icon {
+  font-size: 14px;
+}
+
+.diag-unassigned-title {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.diag-unassigned-count {
+  color: #94a3b8;
+}
+
+.diag-unassigned-diagnoses {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+.diag-unassigned-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.diag-unassigned-diag-title {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+.diag-unassigned-diag-detail {
+  color: #64748b;
+}

@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { pauseFactory, resumeFactory, runFactoryCycle } from '../api';
+import React from 'react';
 
 /**
- * FactoryHeader — Top bar displaying system health, workers and sync state (R6A.3).
+ * FactoryHeader — Top bar displaying system health, workers and sync state (R6A.3 + Controle Único).
+ * Somente leitura para o estado da fábrica, com atalho "Ir para Sistema" (único lugar de controle global).
  * Semantic chip colors:
  * - ONLINE / ON: green
  * - OFF intentional: gray
@@ -17,11 +17,6 @@ export default function FactoryHeader({
   activeTab = 'factory-live',
   onSelectTab,
 }) {
-  const [confirmAction, setConfirmAction] = useState(null); // 'pause' | 'resume' | 'run-cycle' | null
-  const [isMutating, setIsMutating] = useState(false);
-  const [errorMessage, setErrorMessage] = useState(null);
-  const [successFeedback, setSuccessFeedback] = useState(null);
-
   const isPaused = Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED');
   const factoryState = systemStatus?.factory_state || (isPaused ? 'PAUSED' : 'RUNNING');
   const workerRunning = Boolean(systemStatus?.worker_running);
@@ -29,57 +24,11 @@ export default function FactoryHeader({
   const autoPublish = Boolean(systemStatus?.auto_publish_enabled);
   const dryRun = Boolean(systemStatus?.dry_run);
 
-  const handleRequestAction = (action) => {
-    setErrorMessage(null);
-    setSuccessFeedback(null);
-    setConfirmAction(action);
-  };
-
-  const handleCancelAction = () => {
-    setConfirmAction(null);
-    setErrorMessage(null);
-  };
-
-  const handleConfirmAction = async () => {
-    if (!confirmAction || isMutating) return;
-    const action = confirmAction;
-    setIsMutating(true);
-    setErrorMessage(null);
-    setSuccessFeedback(null);
-
-    try {
-      if (action === 'pause') {
-        await pauseFactory();
-        setSuccessFeedback('Fábrica pausada');
-      } else if (action === 'resume') {
-        await resumeFactory();
-        setSuccessFeedback('Fábrica retomada');
-      } else if (action === 'run-cycle') {
-        await runFactoryCycle({ force: true, one_shot: true });
-        setSuccessFeedback('Ciclo disparado com sucesso');
-      }
-      setConfirmAction(null);
-      if (onRefresh) {
-        await onRefresh();
-      }
-      setTimeout(() => setSuccessFeedback(null), 4000);
-    } catch (err) {
-      console.error(`Falha ao executar ${action} da fábrica:`, err);
-      let msg = err.message || `Falha ao processar operação. Tente novamente.`;
-      if (err.status === 409) {
-        if (msg.toLowerCase().includes('already in progress')) {
-          msg = 'Ciclo de produção já em andamento em segundo plano.';
-        } else if (msg.toLowerCase().includes('paused') || msg.toLowerCase().includes('pausada')) {
-          msg = 'Fábrica pausada — retome para disparar.';
-        }
-      } else if (err.status === 403) {
-        msg = 'Bloqueado: somente nó primário pode executar.';
-      }
-      setErrorMessage(msg);
-      setConfirmAction(null);
-      setTimeout(() => setErrorMessage(null), 6000);
-    } finally {
-      setIsMutating(false);
+  const handleGoToSystem = () => {
+    if (onSelectTab) {
+      onSelectTab('sistema');
+    } else if (typeof window !== 'undefined') {
+      window.location.hash = '#sistema';
     }
   };
 
@@ -132,156 +81,35 @@ export default function FactoryHeader({
         </div>
 
         <div className="header-status-group">
-          {/* 1. Fábrica (RUNNING / PAUSED) */}
+          {/* 1. Fábrica (RUNNING / PAUSED) — somente leitura */}
           <div className={`status-pill ${isPaused ? 'pill-paused' : 'pill-online'}`}>
             <span className={`indicator-dot ${isPaused ? 'inactive' : 'active'}`} />
             <span>Fábrica: {factoryState === 'PAUSED' ? 'Pausada' : 'Online'}</span>
           </div>
 
-          {/* Controle Operacional de Fábrica (Missão 3: Pause/Resume; Missão 4: Run Cycle) */}
-          <div className="factory-action-container" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-            {!confirmAction ? (
-              <>
-                <button
-                  type="button"
-                  className="factory-toggle-btn"
-                  onClick={() => handleRequestAction(isPaused ? 'resume' : 'pause')}
-                  disabled={isMutating}
-                  title={isPaused ? 'Retomar operações da fábrica' : 'Pausar operações da fábrica'}
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    padding: '3px 10px',
-                    borderRadius: '16px',
-                    border: isPaused ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
-                    backgroundColor: isPaused ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
-                    color: isPaused ? '#34d399' : '#fbbf24',
-                    cursor: isMutating ? 'not-allowed' : 'pointer',
-                    opacity: isMutating ? 0.6 : 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {isPaused ? '▶ Retomar' : '⏸ Pausar'}
-                </button>
-
-                <button
-                  type="button"
-                  className="factory-cycle-btn"
-                  onClick={() => handleRequestAction('run-cycle')}
-                  disabled={isMutating || isPaused}
-                  title={isPaused ? 'Fábrica pausada — retome antes de disparar' : 'Disparar ciclo de produção autônoma supervisionado'}
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    padding: '3px 10px',
-                    borderRadius: '16px',
-                    border: '1px solid rgba(56, 189, 248, 0.4)',
-                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                    color: '#38bdf8',
-                    cursor: (isMutating || isPaused) ? 'not-allowed' : 'pointer',
-                    opacity: (isMutating || isPaused) ? 0.5 : 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  ⚡ Executar Ciclo
-                </button>
-              </>
-            ) : (
-              <div
-                className="factory-confirm-inline"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '2px 8px',
-                  borderRadius: '14px',
-                  backgroundColor: 'rgba(30, 41, 59, 0.8)',
-                  border: '1px solid rgba(148, 163, 184, 0.25)',
-                }}
-              >
-                <span style={{ fontSize: '11px', color: '#e2e8f0' }}>
-                  {confirmAction === 'pause'
-                    ? 'Confirmar pausa?'
-                    : confirmAction === 'resume'
-                    ? 'Confirmar retomada?'
-                    : 'Disparar ciclo autônomo agora?'}
-                </span>
-                <button
-                  type="button"
-                  className="confirm-btn-yes"
-                  onClick={handleConfirmAction}
-                  disabled={isMutating}
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    border: 'none',
-                    backgroundColor: confirmAction === 'pause' ? '#d97706' : confirmAction === 'resume' ? '#059669' : '#0284c7',
-                    color: '#ffffff',
-                    cursor: isMutating ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {isMutating ? 'Processando...' : 'Sim'}
-                </button>
-                <button
-                  type="button"
-                  className="confirm-btn-no"
-                  onClick={handleCancelAction}
-                  disabled={isMutating}
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 500,
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    border: '1px solid #475569',
-                    backgroundColor: 'transparent',
-                    color: '#94a3b8',
-                    cursor: isMutating ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  Cancelar
-                </button>
-              </div>
-            )}
-
-            {successFeedback && (
-              <span
-                className="factory-action-success"
-                style={{
-                  fontSize: '11px',
-                  color: '#34d399',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '3px',
-                }}
-              >
-                ✓ {successFeedback}
-              </span>
-            )}
-
-            {errorMessage && (
-              <span
-                className="factory-action-error"
-                style={{
-                  fontSize: '11px',
-                  color: '#f87171',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '3px',
-                }}
-                title={errorMessage}
-              >
-                ⚠️ {errorMessage}
-              </span>
-            )}
-          </div>
+          {/* Atalho para o único lugar de controle global da fábrica (Tela Sistema) */}
+          <button
+            type="button"
+            className="factory-system-shortcut-btn"
+            onClick={handleGoToSystem}
+            title="Gerenciar estado da fábrica (Pausar/Retomar e Rodar 1 ciclo) na tela Sistema"
+            style={{
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '3px 10px',
+              borderRadius: '16px',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              backgroundColor: 'rgba(56, 189, 248, 0.1)',
+              color: '#38bdf8',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            ⚙️ Ir para Sistema
+          </button>
 
           {/* 2. Worker (Ativo / Parado inesperado) */}
           <div className={`status-pill ${workerRunning ? 'pill-running' : 'pill-stopped'}`}>

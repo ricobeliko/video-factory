@@ -169,6 +169,7 @@ export function canToggleFactory(instance) {
 
 /**
  * 5. Formata mensagens de erro da API em português sem omitir o detalhe original.
+ * Preserva o tratamento específico de 409 (ciclo já em execução, fábrica pausada) e 403 (nó primário).
  */
 export function formatApiError(err, actionContext = 'executar ação') {
   if (!err) {
@@ -183,6 +184,17 @@ export function formatApiError(err, actionContext = 'executar ação') {
   }
 
   if (status === 409) {
+    const msgLower = String(message).toLowerCase();
+    if (
+      msgLower.includes('already in progress') ||
+      msgLower.includes('cycle_in_progress') ||
+      msgLower.includes('active_tasks_generating')
+    ) {
+      return `Conflito operacional (409): Ciclo de produção já em andamento em segundo plano ao ${actionContext}. (${message})`;
+    }
+    if (msgLower.includes('paused') || msgLower.includes('pausada')) {
+      return `Conflito operacional (409): Fábrica pausada — retome para disparar ao ${actionContext}. (${message})`;
+    }
     return `Conflito operacional (409): Fábrica ocupada ou já no estado solicitado ao ${actionContext}. (${message})`;
   }
 

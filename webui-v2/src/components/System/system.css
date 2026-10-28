@@ -843,3 +843,16 @@
   border: 1px solid #3B82F6;
   color: #BFDBFE;
 }
+
+
+.sys-big-btn--cycle {
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #38BDF8;
+}
+
+.sys-big-btn--cycle:hover:not(:disabled) {
+  background: #0284C7;
+  color: #FFFFFF;
+  box-shadow: 0 0 12px rgba(2, 132, 199, 0.4);
+}

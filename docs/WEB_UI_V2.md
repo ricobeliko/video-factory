@@ -230,30 +230,33 @@ A latência perceptível relatada pelo operador decorre de fatores estruturais d
 
 ---
 
-## 8. Proposed API Surface (Superfície Preliminar de Endpoints)
+## 8. API Surface Canônica (`app/controllers/v2/operations.py`)
 
-A API fina será construída utilizando o FastAPI existente no projeto (`app/asgi.py`, `fastapi==0.136.3`), sem introduzir novos frameworks backend:
+A API fina é construída utilizando o FastAPI existente no projeto (`app/asgi.py`, `fastapi==0.136.3`), seguindo a regra de **um controle = uma rota** (sem aliases duplicados):
 
 | Método | Endpoint | Objetivo | Serviço Backend Canônico | Leitura/Escrita | Autoridade | Risco |
 | :--- | :--- | :--- | :--- | :---: | :--- | :---: |
 | `GET` | `/api/v2/system/status` | Macro status da fábrica, instância, nó, heartbeats e modo operacional | `operator_console.get_system_status()` | READ | SQLite `operator_heartbeats` | LOW |
-| `POST` | `/api/v2/system/pause` | Pausa operacional não-destrutiva da fábrica | `operator_console.pause_factory()` | WRITE | SQLite `operator_settings` | HIGH |
-| `POST` | `/api/v2/system/resume` | Retomada operacional da fábrica | `operator_console.resume_factory()` | WRITE | SQLite `operator_settings` | HIGH |
-| `POST` | `/api/v2/system/emergency-pause` | Parada de emergência imediata | `operator_console.emergency_pause()` | WRITE | SQLite `operator_settings` | HIGH |
-| `GET` | `/api/v2/channels` | Listagem consolidada de todos os canais/perfis com métricas | `channel_factory._get_channel_card_data()` | READ | SQLite `content_profiles` | LOW |
-| `GET` | `/api/v2/channels/{profile_id}` | Detalhes operacionais e configurações de um canal específico | `profile_manager.get_profile_settings()` | READ | SQLite `content_profiles` | LOW |
-| `PATCH`| `/api/v2/channels/{profile_id}/growth-mode` | Altera Growth Mode do canal (WARMUP / SCALE) | `profile_manager.set_profile_growth_mode()` | WRITE | SQLite `content_profiles` | HIGH |
-| `POST` | `/api/v2/channels/{profile_id}/autonomous/enable` | Habilita produção autônoma para o canal | `autonomous_production.set_profile_autonomous_mode()` | WRITE | SQLite `content_profile_settings` | HIGH |
-| `POST` | `/api/v2/channels/{profile_id}/autonomous/disable` | Pausa produção autônoma para o canal | `autonomous_production.set_profile_autonomous_mode()` | WRITE | SQLite `content_profile_settings` | HIGH |
-| `PATCH`| `/api/v2/channels/{profile_id}/target-stock` | Altera meta de estoque pronto do canal | `autonomous_production.set_target_ready_stock()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
-| `GET` | `/api/v2/channels/{profile_id}/ready-stock` | Detalhamento das tarefas prontas em estoque para o perfil | `operator_console.get_canonical_ready_stock()` | READ | SQLite `tasks` | LOW |
-| `GET` | `/api/v2/scheduler/queue` | Lista de postagens agendadas e status da fila | `operator_console.get_scheduler_queue_summary()` | READ | SQLite `scheduled_posts` | LOW |
-| `GET` | `/api/v2/publications/recent` | Histórico consolidado de publicações no YouTube com status terminal | `operator_console.get_operational_events()` | READ | SQLite `publication_events` | LOW |
-| `GET` | `/api/v2/providers/health` | Resumo de integridade e conectividade dos provedores | `operator_console.get_provider_health_summary()` | READ | Service Health Checks | LOW |
-| `POST` | `/api/v2/operations/run-autonomous-cycle` | Dispara execução forçada de um ciclo autônomo (respeitando cooldown) | `operator_console.run_autonomous_cycle_op()` | WRITE | Autonomous Worker | HIGH |
-| `POST` | `/api/v2/operations/run-analytics-cycle` | Dispara coleta manual de métricas analíticas | `operator_console.run_analytics_collection_cycle_op()` | WRITE | Analytics Worker | MEDIUM |
-| `GET` | `/api/v2/observability/events` | Log de eventos operacionais recentes | `operator_console.get_operational_events()` | READ | SQLite `operator_events` | LOW |
-| `GET` | `/api/v2/observability/errors` | Central de erros e falhas recentes | `operator_console.get_recent_errors()` | READ | SQLite `operator_errors` | LOW |
+| `POST` | `/api/v2/factory/pause` | Pausa operacional não-destrutiva da fábrica | `operator_console.pause_factory()` | WRITE | SQLite `operator_settings` | HIGH |
+| `POST` | `/api/v2/factory/resume` | Retomada operacional da fábrica | `operator_console.resume_factory()` | WRITE | SQLite `operator_settings` | HIGH |
+| `POST` | `/api/v2/factory/run-cycle` | Dispara execução supervisionada de ciclo autônomo (global ou por canal) | `operator_console.run_autonomous_cycle_op()` | WRITE | Autonomous Worker | HIGH |
+| `GET` | `/api/v2/profiles` | Lista operacional dos perfis e canais com contagens de estoque e agendamentos | `operator_console.get_profile_operations_overview()` | READ | SQLite `content_profiles` | LOW |
+| `GET` | `/api/v2/channels` | Listagem consolidada de todos os canais/perfis com métricas e settings | `operator_console.get_profile_operations_overview()`, `profile_manager` | READ | SQLite `content_profiles` | LOW |
+| `GET` | `/api/v2/profiles/{profile_id}/status` | Snapshot de status operacional de um perfil específico | `profile_manager.get_profile()`, `autonomous_production.get_autonomous_status()`, `operator_console.get_canonical_ready_stock()` | READ | SQLite `content_profiles` | LOW |
+| `PATCH`| `/api/v2/channels/{profile_id}/growth-mode` | Altera Growth Mode do canal (`WARMUP` / `SCALE`) | `profile_manager.update_profile()` | WRITE | SQLite `content_profiles` | HIGH |
+| `PATCH`| `/api/v2/channels/{profile_id}/autonomous` | Habilita ou desabilita produção autônoma para o canal | `operator_console.set_autonomous_mode_enabled_op()` | WRITE | SQLite `content_profile_settings` | HIGH |
+| `GET` | `/api/v2/channels/{profile_id}/settings` | Configurações completas do canal (cotas, agenda, workspace e voz efetiva) | `profile_manager.get_profile_quotas()`, `get_profile_schedule()`, `get_effective_voice_settings()` | READ | SQLite `content_profile_settings` | LOW |
+| `PATCH`| `/api/v2/channels/{profile_id}/quotas` | Atualiza cotas operacionais do canal (`target_ready_stock`, `max_generations_24h`, `posts_per_day`) | `profile_manager.update_profile_quotas()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
+| `PATCH`| `/api/v2/channels/{profile_id}/schedule` | Atualiza janela de publicação e intervalo mínimo do canal | `profile_manager.update_profile_schedule()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
+| `PATCH`| `/api/v2/channels/{profile_id}/voice` | Atualiza voz, velocidade e volume por canal | `profile_manager.update_profile_voice_settings()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
+| `GET` | `/api/v2/scheduler/posts` | Resumo da fila do scheduler e próximos posts agendados | `operator_console.get_scheduler_queue_summary()` | READ | SQLite `scheduled_posts` | LOW |
+| `GET` | `/api/v2/publications` | Histórico recente de publicações no YouTube com status terminal | `operator_console.get_recent_publications()` | READ | SQLite `publication_events` | LOW |
+| `GET` | `/api/v2/providers/health` | Resumo passivo de integridade e conectividade dos provedores | `operator_console.get_provider_health_summary()` | READ | Service Health Checks | LOW |
+| `GET` | `/api/v2/executions/live` | Visão multicanal ao vivo do pipeline de execução (UI-005) | `operator_console.get_live_execution_overview()` | READ | SQLite `tasks` / `scheduled_posts` | LOW |
+| `GET` | `/api/v2/executions/{task_id}` | Detalhe e trace causal de execução de uma tarefa específica | `operator_console.get_execution_detail()` | READ | SQLite `tasks` / `operator_events` | LOW |
+| `GET` | `/api/v2/agent-ops` | Snapshot de observabilidade ao vivo da sala Agent Ops | `agent_ops.get_agent_ops_snapshot()` | READ | Multi-service aggregated | LOW |
+| `GET` | `/api/v2/health` | Prontidão operacional da Web UI V2 e papel da instância (`PRIMARY`/`SECONDARY`) | `operator_console.is_primary_instance()` | READ | SQLite `operator_heartbeats` | LOW |
+| `GET` | `/api/v2/voices/allowed` | Catálogo de vozes TTS pt-BR homologadas | `profile_manager.get_allowed_voices()` | READ | `autonomous_production` / catálogo | LOW |
 
 ---
 
@@ -602,7 +605,7 @@ webui-v2/
 ### C. Telas & Componentes Funcionais
 
 1. **Factory Header (`FactoryHeader.jsx`):**
-   - Exibe status da fábrica (Online/Pausada), Worker, Scheduler, Auto Publish e Dry Run.
+   - Exibe somente leitura o status da fábrica (Online/Pausada), Worker, Scheduler, Auto Publish e Dry Run, com atalho "Ir para Sistema" (onde vivem os controles globais de Pausar/Retomar e Rodar 1 ciclo).
    - Timestamp de última atualização em tempo real com botão de refresh manual.
    - Banner de resiliência: se a API ficar offline, o frontend **não quebra** e mantém o último snapshot válido em memória, exibindo aviso claro de offline.
 

@@ -899,7 +899,7 @@ class TestChannelFactory(unittest.TestCase):
                 config.ui["voice_name"] = orig
 
     def test_legacy_profile_settings_voice_values_ignored(self):
-        """8. Valores legacy salvos no profile settings não ganham precedência sobre a voz global."""
+        """8. Regra V2 (canal > global > padrão): canal com voz própria vence a global; sem voz própria, vale a global."""
         from app.config import config
 
         p = profile_manager.create_profile(name="Canal Legado", niche="historia", db_path=self.db_path)
@@ -908,6 +908,15 @@ class TestChannelFactory(unittest.TestCase):
         # Salva voz legada no SQLite
         settings = profile_manager.get_profile_settings(pid, db_path=self.db_path)
         settings.voice.voice_name = "pt-BR-FranciscaNeural"
+        profile_manager.update_profile_settings(pid, settings, db_path=self.db_path)
+        orig_pre = config.ui.get("voice_name")
+        try:
+            config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+            self.assertEqual(profile_manager.get_generation_profile_context(pid, db_path=self.db_path)["voice_name"], "pt-BR-FranciscaNeural")
+        finally:
+            if orig_pre is not None:
+                config.ui["voice_name"] = orig_pre
+        settings.voice.voice_name = None
         profile_manager.update_profile_settings(pid, settings, db_path=self.db_path)
 
         orig = config.ui.get("voice_name")

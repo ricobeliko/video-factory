@@ -1,4 +1,4 @@
-"""Read-only operational endpoints for Web UI V2 (Fase R5A)."""
+"""Operational endpoints for Web UI V2."""
 
 from typing import Optional
 
@@ -275,7 +275,6 @@ class UpdateScheduleRequest(BaseModel):
     publish_end_hour: Optional[int] = Field(None, ge=0, le=23, description="Horário final da janela de publicação (0-23)")
     timezone: Optional[str] = Field(None, description="Fuso horário (ex: America/Sao_Paulo)")
     min_interval_hours: Optional[int] = Field(None, ge=1, le=24, description="Intervalo mínimo entre posts em horas")
-    posts_per_day: Optional[int] = Field(None, ge=1, le=10, description="Publicações diárias")
 
 
 class UpdateVoiceSettingsRequest(BaseModel):
@@ -285,21 +284,9 @@ class UpdateVoiceSettingsRequest(BaseModel):
     tts_server: Optional[str] = Field(None, description="Provedor de TTS (ex: azure-tts-v1, elevenlabs)")
 
 
-class UpdateProfileSettingsRequest(BaseModel):
-    growth_mode: Optional[str] = Field(None, description="Modo de crescimento (warmup | scale)")
-    autonomous_enabled: Optional[bool] = Field(None, description="Status de autonomia operacional")
-    quotas: Optional[UpdateQuotasRequest] = Field(None, description="Configurações de quotas e limites")
-    schedule: Optional[UpdateScheduleRequest] = Field(None, description="Configurações de agendamento e janela")
-    voice: Optional[UpdateVoiceSettingsRequest] = Field(None, description="Configurações de voz por canal")
-
-
 @router.patch(
     "/channels/{profile_id}/growth-mode",
     summary="Update channel Growth Mode (WARMUP / SCALE)",
-)
-@router.patch(
-    "/profiles/{profile_id}/growth-mode",
-    summary="Update profile Growth Mode (WARMUP / SCALE)",
 )
 def update_profile_growth_mode(
     request: Request,
@@ -354,10 +341,6 @@ def update_profile_growth_mode(
     "/channels/{profile_id}/autonomous",
     summary="Enable or pause autonomous production for a channel",
 )
-@router.patch(
-    "/profiles/{profile_id}/autonomous",
-    summary="Enable or pause autonomous production for a profile",
-)
 def update_profile_autonomous_mode(
     request: Request,
     profile_id: str,
@@ -403,29 +386,9 @@ def update_profile_autonomous_mode(
     )
 
 
-@router.post(
-    "/channels/{profile_id}/autonomous/enable",
-    summary="Enable autonomous production for a channel",
-)
-def enable_profile_autonomous(request: Request, profile_id: str):
-    return update_profile_autonomous_mode(request, profile_id, UpdateAutonomousRequest(enabled=True))
-
-
-@router.post(
-    "/channels/{profile_id}/autonomous/disable",
-    summary="Disable autonomous production for a channel",
-)
-def disable_profile_autonomous(request: Request, profile_id: str):
-    return update_profile_autonomous_mode(request, profile_id, UpdateAutonomousRequest(enabled=False))
-
-
 @router.get(
     "/channels/{profile_id}/settings",
     summary="Get comprehensive per-profile settings including quotas and schedule (R7 Phase 2)",
-)
-@router.get(
-    "/profiles/{profile_id}/settings",
-    summary="Get comprehensive per-profile settings including quotas and schedule (alias)",
 )
 def get_channel_settings(request: Request, profile_id: str):
     request_id = base.get_task_id(request)
@@ -459,89 +422,8 @@ def get_channel_settings(request: Request, profile_id: str):
 
 
 @router.patch(
-    "/channels/{profile_id}/settings",
-    summary="Update per-profile settings, quotas and schedule (R7 Phase 2)",
-)
-@router.patch(
-    "/profiles/{profile_id}/settings",
-    summary="Update per-profile settings, quotas and schedule (alias)",
-)
-def update_channel_settings(
-    request: Request,
-    profile_id: str,
-    payload: UpdateProfileSettingsRequest,
-):
-    request_id = base.get_task_id(request)
-    profile = profile_manager.get_profile(profile_id)
-    if not profile:
-        raise HttpException(
-            task_id=request_id,
-            status_code=404,
-            message=f"Profile '{profile_id}' not found",
-        )
-    clean_p = profile.get("id", profile_id)
-
-    # Enforce primary node authority
-    try:
-        operator_console.require_primary_instance()
-    except PermissionError as exc:
-        raise HttpException(
-            task_id=request_id,
-            status_code=403,
-            message=f"Operation blocked: only primary instance can update profile settings ({exc})",
-        )
-    except Exception as exc:
-        raise HttpException(
-            task_id=request_id,
-            status_code=403,
-            message=f"Operation blocked: only primary instance can update profile settings ({exc})",
-        )
-
-    try:
-        if payload.growth_mode is not None:
-            clean_mode = str(payload.growth_mode).strip().lower()
-            if clean_mode not in ("warmup", "scale"):
-                raise ValueError("growth_mode must be 'warmup' or 'scale'")
-            profile_manager.update_profile(clean_p, growth_mode=clean_mode)
-
-        if payload.autonomous_enabled is not None:
-            operator_console.set_autonomous_mode_enabled_op(payload.autonomous_enabled, profile_id=clean_p)
-
-        if payload.quotas is not None:
-            q_dict = payload.quotas.model_dump(exclude_unset=True)
-            if q_dict:
-                profile_manager.update_profile_quotas(clean_p, q_dict)
-
-        if payload.schedule is not None:
-            s_dict = payload.schedule.model_dump(exclude_unset=True)
-            if s_dict:
-                cur_sched = profile_manager.get_profile_schedule(clean_p).model_dump()
-                cur_sched.update(s_dict)
-                profile_manager.update_profile_schedule(clean_p, cur_sched)
-
-    except ValueError as exc:
-        raise HttpException(
-            task_id=request_id,
-            status_code=400,
-            message=str(exc),
-        )
-    except Exception as exc:
-        raise HttpException(
-            task_id=request_id,
-            status_code=500,
-            message=f"Internal error updating profile settings: {exc}",
-        )
-
-    return get_channel_settings(request, clean_p)
-
-
-@router.patch(
     "/channels/{profile_id}/quotas",
     summary="Update quotas and generation limits for a channel/profile (R7 Phase 2)",
-)
-@router.patch(
-    "/profiles/{profile_id}/quotas",
-    summary="Update quotas and generation limits for a channel/profile (alias)",
 )
 def update_channel_quotas(
     request: Request,
@@ -613,10 +495,6 @@ def update_channel_quotas(
 @router.patch(
     "/channels/{profile_id}/schedule",
     summary="Update schedule and publishing window for a channel/profile (R7 Phase 2)",
-)
-@router.patch(
-    "/profiles/{profile_id}/schedule",
-    summary="Update schedule and publishing window for a channel/profile (alias)",
 )
 def update_channel_schedule(
     request: Request,
@@ -690,10 +568,6 @@ def update_channel_schedule(
 @router.patch(
     "/channels/{profile_id}/voice",
     summary="Update voice settings for a channel/profile (M6a)",
-)
-@router.patch(
-    "/profiles/{profile_id}/voice",
-    summary="Update voice settings for a channel/profile (alias)",
 )
 def update_channel_voice(
     request: Request,

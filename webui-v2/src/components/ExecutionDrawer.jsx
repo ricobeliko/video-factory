@@ -2,23 +2,22 @@ import React, { useEffect, useState } from 'react';
 import {
   getExecutionDetail,
   runFactoryCycle,
-  updateProfileGrowthMode,
-  updateProfileAutonomousMode,
   getProfileSettings,
-  updateProfileSettings,
 } from '../api';
 import { STAGE_BY_CODE, sanitizeDisplayText } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
+import { buildSystemChannelHash } from './System/systemEditLogic';
 
 /**
- * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5 + R7).
+ * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5 + R7 + Controles Únicos).
  * Features:
  * - Active Agent Persona Card with avatar, bio, and operational role.
  * - Deep Causal Trace ("Quem chamou quem").
  * - Execution snapshot and chronological timeline.
  * - Terminal publication confirmation with direct YouTube link.
  * - Supervised channel run cycle trigger.
- * - Per-profile Growth Mode (WARMUP / SCALE) and Autonomous Mode controls (R7).
+ * - Read-only operational settings summary with direct shortcut ("Editar em Sistema")
+ *   to the single canonical configuration screen (SystemView).
  */
 export default function ExecutionDrawer({
   isOpen,
@@ -28,6 +27,7 @@ export default function ExecutionDrawer({
   selectedStage: propSelectedStage,
   onRefresh,
   isPaused,
+  onEditInSystem,
 }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -39,24 +39,18 @@ export default function ExecutionDrawer({
   const [channelActionMsg, setChannelActionMsg] = useState(null);
   const [channelActionError, setChannelActionError] = useState(null);
 
-  // Channel settings state (R7)
-  const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
-  const [settingsSuccessMsg, setSettingsSuccessMsg] = useState(null);
-  const [settingsErrorMsg, setSettingsErrorMsg] = useState(null);
-
-  // R7 Phase 2: Per-profile quotas and schedule states
+  // Read-only per-profile quotas and schedule snapshot
   const [targetStockVal, setTargetStockVal] = useState(3);
   const [maxGenerationsVal, setMaxGenerationsVal] = useState(2);
   const [postsPerDayVal, setPostsPerDayVal] = useState(1);
   const [publishStartHour, setPublishStartHour] = useState(10);
   const [publishEndHour, setPublishEndHour] = useState(22);
   const [minIntervalHours, setMinIntervalHours] = useState(2);
-  const [isSavingCustomSettings, setIsSavingCustomSettings] = useState(false);
 
   const currentGrowthMode = (channelData?.growth_mode || 'warmup').toLowerCase();
   const currentAutonomous = Boolean(channelData?.autonomous_enabled);
 
-  // Load factual profile settings on drawer open
+  // Load factual profile settings on drawer open (read-only display)
   useEffect(() => {
     if (!isOpen || !channelData?.profile_id) return;
     let isMounted = true;
@@ -86,82 +80,13 @@ export default function ExecutionDrawer({
     };
   }, [isOpen, channelData?.profile_id]);
 
-  const handleSaveScheduleAndQuotas = async () => {
-    if (isSavingCustomSettings || !channelData?.profile_id) return;
-    setIsSavingCustomSettings(true);
-    setSettingsSuccessMsg(null);
-    setSettingsErrorMsg(null);
-
-    try {
-      await updateProfileSettings(channelData.profile_id, {
-        quotas: {
-          target_ready_stock: Number(targetStockVal),
-          max_generations_24h: Number(maxGenerationsVal),
-          posts_per_day: Number(postsPerDayVal),
-        },
-        schedule: {
-          publish_start_hour: Number(publishStartHour),
-          publish_end_hour: Number(publishEndHour),
-          min_interval_hours: Number(minIntervalHours),
-          posts_per_day: Number(postsPerDayVal),
-        },
-      });
-      setSettingsSuccessMsg('Quotas e janela de publicação salvas com sucesso!');
-      if (onRefresh) await onRefresh();
-      setTimeout(() => setSettingsSuccessMsg(null), 4000);
-    } catch (err) {
-      console.error('Falha ao salvar quotas e janela:', err);
-      let msg = err.message || 'Falha ao salvar configurações';
-      if (err.status === 403) msg = 'Bloqueado: somente nó primário pode salvar configurações.';
-      setSettingsErrorMsg(msg);
-      setTimeout(() => setSettingsErrorMsg(null), 5000);
-    } finally {
-      setIsSavingCustomSettings(false);
-    }
-  };
-
-  const handleToggleGrowthMode = async (targetMode) => {
-    if (isUpdatingSettings || targetMode === currentGrowthMode) return;
-    setIsUpdatingSettings(true);
-    setSettingsSuccessMsg(null);
-    setSettingsErrorMsg(null);
-
-    try {
-      await updateProfileGrowthMode(channelData?.profile_id, targetMode);
-      setSettingsSuccessMsg(`Growth Mode alterado para ${targetMode.toUpperCase()}`);
-      if (onRefresh) await onRefresh();
-      setTimeout(() => setSettingsSuccessMsg(null), 4000);
-    } catch (err) {
-      console.error('Falha ao atualizar Growth Mode:', err);
-      let msg = err.message || 'Falha ao atualizar Growth Mode';
-      if (err.status === 403) msg = 'Bloqueado: somente nó primário pode alterar Growth Mode.';
-      setSettingsErrorMsg(msg);
-      setTimeout(() => setSettingsErrorMsg(null), 5000);
-    } finally {
-      setIsUpdatingSettings(false);
-    }
-  };
-
-  const handleToggleAutonomous = async () => {
-    if (isUpdatingSettings) return;
-    const targetState = !currentAutonomous;
-    setIsUpdatingSettings(true);
-    setSettingsSuccessMsg(null);
-    setSettingsErrorMsg(null);
-
-    try {
-      await updateProfileAutonomousMode(channelData?.profile_id, targetState);
-      setSettingsSuccessMsg(`Autonomia ${targetState ? 'ativada (AUTO)' : 'pausada (MANUAL)'}`);
-      if (onRefresh) await onRefresh();
-      setTimeout(() => setSettingsSuccessMsg(null), 4000);
-    } catch (err) {
-      console.error('Falha ao atualizar modo autônomo:', err);
-      let msg = err.message || 'Falha ao atualizar autonomia';
-      if (err.status === 403) msg = 'Bloqueado: somente nó primário pode alterar autonomia.';
-      setSettingsErrorMsg(msg);
-      setTimeout(() => setSettingsErrorMsg(null), 5000);
-    } finally {
-      setIsUpdatingSettings(false);
+  const handleEditInSystem = () => {
+    const pid = channelData?.profile_id || channelData?.channel_id;
+    if (onClose) onClose();
+    if (onEditInSystem && pid) {
+      onEditInSystem(pid);
+    } else if (typeof window !== 'undefined') {
+      window.location.hash = buildSystemChannelHash(pid);
     }
   };
 
@@ -353,205 +278,79 @@ export default function ExecutionDrawer({
             </div>
           </div>
 
-          {/* Operational Settings Section (R7) */}
+          {/* Read-Only Operational Settings Summary + Shortcut to Sistema */}
           {channelData && (
             <div className="drawer-section drawer-settings-section">
-              <span className="section-label">Configurações Operacionais (R7)</span>
-              
-              <div className="drawer-settings-grid">
-                {/* 1. Growth Mode Selector */}
-                <div className="drawer-setting-item">
-                  <div className="drawer-setting-header">
-                    <span className="drawer-setting-title">Growth Mode:</span>
-                    <span className="drawer-setting-desc">Teto de produção e slots do canal</span>
-                  </div>
-                  <div className="drawer-growth-selector">
-                    <button
-                      type="button"
-                      className={`growth-toggle-btn ${currentGrowthMode === 'warmup' ? 'active-warmup' : ''}`}
-                      onClick={() => handleToggleGrowthMode('warmup')}
-                      disabled={isUpdatingSettings}
-                      title="WARMUP: Modo aquecimento / 2 aprovações por 24h"
-                    >
-                      🌱 WARMUP
-                    </button>
-                    <button
-                      type="button"
-                      className={`growth-toggle-btn ${currentGrowthMode === 'scale' ? 'active-scale' : ''}`}
-                      onClick={() => handleToggleGrowthMode('scale')}
-                      disabled={isUpdatingSettings}
-                      title="SCALE: Modo escala / 5 aprovações por 24h"
-                    >
-                      🚀 SCALE
-                    </button>
-                  </div>
-                </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  marginBottom: '10px',
+                }}
+              >
+                <span className="section-label" style={{ marginBottom: 0 }}>
+                  Configurações Operacionais (Somente Leitura)
+                </span>
+                <button
+                  type="button"
+                  className="drawer-edit-in-system-btn"
+                  onClick={handleEditInSystem}
+                  title="Abrir a tela Sistema focada neste canal para editar configurações"
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(56, 189, 248, 0.45)',
+                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                    color: '#38bdf8',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  ⚙️ Editar em Sistema
+                </button>
+              </div>
 
-                {/* 2. Autonomous Mode Toggle */}
-                <div className="drawer-setting-item">
-                  <div className="drawer-setting-header">
-                    <span className="drawer-setting-title">Produção Autônoma:</span>
-                    <span className="drawer-setting-desc">Geração em background via Scheduler</span>
-                  </div>
-                  <div className="drawer-autonomous-selector">
-                    <button
-                      type="button"
-                      className={`autonomous-toggle-btn ${currentAutonomous ? 'active-auto' : 'active-manual'}`}
-                      onClick={handleToggleAutonomous}
-                      disabled={isUpdatingSettings}
-                      title={currentAutonomous ? 'Clique para pausar produção autônoma (MANUAL)' : 'Clique para ativar produção autônoma (AUTO)'}
-                    >
-                      {currentAutonomous ? '● AUTO (Ativo)' : '○ MANUAL (Pausado)'}
-                    </button>
+              <div className="info-grid">
+                <div className="info-box">
+                  <div className="info-box-label">Growth Mode</div>
+                  <div className="info-box-value mono">
+                    {currentGrowthMode === 'scale' ? '🚀 SCALE' : '🌱 WARMUP'}
                   </div>
                 </div>
 
-                {/* 3. Quotas & Limites Operacionais (R7 Phase 2) */}
-                <div className="drawer-subcard-settings">
-                  <div className="drawer-subcard-header">
-                    <span className="drawer-subcard-title">📊 Quotas & Limites Operacionais</span>
-                  </div>
-
-                  <div className="drawer-controls-row">
-                    <div className="drawer-control-col">
-                      <label className="drawer-field-label" title="Meta de vídeos finalizados mantidos em estoque (3 a 6)">
-                        Meta Estoque Pronto:
-                      </label>
-                      <div className="drawer-btn-group">
-                        {[3, 4, 5, 6].map((num) => (
-                          <button
-                            key={num}
-                            type="button"
-                            className={`drawer-num-btn ${Number(targetStockVal) === num ? 'active' : ''}`}
-                            onClick={() => setTargetStockVal(num)}
-                            disabled={isSavingCustomSettings}
-                          >
-                            {num}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="drawer-control-col">
-                      <label className="drawer-field-label" title="Teto de vídeos aprovados criados por dia">
-                        Gerações 24h:
-                      </label>
-                      <div className="drawer-btn-group">
-                        {[1, 2, 3, 4, 5].map((num) => (
-                          <button
-                            key={num}
-                            type="button"
-                            className={`drawer-num-btn ${Number(maxGenerationsVal) === num ? 'active' : ''}`}
-                            onClick={() => setMaxGenerationsVal(num)}
-                            disabled={isSavingCustomSettings}
-                          >
-                            {num}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="drawer-control-col">
-                      <label className="drawer-field-label" title="Frequência diária de publicações">
-                        Posts / Dia:
-                      </label>
-                      <div className="drawer-btn-group">
-                        {[1, 2, 3].map((num) => (
-                          <button
-                            key={num}
-                            type="button"
-                            className={`drawer-num-btn ${Number(postsPerDayVal) === num ? 'active' : ''}`}
-                            onClick={() => setPostsPerDayVal(num)}
-                            disabled={isSavingCustomSettings}
-                          >
-                            {num}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                <div className="info-box">
+                  <div className="info-box-label">Produção Autônoma</div>
+                  <div className="info-box-value mono">
+                    {currentAutonomous ? '● AUTO (Ativo)' : '○ MANUAL (Pausado)'}
                   </div>
                 </div>
 
-                {/* 4. Janela de Publicação & Agendamento (R7 Phase 2) */}
-                <div className="drawer-subcard-settings">
-                  <div className="drawer-subcard-header">
-                    <span className="drawer-subcard-title">⏰ Janela de Publicação & Agendamento</span>
-                    <span className="drawer-tz-tag">America/Sao_Paulo (UTC-3)</span>
-                  </div>
+                <div className="info-box">
+                  <div className="info-box-label">Meta Estoque Pronto</div>
+                  <div className="info-box-value mono">{targetStockVal} vídeos</div>
+                </div>
 
-                  <div className="drawer-controls-row">
-                    <div className="drawer-control-col">
-                      <label className="drawer-field-label">Início da Janela:</label>
-                      <select
-                        className="drawer-select"
-                        value={publishStartHour}
-                        onChange={(e) => setPublishStartHour(Number(e.target.value))}
-                        disabled={isSavingCustomSettings}
-                      >
-                        {[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map((h) => (
-                          <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <div className="info-box">
+                  <div className="info-box-label">Gerações 24h</div>
+                  <div className="info-box-value mono">{maxGenerationsVal} / 24h</div>
+                </div>
 
-                    <div className="drawer-control-col">
-                      <label className="drawer-field-label">Fim da Janela:</label>
-                      <select
-                        className="drawer-select"
-                        value={publishEndHour}
-                        onChange={(e) => setPublishEndHour(Number(e.target.value))}
-                        disabled={isSavingCustomSettings}
-                      >
-                        {[12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map((h) => (
-                          <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <div className="info-box">
+                  <div className="info-box-label">Posts / Dia</div>
+                  <div className="info-box-value mono">{postsPerDayVal} / dia</div>
+                </div>
 
-                    <div className="drawer-control-col">
-                      <label className="drawer-field-label">Intervalo Mínimo:</label>
-                      <select
-                        className="drawer-select"
-                        value={minIntervalHours}
-                        onChange={(e) => setMinIntervalHours(Number(e.target.value))}
-                        disabled={isSavingCustomSettings}
-                      >
-                        <option value={1}>1 hora</option>
-                        <option value={2}>2 horas</option>
-                        <option value={3}>3 horas</option>
-                        <option value={4}>4 horas</option>
-                        <option value={6}>6 horas</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="drawer-save-row">
-                    <button
-                      type="button"
-                      className="drawer-save-settings-btn"
-                      onClick={handleSaveScheduleAndQuotas}
-                      disabled={isSavingCustomSettings}
-                    >
-                      {isSavingCustomSettings ? 'Salvando...' : '💾 Salvar Quotas e Janela'}
-                    </button>
+                <div className="info-box">
+                  <div className="info-box-label">Janela de Publicação</div>
+                  <div className="info-box-value mono">
+                    {String(publishStartHour).padStart(2, '0')}:00 às {String(publishEndHour).padStart(2, '0')}:00 (int. {minIntervalHours}h)
                   </div>
                 </div>
               </div>
-
-              {settingsSuccessMsg && (
-                <div className="drawer-settings-feedback success">
-                  ✓ {settingsSuccessMsg}
-                </div>
-              )}
-              {settingsErrorMsg && (
-                <div className="drawer-settings-feedback error">
-                  ⚠️ {settingsErrorMsg}
-                </div>
-              )}
             </div>
           )}
 

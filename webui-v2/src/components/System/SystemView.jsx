@@ -5,6 +5,8 @@ import {
   getHealth,
   getChannelsOverview,
   getProfileSettings,
+  updateProfileGrowthMode,
+  updateProfileAutonomousMode,
   updateProfileQuotas,
   updateProfileSchedule,
   updateProfileVoice,
@@ -23,11 +25,11 @@ import {
   formatScheduleDisplay,
 } from './systemLogic';
 import {
-  validateChannelField,
   validateChannelForm,
   calculateSettingsDiff,
   buildPatchPayloads,
   formatDiffValueDisplay,
+  parseSystemChannelFromHash,
 } from './systemEditLogic';
 import {
   getVoiceSourceInfo,
@@ -43,7 +45,7 @@ import './system.css';
 
 const POLL_INTERVAL_MS = 15000;
 
-export default function SystemView({ onNavigate }) {
+export default function SystemView({ onNavigate, focusChannelId }) {
   // Dados de estado do sistema
   const [systemStatus, setSystemStatus] = useState(null);
   const [providersHealth, setProvidersHealth] = useState(null);
@@ -58,7 +60,7 @@ export default function SystemView({ onNavigate }) {
   const [isActionPending, setIsActionPending] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState(null); // { type: 'pause' | 'resume' }
 
-  // Estados de Edição de Ajustes por Canal (SIS2)
+  // Estados de Edição de Ajustes por Canal (SIS2 + Controles Únicos)
   const [editingChannelId, setEditingChannelId] = useState(null);
   const [channelFormData, setChannelFormData] = useState({});
   const [channelFormErrors, setChannelFormErrors] = useState({});
@@ -66,6 +68,7 @@ export default function SystemView({ onNavigate }) {
   const [isSavingChannel, setIsSavingChannel] = useState(false);
   const [allowedVoices, setAllowedVoices] = useState([]);
   const [pinnedVoiceFields, setPinnedVoiceFields] = useState(new Set());
+  const handledFocusChannelRef = useRef(null);
 
   // Temporizadores
   const [lastFetchTime, setLastFetchTime] = useState(null);
@@ -242,33 +245,70 @@ export default function SystemView({ onNavigate }) {
   };
 
   // -------------------------------------------------------------
-  // Handlers de Edição de Ajustes por Canal (SIS2)
+  // Handlers de Edição de Ajustes por Canal (SIS2 + Controles Únicos)
   // -------------------------------------------------------------
-  const handleStartEdit = (channel) => {
-    if (!togglePermission.canToggle) return;
-    setActionFeedback(null);
+  const handleStartEdit = useCallback(
+    (channel) => {
+      if (!togglePermission.canToggle) return;
+      setActionFeedback(null);
 
-    const pid = channel.profile_id || channel.channel_id;
-    const fullSettings = channelSettingsMap[pid] || channel.settings || {};
-    const quotas = fullSettings.quotas || channel.quotas || {};
-    const schedule = fullSettings.schedule || channel.schedule || {};
-    const effVoice = fullSettings.effective_voice || {};
-    const isQuiz = Boolean(fullSettings.is_quiz ?? channel.is_quiz);
+      const pid = channel.profile_id || channel.channel_id;
+      const fullSettings = channelSettingsMap[pid] || channel.settings || {};
+      const quotas = fullSettings.quotas || channel.quotas || {};
+      const schedule = fullSettings.schedule || channel.schedule || {};
+      const effVoice = fullSettings.effective_voice || {};
+      const isQuiz = Boolean(fullSettings.is_quiz ?? channel.is_quiz);
+      const growthMode = String(fullSettings.growth_mode || channel.growth_mode || 'WARMUP').toUpperCase();
+      const isAuto = Boolean(fullSettings.autonomous_enabled ?? channel.autonomous_enabled);
 
-    setEditingChannelId(pid);
-    setPinnedVoiceFields(new Set());
-    setChannelFormData({
-      target_ready_stock: quotas.target_ready_stock ?? 3,
-      posts_per_day: quotas.posts_per_day ?? schedule.posts_per_day ?? 1,
-      publish_start_hour: schedule.publish_start_hour ?? 10,
-      publish_end_hour: schedule.publish_end_hour ?? 22,
-      min_interval_hours: schedule.min_interval_hours ?? 4,
-      voice_name: effVoice.voice_name?.value || (allowedVoices[0]?.id || ''),
-      voice_rate: isQuiz ? null : (effVoice.voice_rate?.value ?? 1.0),
-      voice_volume: effVoice.voice_volume?.value ?? 1.0,
-    });
-    setChannelFormErrors({});
-  };
+      setEditingChannelId(pid);
+      setPinnedVoiceFields(new Set());
+      setChannelFormData({
+        growth_mode: growthMode,
+        autonomous_enabled: isAuto,
+        target_ready_stock: quotas.target_ready_stock ?? 3,
+        max_generations_24h: quotas.max_generations_24h ?? (growthMode === 'SCALE' ? 5 : 2),
+        posts_per_day: quotas.posts_per_day ?? schedule.posts_per_day ?? 1,
+        publish_start_hour: schedule.publish_start_hour ?? 10,
+        publish_end_hour: schedule.publish_end_hour ?? 22,
+        min_interval_hours: schedule.min_interval_hours ?? 4,
+        voice_name: effVoice.voice_name?.value || (allowedVoices[0]?.id || ''),
+        voice_rate: isQuiz ? null : (effVoice.voice_rate?.value ?? 1.0),
+        voice_volume: effVoice.voice_volume?.value ?? 1.0,
+      });
+      setChannelFormErrors({});
+    },
+    [togglePermission.canToggle, channelSettingsMap, allowedVoices]
+  );
+
+  // Rola e abre a edição do canal quando acionado pelo atalho "Editar em Sistema"
+  useEffect(() => {
+    const targetId =
+      focusChannelId ||
+      (typeof window !== 'undefined' ? parseSystemChannelFromHash(window.location.hash) : null);
+
+    if (!targetId || channelsData.length === 0) return;
+    if (handledFocusChannelRef.current === targetId) return;
+
+    const targetChannel = channelsData.find((c) => (c.profile_id || c.channel_id) === targetId);
+    if (!targetChannel) return;
+
+    // Aguarda carregamento de settings do canal para popular o formulário com valores reais
+    if (!channelSettingsMap[targetId] && isLoading) return;
+
+    handledFocusChannelRef.current = targetId;
+
+    if (typeof document !== 'undefined') {
+      const cardEl = document.getElementById(`sys-channel-${targetId}`);
+      if (cardEl && typeof cardEl.scrollIntoView === 'function') {
+        cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    if (togglePermission.canToggle) {
+      handleStartEdit(targetChannel);
+    }
+  }, [focusChannelId, channelsData, channelSettingsMap, isLoading, togglePermission.canToggle, handleStartEdit]);
 
   const handleCancelEdit = () => {
     setEditingChannelId(null);
@@ -302,14 +342,18 @@ export default function SystemView({ onNavigate }) {
   };
 
   const handleFieldChange = (field, value) => {
-    const updated = { ...channelFormData, [field]: value };
+    const normalizedVal =
+      field === 'autonomous_enabled'
+        ? value === true || value === 'true'
+        : value;
+    const updated = { ...channelFormData, [field]: normalizedVal };
     setChannelFormData(updated);
 
     if (['voice_name', 'voice_rate', 'voice_volume'].includes(field)) {
       const activeChannel = channelsData.find((c) => (c.profile_id || c.channel_id) === editingChannelId);
       const fullSettings = channelSettingsMap[editingChannelId] || activeChannel?.settings || {};
       const isQuiz = Boolean(fullSettings.is_quiz ?? activeChannel?.is_quiz);
-      const valRes = validateVoiceField(field, value, {
+      const valRes = validateVoiceField(field, normalizedVal, {
         isQuiz,
         allowedVoiceIds: allowedVoices.map((v) => v.id),
       });
@@ -326,8 +370,17 @@ export default function SystemView({ onNavigate }) {
       const valResult = validateChannelForm(updated);
       setChannelFormErrors((prev) => {
         const copy = { ...prev };
-        // Atualiza erros de cota e agendamento
-        for (const k of ['target_ready_stock', 'posts_per_day', 'publish_start_hour', 'publish_end_hour', 'min_interval_hours']) {
+        // Atualiza erros de modo, cota e agendamento
+        for (const k of [
+          'growth_mode',
+          'autonomous_enabled',
+          'target_ready_stock',
+          'max_generations_24h',
+          'posts_per_day',
+          'publish_start_hour',
+          'publish_end_hour',
+          'min_interval_hours',
+        ]) {
           if (valResult.errors[k]) {
             copy[k] = valResult.errors[k];
           } else {
@@ -357,8 +410,13 @@ export default function SystemView({ onNavigate }) {
 
     const origQuotas = fullSettings.quotas || channel.quotas || {};
     const origSchedule = fullSettings.schedule || channel.schedule || {};
+    const origGrowthMode = String(fullSettings.growth_mode || channel.growth_mode || 'WARMUP').toUpperCase();
+    const origAuto = Boolean(fullSettings.autonomous_enabled ?? channel.autonomous_enabled);
     const orig = {
+      growth_mode: origGrowthMode,
+      autonomous_enabled: origAuto,
       target_ready_stock: origQuotas.target_ready_stock ?? 3,
+      max_generations_24h: origQuotas.max_generations_24h ?? (origGrowthMode === 'SCALE' ? 5 : 2),
       posts_per_day: origQuotas.posts_per_day ?? origSchedule.posts_per_day ?? 1,
       publish_start_hour: origSchedule.publish_start_hour ?? 10,
       publish_end_hour: origSchedule.publish_end_hour ?? 22,
@@ -407,7 +465,13 @@ export default function SystemView({ onNavigate }) {
     const { profileId, profileName, payloads } = channelConfirmDialog;
 
     try {
-      // Dispara PATCH apenas para as seções que sofreram alteração
+      // Dispara PATCH apenas para as seções que sofreram alteração, reaproveitando as rotas existentes
+      if (payloads.growthModePayload !== null && payloads.growthModePayload !== undefined) {
+        await updateProfileGrowthMode(profileId, payloads.growthModePayload);
+      }
+      if (payloads.autonomousPayload !== null && payloads.autonomousPayload !== undefined) {
+        await updateProfileAutonomousMode(profileId, payloads.autonomousPayload);
+      }
       if (payloads.quotasPayload) {
         await updateProfileQuotas(profileId, payloads.quotasPayload);
       }
@@ -823,7 +887,10 @@ export default function SystemView({ onNavigate }) {
                 const ws = fullSettings.workspace_settings || {};
                 const growthMode = fullSettings.growth_mode || ch.growth_mode || 'WARMUP';
                 const isAuto = Boolean(fullSettings.autonomous_enabled ?? ch.autonomous_enabled);
-                const isWarmup = String(growthMode).toUpperCase() === 'WARMUP';
+                const effectiveGrowthMode = isEditing
+                  ? String(channelFormData.growth_mode || growthMode).toUpperCase()
+                  : String(growthMode).toUpperCase();
+                const isWarmup = effectiveGrowthMode === 'WARMUP';
                 const isQuiz = Boolean(fullSettings.is_quiz ?? ch.is_quiz);
                 const effVoice = fullSettings.effective_voice || {};
                 const voiceSourceInfo = getVoiceSourceInfo(effVoice.voice_name?.source);
@@ -845,6 +912,7 @@ export default function SystemView({ onNavigate }) {
                 return (
                   <article
                     key={pid}
+                    id={`sys-channel-${pid}`}
                     className={`sys-channel-card ${isEditing ? 'sys-channel-card--editing' : ''}`}
                     aria-label={`Ajustes do canal ${ch.name || pid}`}
                   >
@@ -855,7 +923,7 @@ export default function SystemView({ onNavigate }) {
                       </div>
                       <div className="sys-channel-header-right">
                         <span className="sys-role-badge">
-                          {String(growthMode).toUpperCase()}
+                          {effectiveGrowthMode}
                         </span>
                         {!isEditing && (
                           <button
@@ -865,7 +933,7 @@ export default function SystemView({ onNavigate }) {
                             onClick={() => handleStartEdit(ch)}
                             title={
                               togglePermission.canToggle
-                                ? 'Editar cotas e horários deste canal'
+                                ? 'Editar configurações, cotas e horários deste canal'
                                 : 'Apenas o nó primário (PRIMARY) pode editar ajustes de canal. Instância secundária em modo somente leitura.'
                             }
                             aria-label={`Editar canal ${ch.name || pid}`}
@@ -877,13 +945,61 @@ export default function SystemView({ onNavigate }) {
                     </div>
 
                     <div className="sys-card-body">
-                      {/* Campos Somente Leitura (Imutáveis) */}
-                      <div className="sys-stat-row">
-                        <span className="sys-stat-label">Modo Autônomo</span>
-                        <span className="sys-stat-value">
-                          {isAuto ? 'SIM (Ativo)' : 'NÃO (Desligado)'}
-                        </span>
-                      </div>
+                      {/* Modo Operacional e Crescimento */}
+                      {isEditing ? (
+                        <div className="sys-input-group" style={{ marginBottom: '8px' }}>
+                          <div className="sys-edit-row">
+                            <label htmlFor={`auto-${pid}`} className="sys-stat-label">
+                              Modo Autônomo
+                            </label>
+                            <select
+                              id={`auto-${pid}`}
+                              className={`sys-select ${channelFormErrors.autonomous_enabled ? 'sys-input--error' : ''}`}
+                              value={channelFormData.autonomous_enabled ? 'true' : 'false'}
+                              onChange={(e) => handleFieldChange('autonomous_enabled', e.target.value === 'true')}
+                            >
+                              <option value="true">SIM (Ativo)</option>
+                              <option value="false">NÃO (Desligado)</option>
+                            </select>
+                          </div>
+                          {channelFormErrors.autonomous_enabled && (
+                            <span className="sys-field-error">{channelFormErrors.autonomous_enabled}</span>
+                          )}
+
+                          <div className="sys-edit-row">
+                            <label htmlFor={`growth-${pid}`} className="sys-stat-label">
+                              Modo de Crescimento
+                            </label>
+                            <select
+                              id={`growth-${pid}`}
+                              className={`sys-select ${channelFormErrors.growth_mode ? 'sys-input--error' : ''}`}
+                              value={String(channelFormData.growth_mode || 'WARMUP').toUpperCase()}
+                              onChange={(e) => handleFieldChange('growth_mode', e.target.value)}
+                            >
+                              <option value="WARMUP">🌱 WARMUP (Aquecimento)</option>
+                              <option value="SCALE">🚀 SCALE (Escala)</option>
+                            </select>
+                          </div>
+                          {channelFormErrors.growth_mode && (
+                            <span className="sys-field-error">{channelFormErrors.growth_mode}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Modo Autônomo</span>
+                            <span className="sys-stat-value">
+                              {isAuto ? 'SIM (Ativo)' : 'NÃO (Desligado)'}
+                            </span>
+                          </div>
+                          <div className="sys-stat-row">
+                            <span className="sys-stat-label">Modo de Crescimento</span>
+                            <span className="sys-stat-value">
+                              {String(growthMode).toUpperCase() === 'SCALE' ? 'SCALE (Escala)' : 'WARMUP (Aquecimento)'}
+                            </span>
+                          </div>
+                        </>
+                      )}
 
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Nicho / Formato</span>
@@ -898,12 +1014,12 @@ export default function SystemView({ onNavigate }) {
                         <div className="sys-input-group">
                           <div className="sys-edit-row">
                             <label htmlFor={`target-${pid}`} className="sys-stat-label">
-                              Meta Estoque (1–10 vídeos)
+                              Meta Estoque (3–10 vídeos)
                             </label>
                             <input
                               id={`target-${pid}`}
                               type="number"
-                              min="1"
+                              min="3"
                               max="10"
                               className={`sys-input ${channelFormErrors.target_ready_stock ? 'sys-input--error' : ''}`}
                               value={channelFormData.target_ready_stock ?? ''}
@@ -912,6 +1028,24 @@ export default function SystemView({ onNavigate }) {
                           </div>
                           {channelFormErrors.target_ready_stock && (
                             <span className="sys-field-error">{channelFormErrors.target_ready_stock}</span>
+                          )}
+
+                          <div className="sys-edit-row">
+                            <label htmlFor={`maxgen-${pid}`} className="sys-stat-label">
+                              Gerações/24h (1–10)
+                            </label>
+                            <input
+                              id={`maxgen-${pid}`}
+                              type="number"
+                              min="1"
+                              max="10"
+                              className={`sys-input ${channelFormErrors.max_generations_24h ? 'sys-input--error' : ''}`}
+                              value={channelFormData.max_generations_24h ?? ''}
+                              onChange={(e) => handleFieldChange('max_generations_24h', e.target.value)}
+                            />
+                          </div>
+                          {channelFormErrors.max_generations_24h && (
+                            <span className="sys-field-error">{channelFormErrors.max_generations_24h}</span>
                           )}
 
                           <div className="sys-edit-row">
@@ -933,16 +1067,12 @@ export default function SystemView({ onNavigate }) {
                           )}
                           {isWarmup && (
                             <div className="sys-warn-note">
-                              ℹ O modo de crescimento do canal ({growthMode}) pode limitar este valor.
+                              ℹ O modo de crescimento do canal ({effectiveGrowthMode}) pode limitar este valor.
                             </div>
                           )}
 
-                          {/* Cotas Somente-Leitura */}
+                          {/* Cota Somente-Leitura (Tentativas) */}
                           <div className="sys-channel-stats-grid" style={{ marginTop: '6px' }}>
-                            <div className="sys-stat-row">
-                              <span className="sys-stat-label">Gerações/24h</span>
-                              <span className="sys-stat-value">{quotas.max_generations_24h}</span>
-                            </div>
                             <div className="sys-stat-row">
                               <span className="sys-stat-label">Tentativas/24h</span>
                               <span className="sys-stat-value">{quotas.max_attempts_24h}</span>

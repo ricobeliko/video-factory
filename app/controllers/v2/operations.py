@@ -264,7 +264,7 @@ class UpdateAutonomousRequest(BaseModel):
 
 
 class UpdateQuotasRequest(BaseModel):
-    target_ready_stock: Optional[int] = Field(None, ge=1, le=10, description="Meta de estoque pronto")
+    target_ready_stock: Optional[int] = Field(None, description="Meta de estoque pronto (3 a 10)")
     max_generations_24h: Optional[int] = Field(None, ge=1, le=15, description="Teto de gerações diárias aprovadas")
     max_attempts_24h: Optional[int] = Field(None, ge=1, le=30, description="Teto de tentativas totais de geração em 24h")
     posts_per_day: Optional[int] = Field(None, ge=1, le=10, description="Publicações diárias desejadas")

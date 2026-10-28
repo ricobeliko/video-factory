@@ -10,6 +10,10 @@ import { getLiveExecutions, getSystemStatus } from './api';
 import FleetView from './components/Fleet/FleetView';
 import ProductionView from './components/Production/ProductionView';
 import SystemView from './components/System/SystemView';
+import {
+  buildSystemChannelHash,
+  parseSystemChannelFromHash,
+} from './components/System/systemEditLogic';
 import './styles.css';
 
 /**
@@ -26,7 +30,7 @@ export default function App() {
   // Navigation tab state (Frota | Factory Live | Agent Ops | Video Review) with URL hash persistence
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== 'undefined') {
-      if (window.location.hash === '#sistema') return 'sistema';
+      if (window.location.hash.startsWith('#sistema')) return 'sistema';
       if (window.location.hash === '#producao') return 'producao';
       if (window.location.hash === '#factory-live') return 'factory-live';
       if (window.location.hash === '#agent-ops') return 'agent-ops';
@@ -34,6 +38,13 @@ export default function App() {
       if (window.location.hash === '#frota') return 'frota';
     }
     return 'frota';
+  });
+
+  const [systemFocusChannelId, setSystemFocusChannelId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return parseSystemChannelFromHash(window.location.hash);
+    }
+    return null;
   });
 
   const [channels, setChannels] = useState([]);
@@ -142,8 +153,9 @@ export default function App() {
     const handleHashChange = () => {
       if (typeof window !== 'undefined') {
         const hash = window.location.hash;
-        if (hash === '#sistema') {
+        if (hash.startsWith('#sistema')) {
           setActiveTab('sistema');
+          setSystemFocusChannelId(parseSystemChannelFromHash(hash));
         } else if (hash === '#producao') {
           setActiveTab('producao');
         } else if (hash === '#agent-ops') {
@@ -163,6 +175,9 @@ export default function App() {
 
   const handleSelectTab = (tab) => {
     setActiveTab(tab);
+    if (tab !== 'sistema') {
+      setSystemFocusChannelId(null);
+    }
     if (typeof window !== 'undefined') {
       window.location.hash =
         tab === 'sistema'
@@ -176,6 +191,15 @@ export default function App() {
           : tab === 'factory-live'
           ? '#factory-live'
           : '#frota';
+    }
+  };
+
+  const handleEditInSystem = (profileId) => {
+    setIsDrawerOpen(false);
+    setSystemFocusChannelId(profileId || null);
+    setActiveTab('sistema');
+    if (typeof window !== 'undefined') {
+      window.location.hash = buildSystemChannelHash(profileId);
     }
   };
 
@@ -199,7 +223,12 @@ export default function App() {
     return <ProductionView onNavigate={handleSelectTab} />;
   }
   if (activeTab === 'sistema') {
-    return <SystemView onNavigate={handleSelectTab} />;
+    return (
+      <SystemView
+        onNavigate={handleSelectTab}
+        focusChannelId={systemFocusChannelId}
+      />
+    );
   }
 
   return (
@@ -339,6 +368,7 @@ export default function App() {
         selectedStage={drawerStage}
         onRefresh={pollData}
         isPaused={Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED')}
+        onEditInSystem={handleEditInSystem}
       />
         </>
       )}

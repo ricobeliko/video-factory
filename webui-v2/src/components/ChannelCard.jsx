@@ -40,10 +40,13 @@ export default function ChannelCard({
   const secondarySubtitle = `${platformLabel} • ${channel_id || profile_id}`;
   const profileMeta = `Perfil: ${profile_id || 'default'}`;
 
-  // Ready Stock real mathematical percentage calculation
-  const stockCount = typeof ready_stock === 'number' ? ready_stock : (channel.stock || 0);
+  // Ready Stock real mathematical percentage calculation (null -> '—', never 0)
+  const stockCount = typeof ready_stock === 'number'
+    ? ready_stock
+    : (typeof channel.stock === 'number' ? channel.stock : null);
+  const stockDisplay = stockCount !== null ? stockCount : '—';
   const hasTargetStock = typeof target_stock === 'number' && target_stock > 0;
-  const stockPct = hasTargetStock
+  const stockPct = (hasTargetStock && stockCount !== null)
     ? Math.min(100, Math.round((stockCount / target_stock) * 100))
     : null;
 
@@ -127,7 +130,7 @@ export default function ChannelCard({
           <div className="channel-stock-header">
             <span className="stock-title">Estoque Pronto</span>
             <div className="stock-values">
-              <strong>{hasTargetStock ? `${stockCount} / ${target_stock}` : stockCount}</strong>
+              <strong>{hasTargetStock ? `${stockDisplay} / ${target_stock}` : stockDisplay}</strong>
               {stockPct !== null && (
                 <span className="stock-pct-badge" style={{ color: stockBarColor }}>
                   {stockPct}%
@@ -140,7 +143,7 @@ export default function ChannelCard({
               <div
                 className="stock-progress-fill"
                 style={{
-                  width: `${stockPct}%`,
+                  width: `${stockPct ?? 0}%`,
                   backgroundColor: stockBarColor,
                 }}
               />

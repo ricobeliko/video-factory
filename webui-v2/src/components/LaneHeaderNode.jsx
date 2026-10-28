@@ -35,10 +35,11 @@ export default function LaneHeaderNode({ data }) {
   const platformLabel = data.platform === 'tiktok' ? 'TikTok' : 'YouTube';
   const secondaryDetails = `${platformLabel} • ${channelId || profileId}`;
 
-  // Ready Stock real percentage
-  const stockCount = typeof readyStock === 'number' ? readyStock : 0;
+  // Ready Stock real percentage (null -> '—', never 0)
+  const stockCount = typeof readyStock === 'number' ? readyStock : null;
+  const stockDisplay = stockCount !== null ? stockCount : '—';
   const hasTargetStock = typeof targetStock === 'number' && targetStock > 0;
-  const stockPct = hasTargetStock
+  const stockPct = (hasTargetStock && stockCount !== null)
     ? Math.min(100, Math.round((stockCount / targetStock) * 100))
     : null;
 
@@ -118,7 +119,7 @@ export default function LaneHeaderNode({ data }) {
             className="mini-badge stock"
             title="Estoque pronto para agendamento/publicação"
           >
-            Estoque: {hasTargetStock ? `${stockCount} / ${targetStock}` : stockCount}
+            Estoque: {hasTargetStock ? `${stockDisplay} / ${targetStock}` : stockDisplay}
             {stockPct !== null && ` (${stockPct}%)`}
           </span>
 

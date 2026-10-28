@@ -3944,6 +3944,7 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
 
         if "content_profiles" not in existing_tables:
             return {
+                "factory_state": get_factory_state(db_path=effective_db),
                 "totals": {
                     "total_channels": 0,
                     "active_channels": 0,
@@ -3971,13 +3972,14 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             ).fetchall()
         ]
 
-        # C. Autopilot Settings
+        # C. Autopilot Settings (para estados efêmeros e disjuntor)
         settings_map: Dict[str, str] = {}
         if "autopilot_settings" in existing_tables:
             rows = conn.execute("SELECT key, value FROM autopilot_settings;").fetchall()
             settings_map = {r["key"]: str(r["value"]) for r in rows if r["key"] is not None}
 
-        factory_state = str(settings_map.get("factory_state", FACTORY_STATE_RUNNING)).strip().upper()
+        # 5. Estado da fábrica via fonte canônica (get_factory_state)
+        factory_state = get_factory_state(db_path=effective_db)
         is_factory_paused = factory_state in ("PAUSED", "EMERGENCY_PAUSED")
 
         # Janela de tempo de 24 horas para falhas e aprovações
@@ -4026,41 +4028,10 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
                 published_today[pid] = int(r["today_cnt"] or 0)
                 pub_failed_counts[pid] = int(r["failed_24h"] or 0)
 
-        # F. Ready Stock & Tasks agregados via SQLite
-        sqlite_ready: Dict[str, int] = {}
+        # F. Tasks agregadas via SQLite (apenas pending e failed nas últimas 24h; ready_stock é exclusivamente canônico)
         sqlite_pending: Dict[str, int] = {}
         sqlite_failed: Dict[str, int] = {}
 
-        # 1) Via monetization_safety + task_profiles se existirem
-        if "monetization_safety" in existing_tables:
-            has_tp = "task_profiles" in existing_tables
-            join_tp = "LEFT JOIN task_profiles tp ON tp.task_id = ms.task_id" if has_tp else ""
-            col_pid = "COALESCE(tp.profile_id, 'default')" if has_tp else "'default'"
-
-            sub_excl = ""
-            if "publication_events" in existing_tables and "scheduled_posts" in existing_tables:
-                sub_excl = """
-                  AND ms.task_id NOT IN (
-                      SELECT task_id FROM publication_events WHERE status = 'success'
-                      UNION
-                      SELECT task_id FROM scheduled_posts WHERE status IN ('published', 'cancelled')
-                  )
-                """
-
-            ms_rows = conn.execute(
-                f"""
-                SELECT {col_pid} AS pid, COUNT(DISTINCT ms.task_id) AS cnt
-                FROM monetization_safety ms
-                {join_tp}
-                WHERE UPPER(ms.safety_status) = 'PASS'
-                {sub_excl}
-                GROUP BY {col_pid};
-                """
-            ).fetchall()
-            for r in ms_rows:
-                sqlite_ready[r["pid"]] = int(r["cnt"])
-
-        # 2) Via tabela tasks se existir (falhas filtradas nas últimas 24h)
         if "tasks" in existing_tables:
             task_cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks);").fetchall()}
             if "created_at" in task_cols and "updated_at" in task_cols:
@@ -4080,7 +4051,6 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
                 f"""
                 SELECT
                     COALESCE(profile_id, 'default') AS pid,
-                    SUM(CASE WHEN state = 2 AND (safety_status IS NULL OR UPPER(safety_status) != 'FAIL') THEN 1 ELSE 0 END) AS ready_cnt,
                     SUM(CASE WHEN state IN (0, 1) THEN 1 ELSE 0 END) AS pending_cnt,
                     SUM(CASE WHEN state = 3 {time_filter} THEN 1 ELSE 0 END) AS failed_cnt
                 FROM tasks
@@ -4090,44 +4060,10 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             ).fetchall()
             for r in t_rows:
                 pid = r["pid"]
-                sqlite_ready[pid] = max(sqlite_ready.get(pid, 0), int(r["ready_cnt"] or 0))
                 sqlite_pending[pid] = max(sqlite_pending.get(pid, 0), int(r["pending_cnt"] or 0))
                 sqlite_failed[pid] = max(sqlite_failed.get(pid, 0), int(r["failed_cnt"] or 0))
 
-        # G. Aprovação 24h via operational_events se existir
-        approved_24h: Dict[str, int] = {}
-        attempts_24h: Dict[str, int] = {}
-        if "operational_events" in existing_tables:
-            has_tp = "task_profiles" in existing_tables
-            join_tp = "LEFT JOIN task_profiles tp ON tp.task_id = o.task_id" if has_tp else ""
-            col_pid = "COALESCE(tp.profile_id, json_extract(o.metadata_json, '$.profile_id'), 'default')" if has_tp else "COALESCE(json_extract(o.metadata_json, '$.profile_id'), 'default')"
-
-            op_rows = conn.execute(
-                f"""
-                SELECT {col_pid} AS pid, o.event_type, COUNT(*) as cnt
-                FROM operational_events o
-                {join_tp}
-                WHERE o.timestamp >= ?
-                  AND o.event_type IN (
-                      'generation_approved', 'task_approved_and_scheduled', 'task_waiting_schedule',
-                      'task_gate_rejected', 'generation_failed', 'generation_started'
-                  )
-                GROUP BY {col_pid}, o.event_type;
-                """,
-                (h24_ago_iso,),
-            ).fetchall()
-            for r in op_rows:
-                pid = r["pid"]
-                ev = r["event_type"]
-                cnt = int(r["cnt"])
-                if ev in ("generation_approved", "task_approved_and_scheduled", "task_waiting_schedule"):
-                    approved_24h[pid] = approved_24h.get(pid, 0) + cnt
-                if ev in ("generation_approved", "task_approved_and_scheduled", "task_waiting_schedule", "task_gate_rejected", "generation_failed"):
-                    attempts_24h[pid] = attempts_24h.get(pid, 0) + cnt
-                elif ev == "generation_started":
-                    attempts_24h[pid] = max(attempts_24h.get(pid, 0), cnt)
-
-        # H. Mapeamento task_profiles para tarefas em memória
+        # G. Mapeamento task_profiles para tarefas em memória
         task_prof_map = {}
         task_prof_time = {}
         if "task_profiles" in existing_tables:
@@ -4138,8 +4074,7 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
     finally:
         conn.close()
 
-    # 2. Leitura agregada de tarefas em memória (sem limite rígido 200)
-    mem_ready: Dict[str, int] = {}
+    # 2. Leitura agregada de tarefas em memória (apenas pending e failed; ready_stock é exclusivamente canônico)
     mem_pending: Dict[str, int] = {}
     mem_failed: Dict[str, int] = {}
 
@@ -4164,9 +4099,6 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
                 t_time = t.get("failed_at") or t.get("updated_at") or t.get("created_at") or task_prof_time.get(tid)
                 if not t_time or t_time >= h24_ago_iso:
                     mem_failed[pid] = mem_failed.get(pid, 0) + 1
-            elif st == const.TASK_STATE_COMPLETE:
-                if t.get("safety_status") != "FAIL":
-                    mem_ready[pid] = mem_ready.get(pid, 0) + 1
 
     # 3. Consolidação por canal
     channels_data = []
@@ -4192,37 +4124,38 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         # Formato (quiz_dilemma, quiz_paper, traditional, etc.)
         fmt = prof_ctx.get("video_format") or prof_ctx.get("content_style") or "traditional"
 
-        # Autonomous enabled
-        auto_key = "autonomous_mode_enabled" if is_default else f"autonomous_mode_enabled:{pid}"
-        auto_val = settings_map.get(auto_key)
-        if auto_val is not None:
-            autonomous_enabled = str(auto_val).lower() in ("true", "1", "yes")
-        else:
-            autonomous_enabled = bool(prof_ctx.get("autonomous_enabled") if prof_ctx.get("autonomous_enabled") is not None else automation_cfg.get("autonomous_enabled", False))
+        # 4. Modo autônomo por canal: fonte canônica única (autonomous_production.is_profile_autonomous_mode_enabled)
+        autonomous_enabled = autonomous_production.is_profile_autonomous_mode_enabled(
+            profile_id=pid, db_path=effective_db
+        )
 
         # Growth Mode
         growth_mode = (p.get("growth_mode") or prof_ctx.get("growth_mode") or "WARMUP").strip().upper()
 
-        # Target Ready Stock
-        target_key = "autonomous_target_ready_stock" if is_default else f"autonomous_target_ready_stock:{pid}"
-        target_val = settings_map.get(target_key)
-        if target_val is not None:
-            try:
-                target_stock = int(target_val)
-            except (ValueError, TypeError):
-                target_stock = 10 if growth_mode == "SCALE" else 3
-        else:
-            target_stock = prof_ctx.get("target_ready_stock") or automation_cfg.get("target_ready_stock") or (10 if growth_mode == "SCALE" else 3)
-
         # Goal Today (posts por dia configurados)
         goal_today = schedule_cfg.get("posts_per_day") or automation_cfg.get("posts_per_day") or prof_ctx.get("posts_per_day") or 1
 
-        # Estoque pronto: fonte canônica alinhada com get_profile_operations_overview
+        # 1 & 2. Estoque pronto e meta de estoque: fonte canônica única (get_canonical_ready_stock)
+        # Sem fallback para sqlite_ready/mem_ready; falha na leitura -> ready_stock = None + log WARNING.
         try:
             canon = get_canonical_ready_stock(db_path=effective_db, profile_id=pid)
-            ready_stock = int(canon.get("total_ready", 0))
-        except Exception:
-            ready_stock = max(sqlite_ready.get(pid, 0), mem_ready.get(pid, 0))
+            ready_stock: Optional[int] = int(canon["total_ready"])
+            canon_min = canon.get("minimum_threshold")
+            target_stock = (
+                int(canon_min)
+                if canon_min is not None
+                else autonomous_production.get_target_ready_stock(profile_id=pid, db_path=effective_db)
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para o perfil '{pid}': {exc}"
+            )
+            ready_stock = None
+            try:
+                target_stock = autonomous_production.get_target_ready_stock(profile_id=pid, db_path=effective_db)
+            except Exception:
+                target_stock = 5 if growth_mode == "SCALE" else 3
+
         pending_proc = max(sqlite_pending.get(pid, 0), mem_pending.get(pid, 0))
         failed_count = (
             sched_failed_counts.get(pid, 0)
@@ -4232,9 +4165,13 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         sched_count = scheduled_counts.get(pid, 0)
         pub_today_count = published_today.get(pid, 0)
 
-        # Taxa de aprovação 24h
-        app_cnt = approved_24h.get(pid, 0)
-        att_cnt = attempts_24h.get(pid, 0)
+        # 3. Contagens 24h (approved_24h, attempts_24h) via funções canônicas de autonomous_production
+        app_cnt = autonomous_production.count_generations_in_last_24h(
+            now=now_utc, db_path=effective_db, profile_id=pid
+        )
+        att_cnt = autonomous_production.count_generation_attempts_in_last_24h(
+            now=now_utc, db_path=effective_db, profile_id=pid
+        )
         approval_rate_24h = round(app_cnt / att_cnt, 2) if att_cnt > 0 else None
 
         # Last run at
@@ -4291,6 +4228,9 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         elif auto_state == "cooldown":
             status = "attention"
             issue = "Em período de espera (cooldown)"
+        elif ready_stock is None:
+            status = "attention"
+            issue = "Estoque desconhecido (falha na leitura)"
         elif ready_stock == 0:
             status = "attention"
             issue = "Estoque esgotado (0 vídeos prontos)"
@@ -4320,19 +4260,28 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             "scheduled": sched_count,
             "published_today": pub_today_count,
             "goal_today": goal_today,
+            "approved_24h": app_cnt,
+            "attempts_24h": att_cnt,
             "approval_rate_24h": approval_rate_24h,
             "last_run_at": last_run_at,
             "status": status,
             "issue": issue,
         })
 
-    # 4. Totais da Frota
+    # 4. Totais da Frota (se algum canal tem ready_stock = None, total_ready_stock = None para não mascarar erro como número)
+    has_unknown_stock = any(c["ready_stock"] is None for c in channels_data)
+    total_ready_stock: Optional[int] = (
+        None
+        if has_unknown_stock
+        else sum(c["ready_stock"] for c in channels_data if c["ready_stock"] is not None)
+    )
+
     totals = {
         "total_channels": len(channels_data),
         "active_channels": sum(1 for c in channels_data if c["is_active"]),
         "published_today": sum(c["published_today"] for c in channels_data),
         "goal_today": sum(c["goal_today"] for c in channels_data),
-        "total_ready_stock": sum(c["ready_stock"] for c in channels_data),
+        "total_ready_stock": total_ready_stock,
         "channels_running": sum(1 for c in channels_data if c["status"] == "running"),
         "channels_attention": sum(1 for c in channels_data if c["status"] == "attention"),
         "channels_blocked": sum(1 for c in channels_data if c["status"] == "blocked"),
@@ -4341,6 +4290,7 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
     }
 
     return {
+        "factory_state": factory_state,
         "totals": totals,
         "channels": channels_data,
     }

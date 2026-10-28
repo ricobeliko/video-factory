@@ -80,9 +80,15 @@ export default function FactoryLiveGraph({ channel, onSelectChannelTask }) {
       if (executionStatus === 'IDLE') {
         // When channel is in IDLE, NO task is actively traversing the pipeline.
         // Node 9 (READY_STOCK) reflects existing stock, but stages 1..8 and 10..12 are IDLE.
-        if (stageDef.code === 'READY_STOCK' && (channel.ready_stock > 0 || channel.stock > 0)) {
+        const stockVal = typeof channel.ready_stock === 'number'
+          ? channel.ready_stock
+          : (typeof channel.stock === 'number' ? channel.stock : null);
+        if (stageDef.code === 'READY_STOCK' && stockVal !== null && stockVal > 0) {
           stageStatus = 'IDLE';
-          provider = `${channel.ready_stock || channel.stock} em estoque`;
+          provider = `${stockVal} em estoque`;
+        } else if (stageDef.code === 'READY_STOCK' && channel.ready_stock === null) {
+          stageStatus = 'IDLE';
+          provider = 'Estoque: —';
         } else {
           stageStatus = 'IDLE';
         }

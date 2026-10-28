@@ -150,6 +150,56 @@ export function formatApprovalRate(rate) {
 }
 
 /**
+ * Formats channel ready_stock and target_stock safely, treating null/undefined as unknown ('—')
+ * without masquerading errors as 0 or triggering low-stock warning colors.
+ */
+export function formatReadyStock(readyStock, targetStock = null) {
+  const hasTarget = typeof targetStock === 'number' && !isNaN(targetStock) && targetStock > 0;
+  const targetDisplay = hasTarget ? String(targetStock) : '—';
+
+  if (readyStock === null || readyStock === undefined || typeof readyStock !== 'number' || isNaN(readyStock)) {
+    return {
+      isUnknown: true,
+      readyDisplay: '—',
+      targetDisplay,
+      label: hasTarget ? `—/${targetDisplay}` : '—',
+      pct: 0,
+      barColor: '#6B7385',
+    };
+  }
+
+  const pct = hasTarget ? Math.min(100, Math.round((readyStock / targetStock) * 100)) : 0;
+  const barColor = readyStock <= 1 ? '#F5B546' : 'var(--fleet-accent)';
+
+  return {
+    isUnknown: false,
+    readyDisplay: String(readyStock),
+    targetDisplay,
+    label: hasTarget ? `${readyStock}/${targetDisplay}` : String(readyStock),
+    pct,
+    barColor,
+  };
+}
+
+/**
+ * Formats fleet total_ready_stock safely (null/undefined -> '—').
+ */
+export function formatTotalReadyStock(totalReadyStock, isLoading = false) {
+  if (isLoading || totalReadyStock === null || totalReadyStock === undefined || typeof totalReadyStock !== 'number' || isNaN(totalReadyStock)) {
+    return {
+      isUnknown: true,
+      display: '—',
+      barWidth: '0%',
+    };
+  }
+  return {
+    isUnknown: false,
+    display: String(totalReadyStock),
+    barWidth: totalReadyStock > 0 ? '100%' : '0%',
+  };
+}
+
+/**
  * Sorts channels by severity (gravity) first, then alphabetically by name:
  * 1. blocked (severity 1)
  * 2. attention (severity 2)

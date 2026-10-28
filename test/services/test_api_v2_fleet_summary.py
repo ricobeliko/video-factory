@@ -168,21 +168,22 @@ class TestApiV2FleetSummary(unittest.TestCase):
                 (now_iso,),
             )
 
-            # Operational events (para approval_rate_24h de default: 3 aprovados, 1 rejeitado -> 0.75)
+            # Operational events (para approval_rate_24h de default: 4 tentativas iniciadas, 3 aprovadas, 1 rejeitada -> 0.75)
+            for idx in range(4):
+                conn.execute(
+                    "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                    "VALUES (?, 'autonomous_production', 'INFO', 'generation_started', ?, 'started', ?);",
+                    (now_iso, f"task-attempt-{idx}", json.dumps({"profile_id": "default"})),
+                )
+            for idx in range(3):
+                conn.execute(
+                    "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                    "VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', ?, 'approved', ?);",
+                    (now_iso, f"task-attempt-{idx}", json.dumps({"profile_id": "default"})),
+                )
             conn.execute(
-                "INSERT INTO operational_events (timestamp, component, severity, event_type, message, metadata_json) VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', 'approved', ?);",
-                (now_iso, json.dumps({"profile_id": "default"})),
-            )
-            conn.execute(
-                "INSERT INTO operational_events (timestamp, component, severity, event_type, message, metadata_json) VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', 'approved', ?);",
-                (now_iso, json.dumps({"profile_id": "default"})),
-            )
-            conn.execute(
-                "INSERT INTO operational_events (timestamp, component, severity, event_type, message, metadata_json) VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', 'approved', ?);",
-                (now_iso, json.dumps({"profile_id": "default"})),
-            )
-            conn.execute(
-                "INSERT INTO operational_events (timestamp, component, severity, event_type, message, metadata_json) VALUES (?, 'autonomous_production', 'WARNING', 'task_gate_rejected', 'rejected', ?);",
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                "VALUES (?, 'autonomous_production', 'WARNING', 'task_gate_rejected', 'task-attempt-3', 'rejected', ?);",
                 (now_iso, json.dumps({"profile_id": "default"})),
             )
 
@@ -455,3 +456,103 @@ class TestApiV2FleetSummary(unittest.TestCase):
             summary = operator_console.get_fleet_summary(db_path=self.db_path)
             c_def = next(c for c in summary["channels"] if c["profile_id"] == "default")
             self.assertEqual(c_def["failed"], 2, "Apenas falhas das últimas 24h devem ser contadas")
+
+    def test_single_source_canonical_parity_and_reschedule_exclusion(self):
+        """8. Cada campo da Frota == função canônica no mesmo banco; reagendamento antigo não infla approved_24h."""
+        from datetime import timedelta
+        from app.services import autonomous_production
+
+        now_dt = datetime.now(timezone.utc)
+        recent_iso = now_dt.isoformat()
+        old_iso = (now_dt - timedelta(days=5)).isoformat()
+
+        with scheduler.get_connection(self.db_path) as conn:
+            # Remove target customizado de profile-quiz-paper (SCALE) para provar default canônico = 5 (e não 10)
+            conn.execute("DELETE FROM autopilot_settings WHERE key = 'autonomous_target_ready_stock:profile-quiz-paper';")
+
+            # Cria tarefa antiga de profile-quiz-paper gerada há 5 dias e reagendada hoje:
+            # NÃO pode inflar approved_24h nem attempts_24h
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES ('task-old-resched', 'profile-quiz-paper', ?);",
+                (old_iso,),
+            )
+            conn.execute(
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                "VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'task-old-resched', 'old start', ?);",
+                (old_iso, json.dumps({"profile_id": "profile-quiz-paper"})),
+            )
+            conn.execute(
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                "VALUES (?, 'autonomous_production', 'INFO', 'task_approved_and_scheduled', 'task-old-resched', 'Persisted approval scheduled.', ?);",
+                (recent_iso, json.dumps({"profile_id": "profile-quiz-paper"})),
+            )
+            conn.execute(
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                "VALUES (?, 'autonomous_production', 'INFO', 'task_waiting_schedule', 'task-old-resched', 'waiting schedule', ?);",
+                (recent_iso, json.dumps({"profile_id": "profile-quiz-paper"})),
+            )
+
+            # Cria 1 tarefa NOVA iniciada e aprovada nas últimas 24h para profile-quiz-paper
+            conn.execute(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES ('task-new-paper-1', 'profile-quiz-paper', ?);",
+                (recent_iso,),
+            )
+            conn.execute(
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                "VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'task-new-paper-1', 'new start', ?);",
+                (recent_iso, json.dumps({"profile_id": "profile-quiz-paper"})),
+            )
+            conn.execute(
+                "INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json) "
+                "VALUES (?, 'autonomous_production', 'INFO', 'task_approved_and_scheduled', 'task-new-paper-1', 'approved and scheduled', ?);",
+                (recent_iso, json.dumps({"profile_id": "profile-quiz-paper"})),
+            )
+
+        summary = operator_console.get_fleet_summary(db_path=self.db_path)
+        self.assertEqual(
+            summary["factory_state"],
+            operator_console.get_factory_state(db_path=self.db_path),
+        )
+
+        for ch in summary["channels"]:
+            pid = ch["profile_id"]
+            canon_stock = operator_console.get_canonical_ready_stock(db_path=self.db_path, profile_id=pid)
+            canon_app_24h = autonomous_production.count_generations_in_last_24h(db_path=self.db_path, profile_id=pid)
+            canon_att_24h = autonomous_production.count_generation_attempts_in_last_24h(db_path=self.db_path, profile_id=pid)
+            canon_auto = autonomous_production.is_profile_autonomous_mode_enabled(profile_id=pid, db_path=self.db_path)
+
+            self.assertEqual(ch["ready_stock"], canon_stock["total_ready"], f"ready_stock divergente em {pid}")
+            self.assertEqual(ch["target_stock"], canon_stock["minimum_threshold"], f"target_stock divergente em {pid}")
+            self.assertEqual(ch["approved_24h"], canon_app_24h, f"approved_24h divergente em {pid}")
+            self.assertEqual(ch["attempts_24h"], canon_att_24h, f"attempts_24h divergente em {pid}")
+            self.assertEqual(ch["autonomous_enabled"], canon_auto, f"autonomous_enabled divergente em {pid}")
+
+        c_paper = next(c for c in summary["channels"] if c["profile_id"] == "profile-quiz-paper")
+        # Default SCALE sem chave em autopilot_settings usa 5 (valor real do laço autônomo)
+        self.assertEqual(c_paper["target_stock"], 5)
+        # Reagendamento antigo NÃO inflou approved_24h: conta apenas a 1 geração nova
+        self.assertEqual(c_paper["approved_24h"], 1)
+        self.assertEqual(c_paper["attempts_24h"], 1)
+        self.assertEqual(c_paper["approval_rate_24h"], 1.0)
+
+    def test_ready_stock_failure_returns_none_logs_warning_and_does_not_break_api(self):
+        """9. Falha em get_canonical_ready_stock => ready_stock = None, log WARNING e API retorna 200 sem fallback falso."""
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.get_canonical_ready_stock", side_effect=RuntimeError("disk I/O error")), \
+             patch.object(operator_console.logger, "warning") as mock_warn:
+
+            resp = self.client.get("/api/v2/fleet/summary")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json().get("data", {})
+
+            self.assertIsNone(data["totals"]["total_ready_stock"])
+            for ch in data["channels"]:
+                self.assertIsNone(ch["ready_stock"], f"ready_stock deveria ser None em caso de erro ({ch['profile_id']})")
+                self.assertIsInstance(ch["target_stock"], int)
+
+            c_def = next(c for c in data["channels"] if c["profile_id"] == "default")
+            self.assertEqual(c_def["status"], "attention")
+            self.assertIn("Estoque desconhecido", c_def["issue"])
+            self.assertGreaterEqual(mock_warn.call_count, 1)

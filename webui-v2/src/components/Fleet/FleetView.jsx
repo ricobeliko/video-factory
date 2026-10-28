@@ -5,6 +5,8 @@ import {
   formatVideoFormat,
   formatRelativeTime,
   formatApprovalRate,
+  formatReadyStock,
+  formatTotalReadyStock,
   sortChannelsBySeverity,
   getAttentionList,
   filterChannels,
@@ -339,24 +341,29 @@ export default function FleetView({ onNavigate }) {
           </div>
 
           {/* KPI 3: Estoque pronto total */}
-          <div className="fleet-kpi-card">
-            <span className="fleet-kpi-label">Estoque pronto total</span>
-            <div className="fleet-kpi-value-row">
-              <span className="fleet-mono fleet-kpi-value" style={{ color: '#E8EBF1' }}>
-                {totals.total_ready_stock ?? (isLoading ? '—' : 0)}
-              </span>
-              <span className="fleet-mono fleet-kpi-sub">vídeos</span>
-            </div>
-            <div className="fleet-kpi-bar-track">
-              <div
-                className="fleet-kpi-bar-fill"
-                style={{
-                  width: totals.total_ready_stock ? '100%' : '0%',
-                  backgroundColor: 'var(--fleet-accent)',
-                }}
-              />
-            </div>
-          </div>
+          {(() => {
+            const totalStockFmt = formatTotalReadyStock(totals.total_ready_stock, isLoading);
+            return (
+              <div className="fleet-kpi-card">
+                <span className="fleet-kpi-label">Estoque pronto total</span>
+                <div className="fleet-kpi-value-row">
+                  <span className="fleet-mono fleet-kpi-value" style={{ color: '#E8EBF1' }}>
+                    {totalStockFmt.display}
+                  </span>
+                  <span className="fleet-mono fleet-kpi-sub">vídeos</span>
+                </div>
+                <div className="fleet-kpi-bar-track">
+                  <div
+                    className="fleet-kpi-bar-fill"
+                    style={{
+                      width: totalStockFmt.barWidth,
+                      backgroundColor: 'var(--fleet-accent)',
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
 
           {/* KPI 4: Produzindo agora */}
           <div className="fleet-kpi-card">
@@ -635,9 +642,7 @@ export default function FleetView({ onNavigate }) {
                     const isSelected = selectedChannelId === id;
                     const st = formatStatus(ch.status);
                     const fmt = formatVideoFormat(ch.format);
-                    const targetStock = ch.target_stock || 10;
-                    const readyStock = ch.ready_stock || 0;
-                    const stockPct = targetStock > 0 ? Math.min(100, Math.round((readyStock / targetStock) * 100)) : 0;
+                    const stockFmt = formatReadyStock(ch.ready_stock, ch.target_stock);
                     const appr = formatApprovalRate(ch.approval_rate_24h);
                     const lastRun = formatRelativeTime(ch.last_run_at);
 
@@ -676,13 +681,13 @@ export default function FleetView({ onNavigate }) {
                             <div
                               className="fleet-stock-fill"
                               style={{
-                                width: `${stockPct}%`,
-                                backgroundColor: readyStock <= 1 ? '#F5B546' : 'var(--fleet-accent)',
+                                width: `${stockFmt.pct}%`,
+                                backgroundColor: stockFmt.barColor,
                               }}
                             />
                           </div>
                           <span className="fleet-mono fleet-stock-val">
-                            {readyStock}/{targetStock}
+                            {stockFmt.label}
                           </span>
                         </div>
 
@@ -811,8 +816,8 @@ export default function FleetView({ onNavigate }) {
                 <div className="fleet-stat-card">
                   <div className="fleet-stat-label">Estoque pronto</div>
                   <div className="fleet-mono fleet-stat-value">
-                    {selectedChannel.ready_stock ?? 0}
-                    <span className="fleet-stat-sub"> / {selectedChannel.target_stock ?? 10}</span>
+                    {formatReadyStock(selectedChannel.ready_stock, selectedChannel.target_stock).readyDisplay}
+                    <span className="fleet-stat-sub"> / {formatReadyStock(selectedChannel.ready_stock, selectedChannel.target_stock).targetDisplay}</span>
                   </div>
                 </div>
 

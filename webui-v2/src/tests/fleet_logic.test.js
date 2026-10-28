@@ -5,6 +5,8 @@ import {
   formatVideoFormat,
   formatRelativeTime,
   formatApprovalRate,
+  formatReadyStock,
+  formatTotalReadyStock,
   sortChannelsBySeverity,
   getAttentionList,
   filterChannels,
@@ -154,4 +156,48 @@ test('7. filterChannels filters by chip and search term', () => {
 
   const attentionChannels = filterChannels(channels, { filter: 'attention' });
   assert.strictEqual(attentionChannels.length, 2);
+});
+
+test('8. formatReadyStock and formatTotalReadyStock handle null/unknown without breaking math or colors', () => {
+  // Unknown ready_stock (null) with valid target_stock
+  const unk = formatReadyStock(null, 5);
+  assert.strictEqual(unk.isUnknown, true);
+  assert.strictEqual(unk.readyDisplay, '—');
+  assert.strictEqual(unk.targetDisplay, '5');
+  assert.strictEqual(unk.label, '—/5');
+  assert.strictEqual(unk.pct, 0);
+  assert.strictEqual(unk.barColor, '#6B7385');
+
+  // Unknown ready_stock (undefined) without target_stock
+  const unkNoTarget = formatReadyStock(undefined, null);
+  assert.strictEqual(unkNoTarget.isUnknown, true);
+  assert.strictEqual(unkNoTarget.label, '—');
+  assert.strictEqual(unkNoTarget.pct, 0);
+
+  // Low stock (0 or 1) -> warning color #F5B546
+  const low = formatReadyStock(1, 5);
+  assert.strictEqual(low.isUnknown, false);
+  assert.strictEqual(low.readyDisplay, '1');
+  assert.strictEqual(low.targetDisplay, '5');
+  assert.strictEqual(low.label, '1/5');
+  assert.strictEqual(low.pct, 20);
+  assert.strictEqual(low.barColor, '#F5B546');
+
+  // Healthy stock (3 of 5) -> accent color and 60%
+  const ok = formatReadyStock(3, 5);
+  assert.strictEqual(ok.isUnknown, false);
+  assert.strictEqual(ok.label, '3/5');
+  assert.strictEqual(ok.pct, 60);
+  assert.strictEqual(ok.barColor, 'var(--fleet-accent)');
+
+  // Total fleet stock null vs number
+  const totUnk = formatTotalReadyStock(null, false);
+  assert.strictEqual(totUnk.isUnknown, true);
+  assert.strictEqual(totUnk.display, '—');
+  assert.strictEqual(totUnk.barWidth, '0%');
+
+  const totOk = formatTotalReadyStock(18, false);
+  assert.strictEqual(totOk.isUnknown, false);
+  assert.strictEqual(totOk.display, '18');
+  assert.strictEqual(totOk.barWidth, '100%');
 });

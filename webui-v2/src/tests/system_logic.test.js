@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   formatFactoryState,
@@ -11,6 +14,9 @@ import {
   formatQuotasDisplay,
   formatScheduleDisplay,
 } from '../components/System/systemLogic.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 test('1. formatFactoryState: rotula estados operacionais e de pausa com texto explicito', () => {
   // Estado RUNNING
@@ -107,7 +113,7 @@ test('4. canToggleFactory: habilita apenas para PRIMARY e gera explicacao para S
   assert.match(absent.reason, /indisponíveis/);
 });
 
-test('5. formatApiError: formata erros em portugues preservando mensagem original da API', () => {
+test('5. formatApiError: formata erros em portugues preservando mensagem original da API (fábrica pausada, ciclo em execução, nó primário)', () => {
   // Erro 403 (Permissão)
   const err403 = { status: 403, message: 'Operation blocked: only primary instance can change factory operational state' };
   const formatted403 = formatApiError(err403, 'pausar a fábrica');
@@ -115,11 +121,19 @@ test('5. formatApiError: formata erros em portugues preservando mensagem origina
   assert.match(formatted403, /nó primário/);
   assert.match(formatted403, /Operation blocked: only primary instance/);
 
-  // Erro 409 (Conflito)
+  // Erro 409 (Conflito: fábrica pausada)
   const err409 = { status: 409, message: 'Operation blocked: factory is paused' };
-  const formatted409 = formatApiError(err409, 'retomar');
+  const formatted409 = formatApiError(err409, 'rodar 1 ciclo da fábrica');
   assert.match(formatted409, /Conflito operacional \(409\)/);
+  assert.match(formatted409, /Fábrica pausada — retome para disparar/);
   assert.match(formatted409, /Operation blocked: factory is paused/);
+
+  // Erro 409 (Conflito: ciclo já em execução)
+  const err409Busy = { status: 409, message: 'Operation blocked: a production cycle is already in progress' };
+  const formatted409Busy = formatApiError(err409Busy, 'rodar 1 ciclo da fábrica');
+  assert.match(formatted409Busy, /Conflito operacional \(409\)/);
+  assert.match(formatted409Busy, /Ciclo de produção já em andamento em segundo plano/);
+  assert.match(formatted409Busy, /already in progress/);
 
   // Erro 500 genérico
   const err500 = new Error('Database disk image is malformed');
@@ -171,4 +185,50 @@ test('7. formatScheduleDisplay: formata janela e fuso horario de agendamento', (
   const emptySched = formatScheduleDisplay(null);
   assert.equal(emptySched.window, '—');
   assert.equal(emptySched.timezone, '—');
+});
+
+test('8. Controle único da fábrica: FactoryHeader sem botões de ação (com atalho Ir para Sistema); Sistema concentra pausar, retomar e rodar 1 ciclo global', () => {
+  const headerPath = path.resolve(__dirname, '../components/FactoryHeader.jsx');
+  const systemPath = path.resolve(__dirname, '../components/System/SystemView.jsx');
+  const drawerPath = path.resolve(__dirname, '../components/ExecutionDrawer.jsx');
+
+  const headerSource = fs.readFileSync(headerPath, 'utf8');
+  const systemSource = fs.readFileSync(systemPath, 'utf8');
+  const drawerSource = fs.readFileSync(drawerPath, 'utf8');
+
+  // FactoryHeader NÃO possui imports nem botões de mutação global da fábrica
+  assert.equal(headerSource.includes('pauseFactory'), false);
+  assert.equal(headerSource.includes('resumeFactory'), false);
+  assert.equal(headerSource.includes('runFactoryCycle'), false);
+  assert.equal(headerSource.includes('factory-toggle-btn'), false);
+  assert.equal(headerSource.includes('factory-cycle-btn'), false);
+  assert.equal(headerSource.includes('⏸ Pausar'), false);
+  assert.equal(headerSource.includes('▶ Retomar'), false);
+  assert.equal(headerSource.includes('⚡ Executar Ciclo'), false);
+
+  // FactoryHeader mantém indicadores de estado e possui atalho "Ir para Sistema"
+  assert.equal(headerSource.includes('Fábrica:'), true);
+  assert.equal(headerSource.includes('Worker:'), true);
+  assert.equal(headerSource.includes('Scheduler:'), true);
+  assert.equal(headerSource.includes('Auto Publish:'), true);
+  assert.equal(headerSource.includes('Dry Run:'), true);
+  assert.equal(headerSource.includes('Ir para Sistema'), true);
+  assert.equal(headerSource.includes("onSelectTab('sistema')"), true);
+
+  // SystemView (seção Controle da Fábrica) concentra pausar, retomar e rodar 1 ciclo global com confirmação
+  assert.equal(systemSource.includes('Controle da Fábrica'), true);
+  assert.equal(systemSource.includes('pauseFactory'), true);
+  assert.equal(systemSource.includes('resumeFactory'), true);
+  assert.equal(systemSource.includes('runFactoryCycle({ force: true, oneShot: true })'), true);
+  assert.equal(systemSource.includes('⏸ Pausar Fábrica'), true);
+  assert.equal(systemSource.includes('▶ Retomar Fábrica'), true);
+  assert.equal(systemSource.includes('⚡ Rodar 1 ciclo'), true);
+  assert.equal(systemSource.includes('Confirmar Pausa'), true);
+  assert.equal(systemSource.includes('Confirmar Retomada'), true);
+  assert.equal(systemSource.includes('Confirmar Disparo'), true);
+  assert.equal(systemSource.includes('Disparar ciclo autônomo agora?'), true);
+
+  // ExecutionDrawer mantém apenas o "Disparar Ciclo do Canal" (por canal)
+  assert.equal(drawerSource.includes('Disparar Ciclo do Canal'), true);
+  assert.equal(drawerSource.includes('profileId: channelData?.profile_id'), true);
 });

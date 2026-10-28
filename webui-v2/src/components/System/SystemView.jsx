@@ -13,6 +13,7 @@ import {
   getAllowedVoices,
   pauseFactory,
   resumeFactory,
+  runFactoryCycle,
 } from '../../api';
 import {
   formatFactoryState,
@@ -58,7 +59,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const [error, setError] = useState(null);
   const [actionFeedback, setActionFeedback] = useState(null);
   const [isActionPending, setIsActionPending] = useState(false);
-  const [confirmDialog, setConfirmDialog] = useState(null); // { type: 'pause' | 'resume' }
+  const [confirmDialog, setConfirmDialog] = useState(null); // 'pause' | 'resume' | 'run-cycle' | null
 
   // Estados de Edição de Ajustes por Canal (SIS2 + Controles Únicos)
   const [editingChannelId, setEditingChannelId] = useState(null);
@@ -223,17 +224,29 @@ export default function SystemView({ onNavigate, focusChannelId }) {
           type: 'success',
           text: 'Fábrica pausada com sucesso. Tarefas em andamento continuam até o fim; novas tarefas foram bloqueadas.',
         });
-      } else {
+      } else if (action === 'resume') {
         await resumeFactory();
         setActionFeedback({
           type: 'success',
           text: 'Fábrica retomada com sucesso. Processamento e ciclos autônomos reabilitados.',
         });
+      } else if (action === 'run-cycle') {
+        await runFactoryCycle({ force: true, oneShot: true });
+        setActionFeedback({
+          type: 'success',
+          text: 'Ciclo disparado com sucesso. Processamento autônomo supervisionado iniciado em segundo plano.',
+        });
       }
       setConfirmDialog(null);
       await fetchData();
     } catch (err) {
-      const errText = formatApiError(err, action === 'pause' ? 'pausar a fábrica' : 'retomar a fábrica');
+      const actionLabel =
+        action === 'pause'
+          ? 'pausar a fábrica'
+          : action === 'resume'
+          ? 'retomar a fábrica'
+          : 'rodar 1 ciclo da fábrica';
+      const errText = formatApiError(err, actionLabel);
       setActionFeedback({
         type: 'error',
         text: errText,
@@ -632,7 +645,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
             <div className="sys-card-header">
               <div className="sys-card-title-group">
                 <span className="sys-card-icon" aria-hidden="true">🏭</span>
-                <h2 id="card-factory-title" className="sys-card-title">Fábrica</h2>
+                <h2 id="card-factory-title" className="sys-card-title">Controle da Fábrica</h2>
               </div>
               <span className={`sys-state-badge sys-state-badge--${factoryStateInfo.variant}`}>
                 {factoryStateInfo.label}
@@ -709,7 +722,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                 </span>
               </div>
 
-              {/* Botão Grande de Pausar/Retomar Fábrica */}
+              {/* Botões Globais de Controle da Fábrica (Pausar/Retomar e Rodar 1 ciclo) */}
               <div className="sys-factory-action-area">
                 <button
                   type="button"
@@ -721,11 +734,30 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   title={togglePermission.reason || (isPaused ? 'Retomar operações' : 'Pausar fábrica')}
                   aria-label={isPaused ? 'Retomar fábrica' : 'Pausar fábrica'}
                 >
-                  {isActionPending
+                  {isActionPending && confirmDialog !== 'run-cycle'
                     ? 'Processando...'
                     : isPaused
                     ? '▶ Retomar Fábrica'
                     : '⏸ Pausar Fábrica'}
+                </button>
+
+                <button
+                  type="button"
+                  className="sys-big-btn sys-big-btn--cycle"
+                  disabled={!togglePermission.canToggle || isActionPending || isPaused}
+                  onClick={() => handleOpenConfirm('run-cycle')}
+                  title={
+                    !togglePermission.canToggle
+                      ? togglePermission.reason
+                      : isPaused
+                      ? 'Fábrica pausada — retome antes de disparar'
+                      : 'Disparar ciclo de produção autônoma supervisionado'
+                  }
+                  aria-label="Rodar 1 ciclo global da fábrica"
+                >
+                  {isActionPending && confirmDialog === 'run-cycle'
+                    ? 'Processando...'
+                    : '⚡ Rodar 1 ciclo'}
                 </button>
 
                 {!togglePermission.canToggle && (
@@ -1453,7 +1485,11 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         >
           <div className="sys-modal">
             <h3 id="confirm-modal-title" className="sys-modal-title">
-              {confirmDialog === 'pause' ? '⏸ Pausar Fábrica' : '▶ Retomar Fábrica'}
+              {confirmDialog === 'pause'
+                ? '⏸ Pausar Fábrica'
+                : confirmDialog === 'resume'
+                ? '▶ Retomar Fábrica'
+                : '⚡ Rodar 1 ciclo'}
             </h3>
 
             <p className="sys-modal-text">
@@ -1464,11 +1500,18 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                     Isso não interrompe o vídeo em andamento; tarefas em processamento concluem normalmente, mas novas execuções e ciclos automáticos deixam de ser iniciados.
                   </span>
                 </>
-              ) : (
+              ) : confirmDialog === 'resume' ? (
                 <>
                   Deseja retomar a fábrica?{' '}
                   <span className="sys-modal-highlight">
                     O agendador e os ciclos autônomos voltarão a iniciar e processar novas tarefas normalmente.
+                  </span>
+                </>
+              ) : (
+                <>
+                  Disparar ciclo autônomo agora?{' '}
+                  <span className="sys-modal-highlight">
+                    Isso executará 1 ciclo supervisionado global de produção autônoma para os canais elegíveis.
                   </span>
                 </>
               )}
@@ -1487,7 +1530,11 @@ export default function SystemView({ onNavigate, focusChannelId }) {
               <button
                 type="button"
                 className={
-                  confirmDialog === 'pause' ? 'sys-btn-confirm-pause' : 'sys-btn-confirm-resume'
+                  confirmDialog === 'pause'
+                    ? 'sys-btn-confirm-pause'
+                    : confirmDialog === 'resume'
+                    ? 'sys-btn-confirm-resume'
+                    : 'sys-btn-confirm-save'
                 }
                 onClick={handleExecuteToggle}
                 disabled={isActionPending}
@@ -1496,7 +1543,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   ? 'Processando...'
                   : confirmDialog === 'pause'
                   ? 'Confirmar Pausa'
-                  : 'Confirmar Retomada'}
+                  : confirmDialog === 'resume'
+                  ? 'Confirmar Retomada'
+                  : 'Confirmar Disparo'}
               </button>
             </div>
           </div>

@@ -497,6 +497,29 @@ def save_validated_voice_name(voice_name: str, selected_tts_server: str) -> bool
     return False
 
 
+def _on_voice_name_changed(selected_tts_server: str | None = None) -> bool:
+    """Persiste voice_name somente quando o operador altera explicitamente o seletor."""
+    if not selected_tts_server:
+        tts_server_wkey = localized_widget_key("tts_server_select")
+        selected_tts_server = (
+            st.session_state.get(tts_server_wkey)
+            or st.session_state.get("tts_server_select")
+            or config.ui.get("tts_server", "azure-tts-v1")
+            or "azure-tts-v1"
+        )
+    base_key = f"speech_synthesis_select_{selected_tts_server}"
+    widget_key = localized_widget_key(base_key)
+    if widget_key in st.session_state:
+        selected_voice = st.session_state.get(widget_key)
+    else:
+        selected_voice = st.session_state.get(base_key, "")
+    if selected_tts_server == "minimax-tts":
+        custom_voice_id = str(selected_voice or "").strip()
+        if custom_voice_id and not voice.is_minimax_voice(custom_voice_id):
+            selected_voice = f"minimax:{custom_voice_id}"
+    return save_validated_voice_name(str(selected_voice or ""), selected_tts_server)
+
+
 def save_validated_voice_rate(voice_rate: Any) -> bool:
     """Valida e persiste config.ui['voice_rate'] de forma fail-closed e idempotente."""
     if not is_valid_ui_voice_rate(voice_rate):
@@ -7203,6 +7226,8 @@ def _render_audio_settings(panel, params):
                     # MiniMax 支持用户直接输入列表外的克隆或生成音色 ID；其它
                     # Provider 维持原选择器行为，不扩大本次修改的影响范围。
                     accept_new_options=selected_tts_server == "minimax-tts",
+                    on_change=_on_voice_name_changed,
+                    args=(selected_tts_server,),
                 )
 
                 if selected_tts_server == "minimax-tts":
@@ -7217,10 +7242,6 @@ def _render_audio_settings(panel, params):
                         )
 
                 params.voice_name = voice_name
-                if not voice.is_no_voice(voice_name):
-                    # 占位 sentinel 仅用于非自动模式的禁用展示，不覆盖用户上一次
-                    # 真正选择的音色，切回自动配音后可以恢复原设置。
-                    save_validated_voice_name(voice_name, selected_tts_server)
             elif tts_mode_enabled:
                 # 如果没有声音可选，显示提示信息
                 st.warning(

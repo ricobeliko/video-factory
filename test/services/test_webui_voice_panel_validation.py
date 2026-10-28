@@ -10,6 +10,9 @@ Valida os requisitos da missão hotfix/voz-painel-validada:
 7. Renderizar sem interação NÃO chama _set_runtime_config para voice_rate (mesmo com 0.8 em session_state).
 8. Mudança explícita do operador via callback (_on_voice_rate_changed) para valor válido grava com idempotência.
 9. Valor inválido via callback (_on_voice_rate_changed) é recusado e não altera config.ui["voice_rate"].
+10. Renderizar sem interação NÃO chama _set_runtime_config para voice_name (mesmo com voz válida diferente no session_state, ex.: pt-BR-FranciscaNeural), preserva params.voice_name e registra on_change no selectbox de voz.
+11. Mudança explícita via callback (_on_voice_name_changed) para voz válida grava com idempotência.
+12. Voz inválida via callback (_on_voice_name_changed, ex.: af-ZA) é recusada e emite WARNING.
 """
 
 import math
@@ -23,6 +26,7 @@ from app.models.schema import VideoParams
 from webui.Main import (
     VOICE_RATE_MIN,
     VOICE_RATE_MAX,
+    _on_voice_name_changed,
     _on_voice_rate_changed,
     _render_audio_settings,
     is_valid_ui_voice_rate,
@@ -43,6 +47,14 @@ def restore_ui_config():
     orig_wkey_val = st.session_state.get(rate_wkey)
     had_raw_key = "voice_rate_select" in st.session_state
     orig_raw_val = st.session_state.get("voice_rate_select")
+
+    voice_base_key = "speech_synthesis_select_azure-tts-v1"
+    voice_wkey = localized_widget_key(voice_base_key)
+    had_voice_wkey = voice_wkey in st.session_state
+    orig_voice_wkey_val = st.session_state.get(voice_wkey)
+    had_voice_raw = voice_base_key in st.session_state
+    orig_voice_raw_val = st.session_state.get(voice_base_key)
+
     yield
     if orig_voice_name is not None:
         config.ui["voice_name"] = orig_voice_name
@@ -63,6 +75,16 @@ def restore_ui_config():
         st.session_state["voice_rate_select"] = orig_raw_val
     else:
         st.session_state.pop("voice_rate_select", None)
+
+    if had_voice_wkey:
+        st.session_state[voice_wkey] = orig_voice_wkey_val
+    else:
+        st.session_state.pop(voice_wkey, None)
+
+    if had_voice_raw:
+        st.session_state[voice_base_key] = orig_voice_raw_val
+    else:
+        st.session_state.pop(voice_base_key, None)
 
 
 def _apply_runtime_config(section, key, val):
@@ -285,3 +307,94 @@ def test_invalid_voice_rate_via_callback_is_refused():
         mock_set_cfg.assert_not_called()
         assert mock_warn.call_count == len(invalid_values)
         assert math.isclose(float(config.ui["voice_rate"]), 1.1)
+
+
+def test_render_without_interaction_does_not_write_voice_name_even_with_valid_stale_session_voice():
+    """12. Render sem interação NÃO chama _set_runtime_config para voice_name, mesmo com voz válida diferente (Francisca) no session_state, e registra on_change."""
+    config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+    config.ui["voice_rate"] = 1.1
+
+    # Simula aba antiga com outra voz válida (pt-BR-FranciscaNeural-Female) no session_state
+    voice_wkey = localized_widget_key("speech_synthesis_select_azure-tts-v1")
+    st.session_state[voice_wkey] = "pt-BR-FranciscaNeural-Female"
+
+    captured_voice_selectbox_kwargs = {}
+
+    def _fake_selectbox(label, options, **kwargs):
+        key = kwargs.get("key")
+        if key == voice_wkey:
+            captured_voice_selectbox_kwargs.update(kwargs)
+        return st.session_state.get(key, options[0])
+
+    params = VideoParams(video_subject="")
+    with (
+        patch("webui.Main._set_runtime_config", side_effect=_apply_runtime_config) as mock_set_cfg,
+        patch("webui.Main.stable_segmented_control", return_value="tts"),
+        patch("webui.Main.st.selectbox", side_effect=_fake_selectbox),
+        patch("webui.Main.st.columns", side_effect=lambda spec, **kw: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]),
+        patch("webui.Main.st.container", return_value=MagicMock()),
+        patch("webui.Main.st.write"),
+        patch("webui.Main.st.info"),
+        patch("webui.Main._render_voice_preview"),
+        patch("webui.Main._render_background_music_settings", return_value=None),
+        patch(
+            "webui.Main.voice.get_all_azure_voices",
+            return_value=[
+                "af-ZA-AdriNeural-Female",
+                "en-US-BrianMultilingualNeural-Male",
+                "pt-BR-FranciscaNeural-Female",
+            ],
+        ),
+    ):
+        _render_audio_settings(MagicMock(), params)
+
+    # Nenhuma gravação de voice_name durante o render
+    voice_name_writes = [
+        call for call in mock_set_cfg.call_args_list
+        if len(call.args) >= 2 and call.args[0] == "ui" and call.args[1] == "voice_name"
+    ]
+    assert voice_name_writes == []
+    # config.ui["voice_name"] global permanece Brian (não sobrescrito por Francisca da aba antiga)
+    assert config.ui["voice_name"] == "en-US-BrianMultilingualNeural"
+    # params.voice_name da sessão manual continua refletindo o valor retornado pelo selectbox
+    assert params.voice_name == "pt-BR-FranciscaNeural-Female"
+    # O seletor de voz registrou on_change=_on_voice_name_changed
+    assert captured_voice_selectbox_kwargs.get("on_change") is _on_voice_name_changed
+    assert captured_voice_selectbox_kwargs.get("args") == ("azure-tts-v1",)
+
+
+def test_explicit_operator_change_callback_saves_valid_voice_name():
+    """13. Mudança explícita via callback (_on_voice_name_changed) para voz válida grava."""
+    config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+    voice_wkey = localized_widget_key("speech_synthesis_select_azure-tts-v1")
+    st.session_state[voice_wkey] = "pt-BR-FranciscaNeural-Female"
+
+    with patch("webui.Main._set_runtime_config", side_effect=_apply_runtime_config) as mock_set_cfg:
+        result = _on_voice_name_changed("azure-tts-v1")
+        assert result is True
+        mock_set_cfg.assert_called_once_with("ui", "voice_name", "pt-BR-FranciscaNeural")
+        assert config.ui["voice_name"] == "pt-BR-FranciscaNeural"
+
+        # Idempotência: chamar de novo com a mesma voz não grava novamente
+        mock_set_cfg.reset_mock()
+        result_again = _on_voice_name_changed("azure-tts-v1")
+        assert result_again is False
+        mock_set_cfg.assert_not_called()
+
+
+def test_invalid_voice_name_via_callback_is_refused():
+    """14. Voz inválida via callback (_on_voice_name_changed, ex.: af-ZA) é recusada."""
+    config.ui["voice_name"] = "en-US-BrianMultilingualNeural"
+    voice_wkey = localized_widget_key("speech_synthesis_select_azure-tts-v1")
+    st.session_state[voice_wkey] = "af-ZA-AdriNeural-Female"
+
+    with (
+        patch("webui.Main._set_runtime_config") as mock_set_cfg,
+        patch("webui.Main.logger.warning") as mock_warn,
+    ):
+        result = _on_voice_name_changed("azure-tts-v1")
+        assert result is False
+        mock_set_cfg.assert_not_called()
+        assert mock_warn.called
+        assert "af-ZA-AdriNeural" in mock_warn.call_args[0][0]
+        assert config.ui["voice_name"] == "en-US-BrianMultilingualNeural"

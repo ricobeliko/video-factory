@@ -47,7 +47,7 @@ export const STATUS_CONFIG = {
   paused: {
     key: 'paused',
     label: 'Pausado',
-    glyph: '–',
+    glyph: '⏸',
     color: '#9099AA',
     tint: '#171B24',
     sq: '#2A3040',
@@ -230,13 +230,12 @@ export function getAttentionList(channels) {
   const attentionPriorities = {
     blocked: 1,
     attention: 2,
-    paused: 3,
   };
 
   return channels
     .filter((c) => {
       const s = String(c.status || '').toLowerCase();
-      return s === 'blocked' || s === 'attention' || s === 'paused';
+      return s === 'blocked' || s === 'attention';
     })
     .sort((a, b) => {
       const pA = attentionPriorities[String(a.status || '').toLowerCase()] || 99;

@@ -32,7 +32,7 @@ test('1. formatStatus returns accurate Portuguese labels, glyphs and semantic co
 
   const paused = formatStatus('paused');
   assert.strictEqual(paused.label, 'Pausado');
-  assert.strictEqual(paused.glyph, '–');
+  assert.strictEqual(paused.glyph, '⏸');
 
   const unknown = formatStatus('weird_state');
   assert.strictEqual(unknown.label, 'weird_state');
@@ -119,7 +119,7 @@ test('5. sortChannelsBySeverity prioritizes blocked > attention > running > paus
   );
 });
 
-test('6. getAttentionList filters blocked, then attention, then paused', () => {
+test('6. getAttentionList filters blocked, then attention (excluding paused)', () => {
   const channels = [
     { name: 'Healthy 1', status: 'ok' },
     { name: 'Paused 1', status: 'paused' },
@@ -129,10 +129,9 @@ test('6. getAttentionList filters blocked, then attention, then paused', () => {
   ];
 
   const attentionList = getAttentionList(channels);
-  assert.strictEqual(attentionList.length, 3);
+  assert.strictEqual(attentionList.length, 2);
   assert.strictEqual(attentionList[0].name, 'Blocked 1');
   assert.strictEqual(attentionList[1].name, 'Attention 1');
-  assert.strictEqual(attentionList[2].name, 'Paused 1');
 
   // Empty when all are ok
   const allOk = [{ name: 'Ch 1', status: 'ok' }, { name: 'Ch 2', status: 'ok' }];

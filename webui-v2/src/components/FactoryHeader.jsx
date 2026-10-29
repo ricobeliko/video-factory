@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatFactoryState } from './System/systemLogic';
 
 /**
  * FactoryHeader — Top bar displaying system health, workers and sync state (R6A.3 + Controle Único).
@@ -17,8 +18,8 @@ export default function FactoryHeader({
   activeTab = 'factory-live',
   onSelectTab,
 }) {
-  const isPaused = Boolean(systemStatus?.is_paused || systemStatus?.factory_state === 'PAUSED');
-  const factoryState = systemStatus?.factory_state || (isPaused ? 'PAUSED' : 'RUNNING');
+  const factoryStateInfo = formatFactoryState(systemStatus);
+  const isPaused = factoryStateInfo.isPaused;
   const workerRunning = Boolean(systemStatus?.worker_running);
   const schedulerRunning = Boolean(systemStatus?.scheduler_running);
   const autoPublish = Boolean(systemStatus?.auto_publish_enabled);
@@ -81,10 +82,10 @@ export default function FactoryHeader({
         </div>
 
         <div className="header-status-group">
-          {/* 1. Fábrica (RUNNING / PAUSED) — somente leitura */}
-          <div className={`status-pill ${isPaused ? 'pill-paused' : 'pill-online'}`}>
-            <span className={`indicator-dot ${isPaused ? 'inactive' : 'active'}`} />
-            <span>Fábrica: {factoryState === 'PAUSED' ? 'Pausada' : 'Online'}</span>
+          {/* 1. Fábrica (RUNNING / PAUSED / DEGRADED / ERROR) — formatFactoryState único */}
+          <div className={`status-pill ${isPaused ? 'pill-paused' : factoryStateInfo.variant === 'degraded' ? 'pill-degraded' : 'pill-online'}`}>
+            <span className={`indicator-dot ${isPaused ? 'inactive' : factoryStateInfo.variant === 'degraded' ? 'degraded' : 'active'}`} />
+            <span>Fábrica: {factoryStateInfo.text}</span>
           </div>
 
           {/* Atalho para o único lugar de controle global da fábrica (Tela Sistema) */}

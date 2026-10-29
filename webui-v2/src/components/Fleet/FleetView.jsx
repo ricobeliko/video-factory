@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getFleetSummary } from '../../api';
+import { getFleetSummary, createChannel } from '../../api';
+import {
+  validateCreateChannelForm,
+  buildCreateChannelPayload,
+  VIDEO_FORMAT_OPTIONS,
+} from './channelCreationLogic';
 import { formatFactoryState } from '../System/systemLogic';
 import {
   formatStatus,
@@ -27,6 +32,78 @@ export default function FleetView({ onNavigate }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
   const [selectedChannelId, setSelectedChannelId] = useState(null);
+
+  // Estados do Modal de Criação de Canal (Paridade V1->V2 2.7)
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createFormData, setCreateFormData] = useState({
+    name: '',
+    niche: '',
+    video_format: 'traditional',
+    topic_brief: '',
+  });
+  const [createFormErrors, setCreateFormErrors] = useState({});
+  const [isSubmittingChannel, setIsSubmittingChannel] = useState(false);
+  const [createChannelError, setCreateChannelError] = useState(null);
+
+  const handleOpenCreateModal = () => {
+    setCreateFormData({
+      name: '',
+      niche: '',
+      video_format: 'traditional',
+      topic_brief: '',
+    });
+    setCreateFormErrors({});
+    setCreateChannelError(null);
+    setIsCreateModalOpen(true);
+  };
+
+  const handleCloseCreateModal = () => {
+    if (isSubmittingChannel) return;
+    setIsCreateModalOpen(false);
+    setCreateFormErrors({});
+    setCreateChannelError(null);
+  };
+
+  const handleCreateChannelSubmit = async (e) => {
+    if (e) e.preventDefault();
+    const { isValid, errors } = validateCreateChannelForm(createFormData);
+    if (!isValid) {
+      setCreateFormErrors(errors);
+      return;
+    }
+    setIsSubmittingChannel(true);
+    setCreateChannelError(null);
+
+    try {
+      const payload = buildCreateChannelPayload(createFormData);
+      const res = await createChannel(payload);
+      const newProfileId = res?.data?.profile_id;
+
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(
+          'system_action_feedback',
+          JSON.stringify({
+            type: 'success',
+            text: 'Canal criado, desligado. Revise os ajustes e ligue o modo autônomo quando quiser.',
+          })
+        );
+      }
+
+      setIsCreateModalOpen(false);
+
+      const targetHash = `#sistema?channel=${encodeURIComponent(newProfileId || '')}`;
+      if (typeof window !== 'undefined') {
+        window.location.hash = targetHash;
+      }
+      if (onNavigate) {
+        onNavigate('sistema');
+      }
+    } catch (err) {
+      setCreateChannelError(err.message || 'Erro ao cadastrar novo canal.');
+    } finally {
+      setIsSubmittingChannel(false);
+    }
+  };
 
   const isFetchingRef = useRef(false);
   const searchInputRef = useRef(null);
@@ -297,6 +374,13 @@ export default function FleetView({ onNavigate }) {
               precisa de você aparece primeiro.
             </p>
           </div>
+          <button
+            type="button"
+            className="fleet-btn-create-channel"
+            onClick={handleOpenCreateModal}
+          >
+            + Novo Canal
+          </button>
         </div>
 
         {/* 3. 6 Key Indicators (KPIs) */}
@@ -897,6 +981,180 @@ export default function FleetView({ onNavigate }) {
             </aside>
           )}
         </div>
+
+        {/* Modal: Novo Canal (Identidade Editorial Única) */}
+        {isCreateModalOpen && (
+          <div
+            className="fleet-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-channel-title"
+          >
+            <div className="fleet-modal-card">
+              <div className="fleet-modal-header">
+                <div>
+                  <h2 id="create-channel-title" className="fleet-modal-title">
+                    Novo Canal
+                  </h2>
+                  <p className="fleet-modal-subtitle">
+                    Defina a identidade editorial do novo canal. Os ajustes operacionais
+                    (modo de crescimento, cotas, janela, voz e modo autônomo) são
+                    configurados na tela Sistema após o cadastro.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="fleet-modal-close-btn"
+                  onClick={handleCloseCreateModal}
+                  disabled={isSubmittingChannel}
+                  aria-label="Fechar"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateChannelSubmit} className="fleet-modal-form" noValidate>
+                {createChannelError && (
+                  <div className="fleet-modal-error-banner" role="alert">
+                    ⚠️ {createChannelError}
+                  </div>
+                )}
+
+                <div className="fleet-modal-field">
+                  <label htmlFor="create-ch-name" className="fleet-modal-label">
+                    Nome do Canal <span className="fleet-modal-required">*</span>
+                  </label>
+                  <input
+                    id="create-ch-name"
+                    type="text"
+                    className={`fleet-modal-input ${createFormErrors.name ? 'has-error' : ''}`}
+                    value={createFormData.name}
+                    onChange={(e) => {
+                      setCreateFormData((prev) => ({ ...prev, name: e.target.value }));
+                      if (createFormErrors.name) setCreateFormErrors((prev) => ({ ...prev, name: null }));
+                    }}
+                    placeholder="Ex: Curiosidades da História"
+                    disabled={isSubmittingChannel}
+                    autoFocus
+                  />
+                  {createFormErrors.name && (
+                    <span className="fleet-modal-field-error">{createFormErrors.name}</span>
+                  )}
+                </div>
+
+                <div className="fleet-modal-row">
+                  <div className="fleet-modal-field" style={{ flex: 1 }}>
+                    <label htmlFor="create-ch-niche" className="fleet-modal-label">
+                      Nicho <span className="fleet-modal-required">*</span>
+                    </label>
+                    <input
+                      id="create-ch-niche"
+                      type="text"
+                      className={`fleet-modal-input ${createFormErrors.niche ? 'has-error' : ''}`}
+                      value={createFormData.niche}
+                      onChange={(e) => {
+                        setCreateFormData((prev) => ({ ...prev, niche: e.target.value }));
+                        if (createFormErrors.niche) setCreateFormErrors((prev) => ({ ...prev, niche: null }));
+                      }}
+                      placeholder="Ex: historia, games, ciencia"
+                      disabled={isSubmittingChannel}
+                    />
+                    {createFormErrors.niche && (
+                      <span className="fleet-modal-field-error">{createFormErrors.niche}</span>
+                    )}
+                  </div>
+
+                  <div className="fleet-modal-field" style={{ flex: 1 }}>
+                    <label htmlFor="create-ch-lang" className="fleet-modal-label">
+                      Idioma
+                    </label>
+                    <input
+                      id="create-ch-lang"
+                      type="text"
+                      className="fleet-modal-input fleet-modal-input--disabled"
+                      value="pt-BR (Português do Brasil)"
+                      disabled
+                    />
+                  </div>
+                </div>
+
+                <div className="fleet-modal-field">
+                  <label htmlFor="create-ch-format" className="fleet-modal-label">
+                    Formato de Vídeo <span className="fleet-modal-required">*</span>
+                  </label>
+                  <select
+                    id="create-ch-format"
+                    className={`fleet-modal-select ${createFormErrors.video_format ? 'has-error' : ''}`}
+                    value={createFormData.video_format}
+                    onChange={(e) => {
+                      setCreateFormData((prev) => ({ ...prev, video_format: e.target.value }));
+                      if (createFormErrors.video_format) setCreateFormErrors((prev) => ({ ...prev, video_format: null }));
+                    }}
+                    disabled={isSubmittingChannel}
+                  >
+                    {VIDEO_FORMAT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {createFormErrors.video_format && (
+                    <span className="fleet-modal-field-error">{createFormErrors.video_format}</span>
+                  )}
+                </div>
+
+                <div className="fleet-modal-field">
+                  <label htmlFor="create-ch-topic" className="fleet-modal-label">
+                    Tema / Briefing Editorial
+                  </label>
+                  <textarea
+                    id="create-ch-topic"
+                    className={`fleet-modal-textarea ${createFormErrors.topic_brief ? 'has-error' : ''}`}
+                    value={createFormData.topic_brief}
+                    onChange={(e) => {
+                      setCreateFormData((prev) => ({ ...prev, topic_brief: e.target.value }));
+                      if (createFormErrors.topic_brief) setCreateFormErrors((prev) => ({ ...prev, topic_brief: null }));
+                    }}
+                    placeholder="Descreva a linha editorial ou assuntos que este canal explora (opcional)."
+                    rows={3}
+                    disabled={isSubmittingChannel}
+                  />
+                  {createFormErrors.topic_brief && (
+                    <span className="fleet-modal-field-error">{createFormErrors.topic_brief}</span>
+                  )}
+                </div>
+
+                <div className="fleet-modal-safe-defaults-note">
+                  <span className="fleet-modal-safe-icon">🔒</span>
+                  <div>
+                    <strong>Padrão Seguro:</strong> O canal nasce com produção autônoma{' '}
+                    <strong>desligada</strong>, em modo <strong>WARMUP</strong> e meta de
+                    estoque padrão (3 vídeos). Você será levado à tela Sistema para revisar
+                    os ajustes.
+                  </div>
+                </div>
+
+                <div className="fleet-modal-actions">
+                  <button
+                    type="button"
+                    className="fleet-btn-secondary"
+                    onClick={handleCloseCreateModal}
+                    disabled={isSubmittingChannel}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="fleet-btn-create-submit"
+                    disabled={isSubmittingChannel}
+                  >
+                    {isSubmittingChannel ? 'Cadastrando...' : '🚀 Criar Canal'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

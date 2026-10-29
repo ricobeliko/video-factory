@@ -67,7 +67,7 @@ A tabela abaixo detalha cada painel, aba, botão, controle e formulário present
 | **2.4** | **Ajustes por Canal: Estoque Alvo e Cotas Diárias (3 a 10)** | `channel_factory.py:560` | **COBERTA** | `SystemView.jsx:1416`<br>`operations.py:430` | — | Edição canônica com validação de limites de guarda via `PATCH /channels/{id}/quotas`. |
 | **2.5** | **Ajustes por Canal: Janela de Publicação (Horários Início/Fim)** | `channel_factory.py:590` | **COBERTA** | `SystemView.jsx:1435`<br>`operations.py:501` | — | Edição canônica das horas diárias de postagem via `PATCH /channels/{id}/schedule`. |
 | **2.6** | **Ajustes por Canal: Sobrescrita de Voz e Velocidade** | `channel_factory.py:615` | **COBERTA** | `SystemView.jsx:1500`<br>`operations.py:574` | — | Seletor de voz aprovada e taxa de velocidade via `PATCH /channels/{id}/voice`. |
-| **2.7** | **Cadastro de Novo Canal (Onboarding Form)** | `channel_factory.py:75-210`<br>`_render_onboarding_form` | **AUSENTE** | `webui-v2/` (nenhum arquivo) | **BLOQUEIA** | Na V2 só é possível editar canais pré-existentes. Não há formulário nem endpoint para cadastrar um novo canal (nome, nicho, formato tradicional/quiz, voz, cotas). Operador precisaria inserir linhas manualmente no SQLite. |
+| **2.7** | **Cadastro de Novo Canal (Onboarding Form)** | `channel_factory.py:75-210`<br>`_render_onboarding_form` | **COBERTA** | `FleetView.jsx`<br>`operations.py:241` | — | Botão "+ Novo Canal" na tela Frota com modal focado na identidade editorial (nome, nicho, formato tradicional/quiz, briefing, idioma pt-BR) via `POST /api/v2/channels`. Canal nasce com defaults seguros da V1 (desligado, WARMUP, meta 3) e redireciona para a tela Sistema para ajustes operacionais. |
 | **2.8** | **Seletor de Voz Global da Fábrica** | `channel_factory.py:420`<br>`save_global_voice` | **PARCIAL** | `SystemView.jsx` | **PODE ESPERAR** | Na V2, 100% dos canais possuem configuração individual de voz. O fallback global existe no `config.toml`, mas raramente é acionado. Pode vir pós-cutover. |
 
 ---
@@ -189,24 +189,16 @@ Com a conclusão da Missão de Controles de Agendamento e a reclassificação do
 
 ```mermaid
 flowchart TD
-    M2["Missão 1: Onboarding de Canais (Média)"] --> M3["Missão 2: Cutover do Motor Unificado (Média)"]
+    M3["Missão Final: Cutover do Motor Unificado (Média)"]
 ```
 
-> **Nota:** As Missões de Controles de Agendamento (`v2/scheduler-controles`, itens 3.1, 3.3 e 3.4) e de Gestão de Chaves e Provedores Críticos (`v2/settings-keys`, itens 4.1 e 4.2) foram concluídas com sucesso. Restam apenas 2 missões bloqueadoras para o cutover total.
+> **Nota:** As Missões de Controles de Agendamento (`v2/scheduler-controles`), Gestão de Chaves e Provedores (`v2/settings-keys`) e Onboarding de Canais (`v2/canal-onboarding`, item 2.7) foram concluídas com sucesso. Resta apenas 1 missão bloqueadora para o cutover total.
 
 ---
 
-### Detalhamento das Missões Restantes:
+### Detalhamento da Missão Restante:
 
-#### Missão 2: Onboarding de Novos Canais na V2 (`v2/canal-onboarding`)
-- **Tamanho:** **Média**
-- **Escopo Backend:**
-  - Adicionar endpoint `POST /api/v2/channels` chamando `profile_manager.create_profile(...)` com os parâmetros canônicos (nome, slug, nicho, formato de vídeo, idioma, voz, cotas e janela).
-- **Escopo Frontend:**
-  - Adicionar botão "+ Novo Canal" no cabeçalho da **Frota**.
-  - Criar modal de cadastro simplificado com validação imediata de duplicidade de slug e encaminhamento para a gaveta de ajustes do canal criado.
-
-#### Missão 3: Cutover do Motor Unificado V2 & Transição de Produção (`v2/motor-cutover`)
+#### Missão Final: Cutover do Motor Unificado V2 & Transição de Produção (`v2/motor-cutover`)
 - **Tamanho:** **Média**
 - **Escopo Backend / Build:**
   - Configurar FastAPI (`app.asgi:app`) para servir o build estático de produção do frontend (`webui-v2/dist`).

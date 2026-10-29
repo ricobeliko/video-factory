@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/tests/fleet_logic.test.js src/tests/system_edit_logic.test.js src/tests/system_logic.test.js src/tests/diagnostics_logic.test.js src/tests/scheduler_controls.test.js src/tests/provider_settings_logic.test.js"
+    "test": "node --test src/tests/fleet_logic.test.js src/tests/system_edit_logic.test.js src/tests/system_logic.test.js src/tests/diagnostics_logic.test.js src/tests/scheduler_controls.test.js src/tests/provider_settings_logic.test.js src/tests/channel_creation_logic.test.js"
   },
   "dependencies": {
     "@xyflow/react": "^12.4.4",

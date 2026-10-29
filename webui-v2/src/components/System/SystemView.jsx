@@ -62,7 +62,20 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   // Estados de controle e ciclo de vida
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [actionFeedback, setActionFeedback] = useState(null);
+  const [actionFeedback, setActionFeedback] = useState(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const stored = sessionStorage.getItem('system_action_feedback');
+        if (stored) {
+          sessionStorage.removeItem('system_action_feedback');
+          return JSON.parse(stored);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
   const [isActionPending, setIsActionPending] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState(null); // 'pause' | 'resume' | 'run-cycle' | null
 

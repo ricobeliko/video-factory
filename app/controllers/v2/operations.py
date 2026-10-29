@@ -769,9 +769,18 @@ def update_scheduler_settings(
     summary="Get active LLM and social publishing provider settings with masked keys",
 )
 def get_provider_settings(request: Request):
+    request_id = base.get_task_id(request)
     from app.services import provider_settings
-    data = provider_settings.get_providers_settings_snapshot()
-    return utils.get_response(200, data)
+    try:
+        data = provider_settings.get_providers_settings_snapshot()
+        return utils.get_response(200, data)
+    except Exception as exc:
+        logger.error(f"Erro ao obter configuracoes de provedores: {type(exc).__name__}")
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Falha ao ler o arquivo de configuracao no disco (TOML invalido ou inacessivel).",
+        )
 
 
 @router.patch(
@@ -819,10 +828,11 @@ def update_provider_settings(
             message=str(exc),
         )
     except Exception as exc:
+        logger.error(f"Erro ao atualizar configuracoes de provedores: {type(exc).__name__}")
         raise HttpException(
             task_id=request_id,
             status_code=500,
-            message=f"Internal error updating provider settings: {exc}",
+            message="Falha ao processar ou gravar configuracao no disco (TOML invalido ou inacessivel).",
         )
 
 

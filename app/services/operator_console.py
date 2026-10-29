@@ -1446,12 +1446,24 @@ def get_profile_operations_overview(db_path: Optional[str] = None, task_base_dir
             if t.get("safety_status") != "FAIL":
                 tc["ready_stock"] += 1
 
+    status_map = get_channel_status_map(db_path=db_path)
     active_id = profile_manager.get_active_profile_id(db_path=db_path)
     overview = []
     for p in profiles:
         pid = p["id"]
         s_counts = sched_map.get(pid, {})
         t_counts = task_counts.get(pid, {})
+
+        try:
+            canon = get_canonical_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=pid)
+            ready_stock_val = canon.get("total_ready")
+            if ready_stock_val is not None:
+                ready_stock_val = int(ready_stock_val)
+        except Exception as exc:
+            logger.warning(f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para perfil '{pid}': {exc}")
+            ready_stock_val = None
+
+        st_info = status_map.get(pid) or {"status": "paused", "label": "Pausado", "reason_code": "UNKNOWN", "reason": None}
 
         overview.append({
             "profile_id": pid,
@@ -1466,7 +1478,11 @@ def get_profile_operations_overview(db_path: Optional[str] = None, task_base_dir
             "is_active_profile": (pid == active_id),
             "channels_count": total_ch_map.get(pid, 0),
             "channels_enabled": enabled_ch_map.get(pid, 0),
-            "ready_stock": get_canonical_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=pid)["total_ready"],
+            "ready_stock": ready_stock_val,
+            "channel_status": st_info.get("status"),
+            "channel_status_label": st_info.get("label"),
+            "channel_reason_code": st_info.get("reason_code"),
+            "channel_reason": st_info.get("reason"),
             "pending_processing": t_counts.get("pending_processing", 0),
             "scheduled": s_counts.get("planned", 0) + s_counts.get("ready", 0),
             "failed": t_counts.get("failed", 0) + s_counts.get("failed", 0),
@@ -3243,6 +3259,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
         if pid:
             channels_by_prof.setdefault(pid, []).append(c)
 
+    status_map = get_channel_status_map(db_path=db_path)
     results = []
 
     for prof in profiles:
@@ -3607,9 +3624,17 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             else:
                 status = "IDLE"
 
-        stock_info = get_canonical_ready_stock(db_path=db_path, profile_id=pid)
-        ready_stock_count = int(stock_info.get("total_ready", 0))
-        target_stock_count = int(stock_info.get("minimum_threshold", 3))
+        try:
+            stock_info = get_canonical_ready_stock(db_path=db_path, profile_id=pid)
+            ready_stock_val = stock_info.get("total_ready")
+            ready_stock_count = int(ready_stock_val) if ready_stock_val is not None else None
+            target_stock_count = int(stock_info.get("minimum_threshold", 3))
+        except Exception as exc:
+            logger.warning(f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para live execution '{pid}': {exc}")
+            ready_stock_count = None
+            target_stock_count = 3
+
+        st_info = status_map.get(pid) or {"status": "paused", "label": "Pausado", "reason_code": "UNKNOWN", "reason": None}
 
         results.append({
             "profile_id": pid,
@@ -3620,6 +3645,10 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             "autonomous_enabled": auto_enabled,
             "growth_mode": growth_mode,
             "status": status,
+            "channel_status": st_info.get("status"),
+            "channel_status_label": st_info.get("label"),
+            "channel_reason_code": st_info.get("reason_code"),
+            "channel_reason": st_info.get("reason"),
             "ready_stock": ready_stock_count,
             "target_stock": target_stock_count,
             "execution": execution,
@@ -4288,6 +4317,37 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         "totals": totals,
         "channels": channels_data,
     }
+
+
+def get_channel_status_map(db_path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Retorna o status canônico de cada canal indexado por profile_id.
+
+    Reaproveita integralmente o cálculo consolidado de get_fleet_summary,
+    garantindo que Frota, Diagnóstico, Factory Live, Gaveta e /profiles/{id}/status
+    usem exatamente as mesmas entradas e a mesma função canônica única.
+
+    Retorna:
+        {
+            profile_id: {
+                "status": "paused" | "blocked" | "running" | "attention" | "ok",
+                "label": "Pausado" | "Bloqueado" | "Gerando" | "Atenção" | "OK",
+                "reason_code": str,
+                "reason": Optional[str],
+            }
+        }
+    """
+    fleet = get_fleet_summary(db_path=db_path)
+    status_map: Dict[str, Dict[str, Any]] = {}
+    for ch in fleet.get("channels", []):
+        pid = ch.get("profile_id")
+        if pid:
+            status_map[pid] = {
+                "status": ch.get("status"),
+                "label": ch.get("status_label"),
+                "reason_code": ch.get("reason_code"),
+                "reason": ch.get("reason"),
+            }
+    return status_map
 
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { formatStatus } from '../Fleet/fleetLogic';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   getSystemStatus,
@@ -957,7 +958,31 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   >
                     <div className="sys-channel-header">
                       <div className="sys-channel-header-left">
-                        <h3 className="sys-channel-name">{ch.name || pid}</h3>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <h3 className="sys-channel-name">{ch.name || pid}</h3>
+                          {ch.channel_status ? (() => {
+                            const st = formatStatus(ch.channel_status);
+                            const label = ch.channel_status_label || st.label;
+                            return (
+                              <span
+                                className="mini-badge"
+                                style={{
+                                  backgroundColor: st.tint,
+                                  color: st.color,
+                                  borderColor: st.sq,
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  fontWeight: 600,
+                                }}
+                                title={ch.channel_reason ? `Status: ${label} — ${ch.channel_reason}` : `Status: ${label}`}
+                              >
+                                {st.glyph} {label}
+                              </span>
+                            );
+                          })() : (
+                            <span className="mini-badge" style={{ color: '#9099AA', fontSize: '11px' }}>—</span>
+                          )}
+                        </div>
                         <span className="sys-channel-id">{pid}</span>
                       </div>
                       <div className="sys-channel-header-right">

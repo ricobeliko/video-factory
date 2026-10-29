@@ -1,5 +1,6 @@
 import React from 'react';
 import { STAGE_BY_CODE, sanitizeDisplayText } from '../utils/stageVisuals';
+import { formatStatus } from './Fleet/fleetLogic';
 
 /**
  * ChannelCard — Dynamic header card for each profile/channel in the top deck (R6A.6).
@@ -25,9 +26,12 @@ export default function ChannelCard({
     platform = 'youtube',
     autonomous_enabled,
     growth_mode,
-    ready_stock = 0,
+    ready_stock = null,
     target_stock = null,
     status = 'IDLE',
+    channel_status,
+    channel_status_label,
+    channel_reason,
     execution,
   } = channel;
 
@@ -98,6 +102,26 @@ export default function ChannelCard({
           </div>
 
           <div className="channel-mode-badges">
+            {channel_status ? (() => {
+              const health = formatStatus(channel_status);
+              const hLabel = channel_status_label || health.label;
+              return (
+                <span
+                  className="mini-badge channel-health-badge"
+                  style={{
+                    backgroundColor: health.tint,
+                    color: health.color,
+                    borderColor: health.sq,
+                    fontWeight: 600,
+                  }}
+                  title={channel_reason ? `Saúde: ${hLabel} — ${channel_reason}` : `Saúde: ${hLabel}`}
+                >
+                  {health.glyph} {hLabel}
+                </span>
+              );
+            })() : (
+              <span className="mini-badge" style={{ color: '#9099AA' }}>—</span>
+            )}
             <span
               className={`mini-badge ${isAutonomous ? 'autonomous' : 'manual'} clickable-badge`}
               title="Clique para gerenciar autonomia do canal"

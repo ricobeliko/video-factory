@@ -272,7 +272,7 @@ class TestApiV2ReadOnly(unittest.TestCase):
             "waiting_task_id": None,
         }
 
-        def mock_auto_status(profile_id=None, db_path=None):
+        def mock_auto_status(profile_id=None, db_path=None, **kwargs):
             if profile_id == "default":
                 return mock_status_internet
             return {"enabled": False, "state": "idle", "message": "Idle", "current_task_id": None, "waiting_task_id": None}

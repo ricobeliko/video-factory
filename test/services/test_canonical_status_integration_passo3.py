@@ -356,3 +356,58 @@ class TestCanonicalStatusIntegrationPasso3(unittest.TestCase):
                 self.assertEqual(f_item["reason_code"], d_item["reason_code"])
                 self.assertEqual(f_item["reason_code"], l_item["channel_reason_code"])
                 self.assertEqual(f_item["reason_code"], c_item["channel_reason_code"])
+
+    def test_case_6_n_plus_one_prevention_live_execution_overview(self):
+        """Caso 6: Prevenção de N+1 em Live Execution.
+
+        Uma chamada a get_live_execution_overview com 3 canais deve chamar
+        get_fleet_summary EXATAMENTE 1 vez (zero chamadas redundantes dentro do loop).
+        """
+        self._setup_profiles([
+            {"id": "chan-1", "name": "Canal 1", "settings": {"schedule": {"autonomous_enabled": True}}},
+            {"id": "chan-2", "name": "Canal 2", "settings": {"schedule": {"autonomous_enabled": True}}},
+            {"id": "chan-3", "name": "Canal 3", "settings": {"schedule": {"autonomous_enabled": True}}},
+        ])
+
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch.object(operator_console, "get_fleet_summary", wraps=operator_console.get_fleet_summary) as mock_fleet:
+
+            overview = operator_console.get_live_execution_overview(db_path=self.db_path)
+            channels = overview.get("channels", [])
+            self.assertGreaterEqual(len(channels), 3)
+
+            # Prova matemática de ausência de N+1
+            self.assertEqual(
+                mock_fleet.call_count,
+                1,
+                f"get_fleet_summary deveria ter sido chamado 1 vez, mas foi chamado {mock_fleet.call_count} vezes (N+1 detectado)",
+            )
+
+    def test_case_7_n_plus_one_prevention_profile_operations_overview(self):
+        """Caso 7: Prevenção de N+1 em Profile Operations Overview.
+
+        Uma chamada a get_profile_operations_overview com 3 canais deve chamar
+        get_fleet_summary EXATAMENTE 1 vez.
+        """
+        self._setup_profiles([
+            {"id": "chan-1", "name": "Canal 1", "settings": {"schedule": {"autonomous_enabled": True}}},
+            {"id": "chan-2", "name": "Canal 2", "settings": {"schedule": {"autonomous_enabled": True}}},
+            {"id": "chan-3", "name": "Canal 3", "settings": {"schedule": {"autonomous_enabled": True}}},
+        ])
+
+        with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch.object(operator_console, "get_fleet_summary", wraps=operator_console.get_fleet_summary) as mock_fleet:
+
+            overview = operator_console.get_profile_operations_overview(db_path=self.db_path)
+            self.assertGreaterEqual(len(overview), 3)
+
+            # Prova matemática de ausência de N+1
+            self.assertEqual(
+                mock_fleet.call_count,
+                1,
+                f"get_fleet_summary deveria ter sido chamado 1 vez, mas foi chamado {mock_fleet.call_count} vezes",
+            )

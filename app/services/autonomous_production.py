@@ -740,6 +740,7 @@ def get_autonomous_status(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    include_canonical_status: bool = True,
 ) -> Dict[str, Any]:
     """Retorna snapshot completo da telemetria de produção autônoma para UI e diagnósticos."""
     scheduler.init_db(db_path)
@@ -834,14 +835,15 @@ def get_autonomous_status(
         except Exception:
             pass
 
-    # Status canônico via helper único de operator_console
+    # Status canônico via helper único de operator_console (ignorado em loops que já possuem status_map)
     canonical_status = None
-    try:
-        from app.services import operator_console
-        st_map = operator_console.get_channel_status_map(db_path=db_path)
-        canonical_status = st_map.get(target_profile)
-    except Exception as exc:
-        logger.warning(f"[AUTONOMOUS] Erro ao obter canonical_status para '{target_profile}': {exc}")
+    if include_canonical_status:
+        try:
+            from app.services import operator_console
+            st_map = operator_console.get_channel_status_map(db_path=db_path)
+            canonical_status = st_map.get(target_profile)
+        except Exception as exc:
+            logger.warning(f"[AUTONOMOUS] Erro ao obter canonical_status para '{target_profile}': {exc}")
 
     return {
         "autonomous_mode_enabled": enabled,

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import asgi
 from app.config import config
-from app.services import operator_console, profile_manager, scheduler
+from app.services import autonomous_production, operator_console, profile_manager, scheduler
 
 
 class TestWebUiV2Api(unittest.TestCase):
@@ -503,6 +503,8 @@ class TestWebUiV2Api(unittest.TestCase):
         with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
              patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
              patch("app.services.scheduler.get_db_path", return_value=self.db_path):
+            # Define modo SCALE para permitir teto de gerações > 2
+            self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "scale"})
             resp = self.client.patch(
                 "/api/v2/channels/default/quotas",
                 json={
@@ -532,7 +534,7 @@ class TestWebUiV2Api(unittest.TestCase):
             self.assertEqual(resp.status_code, 403)
 
     def test_update_schedule_validates_hours_and_persists(self):
-        """33. PATCH schedule atualiza janela de publicação e fuso horário."""
+        """33. PATCH schedule atualiza janela de publicação e fuso horário (posts_per_day vive exclusivamente em /quotas)."""
         with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
              patch("app.services.profile_manager.get_db_path", return_value=self.db_path):
             resp = self.client.patch(
@@ -541,7 +543,6 @@ class TestWebUiV2Api(unittest.TestCase):
                     "publish_start_hour": 11,
                     "publish_end_hour": 21,
                     "min_interval_hours": 3,
-                    "posts_per_day": 2,
                 },
             )
             self.assertEqual(resp.status_code, 200)
@@ -549,7 +550,6 @@ class TestWebUiV2Api(unittest.TestCase):
             self.assertEqual(data.get("publish_start_hour"), 11)
             self.assertEqual(data.get("publish_end_hour"), 21)
             self.assertEqual(data.get("min_interval_hours"), 3)
-            self.assertEqual(data.get("posts_per_day"), 2)
 
             sched = profile_manager.get_profile_schedule("default", db_path=self.db_path)
             self.assertEqual(sched.publish_start_hour, 11)
@@ -567,11 +567,12 @@ class TestWebUiV2Api(unittest.TestCase):
             self.assertIn("publish_end_hour", resp.json().get("message", "").lower())
 
     def test_update_settings_combined_endpoint(self):
-        """35. PATCH /api/v2/channels/{profile_id}/settings atualiza atomicamente modo, quotas e schedule."""
+        """35. Rota composta PATCH /settings responde 405/404; rotas específicas atualizam modo, quotas e schedule."""
         with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
              patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
              patch("app.services.scheduler.get_db_path", return_value=self.db_path):
-            resp = self.client.patch(
+            # 1. Rota composta antiga responde 405 ou 404 (removida conforme política de controle único)
+            resp_old = self.client.patch(
                 "/api/v2/channels/default/settings",
                 json={
                     "growth_mode": "scale",
@@ -580,13 +581,33 @@ class TestWebUiV2Api(unittest.TestCase):
                     "schedule": {"publish_start_hour": 9, "publish_end_hour": 23},
                 },
             )
-            self.assertEqual(resp.status_code, 200)
-            data = resp.json().get("data", {})
-            self.assertEqual(data.get("growth_mode"), "scale")
-            self.assertEqual(data.get("autonomous_enabled"), True)
-            self.assertEqual(data.get("quotas", {}).get("target_ready_stock"), 5)
-            self.assertEqual(data.get("schedule", {}).get("publish_start_hour"), 9)
-            self.assertEqual(data.get("schedule", {}).get("publish_end_hour"), 23)
+            self.assertIn(resp_old.status_code, (404, 405))
+
+            # 2. Rotas específicas realizam as atualizações canônicas
+            r_mode = self.client.patch("/api/v2/channels/default/growth-mode", json={"growth_mode": "scale"})
+            self.assertEqual(r_mode.status_code, 200)
+
+            r_auto = self.client.patch("/api/v2/channels/default/autonomous", json={"enabled": True})
+            self.assertEqual(r_auto.status_code, 200)
+
+            r_quotas = self.client.patch("/api/v2/channels/default/quotas", json={"target_ready_stock": 5})
+            self.assertEqual(r_quotas.status_code, 200)
+
+            r_sched = self.client.patch(
+                "/api/v2/channels/default/schedule",
+                json={"publish_start_hour": 9, "publish_end_hour": 23},
+            )
+            self.assertEqual(r_sched.status_code, 200)
+
+            # 3. Valida persistência dos valores
+            prof = profile_manager.get_profile("default", db_path=self.db_path)
+            self.assertEqual(prof.get("growth_mode"), "scale")
+            self.assertTrue(autonomous_production.is_profile_autonomous_mode_enabled("default", db_path=self.db_path))
+            q = profile_manager.get_profile_quotas("default", db_path=self.db_path)
+            self.assertEqual(q.get("target_ready_stock"), 5)
+            sched = profile_manager.get_profile_schedule("default", db_path=self.db_path)
+            self.assertEqual(sched.publish_start_hour, 9)
+            self.assertEqual(sched.publish_end_hour, 23)
 
     def test_scheduler_respects_profile_publishing_window(self):
         """36. scheduler.plan_schedule ajusta o slot planejado se cair fora da janela de publicação."""

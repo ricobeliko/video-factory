@@ -159,21 +159,22 @@ class TestApiV2SchedulerControls(unittest.TestCase):
         with patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
              patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
              patch("app.services.operator_console.is_primary_instance", return_value=True), \
-             patch("app.services.scheduler.plan_schedule", return_value=3) as mock_plan, \
-             patch("app.services.scheduler.replan_future_schedule_for_growth_mode", return_value=2) as mock_replan:
+             patch("app.services.scheduler.plan_schedule", return_value=3) as mock_plan:
 
             res = self.client.post("/api/v2/scheduler/plan")
             self.assertEqual(res.status_code, 200, res.text)
             mock_plan.assert_called_once()
-            mock_replan.assert_called_once()
             data = res.json().get("data", {})
             self.assertEqual(data.get("planned_count"), 3)
-            self.assertEqual(data.get("adjusted_count"), 2)
+            self.assertNotIn("adjusted_count", data)
 
             # Verifica auditoria
             events = operator_console.get_operational_events(limit=20, db_path=self.db_path)
             plan_events = [e for e in events if e.get("event_type") == "SCHEDULE_PLANNED"]
             self.assertTrue(len(plan_events) >= 1)
+            metadata = plan_events[0].get("metadata", {})
+            self.assertEqual(metadata.get("planned_count"), 3)
+            self.assertNotIn("adjusted_count", metadata)
 
     def test_post_plan_non_primary_returns_403(self):
         """9. POST /api/v2/scheduler/plan em NÃO-PRIMARY -> 403."""

@@ -87,11 +87,10 @@ export default function ProductionView({ onNavigate }) {
       const res = await planSchedule();
       const payload = res?.data || res || {};
       const count = Number(payload.planned_count || 0);
-      const adjusted = Number(payload.adjusted_count || 0);
-      if (count > 0 || adjusted > 0) {
+      if (count > 0) {
         setActionResult({
           type: 'success',
-          text: `Agenda replanejada com sucesso: ${count} novo(s) post(s) agendado(s)${adjusted > 0 ? `, ${adjusted} ajustado(s)` : ''}!`,
+          text: `Agenda replanejada com sucesso: ${count} novo(s) post(s) agendado(s)!`,
         });
       } else {
         setActionResult({

@@ -2,6 +2,7 @@
 
 import os
 from typing import Optional
+from loguru import logger
 
 from fastapi import Depends, Query, Request
 from pydantic import BaseModel, Field
@@ -809,8 +810,8 @@ def plan_scheduler_schedule(request: Request):
                 tid = t.get("task_id")
                 if tid:
                     tasks_map[tid] = dict(t)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Failed to fetch runtime tasks from state: {exc}")
 
         # 2. Varre diretório físico de tasks
         if os.path.exists(tasks_root):
@@ -827,27 +828,20 @@ def plan_scheduler_schedule(request: Request):
                                         "state": const.TASK_STATE_COMPLETE,
                                         "video_file": video_file,
                                     }
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"Failed to scan task files for planning: {exc}")
 
         all_tasks = list(tasks_map.values())
         new_scheduled = scheduler.plan_schedule(all_tasks, db_path=db_path)
-        total_adjusted = 0
-        try:
-            total_adjusted = scheduler.replan_future_schedule_for_growth_mode(db_path=db_path)
-        except Exception:
-            pass
-
         planned_count = int(new_scheduled) if isinstance(new_scheduled, int) else len(new_scheduled)
 
         operator_console.log_operational_event(
             component="scheduler",
             severity=operator_console.SEVERITY_INFO,
             event_type="SCHEDULE_PLANNED",
-            message=f"Planejamento de agenda executado: {planned_count} posts agendados, {total_adjusted} ajustados",
+            message=f"Planejamento de agenda executado: {planned_count} posts agendados",
             metadata={
                 "planned_count": planned_count,
-                "adjusted_count": total_adjusted,
             },
             db_path=db_path,
         )
@@ -855,9 +849,8 @@ def plan_scheduler_schedule(request: Request):
             200,
             {
                 "planned_count": planned_count,
-                "adjusted_count": total_adjusted,
             },
-            message=f"Schedule planned: {planned_count} new posts scheduled, {total_adjusted} adjusted",
+            message=f"Schedule planned: {planned_count} new posts scheduled",
         )
     except Exception as exc:
         raise HttpException(

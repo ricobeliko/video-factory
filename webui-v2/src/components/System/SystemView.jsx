@@ -201,8 +201,8 @@ export default function SystemView({ onNavigate, focusChannelId }) {
 
   const isPaused = factoryStateInfo.isPaused;
   const isSchedulerEnabled = Boolean(systemStatus?.scheduler_enabled);
-  const isAutoPublish = Boolean(systemStatus?.auto_publish_enabled ?? (systemStatus?.auto_publish === 'ON' || systemStatus?.auto_publish === true));
-  const isDryRun = Boolean(systemStatus?.dry_run_enabled ?? (systemStatus?.dry_run === 'ON' || systemStatus?.dry_run === true));
+  const isAutoPublish = Boolean(systemStatus?.auto_publish_enabled);
+  const isDryRun = Boolean(systemStatus?.dry_run_enabled);
 
   // Ações de Pausar / Retomar a Fábrica
   const handleOpenConfirm = (actionType) => {

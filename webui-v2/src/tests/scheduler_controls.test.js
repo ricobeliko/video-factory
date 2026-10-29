@@ -42,59 +42,72 @@ test('1. Fonte Única de Edição: Sistema concentra switches e Produção conce
   assert.equal(prodSource.includes('sys-switch'), false);
   assert.equal(prodSource.includes('<input type="checkbox"'), false);
 
+  // Produção não mostra "ajustados" no banner ou contagem (igual à V1)
+  assert.equal(prodSource.includes('adjusted_count'), false);
+  assert.equal(prodSource.includes('ajustado'), false);
+
   // FactoryHeader é estritamente LEITURA (sem botões de mutação de settings ou de disparo)
   assert.equal(headerSource.includes('updateSchedulerSettings'), false);
   assert.equal(headerSource.includes('runSchedulerCycle'), false);
   assert.equal(headerSource.includes('planSchedule'), false);
 });
 
-test('2. Resolução Coerente de Valores Canônicos (booleanos estritos, sem falso positivo em string OFF)', () => {
-  // Simula a resolução canônica feita em SystemView e FactoryHeader
-  function resolveSchedulerFlags(systemStatus) {
-    const isSchedulerEnabled = Boolean(
-      systemStatus?.scheduler_enabled ?? (systemStatus?.scheduler_active === 'ACTIVE')
-    );
+test('2. Fonte Única dos Booleanos: V2 lê SOMENTE os booleanos canônicos e ignora campos de texto', () => {
+  const headerPath = path.resolve(__dirname, '../components/FactoryHeader.jsx');
+  const systemPath = path.resolve(__dirname, '../components/System/SystemView.jsx');
 
-    const isAutoPublish = Boolean(
-      systemStatus?.auto_publish_enabled ??
-      (systemStatus?.auto_publish === true || systemStatus?.auto_publish === 'ON')
-    );
+  const headerSource = fs.readFileSync(headerPath, 'utf8');
+  const systemSource = fs.readFileSync(systemPath, 'utf8');
 
-    const isDryRun = Boolean(
-      systemStatus?.dry_run_enabled ??
-      (systemStatus?.dry_run === true || systemStatus?.dry_run === 'ON')
-    );
+  // Prova no código-fonte: sem qualquer fallback ?? para campos de texto 'ON'/'OFF'
+  assert.equal(headerSource.includes('systemStatus?.auto_publish_enabled'), true);
+  assert.equal(headerSource.includes('systemStatus?.dry_run_enabled'), true);
+  assert.equal(headerSource.includes('auto_publish ==='), false);
+  assert.equal(headerSource.includes('dry_run ==='), false);
+  assert.equal(headerSource.includes('auto_publish_enabled ??'), false);
+  assert.equal(headerSource.includes('dry_run_enabled ??'), false);
 
-    return { isSchedulerEnabled, isAutoPublish, isDryRun };
+  assert.equal(systemSource.includes('systemStatus?.scheduler_enabled'), true);
+  assert.equal(systemSource.includes('systemStatus?.auto_publish_enabled'), true);
+  assert.equal(systemSource.includes('systemStatus?.dry_run_enabled'), true);
+  assert.equal(systemSource.includes('auto_publish ==='), false);
+  assert.equal(systemSource.includes('dry_run ==='), false);
+  assert.equal(systemSource.includes('scheduler_active ==='), false);
+  assert.equal(systemSource.includes('auto_publish_enabled ??'), false);
+  assert.equal(systemSource.includes('dry_run_enabled ??'), false);
+  assert.equal(systemSource.includes('scheduler_enabled ??'), false);
+
+  // Prova lógica: função pura simulando a leitura estrita dos componentes V2
+  function readV2Booleans(systemStatus) {
+    return {
+      isSchedulerEnabled: Boolean(systemStatus?.scheduler_enabled),
+      isAutoPublish: Boolean(systemStatus?.auto_publish_enabled),
+      isDryRun: Boolean(systemStatus?.dry_run_enabled),
+    };
   }
 
-  // Caso 1: Flags canônicas booleanas vindas do backend
-  const res1 = resolveSchedulerFlags({
-    scheduler_enabled: true,
-    auto_publish_enabled: false,
-    dry_run_enabled: false,
-  });
-  assert.equal(res1.isSchedulerEnabled, true);
-  assert.equal(res1.isAutoPublish, false);
-  assert.equal(res1.isDryRun, false);
-
-  // Caso 2: Backend legado retornando string "OFF" - NUNCA deve ser true
-  const res2 = resolveSchedulerFlags({
-    scheduler_active: 'INACTIVE',
-    auto_publish: 'OFF',
-    dry_run: 'OFF',
-  });
-  assert.equal(res2.isSchedulerEnabled, false);
-  assert.equal(res2.isAutoPublish, false);
-  assert.equal(res2.isDryRun, false);
-
-  // Caso 3: Backend retornando string "ON" / "ACTIVE"
-  const res3 = resolveSchedulerFlags({
+  // Cenário A: Campos de texto da V1 contêm 'ON', mas booleanos estão ausentes/false
+  // A V2 NÃO deve ler os textos e deve retornar estritamente false
+  const textOnlyStatus = {
     scheduler_active: 'ACTIVE',
     auto_publish: 'ON',
     dry_run: 'ON',
-  });
-  assert.equal(res3.isSchedulerEnabled, true);
-  assert.equal(res3.isAutoPublish, true);
-  assert.equal(res3.isDryRun, true);
+  };
+  const resA = readV2Booleans(textOnlyStatus);
+  assert.equal(resA.isSchedulerEnabled, false);
+  assert.equal(resA.isAutoPublish, false);
+  assert.equal(resA.isDryRun, false);
+
+  // Cenário B: Booleanos canônicos presentes são respeitados estritamente, ignorando textos legados
+  const canonicalStatus = {
+    scheduler_enabled: true,
+    auto_publish_enabled: true,
+    dry_run_enabled: false,
+    auto_publish: 'OFF', // texto divergente deve ser ignorado
+    dry_run: 'ON',        // texto divergente deve ser ignorado
+  };
+  const resB = readV2Booleans(canonicalStatus);
+  assert.equal(resB.isSchedulerEnabled, true);
+  assert.equal(resB.isAutoPublish, true);
+  assert.equal(resB.isDryRun, false);
 });

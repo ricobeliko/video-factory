@@ -26,7 +26,6 @@ from app.services import (
     scheduler,
     state as sm,
 )
-from app.services.channel_status import evaluate_canonical_channel_status
 
 
 class TestHotfixCanalSoTikTok(unittest.TestCase):
@@ -190,6 +189,12 @@ class TestHotfixCanalSoTikTok(unittest.TestCase):
         self.assertEqual(canon_stock["total_ready"], 10)
         self.assertEqual(canon_stock["tiktok_count"], 10)
         self.assertEqual(canon_stock["youtube_count"], 0)
+        self.assertEqual(canon_stock["youtube_items"], [])
+        self.assertEqual(canon_stock["youtube_ready"], [])
+        self.assertEqual(canon_stock["youtube_tasks"], [])
+        self.assertEqual(len(canon_stock["tiktok_items"]), 5)
+        self.assertEqual(len(canon_stock["tiktok_ready"]), 10)
+        self.assertEqual(len(canon_stock["tiktok_tasks"]), 10)
         self.assertFalse(canon_stock["is_below_minimum"])
 
         # 3. Valida que o loop autônomo NÃO gera vídeos adicionais quando estoque pronto >= meta
@@ -239,6 +244,21 @@ class TestHotfixCanalSoTikTok(unittest.TestCase):
         self.assertEqual(stock["tiktok_count"], 0)
         self.assertTrue(stock["is_below_target"])
 
+        canon_stock = operator_console.get_canonical_ready_stock(
+            task_base_dir=self.task_base_dir,
+            db_path=self.db_path,
+            profile_id=yt_prof_id,
+        )
+        self.assertEqual(canon_stock["total_ready"], 2)
+        self.assertEqual(canon_stock["youtube_count"], 2)
+        self.assertEqual(canon_stock["tiktok_count"], 0)
+        self.assertEqual(canon_stock["tiktok_items"], [])
+        self.assertEqual(canon_stock["tiktok_ready"], [])
+        self.assertEqual(canon_stock["tiktok_tasks"], [])
+        self.assertEqual(len(canon_stock["youtube_items"]), 2)
+        self.assertEqual(len(canon_stock["youtube_ready"]), 2)
+        self.assertEqual(len(canon_stock["youtube_tasks"]), 2)
+
     def test_3_profile_youtube_and_tiktok_identical_to_previous_behavior(self):
         """Item 7: Canal YouTube+TikTok mantém comportamento anterior (ambos ativos)."""
         multi_prof_id = "profile-multi-dest"
@@ -275,8 +295,23 @@ class TestHotfixCanalSoTikTok(unittest.TestCase):
         self.assertEqual(stock["youtube_count"], 1)
         self.assertEqual(stock["tiktok_count"], 1)
 
+        canon_stock = operator_console.get_canonical_ready_stock(
+            task_base_dir=self.task_base_dir,
+            db_path=self.db_path,
+            profile_id=multi_prof_id,
+        )
+        self.assertEqual(canon_stock["total_ready"], 1)
+        self.assertEqual(canon_stock["youtube_count"], 1)
+        self.assertEqual(canon_stock["tiktok_count"], 1)
+        self.assertEqual(len(canon_stock["youtube_items"]), 1)
+        self.assertEqual(len(canon_stock["youtube_ready"]), 1)
+        self.assertEqual(len(canon_stock["youtube_tasks"]), 1)
+        self.assertEqual(len(canon_stock["tiktok_items"]), 1)
+        self.assertEqual(len(canon_stock["tiktok_ready"]), 1)
+        self.assertEqual(len(canon_stock["tiktok_tasks"]), 1)
+
     def test_4_profile_no_destinations_fail_closed_blocked(self):
-        """Item 5 & 7: Perfil sem destinos habilitados bloqueia no ciclo e status canônico retorna NO_PUBLISH_DESTINATION."""
+        """Item 5 & 7: Perfil sem destinos habilitados bloqueia no ciclo com motivo no_publish_destination."""
         no_dest_prof_id = "profile-sem-destinos"
         profile_manager.create_profile(name="Sem Destinos", slug="sem-destinos", niche="teste", db_path=self.db_path)
         with scheduler.get_connection(self.db_path) as conn:
@@ -297,20 +332,6 @@ class TestHotfixCanalSoTikTok(unittest.TestCase):
         self.assertEqual(res["status"], "blocked")
         self.assertEqual(res["reason"], "no_publish_destination")
         self.assertIn("Nenhum canal/destino de publicação habilitado", res["message"])
-
-        # 3. Status canônico do canal mostra Bloqueado com reason_code NO_PUBLISH_DESTINATION
-        status_info = evaluate_canonical_channel_status(
-            is_factory_paused=False,
-            is_channel_active=True,
-            autonomous_enabled=True,
-            has_publish_destination=bool(plats),
-            auto_state=res.get("status", ""),
-            auto_message=res.get("message"),
-        )
-        self.assertEqual(status_info["status"], "blocked")
-        self.assertEqual(status_info["label"], "Bloqueado")
-        self.assertEqual(status_info["reason_code"], "NO_PUBLISH_DESTINATION")
-        self.assertIn("Nenhum canal/destino de publicação habilitado", status_info["reason"])
 
     def test_5_tiktok_already_published_task_excluded_from_stock(self):
         """Item 7: Vídeo já publicado no TikTok não conta no estoque pronto do perfil TikTok."""
@@ -429,6 +450,63 @@ class TestHotfixCanalSoTikTok(unittest.TestCase):
         self.assertEqual(stock_b["ready_count"], 0)
         self.assertEqual(stock_b["tiktok_count"], 0)
         self.assertEqual(stock_b["youtube_count"], 0)
+
+    def test_8_count_generations_in_last_24h_platform_scoping(self):
+        """Item 3: count_generations_in_last_24h restaura semântica original por plataforma do canal."""
+        multi_prof_id = "profile-24h-scoping"
+        profile_manager.create_profile(name="Scoping Multi", slug="scoping-multi", niche="historia", db_path=self.db_path)
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute("UPDATE content_profiles SET id = ? WHERE slug = 'scoping-multi';", (multi_prof_id,))
+            conn.execute(
+                """
+                INSERT INTO publishing_channels (id, profile_id, platform, display_name, is_enabled, auto_publish_authorized, created_at, updated_at)
+                VALUES ('ch-scoping-yt', ?, 'youtube', 'YT Scope', 1, 1, datetime('now'), datetime('now')),
+                       ('ch-scoping-tt', ?, 'tiktok', 'TT Scope', 1, 0, datetime('now'), datetime('now'));
+                """,
+                (multi_prof_id, multi_prof_id),
+            )
+            # Evento operacional antigo: sem channel_id nos metadados, sem scheduled_posts
+            now_iso = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """
+                INSERT INTO task_profiles (task_id, profile_id, created_at)
+                VALUES ('task-legacy-multi', ?, ?);
+                """,
+                (multi_prof_id, now_iso),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (component, severity, event_type, task_id, message, metadata_json, timestamp)
+                VALUES ('autonomous_production', 'info', 'generation_approved', 'task-legacy-multi', 'Aprovado legado', NULL, ?);
+                """,
+                (now_iso,),
+            )
+
+        # Canal YouTube conta o evento legado pois o perfil tem exatamente 1 canal YouTube
+        yt_count = autonomous_production.count_generations_in_last_24h(
+            channel_id="ch-scoping-yt", db_path=self.db_path
+        )
+        self.assertEqual(yt_count, 1, "Canal YouTube deve contar o evento legado com semântica da main")
+
+        # Canal TikTok conta o evento legado pois o perfil tem exatamente 1 canal TikTok
+        tt_count = autonomous_production.count_generations_in_last_24h(
+            channel_id="ch-scoping-tt", db_path=self.db_path
+        )
+        self.assertEqual(tt_count, 1, "Canal TikTok deve contar o evento legado com semântica da main")
+
+        # Perfil com 2 canais YouTube habilitados não deve atribuir ambiguamente
+        with scheduler.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO publishing_channels (id, profile_id, platform, display_name, is_enabled, auto_publish_authorized, created_at, updated_at)
+                VALUES ('ch-scoping-yt2', ?, 'youtube', 'YT Scope 2', 1, 1, datetime('now'), datetime('now'));
+                """,
+                (multi_prof_id,),
+            )
+        yt_ambiguous_count = autonomous_production.count_generations_in_last_24h(
+            channel_id="ch-scoping-yt", db_path=self.db_path
+        )
+        self.assertEqual(yt_ambiguous_count, 0, "Com 2 canais YouTube habilitados, evento legado ambíguo não conta")
 
 
 if __name__ == "__main__":

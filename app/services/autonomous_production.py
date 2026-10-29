@@ -862,18 +862,10 @@ def get_autonomous_status(
     max_att = get_max_attempts_24h(profile_id=target_profile, db_path=db_path)
     consecutive_rejections = get_consecutive_rejections(db_path=db_path, profile_id=target_profile)
 
-    # Estoque atual e meta (para o perfil selecionado e suas plataformas ativas)
-    try:
-        stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
-        target_stock = stock_info["target_stock"]
-        ready_count = stock_info["ready_count"]
-        yt_ready_count = stock_info.get("youtube_count", ready_count)
-        is_low = stock_info["is_below_target"]
-    except Exception:
-        target_stock = get_target_ready_stock(profile_id=target_profile, db_path=db_path)
-        ready_count = None
-        yt_ready_count = None
-        is_low = None
+    # Estoque atual e meta (estritamente elegível para YouTube e para o perfil selecionado)
+    stock_info = get_autonomous_ready_stock(db_path=db_path, profile_id=target_profile, channel_id=target_channel)
+    target_stock = stock_info["target_stock"]
+    ready_count = stock_info["ready_count"]
 
     # Global Cost Guard snapshot
     global_approved = count_all_profiles_generations_24h(db_path=db_path)
@@ -904,8 +896,8 @@ def get_autonomous_status(
         "waiting_task_id": waiting_task_id,
         "ready_stock_total": ready_count,
         "target_ready_stock": target_stock,
-        "youtube_ready_count": yt_ready_count if yt_ready_count is not None else ready_count,
-        "is_below_target": is_low,
+        "youtube_ready_count": stock_info["youtube_count"],
+        "is_below_target": stock_info["is_below_target"],
         "generated_today_24h": generated_today,
         "max_generations_24h": max_24h,
         "generation_attempts_24h": attempts_today,
@@ -978,6 +970,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                                   SELECT count(*)
                                   FROM publishing_channels pc2
                                   WHERE pc2.profile_id = tp.profile_id
+                                    AND pc2.platform = (SELECT platform FROM publishing_channels WHERE id = ?)
                                     AND pc2.is_enabled = 1
                               ) = 1
                           )
@@ -986,6 +979,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                     """,
                     (
                         since_iso,
+                        clean_channel,
                         clean_channel,
                         clean_channel,
                         clean_channel,

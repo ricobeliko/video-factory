@@ -1580,8 +1580,14 @@ def get_canonical_ready_stock(
     ready_items = auto_stock.get("ready_tasks") or auto_stock.get("youtube_ready", [])
     yt_count = auto_stock.get("youtube_count", 0)
     tt_count = auto_stock.get("tiktok_count", 0)
-    youtube_items = [t for t in ready_items if "youtube" in (t.get("planned_platforms") or [])] if yt_count else []
-    tiktok_items = [t for t in ready_items if "tiktok" in (t.get("planned_platforms") or [])] if tt_count else []
+    youtube_items = [
+        t for t in ready_items
+        if "youtube" in autonomous_production.get_channel_active_platforms(t.get("profile_id") or target_prof, db_path=db_path)
+    ]
+    tiktok_items = [
+        t for t in ready_items
+        if "tiktok" in autonomous_production.get_channel_active_platforms(t.get("profile_id") or target_prof, db_path=db_path)
+    ]
     return {
         "total_ready": ready_total,
         "youtube_count": yt_count,
@@ -1590,15 +1596,15 @@ def get_canonical_ready_stock(
         "minimum_threshold": target,
         "is_below_minimum": is_low,
         "ready_items": ready_items[:5],
-        "youtube_items": (youtube_items or ready_items)[:5],
-        "tiktok_items": (tiktok_items or ready_items)[:5],
+        "youtube_items": youtube_items[:5],
+        "tiktok_items": tiktok_items[:5],
         "cross_platform_items": [],
         "ready_tasks": ready_items,
-        "youtube_ready": ready_items,
-        "tiktok_ready": tiktok_items or ready_items,
+        "youtube_ready": youtube_items,
+        "tiktok_ready": tiktok_items,
         "cross_platform_ready": [],
-        "youtube_tasks": ready_items,
-        "tiktok_tasks": tiktok_items or ready_items,
+        "youtube_tasks": youtube_items,
+        "tiktok_tasks": tiktok_items,
         "cross_platform_tasks": [],
     }
 

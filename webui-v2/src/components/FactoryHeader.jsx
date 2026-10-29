@@ -22,8 +22,8 @@ export default function FactoryHeader({
   const isPaused = factoryStateInfo.isPaused;
   const workerRunning = Boolean(systemStatus?.worker_running);
   const schedulerRunning = Boolean(systemStatus?.scheduler_running);
-  const autoPublish = Boolean(systemStatus?.auto_publish_enabled);
-  const dryRun = Boolean(systemStatus?.dry_run);
+  const autoPublish = Boolean(systemStatus?.auto_publish_enabled ?? (systemStatus?.auto_publish === 'ON' || systemStatus?.auto_publish === true));
+  const dryRun = Boolean(systemStatus?.dry_run_enabled ?? (systemStatus?.dry_run === 'ON' || systemStatus?.dry_run === true));
 
   const handleGoToSystem = () => {
     if (onSelectTab) {

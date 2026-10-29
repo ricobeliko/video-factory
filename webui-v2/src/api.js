@@ -324,3 +324,26 @@ export async function getDiagnosticsOverview(profileId = null) {
   const qs = params.toString() ? `?${params.toString()}` : '';
   return fetchJson(`/api/v2/diagnostics/overview${qs}`);
 }
+
+
+export async function updateSchedulerSettings(settings = {}) {
+  return fetchJson('/api/v2/scheduler/settings', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function runSchedulerCycle() {
+  return fetchJson('/api/v2/scheduler/run-cycle', {
+    method: 'POST',
+  });
+}
+
+export async function planSchedule() {
+  return fetchJson('/api/v2/scheduler/plan', {
+    method: 'POST',
+  });
+}

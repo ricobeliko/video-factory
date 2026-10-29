@@ -341,3 +341,201 @@
   align-items: center;
   gap: 8px;
 }
+
+/* Ações de Agendamento e Publicação */
+.prod-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prod-btn-action {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--fleet-radius-inner);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+}
+
+.prod-btn-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.prod-btn-action--plan {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--fleet-border);
+  color: var(--fleet-text-secondary);
+}
+
+.prod-btn-action--plan:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--fleet-text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.prod-btn-action--publish {
+  background: rgba(106, 168, 255, 0.15);
+  border-color: rgba(106, 168, 255, 0.35);
+  color: #8bbfff;
+}
+
+.prod-btn-action--publish:hover:not(:disabled) {
+  background: rgba(106, 168, 255, 0.25);
+  border-color: rgba(106, 168, 255, 0.5);
+  color: #ffffff;
+}
+
+.prod-action-banner {
+  margin-top: 10px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: var(--fleet-radius-inner);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prod-action-banner--success {
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  color: #34D399;
+}
+
+.prod-action-banner--warning {
+  background: rgba(245, 181, 70, 0.12);
+  border: 1px solid rgba(245, 181, 70, 0.3);
+  color: #F5B546;
+}
+
+.prod-action-banner--info {
+  background: rgba(106, 168, 255, 0.12);
+  border: 1px solid rgba(106, 168, 255, 0.3);
+  color: #6AA8FF;
+}
+
+.prod-action-banner--error {
+  background: rgba(255, 138, 122, 0.12);
+  border: 1px solid rgba(255, 138, 122, 0.3);
+  color: #FF8A7A;
+}
+
+.prod-action-banner-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.prod-action-banner-close:hover {
+  opacity: 1;
+}
+
+/* Modal de Confirmação Rápida */
+.prod-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+  backdrop-filter: blur(2px);
+}
+
+.prod-modal-card {
+  background: var(--fleet-surface);
+  border: 1px solid var(--fleet-border);
+  border-radius: var(--fleet-radius);
+  max-width: 440px;
+  width: 100%;
+  padding: 22px 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  animation: prodModalIn 0.18s ease-out;
+}
+
+@keyframes prodModalIn {
+  from {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.prod-modal-title {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fleet-text-primary);
+}
+
+.prod-modal-desc {
+  margin: 0 0 20px 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--fleet-text-secondary);
+}
+
+.prod-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.prod-modal-btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--fleet-radius-inner);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+
+.prod-modal-btn--cancel {
+  background: transparent;
+  border-color: var(--fleet-border);
+  color: var(--fleet-text-secondary);
+}
+
+.prod-modal-btn--cancel:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fleet-text-primary);
+}
+
+.prod-modal-btn--confirm.btn-confirm-publish {
+  background: #2563EB;
+  border-color: #3B82F6;
+  color: #FFFFFF;
+}
+
+.prod-modal-btn--confirm.btn-confirm-publish:hover:not(:disabled) {
+  background: #1D4ED8;
+}
+
+.prod-modal-btn--confirm.btn-confirm-plan {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--fleet-text-primary);
+}
+
+.prod-modal-btn--confirm.btn-confirm-plan:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}

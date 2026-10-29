@@ -15,6 +15,7 @@ import {
   pauseFactory,
   resumeFactory,
   runFactoryCycle,
+  updateSchedulerSettings,
 } from '../../api';
 import {
   formatFactoryState,
@@ -199,6 +200,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const togglePermission = useMemo(() => canToggleFactory(instance), [instance]);
 
   const isPaused = factoryStateInfo.isPaused;
+  const isSchedulerEnabled = Boolean(systemStatus?.scheduler_enabled);
+  const isAutoPublish = Boolean(systemStatus?.auto_publish_enabled ?? (systemStatus?.auto_publish === 'ON' || systemStatus?.auto_publish === true));
+  const isDryRun = Boolean(systemStatus?.dry_run_enabled ?? (systemStatus?.dry_run === 'ON' || systemStatus?.dry_run === true));
 
   // Ações de Pausar / Retomar a Fábrica
   const handleOpenConfirm = (actionType) => {
@@ -259,6 +263,40 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   };
 
   // -------------------------------------------------------------
+  const handleToggleSchedulerSetting = async (key, nextValue) => {
+    if (!togglePermission.canToggle) {
+      setActionFeedback({
+        type: 'error',
+        text: togglePermission.reason || 'Apenas nó PRIMARY pode alterar configurações do agendador.',
+      });
+      return;
+    }
+
+    setIsActionPending(true);
+    setActionFeedback(null);
+    try {
+      await updateSchedulerSettings({ [key]: nextValue });
+      const labelMap = {
+        scheduler_enabled: 'Agendamento Automático',
+        auto_publish_enabled: 'Auto Publicação',
+        dry_run: 'Dry Run (Modo Simulação)',
+      };
+      const label = labelMap[key] || key;
+      setActionFeedback({
+        type: 'success',
+        text: `Configuração '${label}' alterada com sucesso para ${nextValue ? 'ATIVADO' : 'DESATIVADO'}.`,
+      });
+      await fetchData();
+    } catch (err) {
+      setActionFeedback({
+        type: 'error',
+        text: formatApiError(err, 'atualizar configuração do agendador'),
+      });
+    } finally {
+      setIsActionPending(false);
+    }
+  };
+
   // Handlers de Edição de Ajustes por Canal (SIS2 + Controles Únicos)
   // -------------------------------------------------------------
   const handleStartEdit = useCallback(
@@ -688,25 +726,70 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                 </span>
               </div>
 
-              <div className="sys-stat-row">
-                <span className="sys-stat-label">Agendamento Automático</span>
-                <span className="sys-stat-value">
-                  {systemStatus?.scheduler_enabled ? 'ATIVO' : 'DESATIVADO'}
-                </span>
+              <div className="sys-switch-row">
+                <div className="sys-switch-label-group">
+                  <span className="sys-switch-title">Agendamento Automático</span>
+                  <span className="sys-switch-desc">Ativa o planejamento e verificação da fila</span>
+                </div>
+                <div className="sys-switch-control">
+                  <span className="sys-switch-status-text" style={{ color: isSchedulerEnabled ? '#10B981' : '#8E96A4' }}>
+                    {isSchedulerEnabled ? 'ATIVO' : 'DESATIVADO'}
+                  </span>
+                  <label className="sys-switch">
+                    <input
+                      type="checkbox"
+                      checked={isSchedulerEnabled}
+                      onChange={(e) => handleToggleSchedulerSetting('scheduler_enabled', e.target.checked)}
+                      disabled={!togglePermission.canToggle || isActionPending}
+                      title={!togglePermission.canToggle ? togglePermission.reason : 'Alternar Agendamento Automático'}
+                    />
+                    <span className="sys-slider" />
+                  </label>
+                </div>
               </div>
 
-              <div className="sys-stat-row">
-                <span className="sys-stat-label">Auto Publicação</span>
-                <span className="sys-stat-value">
-                  {formatProviderValue(systemStatus?.auto_publish || (systemStatus?.auto_publish_enabled ? 'ON' : 'OFF'))}
-                </span>
+              <div className="sys-switch-row">
+                <div className="sys-switch-label-group">
+                  <span className="sys-switch-title">Auto Publicação</span>
+                  <span className="sys-switch-desc">Autoriza envio de posts prontos para redes sociais</span>
+                </div>
+                <div className="sys-switch-control">
+                  <span className="sys-switch-status-text" style={{ color: isAutoPublish ? '#10B981' : '#8E96A4' }}>
+                    {isAutoPublish ? 'ATIVO' : 'DESATIVADO'}
+                  </span>
+                  <label className="sys-switch">
+                    <input
+                      type="checkbox"
+                      checked={isAutoPublish}
+                      onChange={(e) => handleToggleSchedulerSetting('auto_publish_enabled', e.target.checked)}
+                      disabled={!togglePermission.canToggle || isActionPending}
+                      title={!togglePermission.canToggle ? togglePermission.reason : 'Alternar Auto Publicação'}
+                    />
+                    <span className="sys-slider" />
+                  </label>
+                </div>
               </div>
 
-              <div className="sys-stat-row">
-                <span className="sys-stat-label">Dry Run (Simulação)</span>
-                <span className="sys-stat-value">
-                  {formatProviderValue(systemStatus?.dry_run)}
-                </span>
+              <div className="sys-switch-row">
+                <div className="sys-switch-label-group">
+                  <span className="sys-switch-title">Dry Run (Simulação)</span>
+                  <span className="sys-switch-desc">Simula despacho sem postar externamente</span>
+                </div>
+                <div className="sys-switch-control">
+                  <span className="sys-switch-status-text" style={{ color: isDryRun ? '#F59E0B' : '#8E96A4' }}>
+                    {isDryRun ? 'SIMULAÇÃO' : 'REAL'}
+                  </span>
+                  <label className="sys-switch">
+                    <input
+                      type="checkbox"
+                      checked={isDryRun}
+                      onChange={(e) => handleToggleSchedulerSetting('dry_run', e.target.checked)}
+                      disabled={!togglePermission.canToggle || isActionPending}
+                      title={!togglePermission.canToggle ? togglePermission.reason : 'Alternar Dry Run (Modo Simulação)'}
+                    />
+                    <span className="sys-slider sys-slider--warning" />
+                  </label>
+                </div>
               </div>
 
               <div className="sys-stat-row">

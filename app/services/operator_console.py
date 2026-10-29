@@ -2116,6 +2116,7 @@ def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] =
         "auto_publish_enabled": bool(sched_settings.get("auto_publish_enabled", False)),
         "auto_publish": "ON" if sched_settings.get("auto_publish_enabled") else "OFF",
         "dry_run": "ON" if sched_settings.get("dry_run") else "OFF",
+        "dry_run_enabled": bool(sched_settings.get("dry_run", True)),
         "growth_mode": growth_mode.upper(),
         "heartbeats": heartbeats,
         "last_generation_at": last_gen_iso,

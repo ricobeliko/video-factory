@@ -1,4 +1,4 @@
-import { formatStatus } from '../Fleet/fleetLogic';
+import { formatStatus, formatVideoFormat } from '../Fleet/fleetLogic';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   getSystemStatus,
@@ -662,13 +662,6 @@ export default function SystemView({ onNavigate, focusChannelId }) {
 
             <div className="sys-card-body">
               <div className="sys-stat-row">
-                <span className="sys-stat-label">Estado Operacional</span>
-                <span className="sys-stat-value">
-                  <strong>{factoryStateInfo.text}</strong>
-                </span>
-              </div>
-
-              <div className="sys-stat-row">
                 <span className="sys-stat-label">Papel da Instância</span>
                 <span className="sys-stat-value">
                   <span
@@ -689,14 +682,14 @@ export default function SystemView({ onNavigate, focusChannelId }) {
               </div>
 
               <div className="sys-stat-row">
-                <span className="sys-stat-label">Worker do Agendador</span>
+                <span className="sys-stat-label">Processo do Agendador</span>
                 <span className="sys-stat-value">
                   {formatProviderValue(systemStatus?.scheduler_worker)}
                 </span>
               </div>
 
               <div className="sys-stat-row">
-                <span className="sys-stat-label">Agendador Ativo</span>
+                <span className="sys-stat-label">Agendamento Automático</span>
                 <span className="sys-stat-value">
                   {systemStatus?.scheduler_enabled ? 'ATIVO' : 'DESATIVADO'}
                 </span>
@@ -801,11 +794,6 @@ export default function SystemView({ onNavigate, focusChannelId }) {
               </div>
 
               <div className="sys-stat-row">
-                <span className="sys-stat-label">Papel Operacional</span>
-                <span className="sys-stat-value">{formatProviderValue(apiHealth?.role)}</span>
-              </div>
-
-              <div className="sys-stat-row">
                 <span className="sys-stat-label">Web UI V2 Pronta</span>
                 <span className="sys-stat-value">
                   {apiHealth?.webui_v2_available ? 'SIM' : 'NÃO'}
@@ -829,12 +817,14 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                 </span>
               </div>
 
-              <div className="sys-stat-row">
-                <span className="sys-stat-label">Acesso Remoto</span>
-                <span className="sys-stat-value" title={instance?.remote_access_url || ''}>
-                  {formatProviderValue(instance?.remote_access_url)}
-                </span>
-              </div>
+              {instance?.remote_access_url && (
+                <div className="sys-stat-row">
+                  <span className="sys-stat-label">Acesso Remoto</span>
+                  <span className="sys-stat-value" title={instance.remote_access_url}>
+                    {instance.remote_access_url}
+                  </span>
+                </div>
+              )}
             </div>
           </section>
         </div>
@@ -986,9 +976,6 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                         <span className="sys-channel-id">{pid}</span>
                       </div>
                       <div className="sys-channel-header-right">
-                        <span className="sys-role-badge">
-                          {effectiveGrowthMode}
-                        </span>
                         {!isEditing && (
                           <button
                             type="button"
@@ -1068,7 +1055,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Nicho / Formato</span>
                         <span className="sys-stat-value">
-                          {formatProviderValue(ch.niche)} / {formatProviderValue(ch.format || ws.editorial?.video_format)}
+                          {formatProviderValue(ch.niche)} / {formatVideoFormat(ch.format || ws.editorial?.video_format).label}
                         </span>
                       </div>
 

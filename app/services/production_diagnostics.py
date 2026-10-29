@@ -316,7 +316,7 @@ def get_diagnostics_overview(
         elif auto_state_setting == "ERROR":
             factory_state = "ERROR"
         else:
-            factory_state = auto_state_setting or "IDLE"
+            factory_state = operator_console.get_consolidated_factory_state(db_path=effective_db)
 
         factory_msg = str(auto_settings.get("autonomous_message") or "")
         factory_error = auto_settings.get("autonomous_last_error")
@@ -1164,6 +1164,10 @@ def get_diagnostics_overview(
         channel_reason_code = status_eval.get("reason_code", "")
         channel_reason = status_eval.get("reason", "")
 
+        # Item 4: Remove o diagnóstico info redundante quando a causa do Pausado for AUTONOMOUS_DISABLED
+        if channel_status == STATUS_PAUSED and channel_reason_code == "AUTONOMOUS_DISABLED":
+            diagnoses = [d for d in diagnoses if d.get("code") != CODE_AUTONOMOUS_DISABLED]
+
         formatted_recent = [
             {
                 "task_id": g["task_id"],
@@ -1175,9 +1179,13 @@ def get_diagnostics_overview(
             for g in recent_10
         ]
 
+        prof_ctx = profile_manager.get_generation_profile_context(profile_id=pid, db_path=effective_db)
+        fmt = prof_ctx.get("video_format") or prof_ctx.get("content_style") or "traditional"
+
         channels_output.append({
             "profile_id": pid,
             "name": pname,
+            "format": fmt,
             "status": channel_status,
             "status_label": channel_status_label,
             "reason_code": channel_reason_code,

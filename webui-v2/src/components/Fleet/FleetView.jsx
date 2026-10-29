@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getFleetSummary } from '../../api';
+import { formatFactoryState } from '../System/systemLogic';
 import {
   formatStatus,
   formatVideoFormat,
@@ -104,6 +105,7 @@ export default function FleetView({ onNavigate }) {
   // Resolved channels list and totals
   const rawChannels = useMemo(() => data?.channels || [], [data]);
   const totals = useMemo(() => data?.totals || {}, [data]);
+  const factoryStateInfo = useMemo(() => formatFactoryState(data?.factory_state), [data?.factory_state]);
 
   // Sorted by severity for table display
   const sortedChannels = useMemo(() => {
@@ -253,13 +255,13 @@ export default function FleetView({ onNavigate }) {
           <span className="fleet-mono fleet-search-hint">Ctrl K</span>
         </label>
 
-        {/* API / Engine status */}
+        {/* API / Engine status com formatFactoryState */}
         <div className="fleet-status-indicator">
           <span
-            className={`fleet-status-dot ${error ? 'offline' : ''}`}
+            className={`fleet-status-dot ${error ? 'offline' : factoryStateInfo.isPaused ? 'paused' : factoryStateInfo.variant === 'degraded' ? 'degraded' : ''}`}
             aria-hidden="true"
           />
-          <span className="fleet-mono">Motor V2</span>
+          <span className="fleet-mono">Fábrica: {factoryStateInfo.text}</span>
           {lastFetchTime && (
             <span className="fleet-sync-label fleet-mono">
               (atualizado há {secondsSinceSync}s)

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getDiagnosticsOverview } from '../../api';
+import { formatFactoryState } from '../System/systemLogic';
 import {
   sortDiagnosesBySeverity,
   formatTimeAgo,
@@ -92,6 +93,7 @@ export default function DiagnosticsView({ onNavigate }) {
 
   const rawChannels = useMemo(() => data?.channels || [], [data]);
   const factory = useMemo(() => data?.factory || {}, [data]);
+  const factoryStateInfo = useMemo(() => formatFactoryState(factory), [factory]);
 
   const summary = useMemo(() => {
     return calculateFactorySummary(rawChannels);
@@ -231,12 +233,33 @@ export default function DiagnosticsView({ onNavigate }) {
               <span
                 className="diag-channel-badge"
                 style={{
-                  backgroundColor: factory.is_paused ? 'rgba(148, 163, 184, 0.15)' : (factory.state === 'ERROR' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)'),
-                  color: factory.is_paused ? '#94a3b8' : (factory.state === 'ERROR' ? '#f87171' : '#34d399'),
-                  border: `1px solid ${factory.is_paused ? 'rgba(148, 163, 184, 0.3)' : (factory.state === 'ERROR' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)')}`,
+                  backgroundColor: factoryStateInfo.isPaused
+                    ? 'rgba(148, 163, 184, 0.15)'
+                    : factoryStateInfo.variant === 'error'
+                    ? 'rgba(239, 68, 68, 0.15)'
+                    : factoryStateInfo.variant === 'degraded'
+                    ? 'rgba(245, 158, 11, 0.15)'
+                    : 'rgba(16, 185, 129, 0.15)',
+                  color: factoryStateInfo.isPaused
+                    ? '#94a3b8'
+                    : factoryStateInfo.variant === 'error'
+                    ? '#f87171'
+                    : factoryStateInfo.variant === 'degraded'
+                    ? '#fbbf24'
+                    : '#34d399',
+                  border: `1px solid ${
+                    factoryStateInfo.isPaused
+                      ? 'rgba(148, 163, 184, 0.3)'
+                      : factoryStateInfo.variant === 'error'
+                      ? 'rgba(239, 68, 68, 0.3)'
+                      : factoryStateInfo.variant === 'degraded'
+                      ? 'rgba(245, 158, 11, 0.3)'
+                      : 'rgba(16, 185, 129, 0.3)'
+                  }`,
                 }}
               >
-                {factory.is_paused ? '⏸ Pausada' : (factory.state === 'ERROR' ? '🚨 Erro' : '● Ativa')}
+                {factoryStateInfo.isPaused ? '⏸ ' : factoryStateInfo.variant === 'error' ? '🚨 ' : factoryStateInfo.variant === 'degraded' ? '⚠️ ' : '● '}
+                {factoryStateInfo.text}
               </span>
               {factory.primary_instance?.node_name && (
                 <span className="diag-node-badge" title={`PID: ${factory.primary_instance.pid || '—'}`}>
@@ -399,12 +422,7 @@ export default function DiagnosticsView({ onNavigate }) {
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {isOff && (
-                        <span className="diag-badge-off" title="Produção autônoma desativada pelo operador">
-                          ⏻ Desligado
-                        </span>
-                      )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <span
                         className="diag-channel-badge"
                         style={{
@@ -416,6 +434,18 @@ export default function DiagnosticsView({ onNavigate }) {
                         <span aria-hidden="true">{statusBadge.icon}</span>
                         <span>{statusBadge.label}</span>
                       </span>
+                      {chan.reason && (
+                        <span
+                          className="diag-channel-reason"
+                          style={{
+                            fontSize: '11px',
+                            color: '#9099AA',
+                            fontWeight: 500,
+                          }}
+                        >
+                          {chan.reason}
+                        </span>
+                      )}
                     </div>
                   </div>
 

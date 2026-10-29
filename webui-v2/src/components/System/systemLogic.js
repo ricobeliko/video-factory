@@ -25,7 +25,7 @@ export function formatFactoryState(systemDataOrState) {
     isPaused = state === 'PAUSED';
   } else if (typeof systemDataOrState === 'object') {
     isPaused = Boolean(systemDataOrState.is_paused);
-    state = String(systemDataOrState.factory_state || (isPaused ? 'PAUSED' : 'RUNNING')).toUpperCase();
+    state = String(systemDataOrState.factory_state || systemDataOrState.state || (isPaused ? 'PAUSED' : 'RUNNING')).toUpperCase();
   }
 
   if (isPaused || state === 'PAUSED') {
@@ -37,7 +37,7 @@ export function formatFactoryState(systemDataOrState) {
     };
   }
 
-  if (state === 'RUNNING') {
+  if (state === 'RUNNING' || state === 'IDLE' || state === 'ACTIVE') {
     return {
       label: 'EM OPERAÇÃO',
       text: 'Em Operação',

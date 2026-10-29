@@ -511,7 +511,7 @@ class TestApiV2FleetSummary(unittest.TestCase):
         summary = operator_console.get_fleet_summary(db_path=self.db_path)
         self.assertEqual(
             summary["factory_state"],
-            operator_console.get_factory_state(db_path=self.db_path),
+            operator_console.get_consolidated_factory_state(db_path=self.db_path),
         )
 
         for ch in summary["channels"]:

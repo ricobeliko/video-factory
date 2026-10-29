@@ -687,7 +687,7 @@ def test_ro_connection_guarantees_and_non_existent_db():
         conn_pre.close()
 
         overview = production_diagnostics.get_diagnostics_overview(db_path=db_file)
-        assert overview["factory"]["state"] == "IDLE"
+        assert overview["factory"]["state"] == operator_console.get_consolidated_factory_state(db_file)
         assert any(c["profile_id"] == "c1" for c in overview["channels"])
 
         conn_post = sqlite3.connect(db_file)
@@ -890,7 +890,7 @@ def test_no_monkeypatching_identity_preserved():
         profile_manager.ensure_default_profile(db_file)
 
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file)
-        assert res["factory"]["state"] in ("IDLE", "RUNNING")
+        assert res["factory"]["state"] in ("IDLE", "RUNNING", "DEGRADED")
 
     assert scheduler.init_db is funcs_before["sched_init"]
     assert scheduler.get_connection is funcs_before["sched_conn"]
@@ -1132,15 +1132,14 @@ def test_detector_autonomous_disabled_and_gap_suppression():
         # Status deve ser PAUSADO porque a produção está desligada para o canal
         assert chan["status"] == production_diagnostics.STATUS_PAUSED
         assert chan["limits"]["autonomous_enabled"] is False
+        assert chan["reason_code"] == "AUTONOMOUS_DISABLED"
+        assert "desativad" in chan["reason"].lower() or "desligad" in chan["reason"].lower()
 
         diag_codes = [d["code"] for d in chan["diagnoses"]]
-        assert production_diagnostics.CODE_AUTONOMOUS_DISABLED in diag_codes
+        # Item 4: diagnóstico info redundante removido quando a causa do Pausado for AUTONOMOUS_DISABLED
+        assert production_diagnostics.CODE_AUTONOMOUS_DISABLED not in diag_codes
         # NO_GENERATION_GAP NÃO pode disparar para canal desligado
         assert production_diagnostics.CODE_NO_GENERATION_GAP not in diag_codes
-
-        dis_diag = next(d for d in chan["diagnoses"] if d["code"] == production_diagnostics.CODE_AUTONOMOUS_DISABLED)
-        assert dis_diag["severity"] == production_diagnostics.SEVERITY_INFO
-        assert dis_diag["since"] is not None
 
 
 def test_detector_daily_approved_cap_reached():

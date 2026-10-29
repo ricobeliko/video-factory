@@ -232,3 +232,40 @@ test('8. Controle único da fábrica: FactoryHeader sem botões de ação (com a
   assert.equal(drawerSource.includes('Disparar Ciclo do Canal'), true);
   assert.equal(drawerSource.includes('profileId: channelData?.profile_id'), true);
 });
+
+
+test('9. Polimento Fonte Única: rótulos únicos, sem duplicidade visual e formatador de estado canônico compartilhado', () => {
+  const systemPath = path.resolve(__dirname, '../components/System/SystemView.jsx');
+  const headerPath = path.resolve(__dirname, '../components/FactoryHeader.jsx');
+  const fleetPath = path.resolve(__dirname, '../components/Fleet/FleetView.jsx');
+  const diagPath = path.resolve(__dirname, '../components/Diagnostics/DiagnosticsView.jsx');
+
+  const systemSource = fs.readFileSync(systemPath, 'utf8');
+  const headerSource = fs.readFileSync(headerPath, 'utf8');
+  const fleetSource = fs.readFileSync(fleetPath, 'utf8');
+  const diagSource = fs.readFileSync(diagPath, 'utf8');
+
+  // Item 1: Sem duplicidade de Estado Operacional e sem Papel Operacional repetido
+  assert.equal(systemSource.includes('Estado Operacional'), false);
+  assert.equal(systemSource.includes('Papel Operacional'), false);
+  assert.equal(systemSource.includes('Papel da Instância'), true);
+  assert.equal(systemSource.includes('Processo do Agendador'), true);
+  assert.equal(systemSource.includes('Agendamento Automático'), true);
+
+  // Item 2: Ajustes por Canal não repete o selo de modo de crescimento no cabeçalho
+  assert.equal(systemSource.includes('<span className="sys-role-badge">\n                          {effectiveGrowthMode}'), false);
+
+  // Item 3: Todas as 4 visões utilizam formatFactoryState
+  assert.equal(headerSource.includes('formatFactoryState'), true);
+  assert.equal(fleetSource.includes('formatFactoryState'), true);
+  assert.equal(diagSource.includes('formatFactoryState'), true);
+  assert.equal(systemSource.includes('formatFactoryState'), true);
+
+  // Item 4: Diagnóstico não exibe selo redundante "Desligado" e exibe chan.reason
+  assert.equal(diagSource.includes('diag-badge-off'), false);
+  assert.equal(diagSource.includes('diag-channel-reason'), true);
+  assert.equal(diagSource.includes('{chan.reason}'), true);
+
+  // Item 6: Sistema utiliza formatVideoFormat
+  assert.equal(systemSource.includes('formatVideoFormat'), true);
+});

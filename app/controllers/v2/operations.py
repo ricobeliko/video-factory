@@ -198,6 +198,7 @@ def get_channels_overview(request: Request):
         channels_data.append({
             "channel_id": pid,
             "profile_id": pid,
+            "format": p.get("format") or "traditional",
             "is_quiz": profile_manager.is_quiz_profile(pid),
             "name": p.get("name"),
             "slug": p.get("slug"),

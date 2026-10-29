@@ -914,7 +914,11 @@ def get_instance_info(db_path: Optional[str] = None) -> Dict[str, Any]:
         "heartbeat_seconds_ago": None,
         "is_heartbeat_stale": False,
         "uptime_str": "—",
-        "remote_access_url": "http://0.0.0.0:8501 (LAN / Tailscale)",
+        "remote_access_url": (
+            f"http://{getattr(config, 'listen_host', '')}:{getattr(config, 'listen_port', 8080)}"
+            if getattr(config, "listen_host", "0.0.0.0") and getattr(config, "listen_host", "0.0.0.0") != "0.0.0.0"
+            else None
+        ),
     }
 
     if local_started:
@@ -1016,6 +1020,27 @@ def emergency_pause(db_path: Optional[str] = None) -> None:
         db_path=db_path,
     )
     logger.critical("[OPERATOR_CONSOLE] PARADA DE EMERGÊNCIA ACIONADA.")
+
+
+def get_consolidated_factory_state(db_path: Optional[str] = None) -> str:
+    """Retorna o estado operacional consolidado e canônico da fábrica.
+
+    Fonte única da verdade consumida por Frota, Diagnóstico, Factory Live e Sistema:
+    - 'PAUSED': Fábrica pausada operacionalmente pelo operador (ou parada de emergência).
+    - 'ERROR': Falha crítica em dependência vital (FFmpeg indisponível).
+    - 'DEGRADED': Provedor secundário ou essencial degradado/indisponível.
+    - 'RUNNING': Todos os provedores saudáveis e fábrica ativa.
+    """
+    factory_state = get_factory_state(db_path=db_path)
+    if factory_state in (FACTORY_STATE_PAUSED, "EMERGENCY_PAUSED"):
+        return FACTORY_STATE_PAUSED
+
+    providers = get_provider_health_summary(db_path=db_path)
+    if any(p.get("status") == PROVIDER_UNAVAILABLE for k, p in providers.items() if k == "FFmpeg"):
+        return "ERROR"
+    if any(p.get("status") in (PROVIDER_DEGRADED, PROVIDER_UNAVAILABLE) for p in providers.values()):
+        return "DEGRADED"
+    return FACTORY_STATE_RUNNING
 
 
 # ---------------------------------------------------------------------------
@@ -1464,9 +1489,12 @@ def get_profile_operations_overview(db_path: Optional[str] = None, task_base_dir
             ready_stock_val = None
 
         st_info = status_map.get(pid) or {"status": "paused", "label": "Pausado", "reason_code": "UNKNOWN", "reason": None}
+        prof_ctx = profile_manager.get_generation_profile_context(profile_id=pid, db_path=db_path)
+        fmt = prof_ctx.get("video_format") or prof_ctx.get("content_style") or "traditional"
 
         overview.append({
             "profile_id": pid,
+            "format": fmt,
             "name": p.get("name"),
             "slug": p.get("slug"),
             "niche": p.get("niche") or "—",
@@ -2038,15 +2066,8 @@ def get_system_status(db_path: Optional[str] = None, profile_id: Optional[str] =
     if scheduler_status.get("state") == "error":
         sched_worker_state = "ERROR"
 
-    # Status consolidado da Factory
-    if factory_state == FACTORY_STATE_PAUSED:
-        consolidated_factory = FACTORY_STATE_PAUSED
-    elif any(p.get("status") == PROVIDER_UNAVAILABLE for k, p in providers.items() if k == "FFmpeg"):
-        consolidated_factory = "ERROR"
-    elif any(p.get("status") in (PROVIDER_DEGRADED, PROVIDER_UNAVAILABLE) for p in providers.values()):
-        consolidated_factory = "DEGRADED"
-    else:
-        consolidated_factory = FACTORY_STATE_RUNNING
+    # Status consolidado da Factory via helper canônico único
+    consolidated_factory = get_consolidated_factory_state(db_path=db_path)
 
     # Última geração concluída
     gen_summary = get_generation_queue_summary()
@@ -4011,8 +4032,8 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             rows = conn.execute("SELECT key, value FROM autopilot_settings;").fetchall()
             settings_map = {r["key"]: str(r["value"]) for r in rows if r["key"] is not None}
 
-        # 5. Estado da fábrica via fonte canônica (get_factory_state)
-        factory_state = get_factory_state(db_path=effective_db)
+        # 5. Estado da fábrica via fonte canônica (get_consolidated_factory_state)
+        factory_state = get_consolidated_factory_state(db_path=effective_db)
         is_factory_paused = factory_state in ("PAUSED", "EMERGENCY_PAUSED")
 
         # Janela de tempo de 24 horas para falhas e aprovações

@@ -3274,7 +3274,11 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
         cname = primary_ch.get("channel_name") if primary_ch else None
         platform = primary_ch.get("platform") if primary_ch else None
 
-        auto_status = autonomous_production.get_autonomous_status(profile_id=pid, db_path=db_path)
+        auto_status = autonomous_production.get_autonomous_status(
+            profile_id=pid,
+            db_path=db_path,
+            include_canonical_status=False,
+        )
         auto_enabled = auto_status.get("enabled", False)
         auto_state = auto_status.get("state", "disabled")
         auto_msg = auto_status.get("message", "")

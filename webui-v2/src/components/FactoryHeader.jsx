@@ -23,7 +23,7 @@ export default function FactoryHeader({
   const workerRunning = Boolean(systemStatus?.worker_running);
   const schedulerRunning = Boolean(systemStatus?.scheduler_running);
   const autoPublish = Boolean(systemStatus?.auto_publish_enabled);
-  const dryRun = Boolean(systemStatus?.dry_run);
+  const dryRun = Boolean(systemStatus?.dry_run_enabled);
 
   const handleGoToSystem = () => {
     if (onSelectTab) {

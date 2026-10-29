@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getProductionOverview } from '../../api';
+import { getProductionOverview, runSchedulerCycle, planSchedule } from '../../api';
 import { formatVideoFormat } from '../Fleet/fleetLogic';
 import {
   formatAgeHours,
@@ -29,6 +29,86 @@ export default function ProductionView({ onNavigate }) {
 
   // Filtro por canal ('all' por padrão)
   const [selectedProfileId, setSelectedProfileId] = useState('all');
+
+  // Ações de Publicação e Agendamento
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [actionResult, setActionResult] = useState(null);
+  const [isActionExecuting, setIsActionExecuting] = useState(false);
+
+  const handleConfirmPublishNow = async () => {
+    setIsActionExecuting(true);
+    setActionResult(null);
+    try {
+      const res = await runSchedulerCycle();
+      const payload = res?.data || res || {};
+      const status = payload.status;
+      if (status === 'published') {
+        setActionResult({
+          type: 'success',
+          text: `Post despachado com sucesso para ${payload.platform || 'plataforma social'} (tarefa ${payload.task_id || '—'})!`,
+        });
+      } else if (status === 'dry_run') {
+        setActionResult({
+          type: 'success',
+          text: `Simulação concluída (Dry Run): 1 post processado para ${payload.platform || 'plataforma social'}.`,
+        });
+      } else if (status === 'idle' || status === 'no_due_posts') {
+        setActionResult({
+          type: 'info',
+          text: 'Nenhum post agendado com horário vencido para despacho no momento.',
+        });
+      } else if (status === 'skipped') {
+        setActionResult({
+          type: 'warning',
+          text: `Despacho ignorado: ${payload.reason || 'agendador desativado ou fábrica pausada'}.`,
+        });
+      } else {
+        setActionResult({
+          type: 'info',
+          text: `Ciclo executado: status=${status}`,
+        });
+      }
+      await fetchData();
+    } catch (err) {
+      setActionResult({
+        type: 'error',
+        text: err?.message || 'Falha ao executar ciclo de publicação.',
+      });
+    } finally {
+      setIsActionExecuting(false);
+      setConfirmAction(null);
+    }
+  };
+
+  const handleConfirmPlanSchedule = async () => {
+    setIsActionExecuting(true);
+    setActionResult(null);
+    try {
+      const res = await planSchedule();
+      const payload = res?.data || res || {};
+      const count = Number(payload.planned_count || 0);
+      if (count > 0) {
+        setActionResult({
+          type: 'success',
+          text: `Agenda replanejada com sucesso: ${count} novo(s) post(s) agendado(s)!`,
+        });
+      } else {
+        setActionResult({
+          type: 'info',
+          text: 'Nenhum novo vídeo pendente de agendamento no estoque.',
+        });
+      }
+      await fetchData();
+    } catch (err) {
+      setActionResult({
+        type: 'error',
+        text: err?.message || 'Falha ao planejar agenda.',
+      });
+    } finally {
+      setIsActionExecuting(false);
+      setConfirmAction(null);
+    }
+  };
 
   const isFetchingRef = useRef(false);
 
@@ -466,13 +546,51 @@ export default function ProductionView({ onNavigate }) {
                 🗓️ Agendados
               </h2>
               <span className="prod-badge-count fleet-mono">{scheduledSection.total}</span>
+              {formatShowingCount(scheduledSection.items.length, scheduledSection.total) && (
+                <span className="prod-section-showing-hint">
+                  {formatShowingCount(scheduledSection.items.length, scheduledSection.total)}
+                </span>
+              )}
             </div>
-            {formatShowingCount(scheduledSection.items.length, scheduledSection.total) && (
-              <span className="prod-section-showing-hint">
-                {formatShowingCount(scheduledSection.items.length, scheduledSection.total)}
-              </span>
-            )}
+
+            <div className="prod-actions-group">
+              <button
+                type="button"
+                className="prod-btn-action prod-btn-action--plan"
+                onClick={() => setConfirmAction('plan')}
+                disabled={isActionExecuting}
+                title="Planeja a agenda para vídeos prontos e redistribui horários futuros"
+              >
+                📅 Replanejar Agenda
+              </button>
+              <button
+                type="button"
+                className="prod-btn-action prod-btn-action--publish"
+                onClick={() => setConfirmAction('publish')}
+                disabled={isActionExecuting}
+                title="Despacha imediatamente o próximo post com horário vencido"
+              >
+                ⚡ Publicar Agora
+              </button>
+            </div>
           </div>
+
+          {actionResult && (
+            <div
+              className={`prod-action-banner prod-action-banner--${actionResult.type}`}
+              role="status"
+            >
+              <span className="prod-action-banner-text">{actionResult.text}</span>
+              <button
+                type="button"
+                className="prod-action-banner-close"
+                onClick={() => setActionResult(null)}
+                aria-label="Fechar notificação"
+              >
+                ×
+              </button>
+            </div>
+          )}
 
           <div className="prod-table-wrapper">
             {scheduledSection.items.length === 0 ? (
@@ -605,6 +723,42 @@ export default function ProductionView({ onNavigate }) {
           </div>
         </section>
       </main>
+
+      {/* Modal de Confirmação Rápida */}
+      {confirmAction && (
+        <div className="prod-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+          <div className="prod-modal-card">
+            <h3 id="confirm-modal-title" className="prod-modal-title">
+              {confirmAction === 'publish' ? '⚡ Despachar Publicação Agora?' : '📅 Replanejar Agenda?'}
+            </h3>
+            <p className="prod-modal-desc">
+              {confirmAction === 'publish'
+                ? 'Deseja disparar um ciclo de publicação imediato para o próximo post com horário vencido?'
+                : 'Deseja recomputar os horários futuros de agendamento e alocar vídeos pendentes no estoque?'}
+            </p>
+            <div className="prod-modal-actions">
+              <button
+                type="button"
+                className="prod-modal-btn prod-modal-btn--cancel"
+                onClick={() => setConfirmAction(null)}
+                disabled={isActionExecuting}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className={`prod-modal-btn prod-modal-btn--confirm ${
+                  confirmAction === 'publish' ? 'btn-confirm-publish' : 'btn-confirm-plan'
+                }`}
+                onClick={confirmAction === 'publish' ? handleConfirmPublishNow : handleConfirmPlanSchedule}
+                disabled={isActionExecuting}
+              >
+                {isActionExecuting ? 'Executando...' : 'Confirmar e Executar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

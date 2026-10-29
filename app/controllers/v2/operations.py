@@ -1,14 +1,18 @@
 """Operational endpoints for Web UI V2."""
 
+import os
 from typing import Optional
+from loguru import logger
 
 from fastapi import Depends, Query, Request
 from pydantic import BaseModel, Field
 
+from app.models import const
+
 from app.controllers import base
 from app.controllers.v2.base import new_router
 from app.models.exception import HttpException
-from app.services import autonomous_production, operator_console, profile_manager
+from app.services import autonomous_production, operator_console, profile_manager, scheduler
 from app.utils import utils
 
 router = new_router(dependencies=[Depends(base.verify_token)])
@@ -288,6 +292,13 @@ class UpdateVoiceSettingsRequest(BaseModel):
     voice_rate: Optional[float] = Field(None, description="Velocidade da voz (0.5 a 2.0)")
     voice_volume: Optional[float] = Field(None, description="Volume da voz (0.0 a 1.0)")
     tts_server: Optional[str] = Field(None, description="Provedor de TTS (ex: azure-tts-v1, elevenlabs)")
+
+
+class UpdateSchedulerSettingsRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    auto_publish_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita a publicação automática")
+    scheduler_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita o agendamento de posts")
+    dry_run: Optional[bool] = Field(None, description="Habilita ou desabilita o modo de simulação (dry run)")
 
 
 @router.patch(
@@ -676,6 +687,177 @@ def get_scheduler_posts(
             if p.get("profile_id") == profile_id
         ]
     return utils.get_response(200, summary)
+
+
+@router.patch(
+    "/scheduler/settings",
+    summary="Update global scheduler settings (auto_publish_enabled, scheduler_enabled, dry_run)",
+)
+def update_scheduler_settings(
+    request: Request,
+    payload: UpdateSchedulerSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can change scheduler settings",
+        )
+
+    update_dict = payload.model_dump(exclude_unset=True)
+    if not update_dict:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message="No valid scheduler settings provided to update",
+        )
+
+    old_settings = scheduler.get_all_settings(db_path=db_path)
+
+    for k, v in update_dict.items():
+        old_v = old_settings.get(k)
+        scheduler.set_setting(k, v, db_path=db_path)
+        if old_v != v:
+            operator_console.log_operational_event(
+                component="scheduler",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="SCHEDULER_SETTINGS_UPDATED",
+                message=f"Scheduler setting '{k}' updated: {old_v} -> {v}",
+                metadata={
+                    "field": k,
+                    "old_value": old_v,
+                    "new_value": v,
+                },
+                db_path=db_path,
+            )
+
+    current = scheduler.get_all_settings(db_path=db_path)
+    return utils.get_response(
+        200,
+        {
+            "scheduler_enabled": current["scheduler_enabled"],
+            "auto_publish_enabled": current["auto_publish_enabled"],
+            "dry_run": current["dry_run"],
+        },
+        message="Scheduler settings updated successfully",
+    )
+
+
+@router.post(
+    "/scheduler/run-cycle",
+    summary="Trigger manual run of publication scheduler cycle",
+)
+def trigger_scheduler_cycle(request: Request):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can run scheduler cycle",
+        )
+
+    try:
+        result = scheduler.run_scheduler_cycle(db_path=db_path)
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity=operator_console.SEVERITY_INFO,
+            event_type="SCHEDULER_CYCLE_TRIGGERED",
+            message=f"Ciclo de publicação disparado manualmente: {result.get('status', 'unknown')}",
+            metadata={"result": result},
+            db_path=db_path,
+        )
+        return utils.get_response(200, result, message="Scheduler cycle executed successfully")
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error executing scheduler cycle: {exc}",
+        )
+
+
+@router.post(
+    "/scheduler/plan",
+    summary="Trigger manual schedule planning for completed unposted videos",
+)
+def plan_scheduler_schedule(request: Request):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can plan schedule",
+        )
+
+    try:
+        from app.services import state as sm
+        tasks_root = utils.task_dir()
+        tasks_map = {}
+
+        # 1. Carrega do state em memória
+        try:
+            runtime_tasks, _ = sm.state.get_all_tasks(1, 2000)
+            for t in runtime_tasks:
+                tid = t.get("task_id")
+                if tid:
+                    tasks_map[tid] = dict(t)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch runtime tasks from state: {exc}")
+
+        # 2. Varre diretório físico de tasks
+        if os.path.exists(tasks_root):
+            try:
+                with os.scandir(tasks_root) as entries:
+                    for entry in entries:
+                        if entry.is_dir() and not entry.name.startswith("."):
+                            tid = entry.name
+                            if tid not in tasks_map:
+                                video_file = scheduler.get_task_final_video(tid, task_base_dir=tasks_root)
+                                if video_file:
+                                    tasks_map[tid] = {
+                                        "task_id": tid,
+                                        "state": const.TASK_STATE_COMPLETE,
+                                        "video_file": video_file,
+                                    }
+            except Exception as exc:
+                logger.warning(f"Failed to scan task files for planning: {exc}")
+
+        all_tasks = list(tasks_map.values())
+        new_scheduled = scheduler.plan_schedule(all_tasks, db_path=db_path)
+        planned_count = int(new_scheduled) if isinstance(new_scheduled, int) else len(new_scheduled)
+
+        operator_console.log_operational_event(
+            component="scheduler",
+            severity=operator_console.SEVERITY_INFO,
+            event_type="SCHEDULE_PLANNED",
+            message=f"Planejamento de agenda executado: {planned_count} posts agendados",
+            metadata={
+                "planned_count": planned_count,
+            },
+            db_path=db_path,
+        )
+        return utils.get_response(
+            200,
+            {
+                "planned_count": planned_count,
+            },
+            message=f"Schedule planned: {planned_count} new posts scheduled",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error planning schedule: {exc}",
+        )
 
 
 @router.get(

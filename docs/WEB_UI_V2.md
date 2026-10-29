@@ -250,6 +250,9 @@ A API fina é construída utilizando o FastAPI existente no projeto (`app/asgi.p
 | `PATCH`| `/api/v2/channels/{profile_id}/schedule` | Atualiza janela de publicação e intervalo mínimo do canal | `profile_manager.update_profile_schedule()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
 | `PATCH`| `/api/v2/channels/{profile_id}/voice` | Atualiza voz, velocidade e volume por canal | `profile_manager.update_profile_voice_settings()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
 | `GET` | `/api/v2/scheduler/posts` | Resumo da fila do scheduler e próximos posts agendados | `operator_console.get_scheduler_queue_summary()` | READ | SQLite `scheduled_posts` | LOW |
+| `PATCH`| `/api/v2/scheduler/settings` | Atualiza flags globais do agendador (`auto_publish_enabled`, `scheduler_enabled`, `dry_run`) | `scheduler.set_setting()` | WRITE | SQLite `operator_settings` / `scheduler_settings` | HIGH |
+| `POST` | `/api/v2/scheduler/run-cycle` | Dispara ciclo imediato de publicação supervisionada ("Publicar Agora") | `scheduler.run_scheduler_cycle()` | WRITE | SQLite `scheduled_posts` / `publication_events` | HIGH |
+| `POST` | `/api/v2/scheduler/plan` | Replaneja horários futuros e aloca vídeos do estoque pronto ("Replanejar Agenda") | `scheduler.plan_schedule()` | WRITE | SQLite `scheduled_posts` | HIGH |
 | `GET` | `/api/v2/publications` | Histórico recente de publicações no YouTube com status terminal | `operator_console.get_recent_publications()` | READ | SQLite `publication_events` | LOW |
 | `GET` | `/api/v2/providers/health` | Resumo passivo de integridade e conectividade dos provedores | `operator_console.get_provider_health_summary()` | READ | Service Health Checks | LOW |
 | `GET` | `/api/v2/executions/live` | Visão multicanal ao vivo do pipeline de execução (UI-005) | `operator_console.get_live_execution_overview()` | READ | SQLite `tasks` / `scheduled_posts` | LOW |

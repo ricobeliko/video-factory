@@ -7,6 +7,7 @@ import {
 import { STAGE_BY_CODE, sanitizeDisplayText } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
 import { buildSystemChannelHash } from './System/systemEditLogic';
+import { formatStatus } from './Fleet/fleetLogic';
 
 /**
  * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5 + R7 + Controles Únicos).
@@ -196,6 +197,32 @@ export default function ExecutionDrawer({
             <div className="drawer-subtitle">
               {channelData?.channel_name ? `${channelData.channel_name} • ` : ''}Perfil: <code>{channelData?.profile_id}</code>
             </div>
+            {channelData?.channel_status && (() => {
+              const health = formatStatus(channelData.channel_status);
+              const hLabel = channelData.channel_status_label || health.label;
+              return (
+                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span
+                    className="mini-badge"
+                    style={{
+                      backgroundColor: health.tint,
+                      color: health.color,
+                      borderColor: health.sq,
+                      fontWeight: 600,
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                    }}
+                  >
+                    {health.glyph} Saúde: {hLabel}
+                  </span>
+                  {channelData.channel_reason && (
+                    <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                      — {channelData.channel_reason}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
 

@@ -834,8 +834,18 @@ def get_autonomous_status(
         except Exception:
             pass
 
+    # Status canônico via helper único de operator_console
+    canonical_status = None
+    try:
+        from app.services import operator_console
+        st_map = operator_console.get_channel_status_map(db_path=db_path)
+        canonical_status = st_map.get(target_profile)
+    except Exception as exc:
+        logger.warning(f"[AUTONOMOUS] Erro ao obter canonical_status para '{target_profile}': {exc}")
+
     return {
         "autonomous_mode_enabled": enabled,
+        "canonical_status": canonical_status,
         "state": state,
         "message": message,
         "last_result": last_result,

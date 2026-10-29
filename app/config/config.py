@@ -488,6 +488,44 @@ def load_config():
     return _load_toml_config(config_file)
 
 
+def _atomic_write_file(target_path: str, content: str) -> None:
+    """Grava conteudo em target_path atomicamente via arquivo temporario + os.replace,
+    com fallback para escrita in-place se ocorrer EBUSY (bind mount Docker).
+    """
+    target_dir = os.path.dirname(os.path.abspath(target_path)) or root_dir
+    temp_path = ""
+    try:
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".config-",
+            suffix=".toml.tmp",
+            dir=target_dir,
+        )
+        with os.fdopen(fd, mode="w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.replace(temp_path, target_path)
+        except OSError as exc:
+            if exc.errno != errno.EBUSY:
+                raise
+
+            logger.warning(
+                "atomic config replacement is unavailable for the mounted "
+                f"file, fallback to in-place write: {target_path}"
+            )
+            with open(target_path, mode="w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
 def save_config():
     """
     原子保存运行时配置。
@@ -530,36 +568,9 @@ def save_config():
         except (OSError, UnicodeError):
             pass
 
-        temp_path = ""
-        try:
-            fd, temp_path = tempfile.mkstemp(
-                prefix=".config-",
-                suffix=".toml.tmp",
-                dir=root_dir,
-            )
-            with os.fdopen(fd, mode="w", encoding="utf-8") as f:
-                f.write(serialized_config)
-                f.flush()
-                os.fsync(f.fileno())
-            try:
-                os.replace(temp_path, config_file)
-            except OSError as exc:
-                if exc.errno != errno.EBUSY:
-                    raise
-
-                logger.warning(
-                    "atomic config replacement is unavailable for the mounted "
-                    f"file, fallback to in-place write: {config_file}"
-                )
-                with open(config_file, mode="w", encoding="utf-8") as f:
-                    f.write(serialized_config)
-                    f.flush()
-                    os.fsync(f.fileno())
-            _cfg.clear()
-            _cfg.update(config_to_save)
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
+        _atomic_write_file(config_file, serialized_config)
+        _cfg.clear()
+        _cfg.update(config_to_save)
 
 
 _cfg = load_config()

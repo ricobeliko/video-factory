@@ -90,8 +90,8 @@ A tabela abaixo detalha cada painel, aba, botão, controle e formulário present
 
 | # | Recurso / Controle na V1 | Arquivo e Linha V1 | Estado na V2 | Tela e Arquivo V2 | Classificação | O que falta / Justificativa Técnica |
 | :-: | :--- | :--- | :-: | :--- | :-: | :--- |
-| **4.1** | **Configuração de Provedor LLM (Chave, Modelo, Base URL)** | `Main.py:3781-3950`<br>`middle_config_panel` | **AUSENTE** | `SystemView.jsx` | **BLOQUEIA** | Sem o Streamlit, o operador fica sem interface para trocar a API key do Gemini/Moonshot/OpenAI ou mudar o modelo padrão. Exige edição manual direta no `config.toml`. |
-| **4.2** | **Configuração do Upload-Post / Contas Sociais** | `Main.py:3672-3765`<br>`publish_config_panel` | **AUSENTE** | `SystemView.jsx` | **BLOQUEIA** | Configuração da API Key do Upload-Post, username, seleção de plataformas ativas (YouTube/TikTok), status de privacidade padrão (public/unlisted/private) e Made for Kids. |
+| **4.1** | **Configuração de Provedor LLM (Chave, Modelo, Base URL)** | `Main.py:3781-3950`<br>`middle_config_panel` | **COBERTA** | `SystemView.jsx`<br>`operations.py:764`<br>`provider_settings.py` | — | Coberto na aba Sistema (Chaves e Conexões). Provedor LLM ativo, modelo, base URL e chave de API com mascaramento seguro e gravação atômica em `config.toml` com backup automático. |
+| **4.2** | **Configuração do Upload-Post / Contas Sociais** | `Main.py:3672-3765`<br>`publish_config_panel` | **COBERTA** | `SystemView.jsx`<br>`operations.py:764`<br>`provider_settings.py` | — | Coberto na aba Sistema (Chaves e Conexões). Toggles ativo/auto-upload, chave API mascarada, username, plataformas ativas (YouTube/TikTok/Instagram), privacidade YouTube e Made for Kids com gravação atômica em `config.toml` e backup. |
 | **4.3** | **Chaves de Provedores de Mídia de Estoque (Pexels / Pixabay)** | `Main.py:4101-4130` | **AUSENTE** | `SystemView.jsx` | **PODE ESPERAR** | Chaves estáticas de bancos de imagem/vídeo gratuito. Raramente sofrem rotação após configuradas em produção. |
 | **4.4** | **Pool de Contas Google Flow (FLOW-MA1)** | `operator_console.py:1510` | **COBERTA** | `FlowAccountsSection.jsx`<br>`SystemView.jsx` | — | Gerenciamento de contas, prioridades, saldo de créditos e status do browser profile implementados na V2. |
 | **4.5** | **Backup e Restauração de Chaves em JSON** | `Main.py:3777`<br>`key_backup_panel` | **AUSENTE** | `webui-v2/` | **PODE ESPERAR** | Conveniência para migração entre máquinas. O `config.toml` do PC Forte já é o repositório persistente local. |
@@ -189,23 +189,14 @@ Com a conclusão da Missão de Controles de Agendamento e a reclassificação do
 
 ```mermaid
 flowchart TD
-    M1["Missão 1: Gestão de Chaves de API (Média)"] --> M2["Missão 2: Onboarding de Canais (Média)"]
-    M2 --> M3["Missão 3: Cutover do Motor Unificado (Média)"]
+    M2["Missão 1: Onboarding de Canais (Média)"] --> M3["Missão 2: Cutover do Motor Unificado (Média)"]
 ```
 
-> **Nota:** A antiga Missão de Controles de Agendamento (`v2/scheduler-controles`) foi concluída com sucesso (itens 3.1, 3.3 e 3.4 cobertos). O cancelamento de tarefa ativa (item 1.7) foi reclassificado como *PODE ESPERAR* e não bloqueia o cutover.
+> **Nota:** As Missões de Controles de Agendamento (`v2/scheduler-controles`, itens 3.1, 3.3 e 3.4) e de Gestão de Chaves e Provedores Críticos (`v2/settings-keys`, itens 4.1 e 4.2) foram concluídas com sucesso. Restam apenas 2 missões bloqueadoras para o cutover total.
 
 ---
 
 ### Detalhamento das Missões Restantes:
-
-#### Missão 1: Gestão de Chaves de API e Provedores Críticos (`v2/settings-keys`)
-- **Tamanho:** **Média**
-- **Escopo Backend:**
-  - Criar endpoint `GET /api/v2/settings/providers` retornando metadados de configuração e chaves com mascaramento seguro (`***xxxx`).
-  - Criar endpoint `PATCH /api/v2/settings/providers` com validação de formato e gravação atômica em `config.toml` (LLM ativo, Upload-Post e Pexels).
-- **Escopo Frontend:**
-  - Adicionar na tela **Sistema** uma seção expansível "Chaves de API & Conexões" com campos de senha/visibilidade para atualizar tokens de LLM e Upload-Post.
 
 #### Missão 2: Onboarding de Novos Canais na V2 (`v2/canal-onboarding`)
 - **Tamanho:** **Média**

@@ -347,3 +347,17 @@ export async function planSchedule() {
     method: 'POST',
   });
 }
+
+export async function getProviderSettings() {
+  return fetchJson('/api/v2/settings/providers');
+}
+
+export async function updateProviderSettings(settings = {}) {
+  return fetchJson('/api/v2/settings/providers', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(settings),
+  });
+}

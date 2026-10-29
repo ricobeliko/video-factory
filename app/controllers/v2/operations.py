@@ -1,7 +1,7 @@
 """Operational endpoints for Web UI V2."""
 
 import os
-from typing import Optional
+from typing import List, Optional
 from loguru import logger
 
 from fastapi import Depends, Query, Request
@@ -299,6 +299,23 @@ class UpdateSchedulerSettingsRequest(BaseModel):
     auto_publish_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita a publicação automática")
     scheduler_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita o agendamento de posts")
     dry_run: Optional[bool] = Field(None, description="Habilita ou desabilita o modo de simulação (dry run)")
+
+
+class UpdateProviderSettingsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    llm_provider: Optional[str] = Field(None, description="Provedor LLM ativo (ex: gemini, openai, moonshot)")
+    llm_api_key: Optional[str] = Field(None, description="Chave de API para o provedor LLM ativo")
+    llm_model_name: Optional[str] = Field(None, description="Nome do modelo para o provedor LLM ativo")
+    llm_base_url: Optional[str] = Field(None, description="Base URL para o provedor LLM ativo")
+
+    upload_post_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita Upload-Post")
+    upload_post_auto_upload: Optional[bool] = Field(None, description="Habilita auto-upload no Upload-Post")
+    upload_post_api_key: Optional[str] = Field(None, description="Chave de API do Upload-Post")
+    upload_post_username: Optional[str] = Field(None, description="Username/perfil do Upload-Post")
+    upload_post_platforms: Optional[List[str]] = Field(None, description="Plataformas ativas (youtube, tiktok, instagram)")
+    upload_post_youtube_privacy_status: Optional[str] = Field(None, description="Privacidade YouTube (public, private, unlisted)")
+    upload_post_youtube_made_for_kids: Optional[bool] = Field(None, description="Made for Kids (true, false)")
 
 
 @router.patch(
@@ -745,6 +762,78 @@ def update_scheduler_settings(
         },
         message="Scheduler settings updated successfully",
     )
+
+
+@router.get(
+    "/settings/providers",
+    summary="Get active LLM and social publishing provider settings with masked keys",
+)
+def get_provider_settings(request: Request):
+    request_id = base.get_task_id(request)
+    from app.services import provider_settings
+    try:
+        data = provider_settings.get_providers_settings_snapshot()
+        return utils.get_response(200, data)
+    except Exception as exc:
+        logger.error(f"Erro ao obter configuracoes de provedores: {type(exc).__name__}")
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Falha ao ler o arquivo de configuracao no disco (TOML invalido ou inacessivel).",
+        )
+
+
+@router.patch(
+    "/settings/providers",
+    summary="Update LLM and social publishing provider settings",
+)
+def update_provider_settings(
+    request: Request,
+    payload: UpdateProviderSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can update provider settings",
+        )
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message="No valid provider settings provided to update",
+        )
+
+    from app.services import provider_settings
+    try:
+        data, updated_fields = provider_settings.update_providers_settings(
+            updates=updates,
+            db_path=db_path,
+        )
+        return utils.get_response(
+            200,
+            data,
+            message=f"Provider settings updated successfully ({len(updated_fields)} fields changed)",
+        )
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        logger.error(f"Erro ao atualizar configuracoes de provedores: {type(exc).__name__}")
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Falha ao processar ou gravar configuracao no disco (TOML invalido ou inacessivel).",
+        )
 
 
 @router.post(

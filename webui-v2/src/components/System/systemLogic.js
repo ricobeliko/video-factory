@@ -265,3 +265,143 @@ export function formatScheduleDisplay(schedule) {
     posts_per_day: postsPerDay,
   };
 }
+
+/**
+ * 9. Calcula a diferença entre configurações de provedores originais e o formulário.
+ * Retorna payload somente com campos modificados e lista formatada para o modal de confirmação.
+ */
+export function calculateProviderSettingsDiff(initialData, formValues) {
+  const payload = {};
+  const diffItems = [];
+
+  if (!initialData || !formValues) return { payload, diffItems, hasDiff: false };
+
+  const initialLlm = initialData.llm || {};
+  const initialUp = initialData.upload_post || {};
+
+  // LLM Provider
+  if (formValues.llm_provider && formValues.llm_provider !== initialLlm.provider) {
+    payload.llm_provider = formValues.llm_provider;
+    diffItems.push({
+      field: 'llm_provider',
+      label: 'Provedor LLM Ativo',
+      desc: `${initialLlm.provider || '—'} → ${formValues.llm_provider}`,
+    });
+  }
+
+  // LLM API Key (se digitou algo novo que não seja vazio nem máscara)
+  if (formValues.llm_api_key && formValues.llm_api_key.trim()) {
+    const cleanKey = formValues.llm_api_key.trim();
+    if (!cleanKey.startsWith('••••') && cleanKey !== initialLlm.masked_api_key) {
+      payload.llm_api_key = cleanKey;
+      diffItems.push({
+        field: 'llm_api_key',
+        label: 'Chave de API LLM',
+        desc: 'Nova chave informada',
+      });
+    }
+  }
+
+  // LLM Model Name
+  if (formValues.llm_model_name !== undefined && formValues.llm_model_name !== (initialLlm.model_name || '')) {
+    payload.llm_model_name = formValues.llm_model_name.trim();
+    diffItems.push({
+      field: 'llm_model_name',
+      label: 'Modelo LLM',
+      desc: `${initialLlm.model_name || '—'} → ${formValues.llm_model_name.trim()}`,
+    });
+  }
+
+  // LLM Base URL
+  if (formValues.llm_base_url !== undefined && formValues.llm_base_url !== (initialLlm.base_url || '')) {
+    payload.llm_base_url = formValues.llm_base_url.trim();
+    diffItems.push({
+      field: 'llm_base_url',
+      label: 'URL Base LLM',
+      desc: `${initialLlm.base_url || 'Padrão'} → ${formValues.llm_base_url.trim() || 'Padrão'}`,
+    });
+  }
+
+  // Upload-Post Enabled
+  if (formValues.upload_post_enabled !== undefined && Boolean(formValues.upload_post_enabled) !== Boolean(initialUp.enabled)) {
+    payload.upload_post_enabled = Boolean(formValues.upload_post_enabled);
+    diffItems.push({
+      field: 'upload_post_enabled',
+      label: 'Upload-Post Habilitado',
+      desc: formValues.upload_post_enabled ? 'Ativado' : 'Desativado',
+    });
+  }
+
+  // Upload-Post Auto Upload
+  if (formValues.upload_post_auto_upload !== undefined && Boolean(formValues.upload_post_auto_upload) !== Boolean(initialUp.auto_upload)) {
+    payload.upload_post_auto_upload = Boolean(formValues.upload_post_auto_upload);
+    diffItems.push({
+      field: 'upload_post_auto_upload',
+      label: 'Upload-Post Auto Upload',
+      desc: formValues.upload_post_auto_upload ? 'Ativado' : 'Desativado',
+    });
+  }
+
+  // Upload-Post API Key
+  if (formValues.upload_post_api_key && formValues.upload_post_api_key.trim()) {
+    const cleanUpKey = formValues.upload_post_api_key.trim();
+    if (!cleanUpKey.startsWith('••••') && cleanUpKey !== initialUp.masked_api_key) {
+      payload.upload_post_api_key = cleanUpKey;
+      diffItems.push({
+        field: 'upload_post_api_key',
+        label: 'Chave API Upload-Post',
+        desc: 'Nova chave informada',
+      });
+    }
+  }
+
+  // Upload-Post Username
+  if (formValues.upload_post_username !== undefined && formValues.upload_post_username !== (initialUp.username || '')) {
+    payload.upload_post_username = formValues.upload_post_username.trim();
+    diffItems.push({
+      field: 'upload_post_username',
+      label: 'Usuário Upload-Post',
+      desc: `${initialUp.username || '—'} → ${formValues.upload_post_username.trim()}`,
+    });
+  }
+
+  // Upload-Post Platforms
+  if (formValues.upload_post_platforms) {
+    const curP = (initialUp.platforms || []).slice().sort().join(',');
+    const newP = formValues.upload_post_platforms.slice().sort().join(',');
+    if (curP !== newP) {
+      payload.upload_post_platforms = formValues.upload_post_platforms;
+      diffItems.push({
+        field: 'upload_post_platforms',
+        label: 'Plataformas Ativas',
+        desc: formValues.upload_post_platforms.join(', '),
+      });
+    }
+  }
+
+  // Upload-Post YouTube Privacy
+  if (formValues.upload_post_youtube_privacy_status && formValues.upload_post_youtube_privacy_status !== (initialUp.youtube_privacy_status || 'public')) {
+    payload.upload_post_youtube_privacy_status = formValues.upload_post_youtube_privacy_status;
+    diffItems.push({
+      field: 'upload_post_youtube_privacy_status',
+      label: 'Privacidade YouTube',
+      desc: `${initialUp.youtube_privacy_status || 'public'} → ${formValues.upload_post_youtube_privacy_status}`,
+    });
+  }
+
+  // Upload-Post YouTube Made for Kids
+  if (formValues.upload_post_youtube_made_for_kids !== undefined && Boolean(formValues.upload_post_youtube_made_for_kids) !== Boolean(initialUp.youtube_made_for_kids)) {
+    payload.upload_post_youtube_made_for_kids = Boolean(formValues.upload_post_youtube_made_for_kids);
+    diffItems.push({
+      field: 'upload_post_youtube_made_for_kids',
+      label: 'Classificação Made for Kids',
+      desc: formValues.upload_post_youtube_made_for_kids ? 'Sim (Infantil)' : 'Não (Geral)',
+    });
+  }
+
+  return {
+    payload,
+    diffItems,
+    hasDiff: diffItems.length > 0,
+  };
+}

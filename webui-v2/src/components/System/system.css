@@ -965,3 +965,167 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ==========================================================================
+   Seção de Chaves e Conexões (Keys & Providers)
+   ========================================================================== */
+
+.sys-keys-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+  margin-top: 16px;
+}
+
+.sys-keys-card {
+  background: var(--fleet-surface);
+  border: 1px solid var(--fleet-border);
+  border-radius: var(--fleet-radius);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sys-keys-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-bottom: 1px solid var(--fleet-border);
+  padding-bottom: 14px;
+}
+
+.sys-keys-card-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.sys-keys-card-title {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fleet-text-primary);
+}
+
+.sys-keys-card-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fleet-text-muted);
+}
+
+.sys-keys-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sys-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sys-key-badge {
+  font-size: 11px;
+  font-family: var(--fleet-font-mono);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+}
+
+.sys-key-badge--ok {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34D399;
+}
+
+.sys-key-badge--missing {
+  background: rgba(245, 181, 70, 0.12);
+  border: 1px solid rgba(245, 181, 70, 0.3);
+  color: #F5B546;
+}
+
+.sys-keys-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sys-keys-input-wrapper .sys-input {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.sys-key-toggle-btn {
+  position: absolute;
+  right: 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0.65;
+  transition: opacity 0.15s;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sys-key-toggle-btn:hover {
+  opacity: 1;
+}
+
+.sys-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.sys-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fleet-text-secondary);
+  cursor: pointer;
+}
+
+.sys-checkbox-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: #2563EB;
+  cursor: pointer;
+}
+
+.sys-keys-diff-list {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--fleet-border);
+  border-radius: var(--fleet-radius-inner);
+  padding: 12px 16px;
+  margin: 14px 0 20px 0;
+  font-size: 13px;
+}
+
+.sys-keys-diff-list ul {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sys-diff-field {
+  font-weight: 600;
+  color: var(--fleet-text-primary);
+}
+
+.sys-diff-val {
+  color: var(--fleet-text-secondary);
+}

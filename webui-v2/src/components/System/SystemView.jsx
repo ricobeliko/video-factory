@@ -16,6 +16,8 @@ import {
   resumeFactory,
   runFactoryCycle,
   updateSchedulerSettings,
+  getProviderSettings,
+  updateProviderSettings,
 } from '../../api';
 import {
   formatFactoryState,
@@ -26,6 +28,7 @@ import {
   formatProviderValue,
   formatQuotasDisplay,
   formatScheduleDisplay,
+  calculateProviderSettingsDiff,
 } from './systemLogic';
 import {
   validateChannelForm,
@@ -73,6 +76,50 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const [pinnedVoiceFields, setPinnedVoiceFields] = useState(new Set());
   const handledFocusChannelRef = useRef(null);
 
+  // Estados de Chaves e Conexões (Provedores LLM e Upload-Post)
+  const [providerSettings, setProviderSettings] = useState(null);
+  const [providerForm, setProviderForm] = useState({
+    llm_provider: 'openai',
+    llm_api_key: '',
+    llm_model_name: '',
+    llm_base_url: '',
+    upload_post_enabled: false,
+    upload_post_auto_upload: false,
+    upload_post_api_key: '',
+    upload_post_username: '',
+    upload_post_platforms: ['youtube', 'tiktok'],
+    upload_post_youtube_privacy_status: 'public',
+    upload_post_youtube_made_for_kids: false,
+  });
+  const [showLlmKey, setShowLlmKey] = useState(false);
+  const [showUpKey, setShowUpKey] = useState(false);
+  const [providerConfirmModal, setProviderConfirmModal] = useState(null);
+  const [isSavingProviders, setIsSavingProviders] = useState(false);
+  const [providerFeedback, setProviderFeedback] = useState(null);
+  const [isProviderDirty, setIsProviderDirty] = useState(false);
+  const isProviderDirtyRef = useRef(false);
+
+  const syncFormFromSnapshot = useCallback((snap) => {
+    if (!snap) return;
+    const llm = snap.llm || {};
+    const up = snap.upload_post || {};
+    setProviderForm({
+      llm_provider: llm.provider || 'openai',
+      llm_api_key: '',
+      llm_model_name: llm.model_name || '',
+      llm_base_url: llm.base_url || '',
+      upload_post_enabled: Boolean(up.enabled),
+      upload_post_auto_upload: Boolean(up.auto_upload),
+      upload_post_api_key: '',
+      upload_post_username: up.username || '',
+      upload_post_platforms: Array.isArray(up.platforms) ? [...up.platforms] : ['youtube', 'tiktok'],
+      upload_post_youtube_privacy_status: up.youtube_privacy_status || 'public',
+      upload_post_youtube_made_for_kids: Boolean(up.youtube_made_for_kids),
+    });
+    setIsProviderDirty(false);
+    isProviderDirtyRef.current = false;
+  }, []);
+
   // Temporizadores
   const [lastFetchTime, setLastFetchTime] = useState(null);
   const [secondsSinceSync, setSecondsSinceSync] = useState(0);
@@ -84,12 +131,13 @@ export default function SystemView({ onNavigate, focusChannelId }) {
     isFetchingRef.current = true;
 
     try {
-      const [sysRes, provRes, healthRes, chanRes, voiceRes] = await Promise.allSettled([
+      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes] = await Promise.allSettled([
         getSystemStatus(),
         getProviderHealth(),
         getHealth(),
         getChannelsOverview(),
         getAllowedVoices(),
+        getProviderSettings(),
       ]);
 
       if (sysRes.status === 'fulfilled' && sysRes.value) {
@@ -104,6 +152,13 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       if (voiceRes.status === 'fulfilled' && voiceRes.value) {
         const rawV = voiceRes.value.data || voiceRes.value || [];
         setAllowedVoices(Array.isArray(rawV) ? rawV : []);
+      }
+      if (providerSettingsRes.status === 'fulfilled' && providerSettingsRes.value) {
+        const pData = providerSettingsRes.value.data || providerSettingsRes.value;
+        setProviderSettings(pData);
+        if (!isProviderDirtyRef.current) {
+          syncFormFromSnapshot(pData);
+        }
       }
       if (chanRes.status === 'fulfilled' && chanRes.value) {
         const rawChannels = chanRes.value.data?.channels || chanRes.value.channels || [];
@@ -198,6 +253,78 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const factoryStateInfo = useMemo(() => formatFactoryState(systemStatus), [systemStatus]);
   const roleInfo = useMemo(() => formatInstanceRole(instance), [instance]);
   const togglePermission = useMemo(() => canToggleFactory(instance), [instance]);
+
+  const providerDiffResult = useMemo(() => {
+    return calculateProviderSettingsDiff(providerSettings, providerForm);
+  }, [providerSettings, providerForm]);
+
+  const handleProviderFieldChange = (field, value) => {
+    setIsProviderDirty(true);
+    isProviderDirtyRef.current = true;
+    setProviderFeedback(null);
+    setProviderForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === 'llm_provider' && providerSettings?.llm?.available_providers) {
+        const spec = providerSettings.llm.available_providers.find((p) => p.id === value);
+        if (spec) {
+          next.llm_model_name = spec.model_name || spec.default_model || '';
+          next.llm_base_url = spec.base_url || '';
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleTogglePlatform = (platform) => {
+    setIsProviderDirty(true);
+    isProviderDirtyRef.current = true;
+    setProviderFeedback(null);
+    setProviderForm((prev) => {
+      const cur = prev.upload_post_platforms || [];
+      const next = cur.includes(platform)
+        ? cur.filter((p) => p !== platform)
+        : [...cur, platform];
+      return { ...prev, upload_post_platforms: next };
+    });
+  };
+
+  const handleOpenProviderConfirm = () => {
+    setProviderFeedback(null);
+    if (!providerDiffResult.hasDiff) return;
+    setProviderConfirmModal(providerDiffResult);
+  };
+
+  const handleConfirmSaveProviders = async () => {
+    if (!providerConfirmModal || isSavingProviders) return;
+    setIsSavingProviders(true);
+    setProviderFeedback(null);
+    try {
+      const res = await updateProviderSettings(providerConfirmModal.payload);
+      const updatedSnap = res.data || res;
+      setProviderSettings(updatedSnap);
+      syncFormFromSnapshot(updatedSnap);
+      setProviderConfirmModal(null);
+      setProviderFeedback({
+        type: 'success',
+        message: 'Configurações de provedores salvas com sucesso (backup criado em config.toml.bak).',
+      });
+    } catch (err) {
+      setProviderFeedback({
+        type: 'error',
+        message: formatApiError(err, 'Erro ao salvar configurações de provedores'),
+      });
+      setProviderConfirmModal(null);
+    } finally {
+      setIsSavingProviders(false);
+    }
+  };
+
+  const handleCancelProviderEdits = () => {
+    if (providerSettings) {
+      syncFormFromSnapshot(providerSettings);
+    }
+    setProviderFeedback(null);
+  };
 
   const isPaused = factoryStateInfo.isPaused;
   const isSchedulerEnabled = Boolean(systemStatus?.scheduler_enabled);
@@ -978,6 +1105,325 @@ export default function SystemView({ onNavigate, focusChannelId }) {
           </div>
         </section>
 
+        {/* Seção: Chaves e Conexões (M7 / Paridade V1-V2 Itens 4.1 e 4.2) */}
+        <section className="sys-section" aria-labelledby="section-keys-title">
+          <div className="sys-section-header">
+            <h2 id="section-keys-title" className="sys-section-title">
+              <span>🔑</span> Chaves e Conexões
+            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {isProviderDirty && (
+                <button
+                  type="button"
+                  className="sys-btn-cancel-edit"
+                  onClick={handleCancelProviderEdits}
+                  disabled={isSavingProviders}
+                >
+                  Descartar Alterações
+                </button>
+              )}
+              <button
+                type="button"
+                className="sys-btn-save"
+                disabled={!providerDiffResult.hasDiff || isSavingProviders || !togglePermission.canToggle}
+                onClick={handleOpenProviderConfirm}
+                title={!togglePermission.canToggle ? togglePermission.reason : 'Gravar alterações nas configurações'}
+              >
+                Salvar Chaves e Conexões
+              </button>
+            </div>
+          </div>
+
+          {providerFeedback && (
+            <div
+              className={`sys-feedback-banner sys-feedback-banner--${providerFeedback.type}`}
+              role="alert"
+            >
+              <span>{providerFeedback.type === 'success' ? '✓' : '⚠️'}</span>
+              <span>{providerFeedback.message}</span>
+              <button
+                type="button"
+                className="sys-feedback-close"
+                onClick={() => setProviderFeedback(null)}
+                aria-label="Fechar aviso"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          <div className="sys-keys-grid">
+            {/* Card 1: Provedor LLM */}
+            <article className="sys-card sys-keys-card">
+              <div className="sys-card-header">
+                <div className="sys-card-title-group">
+                  <span className="sys-card-icon" aria-hidden="true">🧠</span>
+                  <h3 className="sys-card-title">Provedor LLM</h3>
+                </div>
+                {providerSettings?.llm?.is_configured ? (
+                  <span className="sys-key-badge sys-key-badge--configured">
+                    Configurado ({providerSettings.llm.masked_api_key || '••••'})
+                  </span>
+                ) : (
+                  <span className="sys-key-badge sys-key-badge--empty">Não configurado</span>
+                )}
+              </div>
+
+              <div className="sys-card-body">
+                <div className="sys-edit-row">
+                  <label htmlFor="llm-provider-select" className="sys-stat-label">
+                    Provedor Ativo
+                  </label>
+                  <select
+                    id="llm-provider-select"
+                    className="sys-select"
+                    value={providerForm.llm_provider}
+                    onChange={(e) => handleProviderFieldChange('llm_provider', e.target.value)}
+                  >
+                    {(providerSettings?.llm?.available_providers || [
+                      { id: 'openai', label: 'OpenAI' },
+                      { id: 'gemini', label: 'Gemini' },
+                      { id: 'claude', label: 'Claude' },
+                      { id: 'deepseek', label: 'DeepSeek' },
+                      { id: 'qwen', label: 'Qwen' },
+                      { id: 'moonshot', label: 'Moonshot' },
+                      { id: 'ollama', label: 'Ollama' },
+                      { id: 'azure', label: 'Azure' },
+                      { id: 'oneapi', label: 'OneAPI' },
+                    ]).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label || p.id} {p.is_configured ? `✓ (${p.masked_api_key || '••••'})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="sys-edit-row">
+                  <label htmlFor="llm-api-key-input" className="sys-stat-label">
+                    Chave de API
+                  </label>
+                  <div className="sys-keys-input-wrapper">
+                    <input
+                      id="llm-api-key-input"
+                      type={showLlmKey ? 'text' : 'password'}
+                      className="sys-input"
+                      placeholder={
+                        providerSettings?.llm?.is_configured
+                          ? `Configurada (${providerSettings.llm.masked_api_key}) — digite para substituir`
+                          : 'Cole a chave da API...'
+                      }
+                      value={providerForm.llm_api_key}
+                      onChange={(e) => handleProviderFieldChange('llm_api_key', e.target.value)}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="sys-key-toggle-btn"
+                      onClick={() => setShowLlmKey((v) => !v)}
+                      title={showLlmKey ? 'Ocultar chave' : 'Revelar chave'}
+                      aria-label={showLlmKey ? 'Ocultar chave' : 'Revelar chave'}
+                    >
+                      {showLlmKey ? '🙈' : '👁️'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="sys-edit-row">
+                  <label htmlFor="llm-model-input" className="sys-stat-label">
+                    Nome do Modelo
+                  </label>
+                  <input
+                    id="llm-model-input"
+                    type="text"
+                    className="sys-input"
+                    placeholder="Ex: gpt-4o, gemini-2.5-flash..."
+                    value={providerForm.llm_model_name}
+                    onChange={(e) => handleProviderFieldChange('llm_model_name', e.target.value)}
+                  />
+                </div>
+
+                <div className="sys-edit-row">
+                  <label htmlFor="llm-base-url-input" className="sys-stat-label">
+                    Base URL (Opcional)
+                  </label>
+                  <input
+                    id="llm-base-url-input"
+                    type="text"
+                    className="sys-input"
+                    placeholder="Deixe em branco para URL padrão da API"
+                    value={providerForm.llm_base_url}
+                    onChange={(e) => handleProviderFieldChange('llm_base_url', e.target.value)}
+                  />
+                </div>
+              </div>
+            </article>
+
+            {/* Card 2: Upload-Post */}
+            <article className="sys-card sys-keys-card">
+              <div className="sys-card-header">
+                <div className="sys-card-title-group">
+                  <span className="sys-card-icon" aria-hidden="true">📤</span>
+                  <h3 className="sys-card-title">Upload-Post (Publicação)</h3>
+                </div>
+                {providerSettings?.upload_post?.is_configured ? (
+                  <span className="sys-key-badge sys-key-badge--configured">
+                    Configurado ({providerSettings.upload_post.masked_api_key || '••••'})
+                  </span>
+                ) : (
+                  <span className="sys-key-badge sys-key-badge--empty">Não configurado</span>
+                )}
+              </div>
+
+              <div className="sys-card-body">
+                <div className="sys-switch-row">
+                  <div className="sys-switch-label-group">
+                    <span className="sys-switch-title">Upload-Post Habilitado</span>
+                    <span className="sys-switch-desc">Ativa o serviço de publicação Upload-Post</span>
+                  </div>
+                  <div className="sys-switch-control">
+                    <span
+                      className="sys-switch-status-text"
+                      style={{ color: providerForm.upload_post_enabled ? '#10B981' : '#8E96A4' }}
+                    >
+                      {providerForm.upload_post_enabled ? 'ATIVO' : 'DESLIGADO'}
+                    </span>
+                    <label className="sys-switch">
+                      <input
+                        type="checkbox"
+                        checked={providerForm.upload_post_enabled}
+                        onChange={(e) => handleProviderFieldChange('upload_post_enabled', e.target.checked)}
+                      />
+                      <span className="sys-slider" />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="sys-switch-row">
+                  <div className="sys-switch-label-group">
+                    <span className="sys-switch-title">Auto Upload</span>
+                    <span className="sys-switch-desc">Envia automaticamente após geração do vídeo</span>
+                  </div>
+                  <div className="sys-switch-control">
+                    <span
+                      className="sys-switch-status-text"
+                      style={{ color: providerForm.upload_post_auto_upload ? '#10B981' : '#8E96A4' }}
+                    >
+                      {providerForm.upload_post_auto_upload ? 'ATIVO' : 'DESLIGADO'}
+                    </span>
+                    <label className="sys-switch">
+                      <input
+                        type="checkbox"
+                        checked={providerForm.upload_post_auto_upload}
+                        onChange={(e) => handleProviderFieldChange('upload_post_auto_upload', e.target.checked)}
+                      />
+                      <span className="sys-slider" />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="sys-edit-row">
+                  <label htmlFor="upload-post-key-input" className="sys-stat-label">
+                    Chave de API Upload-Post
+                  </label>
+                  <div className="sys-keys-input-wrapper">
+                    <input
+                      id="upload-post-key-input"
+                      type={showUpKey ? 'text' : 'password'}
+                      className="sys-input"
+                      placeholder={
+                        providerSettings?.upload_post?.is_configured
+                          ? `Configurada (${providerSettings.upload_post.masked_api_key}) — digite para substituir`
+                          : 'Cole a chave Upload-Post...'
+                      }
+                      value={providerForm.upload_post_api_key}
+                      onChange={(e) => handleProviderFieldChange('upload_post_api_key', e.target.value)}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="sys-key-toggle-btn"
+                      onClick={() => setShowUpKey((v) => !v)}
+                      title={showUpKey ? 'Ocultar chave' : 'Revelar chave'}
+                      aria-label={showUpKey ? 'Ocultar chave' : 'Revelar chave'}
+                    >
+                      {showUpKey ? '🙈' : '👁️'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="sys-edit-row">
+                  <label htmlFor="upload-post-username-input" className="sys-stat-label">
+                    Nome de Usuário / Perfil
+                  </label>
+                  <input
+                    id="upload-post-username-input"
+                    type="text"
+                    className="sys-input"
+                    placeholder="Username registrado no Upload-Post"
+                    value={providerForm.upload_post_username}
+                    onChange={(e) => handleProviderFieldChange('upload_post_username', e.target.value)}
+                  />
+                </div>
+
+                <div className="sys-edit-row">
+                  <span className="sys-stat-label">Plataformas de Publicação</span>
+                  <div className="sys-checkbox-row">
+                    {['youtube', 'tiktok', 'instagram'].map((plat) => {
+                      const isChecked = (providerForm.upload_post_platforms || []).includes(plat);
+                      return (
+                        <label key={plat} className="sys-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleTogglePlatform(plat)}
+                          />
+                          <span style={{ textTransform: 'capitalize' }}>{plat}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Opções YouTube (exibidas quando youtube está selecionado) */}
+                {(providerForm.upload_post_platforms || []).includes('youtube') && (
+                  <>
+                    <div className="sys-edit-row">
+                      <label htmlFor="yt-privacy-select" className="sys-stat-label">
+                        Privacidade YouTube
+                      </label>
+                      <select
+                        id="yt-privacy-select"
+                        className="sys-select"
+                        value={providerForm.upload_post_youtube_privacy_status}
+                        onChange={(e) => handleProviderFieldChange('upload_post_youtube_privacy_status', e.target.value)}
+                      >
+                        <option value="public">Pública (Public)</option>
+                        <option value="unlisted">Não-Listada (Unlisted)</option>
+                        <option value="private">Privada (Private)</option>
+                      </select>
+                    </div>
+
+                    <div className="sys-edit-row">
+                      <label htmlFor="yt-kids-select" className="sys-stat-label">
+                        Classificação YouTube
+                      </label>
+                      <select
+                        id="yt-kids-select"
+                        className="sys-select"
+                        value={providerForm.upload_post_youtube_made_for_kids ? 'true' : 'false'}
+                        onChange={(e) => handleProviderFieldChange('upload_post_youtube_made_for_kids', e.target.value === 'true')}
+                      >
+                        <option value="false">Não é conteúdo para crianças (Geral)</option>
+                        <option value="true">Conteúdo feito para crianças (Made for Kids)</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+              </div>
+            </article>
+          </div>
+        </section>
+
         {/* 5. Seção 4: Ajustes por canal */}
         <section className="sys-section" aria-labelledby="section-channels-title">
           <div className="sys-section-header">
@@ -1648,6 +2094,54 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   : confirmDialog === 'resume'
                   ? 'Confirmar Retomada'
                   : 'Confirmar Disparo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diálogo de Confirmação para Salvar Chaves e Conexões */}
+      {providerConfirmModal && (
+        <div
+          className="sys-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-providers-title"
+        >
+          <div className="sys-modal">
+            <h3 id="confirm-providers-title" className="sys-modal-title">
+              Confirmar Alterações de Chaves e Conexões
+            </h3>
+
+            <p className="sys-modal-text">
+              As seguintes configurações serão atualizadas em <code>config.toml</code> (um backup será criado automaticamente):
+            </p>
+
+            <ul className="sys-keys-diff-list" aria-label="Lista de campos alterados">
+              {providerConfirmModal.diffItems.map((item) => (
+                <li key={item.field} className="sys-keys-diff-item">
+                  <strong>{item.label}:</strong> <span>{item.desc}</span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="sys-modal-actions">
+              <button
+                type="button"
+                className="sys-btn-cancel"
+                onClick={() => setProviderConfirmModal(null)}
+                disabled={isSavingProviders}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="sys-btn-confirm-save"
+                onClick={handleConfirmSaveProviders}
+                disabled={isSavingProviders}
+              >
+                {isSavingProviders ? 'Gravando...' : 'Confirmar e Gravar'}
               </button>
             </div>
           </div>

@@ -255,6 +255,8 @@ A API fina é construída utilizando o FastAPI existente no projeto (`app/asgi.p
 | `POST` | `/api/v2/scheduler/plan` | Replaneja horários futuros e aloca vídeos do estoque pronto ("Replanejar Agenda") | `scheduler.plan_schedule()` | WRITE | SQLite `scheduled_posts` | HIGH |
 | `GET` | `/api/v2/publications` | Histórico recente de publicações no YouTube com status terminal | `operator_console.get_recent_publications()` | READ | SQLite `publication_events` | LOW |
 | `GET` | `/api/v2/providers/health` | Resumo passivo de integridade e conectividade dos provedores | `operator_console.get_provider_health_summary()` | READ | Service Health Checks | LOW |
+| `GET` | `/api/v2/settings/providers` | Snapshot de configuracoes do provedor LLM ativo e Upload-Post com chaves mascaradas | `provider_settings.get_providers_settings_snapshot()` | READ | `config.toml` | LOW |
+| `PATCH`| `/api/v2/settings/providers` | Atualiza configuracoes e chaves de LLM e Upload-Post com gravacao atomica e backup | `provider_settings.update_providers_settings()` | WRITE | `config.toml` / `operational_events` | HIGH |
 | `GET` | `/api/v2/executions/live` | Visão multicanal ao vivo do pipeline de execução (UI-005) | `operator_console.get_live_execution_overview()` | READ | SQLite `tasks` / `scheduled_posts` | LOW |
 | `GET` | `/api/v2/executions/{task_id}` | Detalhe e trace causal de execução de uma tarefa específica | `operator_console.get_execution_detail()` | READ | SQLite `tasks` / `operator_events` | LOW |
 | `GET` | `/api/v2/agent-ops` | Snapshot de observabilidade ao vivo da sala Agent Ops | `agent_ops.get_agent_ops_snapshot()` | READ | Multi-service aggregated | LOW |

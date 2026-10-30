@@ -223,12 +223,101 @@ class TestApiV2ChannelDestinations(unittest.TestCase):
             self.assertIsNotNone(row)
             meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
             self.assertEqual(meta.get("platform"), "youtube")
-            self.assertEqual(meta.get("external_account_id"), "UCaudit1234567890")
-            self.assertTrue(meta.get("auto_publish_authorized"))
+            self.assertIn("changed_fields", meta)
+            self.assertTrue(meta.get("new_is_enabled"))
+            self.assertTrue(meta.get("new_auto_publish_authorized"))
+            # Nenhum external_account_id nem project_id gravado nos metadados de auditoria
+            self.assertNotIn("external_account_id", meta)
+            self.assertNotIn("project_id", meta)
             # Nenhum token ou secret gravado
             self.assertNotIn("token", meta)
             self.assertNotIn("secret", meta)
             self.assertNotIn("api_key", meta)
+
+    def test_patch_channel_destinations_atomic_validation_all_or_nothing(self):
+        """PATCH /destinations com item 1 válido e item 2 inválido rejeita tudo (400) e não grava nada."""
+        # Garante estado inicial vazio
+        initial = profile_manager.list_channels(profile_id=self.profile_id, db_path=self.db_path)
+        self.assertEqual(len(initial), 0)
+
+        payload = {
+            "destinations": [
+                {
+                    "platform": "youtube",
+                    "is_enabled": True,
+                    "external_account_id": "UCvalid1234567890",
+                },
+                {
+                    "platform": "youtube",
+                    "is_enabled": True,
+                    "external_account_id": "INVALID_NO_UC",
+                },
+            ]
+        }
+        resp = self.client.patch(f"/api/v2/channels/{self.profile_id}/destinations", json=payload)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("deve iniciar com 'UC'", resp.json()["message"])
+
+        # Prova que o item 1 NÃO foi gravado no banco de dados
+        after = profile_manager.list_channels(profile_id=self.profile_id, db_path=self.db_path)
+        self.assertEqual(len(after), 0)
+
+    def test_compute_active_platforms_parity_with_get_channel_active_platforms(self):
+        """Prova paridade estrita entre compute_active_platforms (pura) e get_channel_active_platforms (banco) para todos os cenários."""
+        scenarios = [
+            ("so_youtube", [{"platform": "youtube", "is_enabled": 1}], [], True, True, True, ["youtube"]),
+            ("so_tiktok", [], [{"platform": "tiktok", "is_enabled": 1}], True, True, True, ["tiktok"]),
+            ("ambos", [{"platform": "youtube", "is_enabled": 1}], [{"platform": "tiktok", "is_enabled": 1}], True, True, True, ["youtube", "tiktok"]),
+            ("nenhum", [], [], True, True, True, []),
+            ("2_tiktok_habilitados", [], [{"platform": "tiktok", "is_enabled": 1}, {"platform": "tiktok", "is_enabled": 1}], True, True, True, []),
+            ("setting_desligado", [{"platform": "youtube", "is_enabled": 1}], [{"platform": "tiktok", "is_enabled": 1}], False, False, True, []),
+            ("perfil_inativo", [{"platform": "youtube", "is_enabled": 1}], [{"platform": "tiktok", "is_enabled": 1}], True, True, False, []),
+        ]
+
+        for name, yt_c, tt_c, yt_set, tt_set, prof_act, expected in scenarios:
+            with self.subTest(scenario=name):
+                # 1. Função pura direta
+                combined = yt_c + tt_c
+                pure_result = autonomous_production.compute_active_platforms(
+                    channels=combined,
+                    youtube_enabled=yt_set,
+                    tiktok_enabled=tt_set,
+                    profile_active=prof_act,
+                )
+                self.assertEqual(pure_result, expected, f"Pure function failed for scenario {name}")
+
+                # 2. Função com banco
+                prof = profile_manager.create_profile(
+                    name=f"Profile {name}",
+                    slug=f"slug-{name}",
+                    db_path=self.db_path,
+                )
+                p_id = prof["id"]
+                if not prof_act:
+                    profile_manager.update_profile(p_id, is_active=False, db_path=self.db_path)
+
+                for idx, ch in enumerate(yt_c):
+                    profile_manager.create_channel(
+                        profile_id=p_id,
+                        platform="youtube",
+                        display_name=f"YT {name} {idx}",
+                        is_enabled=bool(ch["is_enabled"]),
+                        db_path=self.db_path,
+                    )
+                for idx, ch in enumerate(tt_c):
+                    profile_manager.create_channel(
+                        profile_id=p_id,
+                        platform="tiktok",
+                        display_name=f"TT {name} {idx}",
+                        is_enabled=bool(ch["is_enabled"]),
+                        db_path=self.db_path,
+                    )
+                scheduler.set_setting("youtube_enabled", "true" if yt_set else "false", db_path=self.db_path)
+                scheduler.set_setting("tiktok_enabled", "true" if tt_set else "false", db_path=self.db_path)
+
+                db_result = autonomous_production.get_channel_active_platforms(profile_id=p_id, db_path=self.db_path)
+                self.assertEqual(db_result, expected, f"DB function get_channel_active_platforms failed for scenario {name}")
+                self.assertEqual(pure_result, db_result, f"Discrepancy between pure and DB results for scenario {name}")
 
     def test_guard_autonomous_mode_rejects_without_destinations_400(self):
         """Guarda FAIL-SAFE: ligar autônomo sem nenhum destino ativo retorna HTTP 400."""

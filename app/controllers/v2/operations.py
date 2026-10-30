@@ -1445,8 +1445,9 @@ def update_channel_destinations(
             message="Nenhum destino especificado para atualização.",
         )
 
-    # 3. Process each destination
-    existing_channels = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
+    # 3. Phase A: Validação atômica antecipada (Fail-Closed / Tudo-ou-Nada)
+    # Valida rigorosamente TODOS os itens ANTES de efetuar qualquer alteração no banco.
+    validated_items = []
     for item in items_to_process:
         plat = str(item.platform or "").lower().strip()
         if plat not in ("youtube", "tiktok"):
@@ -1466,30 +1467,77 @@ def update_channel_destinations(
                 )
 
         clean_proj = str(item.project_id).strip() if item.project_id is not None else None
+        clean_disp = str(item.display_name).strip() if item.display_name is not None else None
+
+        validated_items.append({
+            "item": item,
+            "platform": plat,
+            "external_account_id": clean_ext,
+            "project_id": clean_proj,
+            "display_name": clean_disp,
+        })
+
+    # 4. Phase B: Gravação e Auditoria Segura
+    # Somente executada se TODOS os itens passaram com sucesso na validação prévia.
+    existing_channels = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
+    for entry in validated_items:
+        item = entry["item"]
+        plat = entry["platform"]
+        clean_ext = entry["external_account_id"]
+        clean_proj = entry["project_id"]
+        clean_disp = entry["display_name"]
 
         existing_dest = next((c for c in existing_channels if c.get("platform") == plat), None)
+        changed_fields = []
 
         if existing_dest:
             cid = existing_dest["id"]
+            old_is_enabled = bool(existing_dest.get("is_enabled", 0))
+            old_auto_pub = bool(existing_dest.get("auto_publish_authorized", 0))
+
             upd_kwargs: Dict[str, Any] = {"db_path": db_path}
             if item.is_enabled is not None:
-                upd_kwargs["is_enabled"] = bool(item.is_enabled)
+                new_is_en = bool(item.is_enabled)
+                if new_is_en != old_is_enabled:
+                    changed_fields.append("is_enabled")
+                upd_kwargs["is_enabled"] = new_is_en
+                new_is_enabled = new_is_en
+            else:
+                new_is_enabled = old_is_enabled
+
             if item.external_account_id is not None:
-                upd_kwargs["external_account_id"] = clean_ext or None
+                val_ext = clean_ext or None
+                if val_ext != (existing_dest.get("external_account_id") or None):
+                    changed_fields.append("external_account_id")
+                upd_kwargs["external_account_id"] = val_ext
+
             if item.project_id is not None:
-                upd_kwargs["project_id"] = clean_proj or None
+                val_proj = clean_proj or None
+                if val_proj != (existing_dest.get("project_id") or None):
+                    changed_fields.append("project_id")
+                upd_kwargs["project_id"] = val_proj
+
             if item.display_name is not None:
-                upd_kwargs["display_name"] = str(item.display_name).strip() if item.display_name else None
+                val_disp = clean_disp or None
+                if val_disp != (existing_dest.get("display_name") or None):
+                    changed_fields.append("display_name")
+                upd_kwargs["display_name"] = val_disp
 
             profile_manager.update_channel(cid, **upd_kwargs)
 
             if item.auto_publish_authorized is not None:
+                new_auto = bool(item.auto_publish_authorized)
+                if new_auto != old_auto_pub:
+                    changed_fields.append("auto_publish_authorized")
                 scheduler.set_channel_auto_publish_authorized(
-                    cid, bool(item.auto_publish_authorized), db_path=db_path
+                    cid, new_auto, db_path=db_path
                 )
+                new_auto_pub = new_auto
+            else:
+                new_auto_pub = old_auto_pub
         else:
             prof_name = profile.get("name") or clean_p
-            disp_name = item.display_name or f"{prof_name} ({plat.title()})"
+            disp_name = clean_disp or f"{prof_name} ({plat.title()})"
             is_en = bool(item.is_enabled) if item.is_enabled is not None else True
             created = profile_manager.create_channel(
                 profile_id=clean_p,
@@ -1502,14 +1550,31 @@ def update_channel_destinations(
                 db_path=db_path,
             )
             cid = created["id"]
+            old_is_enabled = None
+            new_is_enabled = is_en
+            old_auto_pub = None
+            new_auto_pub = bool(item.auto_publish_authorized) if item.auto_publish_authorized is not None else False
+
+            changed_fields.append("created")
+            if item.is_enabled is not None:
+                changed_fields.append("is_enabled")
+            if clean_ext:
+                changed_fields.append("external_account_id")
+            if clean_proj:
+                changed_fields.append("project_id")
+            if clean_disp:
+                changed_fields.append("display_name")
             if item.auto_publish_authorized is not None:
                 scheduler.set_channel_auto_publish_authorized(
-                    cid, bool(item.auto_publish_authorized), db_path=db_path
+                    cid, new_auto_pub, db_path=db_path
                 )
+                changed_fields.append("auto_publish_authorized")
+
             # Re-fetch for subsequent iterations
             existing_channels = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
 
-        # Audit event without secrets
+        # Audit event without secrets: changed_fields e valores antigo/novo de is_enabled e auto_publish_authorized
+        # Não grava external_account_id nem project_id
         operator_console.log_operational_event(
             component="channels",
             severity=operator_console.SEVERITY_INFO,
@@ -1519,10 +1584,11 @@ def update_channel_destinations(
                 "profile_id": clean_p,
                 "channel_id": cid,
                 "platform": plat,
-                "is_enabled": item.is_enabled,
-                "external_account_id": clean_ext,
-                "project_id": clean_proj,
-                "auto_publish_authorized": item.auto_publish_authorized,
+                "changed_fields": changed_fields,
+                "old_is_enabled": old_is_enabled,
+                "new_is_enabled": new_is_enabled,
+                "old_auto_publish_authorized": old_auto_pub,
+                "new_auto_publish_authorized": new_auto_pub,
             },
             db_path=db_path,
         )

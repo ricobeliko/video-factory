@@ -4306,10 +4306,13 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             chans = destinations_by_profile.get(pid, [])
             yt_on = str(settings_map.get("youtube_enabled", "true")).lower() == "true"
             tt_on = str(settings_map.get("tiktok_enabled", "true")).lower() == "true"
-            has_yt = yt_on and any(c.get("platform") == "youtube" and c.get("is_enabled") for c in chans)
-            tt_enabled_chans = [c for c in chans if c.get("platform") == "tiktok" and c.get("is_enabled")]
-            has_tt = tt_on and len(tt_enabled_chans) == 1
-            has_dest = bool(has_yt or has_tt)
+            active_plats = autonomous_production.compute_active_platforms(
+                channels=chans,
+                youtube_enabled=yt_on,
+                tiktok_enabled=tt_on,
+                profile_active=is_active,
+            )
+            has_dest = bool(active_plats)
 
         status_eval = evaluate_canonical_channel_status(
             has_publish_destination=has_dest,

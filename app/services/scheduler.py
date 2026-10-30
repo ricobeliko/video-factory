@@ -6,7 +6,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from loguru import logger
 
 from app.models import const
@@ -50,9 +50,16 @@ def get_connection(db_path: Optional[str] = None):
     conn = sqlite3.connect(path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
+        if os.path.abspath(path) not in _INITIALIZED_DBS:
+            conn.execute("PRAGMA journal_mode=WAL;")
         with conn:
             yield conn
+        if conn.total_changes > 0:
+            try:
+                from app.services import operator_console
+                operator_console.invalidate_render_pass_cache()
+            except Exception:
+                pass
     finally:
         conn.close()
 
@@ -135,6 +142,9 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         ON publication_events(task_id, platform, COALESCE(channel_id, ''));
         """
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_task_id ON scheduled_posts(task_id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_prof_st ON scheduled_posts(profile_id, status);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pub_events_prof_st ON publication_events(profile_id, status);")
 
     # Migração Missão E (Capacidade ESCALA 10 / Global Cost Guard): elevação idempotente e aditiva
     cur_sett = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_settings';").fetchone()
@@ -812,12 +822,28 @@ def validate_candidate_technical_and_safety_gates(
 
 
 # ---------------------------------------------------------------------------
-def init_db(db_path: Optional[str] = None) -> None:
+_INITIALIZED_DBS: Set[str] = set()
+_INIT_DB_LOCK = threading.RLock()
+
+
+def reset_initialized_dbs() -> None:
+    """Limpa o registro de bancos inicializados (útil para testes)."""
+    with _INIT_DB_LOCK:
+        _INITIALIZED_DBS.clear()
+
+
+def init_db(db_path: Optional[str] = None, force: bool = False) -> None:
     """Inicializa o schema do banco SQLite de forma idempotente."""
+    resolved = os.path.abspath(get_db_path(db_path))
+    if not force:
+        with _INIT_DB_LOCK:
+            if resolved in _INITIALIZED_DBS:
+                return
+
     # CF-02: Elimina dependência de ordem entre init_db e init_profile_db
     try:
         from app.services import profile_manager
-        profile_manager.init_profile_db(db_path)
+        profile_manager.init_profile_db(db_path, force=force)
     except Exception as exc:
         logger.debug(f"[SCHEDULER] init_profile_db durante init_db: {exc}")
 
@@ -892,6 +918,9 @@ def init_db(db_path: Optional[str] = None) -> None:
     except Exception as exc:
         logger.warning(f"[SCHEDULER] Falha ao inicializar safety_gate db: {exc}")
 
+    with _INIT_DB_LOCK:
+        _INITIALIZED_DBS.add(resolved)
+
 
 # ---------------------------------------------------------------------------
 # Configurações do Autopilot
@@ -900,6 +929,21 @@ def init_db(db_path: Optional[str] = None) -> None:
 def get_setting(key: str, default: Any = None, db_path: Optional[str] = None) -> Any:
     """Lê uma configuração persistida."""
     init_db(db_path)
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+    except Exception:
+        rp_cache = None
+    if rp_cache is not None:
+        eff_db = os.path.abspath(get_db_path(db_path))
+        map_key = ("autopilot_settings_map", eff_db)
+        settings_map = rp_cache.get(map_key)
+        if settings_map is None:
+            with get_connection(db_path) as conn:
+                rows = conn.execute("SELECT key, value FROM autopilot_settings;").fetchall()
+                settings_map = {r["key"]: r["value"] for r in rows if r["key"] is not None}
+            rp_cache[map_key] = settings_map
+        return settings_map.get(key, default)
     with get_connection(db_path) as conn:
         row = conn.execute(
             "SELECT value FROM autopilot_settings WHERE key = ?;", (key,)
@@ -1087,19 +1131,46 @@ def replan_future_schedule_for_growth_mode(
 def get_all_settings(db_path: Optional[str] = None) -> Dict[str, Any]:
     """Retorna todas as configurações com seus devidos tipos e defaults."""
     init_db(db_path)
-    growth_mode = get_growth_mode(db_path=db_path)
+    with get_connection(db_path) as conn:
+        rows = conn.execute("SELECT key, value FROM autopilot_settings;").fetchall()
+        s_map = {r["key"]: str(r["value"]) for r in rows if r["key"] is not None}
+
+    global_growth = s_map.get("growth_mode", const.DEFAULT_GROWTH_MODE)
+    if global_growth and str(global_growth).lower().strip() in const.GROWTH_MODES:
+        growth_mode = str(global_growth).lower().strip()
+    else:
+        growth_mode = const.DEFAULT_GROWTH_MODE
+
+    yt_growth = s_map.get("growth_mode_youtube")
+    if yt_growth and str(yt_growth).lower().strip() in const.GROWTH_MODES:
+        growth_mode_youtube = str(yt_growth).lower().strip()
+    else:
+        growth_mode_youtube = growth_mode
+
+    tt_growth = s_map.get("growth_mode_tiktok")
+    if tt_growth and str(tt_growth).lower().strip() in const.GROWTH_MODES:
+        growth_mode_tiktok = str(tt_growth).lower().strip()
+    else:
+        growth_mode_tiktok = growth_mode
+
+    def _parse_int(val: Any, default_val: int) -> int:
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default_val
+
     return {
-        "tiktok_enabled": get_setting("tiktok_enabled", "true", db_path).lower() == "true",
-        "tiktok_limit_24h": int(get_setting("tiktok_limit_24h", str(DEFAULT_TIKTOK_LIMIT), db_path)),
-        "youtube_enabled": get_setting("youtube_enabled", "true", db_path).lower() == "true",
-        "youtube_limit_24h": int(get_setting("youtube_limit_24h", str(DEFAULT_YOUTUBE_LIMIT), db_path)),
-        "estoque_desejado": int(get_setting("estoque_desejado", str(DEFAULT_DESIRED_STOCK), db_path)),
-        "scheduler_enabled": get_setting("scheduler_enabled", "false", db_path).lower() == "true",
-        "auto_publish_enabled": get_setting("auto_publish_enabled", "false", db_path).lower() == "true",
-        "dry_run": get_setting("dry_run", "true", db_path).lower() == "true",
+        "tiktok_enabled": s_map.get("tiktok_enabled", "true").lower() == "true",
+        "tiktok_limit_24h": _parse_int(s_map.get("tiktok_limit_24h"), DEFAULT_TIKTOK_LIMIT),
+        "youtube_enabled": s_map.get("youtube_enabled", "true").lower() == "true",
+        "youtube_limit_24h": _parse_int(s_map.get("youtube_limit_24h"), DEFAULT_YOUTUBE_LIMIT),
+        "estoque_desejado": _parse_int(s_map.get("estoque_desejado"), DEFAULT_DESIRED_STOCK),
+        "scheduler_enabled": s_map.get("scheduler_enabled", "false").lower() == "true",
+        "auto_publish_enabled": s_map.get("auto_publish_enabled", "false").lower() == "true",
+        "dry_run": s_map.get("dry_run", "true").lower() == "true",
         "growth_mode": growth_mode,
-        "growth_mode_youtube": get_growth_mode("youtube", db_path=db_path),
-        "growth_mode_tiktok": get_growth_mode("tiktok", db_path=db_path),
+        "growth_mode_youtube": growth_mode_youtube,
+        "growth_mode_tiktok": growth_mode_tiktok,
     }
 
 

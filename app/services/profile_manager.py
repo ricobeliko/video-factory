@@ -9,6 +9,8 @@ import json
 import os
 import re
 import sqlite3
+import threading
+from typing import Set
 import unicodedata
 import uuid
 from contextlib import contextmanager
@@ -151,16 +153,39 @@ def get_connection(db_path: Optional[str] = None):
     conn = sqlite3.connect(path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
+        if os.path.abspath(path) not in _INITIALIZED_PROFILE_DBS:
+            conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
         with conn:
             yield conn
+        if conn.total_changes > 0:
+            try:
+                from app.services import operator_console
+                operator_console.invalidate_render_pass_cache()
+            except Exception:
+                pass
     finally:
         conn.close()
 
 
-def init_profile_db(db_path: Optional[str] = None) -> None:
+_INITIALIZED_PROFILE_DBS: Set[str] = set()
+_PROFILE_INIT_LOCK = threading.RLock()
+
+
+def reset_initialized_profile_dbs() -> None:
+    """Limpa o registro de bancos de perfis inicializados (útil para testes)."""
+    with _PROFILE_INIT_LOCK:
+        _INITIALIZED_PROFILE_DBS.clear()
+
+
+def init_profile_db(db_path: Optional[str] = None, force: bool = False) -> None:
     """Inicializa as tabelas content_profiles e publishing_channels no SQLite de forma aditiva e idempotente."""
+    resolved = os.path.abspath(get_db_path(db_path))
+    if not force:
+        with _PROFILE_INIT_LOCK:
+            if resolved in _INITIALIZED_PROFILE_DBS:
+                return
+
     with get_connection(db_path) as conn:
         conn.execute(
             """
@@ -238,6 +263,9 @@ def init_profile_db(db_path: Optional[str] = None) -> None:
                 "YouTube (Default)",
             ),
         )
+
+    with _PROFILE_INIT_LOCK:
+        _INITIALIZED_PROFILE_DBS.add(resolved)
 
 
 def _validate_growth_mode(mode: str) -> str:
@@ -620,6 +648,17 @@ def update_profile(
 def get_profile(profile_id_or_slug: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Busca um perfil por ID ou por slug (permitido em VIEW ONLY)."""
     init_profile_db(db_path)
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+    except Exception:
+        rp_cache = None
+    if rp_cache is not None:
+        all_profs = list_profiles(active_only=False, db_path=db_path)
+        for p in all_profs:
+            if p.get("id") == profile_id_or_slug or p.get("slug") == profile_id_or_slug:
+                return dict(p)
+        return None
     with get_connection(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM content_profiles WHERE id = ? OR slug = ?;",
@@ -631,6 +670,25 @@ def get_profile(profile_id_or_slug: str, db_path: Optional[str] = None) -> Optio
 def list_profiles(active_only: bool = False, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     """Lista perfis de conteúdo cadastrados (permitido em VIEW ONLY)."""
     init_profile_db(db_path)
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+    except Exception:
+        rp_cache = None
+    if rp_cache is not None:
+        eff_db = os.path.abspath(get_db_path(db_path))
+        cache_key = ("all_content_profiles", eff_db)
+        all_rows = rp_cache.get(cache_key)
+        if all_rows is None:
+            with get_connection(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT * FROM content_profiles ORDER BY created_at ASC;"
+                ).fetchall()
+                all_rows = [dict(r) for r in rows]
+            rp_cache[cache_key] = all_rows
+        if active_only:
+            return [dict(r) for r in all_rows if r.get("is_active")]
+        return [dict(r) for r in all_rows]
     with get_connection(db_path) as conn:
         if active_only:
             rows = conn.execute(
@@ -804,6 +862,28 @@ def list_channels(
 ) -> List[Dict[str, Any]]:
     """Lista canais de publicação, opcionalmente filtrados por perfil e status (permitido em VIEW ONLY)."""
     init_profile_db(db_path)
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+    except Exception:
+        rp_cache = None
+    if rp_cache is not None:
+        eff_db = os.path.abspath(get_db_path(db_path))
+        c_key = ("all_publishing_channels", eff_db)
+        all_chans = rp_cache.get(c_key)
+        if all_chans is None:
+            with get_connection(db_path) as conn:
+                rows = conn.execute("SELECT * FROM publishing_channels ORDER BY created_at ASC;").fetchall()
+                all_chans = [_normalize_channel_dict(dict(r)) for r in rows]
+            rp_cache[c_key] = all_chans
+        res = []
+        for ch in all_chans:
+            if profile_id and ch.get("profile_id") != profile_id:
+                continue
+            if enabled_only and not ch.get("is_enabled"):
+                continue
+            res.append(dict(ch))
+        return res
     conditions = []
     params = []
 
@@ -1135,6 +1215,16 @@ def get_profile_settings(profile_id: str, db_path: Optional[str] = None) -> Chan
     clean_id = str(profile_id or "").strip()
     if not clean_id:
         return ChannelWorkspaceSettings()
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+    except Exception:
+        rp_cache = None
+    if rp_cache is not None:
+        prof = get_profile(clean_id, db_path=db_path)
+        if not prof:
+            return ChannelWorkspaceSettings()
+        return ChannelWorkspaceSettings.from_json(prof.get("settings_json"))
     with get_connection(db_path) as conn:
         row = conn.execute(
             "SELECT settings_json FROM content_profiles WHERE id = ?;",

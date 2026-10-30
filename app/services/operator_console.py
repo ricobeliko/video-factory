@@ -143,10 +143,26 @@ def get_connection(db_path: Optional[str] = None):
     return scheduler.get_connection(db_path)
 
 
-def init_operator_db(db_path: Optional[str] = None) -> None:
+_INITIALIZED_OPERATOR_DBS: Set[str] = set()
+_OPERATOR_INIT_LOCK = threading.RLock()
+
+
+def reset_initialized_operator_dbs() -> None:
+    """Limpa o registro de bancos de operador inicializados (útil para testes)."""
+    with _OPERATOR_INIT_LOCK:
+        _INITIALIZED_OPERATOR_DBS.clear()
+
+
+def init_operator_db(db_path: Optional[str] = None, force: bool = False) -> None:
     """Inicializa as tabelas do Console Operacional de forma idempotente."""
+    resolved = os.path.abspath(get_db_path(db_path))
+    if not force:
+        with _OPERATOR_INIT_LOCK:
+            if resolved in _INITIALIZED_OPERATOR_DBS:
+                return
+
     from app.services import scheduler
-    scheduler.init_db(db_path)
+    scheduler.init_db(db_path, force=force)
 
     with get_connection(db_path) as conn:
         conn.execute(
@@ -170,6 +186,18 @@ def init_operator_db(db_path: Optional[str] = None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_op_events_comp ON operational_events(component);"
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_events_task ON operational_events(task_id);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_events_comp_ts ON operational_events(component, timestamp);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_events_comp_ev_ts ON operational_events(component, event_type, timestamp);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_events_task_comp_ev ON operational_events(task_id, component, event_type, timestamp);"
+        )
+        conn.execute(
             """
 
             CREATE TABLE IF NOT EXISTS instance_locks (
@@ -188,6 +216,9 @@ def init_operator_db(db_path: Optional[str] = None) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_inst_lock_status ON instance_locks(status);"
         )
+
+    with _OPERATOR_INIT_LOCK:
+        _INITIALIZED_OPERATOR_DBS.add(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -1423,6 +1454,11 @@ def get_scheduler_queue_summary(
 
 def get_profile_operations_overview(db_path: Optional[str] = None, task_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """Retorna visão operacional resumida e leve por perfil (canais, estoque, tarefas e agendamentos)."""
+    with render_pass_scope():
+        return _get_profile_operations_overview_impl(db_path=db_path, task_base_dir=task_base_dir)
+
+
+def _get_profile_operations_overview_impl(db_path: Optional[str] = None, task_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     init_operator_db(db_path)
     from app.services import profile_manager, scheduler
     from app.services import state as sm
@@ -1640,6 +1676,11 @@ def get_canonical_ready_stock(
     from app.services import autonomous_production, profile_manager
     target_prof = profile_id if profile_id is not None else profile_manager.get_active_profile_id(db_path=db_path)
     target_chan = channel_id if channel_id is not None else autonomous_production.resolve_autonomous_primary_channel(target_prof, db_path=db_path)
+    rp_cache = get_render_pass_cache()
+    effective_db = os.path.abspath(get_db_path(db_path))
+    c_key = ("canonical_ready_stock", effective_db, target_prof, target_chan)
+    if rp_cache is not None and c_key in rp_cache:
+        return rp_cache[c_key]
     auto_stock = autonomous_production.get_autonomous_ready_stock(
         task_base_dir=task_base_dir,
         db_path=db_path,
@@ -1667,7 +1708,7 @@ def get_canonical_ready_stock(
         t for t in ready_items
         if "tiktok" in _get_platforms(t.get("profile_id"))
     ]
-    return {
+    res = {
         "total_ready": ready_total,
         "youtube_count": yt_count,
         "tiktok_count": tt_count,
@@ -1686,6 +1727,9 @@ def get_canonical_ready_stock(
         "tiktok_tasks": tiktok_items,
         "cross_platform_tasks": [],
     }
+    if rp_cache is not None:
+        rp_cache[c_key] = res
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -1707,11 +1751,12 @@ def get_provider_health_summary(db_path: Optional[str] = None, force: bool = Fal
     """Avalia o status de saúde dos provedores de forma leve e estática (sem chamadas pagas)."""
     global _PROVIDER_HEALTH_CACHE
     import time
+    effective_db = os.path.abspath(get_db_path(db_path))
     now_ts = time.monotonic()
     if (
         not force
         and _PROVIDER_HEALTH_CACHE["data"] is not None
-        and _PROVIDER_HEALTH_CACHE["db_path"] == db_path
+        and _PROVIDER_HEALTH_CACHE["db_path"] == effective_db
         and (now_ts - _PROVIDER_HEALTH_CACHE["timestamp"] < _PROVIDER_HEALTH_TTL)
     ):
         return _PROVIDER_HEALTH_CACHE["data"]
@@ -1890,7 +1935,7 @@ def get_provider_health_summary(db_path: Optional[str] = None, force: bool = Fal
             "last_checked": now_iso,
         }
 
-    _PROVIDER_HEALTH_CACHE = {"data": summary, "timestamp": now_ts, "db_path": db_path}
+    _PROVIDER_HEALTH_CACHE = {"data": summary, "timestamp": now_ts, "db_path": effective_db}
     return summary
 
 
@@ -3283,6 +3328,11 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
     Frontend = Presentation Only.
     Zero inferência de stage ou provider.
     """
+    with render_pass_scope():
+        return _get_live_execution_overview_impl(db_path=db_path)
+
+
+def _get_live_execution_overview_impl(db_path: Optional[str] = None) -> Dict[str, Any]:
     init_operator_db(db_path)
     from app.services import autonomous_production, profile_manager, scheduler
     from app.services import state as sm
@@ -3301,6 +3351,42 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
             channels_by_prof.setdefault(pid, []).append(c)
 
     status_map = get_channel_status_map(db_path=db_path)
+    sched_by_prof: Dict[str, Dict[str, Any]] = {}
+    pub_by_task: Dict[str, Dict[str, Any]] = {}
+    try:
+        with get_connection(db_path) as conn:
+            s_rows = conn.execute(
+                """
+                SELECT id, task_id, profile_id, scheduled_at, status, attempts, last_error
+                FROM scheduled_posts
+                WHERE status IN ('pending', 'failed', 'ready')
+                ORDER BY scheduled_at ASC;
+                """
+            ).fetchall()
+            for r in s_rows:
+                r_pid = r["profile_id"]
+                if r_pid and r_pid not in sched_by_prof:
+                    sched_by_prof[r_pid] = dict(r)
+            if sched_by_prof:
+                s_tids = [v["task_id"] for v in sched_by_prof.values() if v.get("task_id")]
+                if s_tids:
+                    placeholders = ",".join("?" for _ in s_tids)
+                    p_rows = conn.execute(
+                        f"""
+                        SELECT id, task_id, published_at, status, external_url
+                        FROM publication_events
+                        WHERE task_id IN ({placeholders}) AND status = 'success'
+                        ORDER BY id DESC;
+                        """,
+                        tuple(s_tids),
+                    ).fetchall()
+                    for r in p_rows:
+                        r_tid = r["task_id"]
+                        if r_tid and r_tid not in pub_by_task:
+                            pub_by_task[r_tid] = dict(r)
+    except Exception:
+        pass
+
     results = []
 
     for prof in profiles:
@@ -3572,17 +3658,8 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
 
         # 3. Se não há task em geração/waiting, verifica agendamentos pendentes ou retrying em scheduled_posts
         if not execution:
-            with get_connection(db_path) as conn:
-                sched_row = conn.execute(
-                    """
-                    SELECT id, task_id, scheduled_at, status, attempts, last_error
-                    FROM scheduled_posts
-                    WHERE profile_id = ? AND status IN ('pending', 'failed', 'ready')
-                    ORDER BY scheduled_at ASC LIMIT 1;
-                    """,
-                    (pid,)
-                ).fetchone()
-
+            if True:
+                sched_row = sched_by_prof.get(pid)
                 if sched_row:
                     s_dict = dict(sched_row)
                     s_task_id = s_dict["task_id"]
@@ -3590,15 +3667,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
                     s_err = s_dict.get("last_error")
 
                     # REGRA 9 (STALE STATUS): Verifica se na verdade já houve publicação terminal com sucesso!
-                    pub_row = conn.execute(
-                        """
-                        SELECT id, published_at, status, external_url
-                        FROM publication_events
-                        WHERE task_id = ? AND status = 'success'
-                        ORDER BY id DESC LIMIT 1;
-                        """,
-                        (s_task_id,)
-                    ).fetchone()
+                    pub_row = pub_by_task.get(s_task_id)
 
                     if pub_row:
                         p_dict = dict(pub_row)
@@ -3973,6 +4042,11 @@ def _get_fleet_ro_connection(target_path: str) -> sqlite3.Connection:
 
 
 def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
+    with render_pass_scope():
+        return _get_fleet_summary_impl(db_path=db_path)
+
+
+def _get_fleet_summary_impl(db_path: Optional[str] = None) -> Dict[str, Any]:
     """Retorna visão consolidada e aditiva da frota de canais para a Web UI V2.
 
     Regras de Status (status):
@@ -4160,8 +4234,68 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
                 r_dict["auto_publish_authorized"] = bool(r_dict.get("auto_publish_authorized", 0))
                 destinations_by_profile.setdefault(r_dict["profile_id"], []).append(r_dict)
 
+        # I. Generation counts 24h em lote para todos os perfis
+        app_24h_batch: Dict[str, int] = {}
+        att_24h_batch: Dict[str, int] = {}
+        if "operational_events" in existing_tables and "task_profiles" in existing_tables:
+            try:
+                att_rows = conn.execute(
+                    """
+                    SELECT
+                        COALESCE(tp.profile_id, 'default') AS pid,
+                        count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
+                    FROM operational_events o
+                    LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type = 'generation_started'
+                      AND o.timestamp >= ?
+                    GROUP BY COALESCE(tp.profile_id, 'default');
+                    """,
+                    (h24_ago_iso,),
+                ).fetchall()
+                for r in att_rows:
+                    att_24h_batch[r["pid"]] = int(r["cnt"] or 0)
+
+                app_rows = conn.execute(
+                    """
+                    WITH started_tasks AS (
+                        SELECT DISTINCT task_id
+                        FROM operational_events
+                        WHERE component = 'autonomous_production'
+                          AND event_type = 'generation_started'
+                          AND timestamp >= ?
+                          AND task_id IS NOT NULL AND task_id != ''
+                    )
+                    SELECT
+                        COALESCE(tp.profile_id, 'default') AS pid,
+                        count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
+                    FROM operational_events o
+                    LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.timestamp >= ?
+                      AND (
+                          o.event_type = 'generation_approved'
+                          OR (
+                              o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                              AND o.task_id IN (SELECT task_id FROM started_tasks)
+                          )
+                      )
+                    GROUP BY COALESCE(tp.profile_id, 'default');
+                    """,
+                    (h24_ago_iso, h24_ago_iso),
+                ).fetchall()
+                for r in app_rows:
+                    app_24h_batch[r["pid"]] = int(r["cnt"] or 0)
+            except Exception as batch_exc:
+                logger.warning(f"[OPERATOR_CONSOLE] Erro na consulta em lote 24h: {batch_exc}")
+
     finally:
         conn.close()
+
+    rp_cache = get_render_pass_cache()
+    if rp_cache is not None:
+        rp_cache[("app_24h_batch", effective_db)] = app_24h_batch
+        rp_cache[("att_24h_batch", effective_db)] = att_24h_batch
 
     # 2. Leitura agregada de tarefas em memória (apenas pending e failed; ready_stock é exclusivamente canônico)
     mem_pending: Dict[str, int] = {}
@@ -4254,13 +4388,21 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
         sched_count = scheduled_counts.get(pid, 0)
         pub_today_count = published_today.get(pid, 0)
 
-        # 3. Contagens 24h (approved_24h, attempts_24h) e teto diário via funções canônicas de autonomous_production
-        app_cnt = autonomous_production.count_generations_in_last_24h(
-            now=now_utc, db_path=effective_db, profile_id=pid
-        )
-        att_cnt = autonomous_production.count_generation_attempts_in_last_24h(
-            now=now_utc, db_path=effective_db, profile_id=pid
-        )
+        # 3. Contagens 24h (approved_24h, attempts_24h) e teto diário via batch ou fallback
+        if app_24h_batch or att_24h_batch:
+            if is_default:
+                app_cnt = app_24h_batch.get("default", 0)
+                att_cnt = att_24h_batch.get("default", 0)
+            else:
+                app_cnt = app_24h_batch.get(pid, 0)
+                att_cnt = att_24h_batch.get(pid, 0)
+        else:
+            app_cnt = autonomous_production.count_generations_in_last_24h(
+                now=now_utc, db_path=effective_db, profile_id=pid
+            )
+            att_cnt = autonomous_production.count_generation_attempts_in_last_24h(
+                now=now_utc, db_path=effective_db, profile_id=pid
+            )
         max_gen_24h = autonomous_production.get_max_generations_24h(
             profile_id=pid, db_path=effective_db
         )

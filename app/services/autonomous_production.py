@@ -592,6 +592,34 @@ def resolve_autonomous_youtube_channel(profile_id: str, db_path: Optional[str] =
     return None
 
 
+def resolve_autonomous_primary_channel(profile_id: str, db_path: Optional[str] = None) -> Optional[str]:
+    """Resolve com segurança o canal primário ativo do perfil (YouTube se houver, senão TikTok se houver).
+
+    Retorna o channel_id somente se houver exatamente um canal habilitado
+    para a plataforma ativa em um perfil ativo. Caso contrário, retorna None.
+    """
+    clean_profile = str(profile_id or "").strip()
+    if not clean_profile:
+        return None
+    active_plats = get_channel_active_platforms(clean_profile, db_path=db_path)
+    if "youtube" in active_plats:
+        return resolve_autonomous_youtube_channel(clean_profile, db_path=db_path)
+    if "tiktok" in active_plats:
+        try:
+            with scheduler.get_connection(db_path) as conn:
+                ch_rows = conn.execute(
+                    "SELECT c.id FROM publishing_channels c JOIN content_profiles p ON p.id = c.profile_id "
+                    "WHERE c.platform = 'tiktok' AND c.profile_id = ? AND c.is_enabled = 1 AND p.is_active = 1",
+                    (clean_profile,),
+                ).fetchall()
+                if len(ch_rows) == 1:
+                    return str(ch_rows[0][0])
+        except Exception:
+            pass
+    return None
+
+
+
 def get_channel_last_narrative_structure(
     profile_id: str,
     channel_id: Optional[str],
@@ -668,17 +696,16 @@ def get_autonomous_ready_stock(
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Calcula o estoque pronto elegível para o loop autônomo (YouTube-first, fail-closed em Safety e Quality).
+    """Calcula o estoque pronto elegível para o loop autônomo (fail-closed em Safety e Quality).
 
     Garante que:
     - Tarefa em TASK_STATE_COMPLETE com vídeo físico existente em disco.
     - Safety PASS explícito.
     - Quality assessment existente com quality_score >= 70 e quality_label em ('GOOD', 'STRONG').
     - Ausência de Quality assessment é fail-closed (não conta no estoque autônomo).
-    - Tarefa ainda não publicada no YouTube.
-    - Aprovação e destinos persistidos; perfil ativo e canal YouTube habilitado.
+    - Tarefa ainda não publicada na plataforma de destino do perfil.
+    - Aprovação e destinos persistidos; perfil ativo e canal habilitado.
     - MemoryState vazio não elimina aprovações recuperáveis.
-    - Readiness de TikTok NÃO infle o estoque utilizado pelo loop YouTube.
     - Isolamento estrito por perfil e canal se especificados.
     """
     from app.services import operator_console
@@ -698,20 +725,45 @@ def get_autonomous_ready_stock(
                 "SELECT task_id FROM monetization_safety WHERE safety_status = 'PASS' "
                 "ORDER BY checked_at, task_id"
             ).fetchall()
-            excluded = {r["task_id"] for r in conn.execute(
+            excluded_yt = {r["task_id"] for r in conn.execute(
                 "SELECT task_id FROM publication_events WHERE platform='youtube' AND status='success' "
                 "UNION SELECT task_id FROM scheduled_posts WHERE platform='youtube' "
                 "AND status IN ('published', 'cancelled')"
             )}
+            excluded_tt = {r["task_id"] for r in conn.execute(
+                "SELECT task_id FROM publication_events WHERE platform='tiktok' AND status='success' "
+                "UNION SELECT task_id FROM scheduled_posts WHERE platform='tiktok' "
+                "AND status IN ('published', 'cancelled')"
+            )}
         base_eligible = []
         for row in rows:
-            if row["task_id"] in excluded:
+            tid = row["task_id"]
+            t_prof = profile_manager.get_task_profile_id(tid, db_path=db_path)
+            t_plats = get_channel_active_platforms(t_prof, db_path=db_path)
+            if not t_plats:
                 continue
+
+            if "youtube" in t_plats:
+                if tid in excluded_yt:
+                    continue
+            elif "tiktok" in t_plats:
+                if tid in excluded_tt:
+                    continue
+            else:
+                continue
+
             try:
-                t = _recover_waiting_task(row["task_id"], db_path, task_base_dir)
-                base_eligible.append(t)
+                t = _recover_waiting_task(tid, db_path, task_base_dir)
             except (ValueError, TypeError, OSError):
                 continue
+
+            if "youtube" not in t_plats and "tiktok" in t_plats:
+                tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
+                if not tt_check.get("eligible"):
+                    continue
+
+            base_eligible.append(t)
+
         if rp_cache is not None:
             rp_cache[base_cache_key] = base_eligible
 
@@ -726,14 +778,25 @@ def get_autonomous_ready_stock(
         eligible.append(dict(t))
     target = get_target_ready_stock(profile_id=clean_profile, db_path=db_path)
     tt_count = 0
-    if scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true":
-        for t in eligible:
+    yt_count = 0
+    for t in eligible:
+        t_prof = t.get("profile_id")
+        t_plats = get_channel_active_platforms(t_prof, db_path=db_path)
+        if "youtube" in t_plats:
+            yt_count += 1
+        if "tiktok" in t_plats:
             tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
             if tt_check.get("eligible"):
                 tt_count += 1
-    return {"ready_count": len(eligible), "youtube_count": len(eligible),
-            "tiktok_count": tt_count, "target_stock": target,
-            "is_below_target": len(eligible) < target, "youtube_ready": eligible}
+    return {
+        "ready_count": len(eligible),
+        "youtube_count": yt_count,
+        "tiktok_count": tt_count,
+        "target_stock": target,
+        "is_below_target": len(eligible) < target,
+        "ready_tasks": eligible,
+        "youtube_ready": eligible,
+    }
 
 
 def get_autonomous_status(
@@ -745,7 +808,7 @@ def get_autonomous_status(
     """Retorna snapshot completo da telemetria de produção autônoma para UI e diagnósticos."""
     scheduler.init_db(db_path)
     target_profile = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
-    target_channel = channel_id or resolve_autonomous_youtube_channel(target_profile, db_path=db_path)
+    target_channel = channel_id or resolve_autonomous_primary_channel(target_profile, db_path=db_path)
 
     enabled = is_profile_autonomous_mode_enabled(target_profile, db_path=db_path)
     state = _get_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_DISABLED if not enabled else STATE_IDLE, profile_id=target_profile, db_path=db_path)
@@ -932,7 +995,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                                   SELECT count(*)
                                   FROM publishing_channels pc2
                                   WHERE pc2.profile_id = tp.profile_id
-                                    AND pc2.platform = 'youtube'
+                                    AND pc2.platform = (SELECT platform FROM publishing_channels WHERE id = ?)
                                     AND pc2.is_enabled = 1
                               ) = 1
                           )
@@ -941,6 +1004,7 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
                     """,
                     (
                         since_iso,
+                        clean_channel,
                         clean_channel,
                         clean_channel,
                         clean_channel,
@@ -1180,14 +1244,19 @@ def get_global_cost_guard_status(now: Optional[datetime] = None, db_path: Option
     }
 
 
-def resolve_autonomous_planned_platforms(
+def get_channel_active_platforms(
     profile_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> List[str]:
-    """Resolve os destinos de publicação planejados para o loop autônomo baseado no estado real.
+    """Retorna lista canônica de plataformas ativas/habilitadas para o perfil/canal.
+
+    FONTE ÚNICA de verdade sobre quais plataformas de publicação estão habilitadas
+    para um perfil/canal no loop autônomo.
 
     Regras (Fail-closed estrito):
     - Se perfil não existir ou estiver inativo -> retorna []
+    - Se channel_id for fornecido, restringe à plataforma daquele canal específico.
     - YouTube é incluído se perfil ativo + youtube_enabled == True + canal YouTube ativo.
     - TikTok é incluído se perfil ativo + tiktok_enabled == True + exatamente 1 canal TikTok ativo.
     - Ambos válidos -> ["youtube", "tiktok"]
@@ -1200,6 +1269,19 @@ def resolve_autonomous_planned_platforms(
 
     prof = profile_manager.get_profile(prof_id, db_path=db_path)
     if not prof or not prof.get("is_active"):
+        return []
+
+    if channel_id:
+        ch = profile_manager.get_channel(channel_id, db_path=db_path)
+        if not ch or not ch.get("is_enabled") or ch.get("profile_id") != prof_id:
+            return []
+        plat = str(ch.get("platform") or "").lower().strip()
+        if plat == "youtube":
+            yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
+            return ["youtube"] if yt_enabled else []
+        elif plat == "tiktok":
+            tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
+            return ["tiktok"] if tt_enabled else []
         return []
 
     channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
@@ -1218,6 +1300,17 @@ def resolve_autonomous_planned_platforms(
         planned.append("tiktok")
 
     return planned
+
+
+def resolve_autonomous_planned_platforms(
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> List[str]:
+    """Resolve os destinos de publicação planejados para o loop autônomo baseado no estado real.
+
+    Delega para a fonte canônica get_channel_active_platforms.
+    """
+    return get_channel_active_platforms(profile_id=profile_id, db_path=db_path)
 
 
 def check_asset_eligibility_for_destination(
@@ -2284,20 +2377,36 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         raise ValueError(f"waiting_technical_or_safety_failed: {ts_reason}")
     persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
     prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
-    target_platforms = resolve_autonomous_planned_platforms(prof_id, db_path=db_path)
-    if "youtube" not in persisted_plats and "youtube" not in (task.get("planned_platforms") or []):
-        # Auto-reconciliação para tarefas legítimas de perfil autônomo ativo (Missão G)
-        if "youtube" in target_platforms and profile and profile["profile_id"]:
+    target_platforms = get_channel_active_platforms(prof_id, db_path=db_path)
+    if not target_platforms:
+        raise ValueError("waiting_no_eligible_destinations")
+
+    prof = profile_manager.get_profile(prof_id, db_path=db_path) if profile else None
+    if not prof or not prof.get("is_active"):
+        raise ValueError("waiting_profile_unavailable")
+
+    # Auto-reconciliação para tarefas legítimas de perfil autônomo ativo (Missão G + Hotfix TikTok)
+    has_active_persisted = any(p in target_platforms for p in persisted_plats)
+    has_active_planned = any(p in target_platforms for p in (task.get("planned_platforms") or []))
+    if not has_active_persisted and not has_active_planned:
+        if target_platforms and profile and profile["profile_id"]:
             scheduler.save_task_platforms(task_id, target_platforms, db_path=db_path)
             persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
         else:
-            raise ValueError("waiting_youtube_destination_missing")
-    prof = profile_manager.get_profile(profile["profile_id"], db_path=db_path) if profile else None
-    if not prof or not prof.get("is_active"):
-        raise ValueError("waiting_profile_unavailable")
-    resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
-    if not resolved_channel:
-        raise ValueError("waiting_youtube_channel_unavailable")
+            raise ValueError("waiting_destination_missing")
+
+    resolved_channel = None
+    if "youtube" in target_platforms:
+        resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
+        if not resolved_channel:
+            raise ValueError("waiting_youtube_channel_unavailable")
+    elif "tiktok" in target_platforms:
+        resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
+        if not resolved_channel:
+            raise ValueError("waiting_tiktok_channel_unavailable")
+    else:
+        raise ValueError("waiting_channel_unavailable")
+
     chan_id = resolved_channel[0].get("channel_id") or resolved_channel[0].get("id")
     prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
 
@@ -2387,7 +2496,7 @@ def _run_autonomous_cycle(
     now_iso = scheduler._to_iso(current_time)
 
     target_profile_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
-    target_channel_id = channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
+    target_channel_id = channel_id or resolve_autonomous_primary_channel(target_profile_id, db_path=db_path)
 
     def _set_status(key: str, val: Any) -> None:
         _set_cycle_setting(key, val, profile_id=target_profile_id, db_path=db_path)
@@ -2436,6 +2545,19 @@ def _run_autonomous_cycle(
             "status": "disabled",
             "profile_id": target_profile_id,
             "message": f"autonomous_mode_enabled is False and scheduler_enabled is False for profile '{target_profile_id}'",
+        }
+
+    # Guarda 3B: Destino de Publicação Habilitado (Fail-closed)
+    active_platforms = get_channel_active_platforms(target_profile_id, db_path=db_path)
+    if is_prod_enabled and not active_platforms:
+        msg = "Nenhum canal/destino de publicação habilitado para o perfil (YouTube ou TikTok)."
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+        return {
+            "status": "blocked",
+            "reason": "no_publish_destination",
+            "message": msg,
+            "profile_id": target_profile_id,
         }
 
     # -----------------------------------------------------------------------
@@ -2850,7 +2972,7 @@ def _run_autonomous_cycle(
                         "reason": "waiting_recovery_failed", "message": str(exc), "scheduled_items": 0}
 
         pending = []
-        for task_data in stock_info.get("youtube_ready", []):
+        for task_data in (stock_info.get("ready_tasks") or stock_info.get("youtube_ready", [])):
             t_prof = task_data.get("profile_id") or target_profile_id
             target_plats = resolve_autonomous_planned_platforms(t_prof, db_path=db_path)
             if not target_plats:
@@ -3094,8 +3216,9 @@ def _run_autonomous_cycle(
     chosen_topic = candidate["topic"]
     trend_id = candidate.get("trend_id")
 
-    # Resolve canal YouTube com segurança para o perfil alvo
-    yt_channel_id = target_channel_id or resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
+    # Resolve canal primário e YouTube com segurança para o perfil alvo
+    target_primary_channel_id = target_channel_id or resolve_autonomous_primary_channel(target_profile_id, db_path=db_path)
+    yt_channel_id = resolve_autonomous_youtube_channel(target_profile_id, db_path=db_path)
 
     # Recomenda estrutura narrativa diversificada evitando repetições (isolada por perfil e canal)
     # Mas se o canal tiver formato fixo configurado (ex: quiz_dilemma), honra estritamente o formato (Fase Q5-C1)
@@ -3105,8 +3228,8 @@ def _run_autonomous_cycle(
     if fixed_format and fixed_format not in ("traditional", "standard", "auto", ""):
         rec_struct = fixed_format
     else:
-        last_struct = get_channel_last_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
-        rejected_struct = get_channel_rejected_narrative_structure(target_profile_id, yt_channel_id, db_path=db_path)
+        last_struct = get_channel_last_narrative_structure(target_profile_id, target_primary_channel_id, db_path=db_path)
+        rejected_struct = get_channel_rejected_narrative_structure(target_profile_id, target_primary_channel_id, db_path=db_path)
 
         rec_struct, _ = content_strategy.recommend_narrative_structure(
             topic=chosen_topic,
@@ -3119,9 +3242,9 @@ def _run_autonomous_cycle(
                     rec_struct = alt_st
                     break
 
-    set_channel_last_narrative_structure(target_profile_id, yt_channel_id, rec_struct, db_path=db_path)
+    set_channel_last_narrative_structure(target_profile_id, target_primary_channel_id, rec_struct, db_path=db_path)
     if rejected_struct:
-        set_channel_rejected_narrative_structure(target_profile_id, yt_channel_id, "", db_path=db_path)
+        set_channel_rejected_narrative_structure(target_profile_id, target_primary_channel_id, "", db_path=db_path)
 
     # -----------------------------------------------------------------------
     # Etapa D: Criação da Task e Submissão ao Pipeline Existente (Generating)

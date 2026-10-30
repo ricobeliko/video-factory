@@ -415,3 +415,65 @@ class TestApiV2SchedulerControls(unittest.TestCase):
             self.assertEqual(h4.status_code, 200)
             self.assertGreater(mock_ff.call_count, c3)
 
+
+    def test_writes_do_not_retrigger_init_db_migrations_or_ddl(self):
+        """14. PROVA: N requisições alternadas com escritas (set_setting e log_operational_event) executam 0 vezes _run_migrations/DDL após a primeira inicialização."""
+        from contextlib import contextmanager
+        from app.services import profile_manager
+
+        scheduler.init_db(self.db_path)
+        profile_manager.init_profile_db(self.db_path)
+        operator_console.init_operator_db(self.db_path)
+
+        ddl_statements = []
+        orig_get_conn = scheduler.get_connection
+
+        @contextmanager
+        def spy_get_connection(db_path=None):
+            with orig_get_conn(db_path) as conn:
+                conn.set_trace_callback(
+                    lambda sql: ddl_statements.append(sql)
+                    if any(k in sql.upper() for k in ("CREATE TABLE", "CREATE INDEX", "ALTER TABLE", "PRAGMA TABLE_INFO"))
+                    else None
+                )
+                yield conn
+
+        with patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.is_primary_instance", return_value=True), \
+             patch.object(scheduler, "_run_migrations", wraps=scheduler._run_migrations) as spy_migrations, \
+             patch.object(scheduler, "get_connection", side_effect=spy_get_connection):
+
+            for i in range(10):
+                flag = (i % 2 == 0)
+                scheduler.set_setting("auto_publish_enabled", flag, db_path=self.db_path)
+                operator_console.log_operational_event(
+                    component="scheduler",
+                    severity="INFO",
+                    event_type=f"test_write_{i}",
+                    message=f"Ciclo {i}",
+                    db_path=self.db_path,
+                )
+                r_patch = self.client.patch(
+                    "/api/v2/scheduler/settings",
+                    json={"dry_run": flag},
+                )
+                self.assertEqual(r_patch.status_code, 200)
+                r_get = self.client.get("/api/v2/system/status")
+                self.assertEqual(r_get.status_code, 200)
+                self.assertEqual(
+                    r_get.json()["data"]["dry_run_enabled"],
+                    flag,
+                )
+
+            self.assertEqual(
+                spy_migrations.call_count,
+                0,
+                f"_run_migrations deveria rodar 0 vezes após a 1ª inicialização, mas rodou {spy_migrations.call_count}",
+            )
+            self.assertEqual(
+                len(ddl_statements),
+                0,
+                f"Nenhuma instrução DDL de init_db deveria rodar após a 1ª inicialização, mas rodaram: {ddl_statements}",
+            )

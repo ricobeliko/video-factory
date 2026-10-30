@@ -56,3 +56,7 @@ storage/credentials/
 
 # Relatórios transitórios de auditoria
 docs/auditorias/AUDIT_LEARNING_LOOP_REPORT.md
+
+# Caches locais do script de benchmark DEV
+scripts/dev/.dev_results_cache.json
+scripts/dev/.synth_results_cache.json

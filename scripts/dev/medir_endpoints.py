@@ -57,50 +57,101 @@ def calc_percentiles(times: List[float]) -> Tuple[float, float, float, float]:
     return s[0], p50, p95, s[-1]
 
 
-def measure_http_dev(base_url: str = "http://127.0.0.1:8080", iterations: int = 5) -> List[Dict[str, Any]]:
-    print(f"\n--- Medindo Ambiente DEV Real via HTTP ({base_url}) [{iterations} iterações] ---", flush=True)
+def measure_http_dev(base_url: str = "http://127.0.0.1:18089", iterations: int = 5) -> List[Dict[str, Any]]:
+    import shutil
+    import uvicorn
+    from app import asgi
+    from app.config import config
+    from app.services import operator_console, profile_manager, scheduler
+
+    real_db = scheduler.get_db_path()
+    tmp_dev_dir = tempfile.mkdtemp(prefix="dev_bench_")
+    dev_copy_db = os.path.join(tmp_dev_dir, "video_factory_dev_copy.db")
+    if os.path.isfile(real_db):
+        src = sqlite3.connect(real_db)
+        dst = sqlite3.connect(dev_copy_db)
+        with dst:
+            src.backup(dst)
+        dst.close()
+        src.close()
+    else:
+        scheduler.init_db(dev_copy_db)
+
+    # Inicializa índices/schema da versão atual na cópia do banco DEV
+    scheduler.init_db(dev_copy_db, force=True)
+    profile_manager.init_profile_db(dev_copy_db, force=True)
+    operator_console.init_operator_db(dev_copy_db, force=True)
+
+    config.app["api_key"] = ""
+    print(f"\n--- Medindo Ambiente DEV Real via HTTP ({base_url}, cópia sqlite3.backup de {real_db}) [{iterations} iterações] ---", flush=True)
     results = []
 
-    for screen, method, path, payload in ENDPOINTS_TO_MEASURE:
-        times = []
-        statuses = []
-        url = base_url + path
-        data_bytes = json.dumps(payload).encode("utf-8") if payload else None
-        headers = {"Content-Type": "application/json"} if payload else {}
+    with patch("app.services.operator_console.get_db_path", return_value=dev_copy_db), \
+         patch("app.services.scheduler.get_db_path", return_value=dev_copy_db), \
+         patch("app.services.profile_manager.get_db_path", return_value=dev_copy_db), \
+         patch("app.services.operator_console.require_primary_instance", return_value=None), \
+         patch("app.services.operator_console.is_primary_instance", return_value=True):
 
-        print(f"[{screen:12s}] {method:5s} {path:35s} ... ", end="", flush=True)
-        for i in range(iterations):
-            req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
-            t0 = time.perf_counter()
+        uv_cfg = uvicorn.Config(asgi.app, host="127.0.0.1", port=18089, log_level="error")
+        server = uvicorn.Server(uv_cfg)
+        srv_thread = threading.Thread(target=server.run, daemon=True)
+        srv_thread.start()
+        for _ in range(30):
+            if server.started:
+                break
+            time.sleep(0.1)
+
+        try:
+            # 1 requisição de aquecimento do processo recém-iniciado (check_ffmpeg_ready no boot)
             try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    resp.read()
-                    dt_ms = (time.perf_counter() - t0) * 1000
-                    times.append(dt_ms)
-                    statuses.append(resp.status)
-            except urllib.error.HTTPError as e:
-                dt_ms = (time.perf_counter() - t0) * 1000
-                times.append(dt_ms)
-                statuses.append(e.code)
-            except Exception as exc:
-                dt_ms = (time.perf_counter() - t0) * 1000
-                times.append(dt_ms)
-                statuses.append(f"ERR:{type(exc).__name__}")
+                urllib.request.urlopen(base_url + "/api/v2/providers/health", timeout=15).read()
+            except Exception:
+                pass
 
-        min_t, p50, p95, max_t = calc_percentiles(times)
-        status_rep = statuses[-1] if statuses else "-"
-        results.append({
-            "screen": screen,
-            "method": method,
-            "path": path,
-            "p50_ms": p50,
-            "p95_ms": p95,
-            "min_ms": min_t,
-            "max_ms": max_t,
-            "status": status_rep,
-            "times": times,
-        })
-        print(f"p50: {p50:7.1f}ms | p95: {p95:7.1f}ms | status: {status_rep}", flush=True)
+            for screen, method, path, payload in ENDPOINTS_TO_MEASURE:
+                times = []
+                statuses = []
+                url = base_url + path
+                data_bytes = json.dumps(payload).encode("utf-8") if payload else None
+                headers = {"Content-Type": "application/json"} if payload else {}
+
+                print(f"[{screen:12s}] {method:5s} {path:35s} ... ", end="", flush=True)
+                for i in range(iterations):
+                    req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
+                    t0 = time.perf_counter()
+                    try:
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            resp.read()
+                            dt_ms = (time.perf_counter() - t0) * 1000
+                            times.append(dt_ms)
+                            statuses.append(resp.status)
+                    except urllib.error.HTTPError as e:
+                        dt_ms = (time.perf_counter() - t0) * 1000
+                        times.append(dt_ms)
+                        statuses.append(e.code)
+                    except Exception as exc:
+                        dt_ms = (time.perf_counter() - t0) * 1000
+                        times.append(dt_ms)
+                        statuses.append(f"ERR:{type(exc).__name__}")
+
+                min_t, p50, p95, max_t = calc_percentiles(times)
+                status_rep = statuses[-1] if statuses else "-"
+                results.append({
+                    "screen": screen,
+                    "method": method,
+                    "path": path,
+                    "p50_ms": p50,
+                    "p95_ms": p95,
+                    "min_ms": min_t,
+                    "max_ms": max_t,
+                    "status": status_rep,
+                    "times": times,
+                })
+                print(f"p50: {p50:7.1f}ms | p95: {p95:7.1f}ms | status: {status_rep}", flush=True)
+        finally:
+            server.should_exit = True
+            srv_thread.join(timeout=3.0)
+            shutil.rmtree(tmp_dev_dir, ignore_errors=True)
 
     return results
 

@@ -234,7 +234,8 @@ def test_migration_mission_j_idempotence_and_preservation(temp_workspace):
         conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, '5');", (f"autonomous_max_generations_24h:{traditional_pid}",))
         conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES (?, '15');", (f"autonomous_max_attempts_24h:{traditional_pid}",))
 
-    # Executa inicialização / migrações
+    # Executa inicialização / migrações (simula novo boot do processo após estado legado)
+    scheduler.reset_initialized_dbs()
     scheduler.init_db(db_path)
 
     # Validações pós-migração:

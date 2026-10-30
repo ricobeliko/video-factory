@@ -29,7 +29,8 @@ def get_system_status(
         default=None, description="Optional profile ID filter"
     ),
 ):
-    status = operator_console.get_system_status(profile_id=profile_id)
+    with operator_console.render_pass_scope():
+        status = operator_console.get_system_status(profile_id=profile_id)
     return utils.get_response(200, status)
 
 

@@ -55,8 +55,6 @@ def get_connection(db_path: Optional[str] = None):
         with conn:
             yield conn
         if conn.total_changes > 0:
-            with _INIT_DB_LOCK:
-                _INITIALIZED_DBS.discard(os.path.abspath(path))
             try:
                 from app.services import operator_console
                 operator_console.invalidate_render_pass_cache()

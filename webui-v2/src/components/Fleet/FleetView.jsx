@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { getFleetSummary, createChannel } from '../../api';
+import { getFleetSummary, createChannel, updateProfileAutonomousMode } from '../../api';
 import {
   validateCreateChannelForm,
   buildCreateChannelPayload,
@@ -13,6 +13,7 @@ import {
   formatApprovalRate,
   formatReadyStock,
   formatTotalReadyStock,
+  formatDestinationsSummary,
   sortChannelsBySeverity,
   getAttentionList,
   filterChannels,
@@ -44,6 +45,8 @@ export default function FleetView({ onNavigate }) {
   const [createFormErrors, setCreateFormErrors] = useState({});
   const [isSubmittingChannel, setIsSubmittingChannel] = useState(false);
   const [createChannelError, setCreateChannelError] = useState(null);
+  const [fleetActionError, setFleetActionError] = useState(null);
+  const [isTogglingAutonomous, setIsTogglingAutonomous] = useState(false);
 
   const handleOpenCreateModal = () => {
     setCreateFormData({
@@ -751,7 +754,7 @@ export default function FleetView({ onNavigate }) {
                           onClick={() => setSelectedChannelId(id)}
                         >
                           <span className="fleet-channel-name">{ch.name}</span>
-                          <span className="fleet-channel-sub">{ch.niche || 'Geral'}</span>
+                          <span className="fleet-channel-sub">{ch.niche || 'Geral'} · {formatDestinationsSummary(ch.destinations)}</span>
                         </button>
 
                         {/* Formato */}
@@ -947,6 +950,12 @@ export default function FleetView({ onNavigate }) {
                 </div>
               </div>
 
+              {fleetActionError && (
+                <div className="fleet-modal-error-banner" role="alert" style={{ margin: '8px 16px' }}>
+                  ⚠️ {fleetActionError}
+                </div>
+              )}
+
               {/* Meta details list */}
               <div className="fleet-drawer-meta-list">
                 <div className="fleet-meta-row">
@@ -954,14 +963,42 @@ export default function FleetView({ onNavigate }) {
                   <span className="fleet-meta-val fleet-mono">{selectedChannel.growth_mode || '—'}</span>
                 </div>
                 <div className="fleet-meta-row">
+                  <span className="fleet-meta-key">Destinos:</span>
+                  <span className="fleet-meta-val fleet-mono">{formatDestinationsSummary(selectedChannel.destinations)}</span>
+                </div>
+                <div className="fleet-meta-row" style={{ alignItems: 'center' }}>
                   <span className="fleet-meta-key">Modo autônomo:</span>
-                  <span className="fleet-meta-val">
-                    {selectedChannel.autonomous_enabled ? (
-                      <span style={{ color: '#34D399' }}>Ligado</span>
-                    ) : (
-                      <span style={{ color: '#9099AA' }}>Desligado</span>
-                    )}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="fleet-meta-val">
+                      {selectedChannel.autonomous_enabled ? (
+                        <span style={{ color: '#34D399', fontWeight: 600 }}>Ligado</span>
+                      ) : (
+                        <span style={{ color: '#9099AA' }}>Desligado</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="fleet-btn-secondary"
+                      style={{ fontSize: '11px', padding: '2px 8px' }}
+                      disabled={isTogglingAutonomous}
+                      onClick={async () => {
+                        setIsTogglingAutonomous(true);
+                        setFleetActionError(null);
+                        try {
+                          await updateProfileAutonomousMode(selectedChannel.profile_id, {
+                            enabled: !selectedChannel.autonomous_enabled,
+                          });
+                          await fetchData();
+                        } catch (err) {
+                          setFleetActionError(err.message || 'Falha ao alterar modo autônomo.');
+                        } finally {
+                          setIsTogglingAutonomous(false);
+                        }
+                      }}
+                    >
+                      {selectedChannel.autonomous_enabled ? 'Desligar' : 'Ligar'}
+                    </button>
+                  </div>
                 </div>
                 <div className="fleet-meta-row">
                   <span className="fleet-meta-key">Falhas 24h:</span>

@@ -1,7 +1,7 @@
 """Operational endpoints for Web UI V2."""
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from loguru import logger
 
 from fastapi import Depends, Query, Request
@@ -626,9 +626,21 @@ def update_profile_autonomous_mode(
     body: UpdateAutonomousRequest,
 ):
     request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+
+    # Fail-closed: only PRIMARY instance can change autonomous mode
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can change autonomous mode",
+        )
+
     clean_p = str(profile_id or "").strip()
     if clean_p != profile_manager.DEFAULT_PROFILE_ID and clean_p != "default":
-        profile = profile_manager.get_profile(clean_p)
+        profile = profile_manager.get_profile(clean_p, db_path=db_path)
         if not profile:
             raise HttpException(
                 task_id=request_id,
@@ -636,10 +648,21 @@ def update_profile_autonomous_mode(
                 message=f"Profile '{profile_id}' not found",
             )
 
+    # Fail-closed guard: cannot enable autonomous mode if channel has no publish destinations enabled
+    if body.enabled:
+        active_plats = autonomous_production.get_channel_active_platforms(clean_p, db_path=db_path)
+        if not active_plats:
+            raise HttpException(
+                task_id=request_id,
+                status_code=400,
+                message="Canal sem destino de publicação habilitado",
+            )
+
     try:
         operator_console.set_autonomous_mode_enabled_op(
             enabled=body.enabled,
             profile_id=clean_p,
+            db_path=db_path,
         )
     except PermissionError as exc:
         raise HttpException(
@@ -654,7 +677,7 @@ def update_profile_autonomous_mode(
             message="Internal error updating autonomous mode",
         )
 
-    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p)
+    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p, db_path=db_path)
     return utils.get_response(
         200,
         {
@@ -1294,3 +1317,279 @@ def get_v2_health(request: Request):
 def get_allowed_voices(request: Request):
     voices = profile_manager.get_allowed_voices()
     return utils.get_response(200, voices)
+
+class DestinationUpdateRequestItem(BaseModel):
+    model_config = {"extra": "forbid"}
+    platform: str = Field(..., description="Plataforma do destino (youtube ou tiktok)")
+    is_enabled: Optional[bool] = Field(None, description="Habilitar ou desabilitar o destino")
+    external_account_id: Optional[str] = Field(None, description="ID da conta externa (UC... para YouTube)")
+    project_id: Optional[str] = Field(None, description="ID do projeto no Post for Me / Upload-Post")
+    display_name: Optional[str] = Field(None, description="Nome de exibição opcional")
+    auto_publish_authorized: Optional[bool] = Field(None, description="Autorizar publicação automática sem revisão")
+
+
+class UpdateChannelDestinationsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    platform: Optional[str] = Field(None, description="Plataforma do destino (youtube ou tiktok)")
+    is_enabled: Optional[bool] = Field(None, description="Habilitar ou desabilitar o destino")
+    external_account_id: Optional[str] = Field(None, description="ID da conta externa (UC... para YouTube)")
+    project_id: Optional[str] = Field(None, description="ID do projeto no Post for Me / Upload-Post")
+    display_name: Optional[str] = Field(None, description="Nome de exibição opcional")
+    auto_publish_authorized: Optional[bool] = Field(None, description="Autorizar publicação automática sem revisão")
+    destinations: Optional[List[DestinationUpdateRequestItem]] = Field(None, description="Lista para atualização múltipla")
+
+
+@router.get(
+    "/channels/{profile_id}/destinations",
+    summary="Get configured destinations for a channel",
+)
+def get_channel_destinations(request: Request, profile_id: str):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    clean_p = str(profile_id or "").strip()
+    profile = profile_manager.get_profile(clean_p, db_path=db_path)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+
+    all_channels = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
+    yt_ch = next((c for c in all_channels if c.get("platform") == "youtube"), None)
+    tt_ch = next((c for c in all_channels if c.get("platform") == "tiktok"), None)
+
+    destinations = [
+        {
+            "id": yt_ch.get("id") if yt_ch else None,
+            "platform": "youtube",
+            "is_enabled": bool(yt_ch.get("is_enabled", 0)) if yt_ch else False,
+            "external_account_id": yt_ch.get("external_account_id") if yt_ch else None,
+            "project_id": yt_ch.get("project_id") if yt_ch else None,
+            "display_name": yt_ch.get("display_name") if yt_ch else None,
+            "auto_publish_authorized": bool(yt_ch.get("auto_publish_authorized", 0)) if yt_ch else False,
+        },
+        {
+            "id": tt_ch.get("id") if tt_ch else None,
+            "platform": "tiktok",
+            "is_enabled": bool(tt_ch.get("is_enabled", 0)) if tt_ch else False,
+            "external_account_id": tt_ch.get("external_account_id") if tt_ch else None,
+            "project_id": tt_ch.get("project_id") if tt_ch else None,
+            "display_name": tt_ch.get("display_name") if tt_ch else None,
+            "auto_publish_authorized": bool(tt_ch.get("auto_publish_authorized", 0)) if tt_ch else False,
+        },
+    ]
+
+    by_platform = {d["platform"]: d for d in destinations}
+
+    return utils.get_response(
+        200,
+        {
+            "profile_id": clean_p,
+            "destinations": destinations,
+            "by_platform": by_platform,
+        },
+    )
+
+
+@router.patch(
+    "/channels/{profile_id}/destinations",
+    summary="Update or create publishing destinations for a channel",
+)
+def update_channel_destinations(
+    request: Request,
+    profile_id: str,
+    body: UpdateChannelDestinationsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+
+    # 1. Fail-closed: only PRIMARY instance can modify destinations
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can update channel destinations",
+        )
+
+    clean_p = str(profile_id or "").strip()
+    profile = profile_manager.get_profile(clean_p, db_path=db_path)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+
+    # 2. Extract destination items to process
+    items_to_process: List[DestinationUpdateRequestItem] = []
+    if body.destinations:
+        items_to_process.extend(body.destinations)
+    elif body.platform:
+        items_to_process.append(
+            DestinationUpdateRequestItem(
+                platform=body.platform,
+                is_enabled=body.is_enabled,
+                external_account_id=body.external_account_id,
+                project_id=body.project_id,
+                display_name=body.display_name,
+                auto_publish_authorized=body.auto_publish_authorized,
+            )
+        )
+    else:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message="Nenhum destino especificado para atualização.",
+        )
+
+    # 3. Process each destination
+    existing_channels = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
+    for item in items_to_process:
+        plat = str(item.platform or "").lower().strip()
+        if plat not in ("youtube", "tiktok"):
+            raise HttpException(
+                task_id=request_id,
+                status_code=400,
+                message=f"Plataforma '{item.platform}' inválida. Use 'youtube' ou 'tiktok'.",
+            )
+
+        clean_ext = str(item.external_account_id).strip() if item.external_account_id is not None else None
+        if plat == "youtube" and clean_ext:
+            if not clean_ext.startswith("UC"):
+                raise HttpException(
+                    task_id=request_id,
+                    status_code=400,
+                    message=f"O YouTube Channel ID deve iniciar com 'UC' (recebido: '{clean_ext}').",
+                )
+
+        clean_proj = str(item.project_id).strip() if item.project_id is not None else None
+
+        existing_dest = next((c for c in existing_channels if c.get("platform") == plat), None)
+
+        if existing_dest:
+            cid = existing_dest["id"]
+            upd_kwargs: Dict[str, Any] = {"db_path": db_path}
+            if item.is_enabled is not None:
+                upd_kwargs["is_enabled"] = bool(item.is_enabled)
+            if item.external_account_id is not None:
+                upd_kwargs["external_account_id"] = clean_ext or None
+            if item.project_id is not None:
+                upd_kwargs["project_id"] = clean_proj or None
+            if item.display_name is not None:
+                upd_kwargs["display_name"] = str(item.display_name).strip() if item.display_name else None
+
+            profile_manager.update_channel(cid, **upd_kwargs)
+
+            if item.auto_publish_authorized is not None:
+                scheduler.set_channel_auto_publish_authorized(
+                    cid, bool(item.auto_publish_authorized), db_path=db_path
+                )
+        else:
+            prof_name = profile.get("name") or clean_p
+            disp_name = item.display_name or f"{prof_name} ({plat.title()})"
+            is_en = bool(item.is_enabled) if item.is_enabled is not None else True
+            created = profile_manager.create_channel(
+                profile_id=clean_p,
+                platform=plat,
+                display_name=disp_name,
+                external_profile_name=prof_name,
+                external_account_id=clean_ext,
+                project_id=clean_proj,
+                is_enabled=is_en,
+                db_path=db_path,
+            )
+            cid = created["id"]
+            if item.auto_publish_authorized is not None:
+                scheduler.set_channel_auto_publish_authorized(
+                    cid, bool(item.auto_publish_authorized), db_path=db_path
+                )
+            # Re-fetch for subsequent iterations
+            existing_channels = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
+
+        # Audit event without secrets
+        operator_console.log_operational_event(
+            component="channels",
+            severity=operator_console.SEVERITY_INFO,
+            event_type="CHANNEL_DESTINATION_UPDATED",
+            message=f"Destino de publicação '{plat}' atualizado para canal '{clean_p}'",
+            metadata={
+                "profile_id": clean_p,
+                "channel_id": cid,
+                "platform": plat,
+                "is_enabled": item.is_enabled,
+                "external_account_id": clean_ext,
+                "project_id": clean_proj,
+                "auto_publish_authorized": item.auto_publish_authorized,
+            },
+            db_path=db_path,
+        )
+
+    # 4. Return updated destinations
+    refetched = profile_manager.list_channels(profile_id=clean_p, db_path=db_path)
+    yt_ch = next((c for c in refetched if c.get("platform") == "youtube"), None)
+    tt_ch = next((c for c in refetched if c.get("platform") == "tiktok"), None)
+
+    destinations = [
+        {
+            "id": yt_ch.get("id") if yt_ch else None,
+            "platform": "youtube",
+            "is_enabled": bool(yt_ch.get("is_enabled", 0)) if yt_ch else False,
+            "external_account_id": yt_ch.get("external_account_id") if yt_ch else None,
+            "project_id": yt_ch.get("project_id") if yt_ch else None,
+            "display_name": yt_ch.get("display_name") if yt_ch else None,
+            "auto_publish_authorized": bool(yt_ch.get("auto_publish_authorized", 0)) if yt_ch else False,
+        },
+        {
+            "id": tt_ch.get("id") if tt_ch else None,
+            "platform": "tiktok",
+            "is_enabled": bool(tt_ch.get("is_enabled", 0)) if tt_ch else False,
+            "external_account_id": tt_ch.get("external_account_id") if tt_ch else None,
+            "project_id": tt_ch.get("project_id") if tt_ch else None,
+            "display_name": tt_ch.get("display_name") if tt_ch else None,
+            "auto_publish_authorized": bool(tt_ch.get("auto_publish_authorized", 0)) if tt_ch else False,
+        },
+    ]
+
+    return utils.get_response(
+        200,
+        {
+            "profile_id": clean_p,
+            "destinations": destinations,
+            "by_platform": {d["platform"]: d for d in destinations},
+        },
+        message=f"Destinos de publicação para canal '{clean_p}' atualizados com sucesso.",
+    )
+
+
+@router.get(
+    "/publishing/accounts",
+    summary="List connected publishing accounts from post_for_me",
+)
+def list_publishing_accounts(
+    request: Request,
+    platform: Optional[str] = Query(default=None, description="Optional platform filter (youtube, tiktok)"),
+):
+    request_id = base.get_task_id(request)
+    from app.services import post_for_me
+    accounts = []
+    clean_platform = str(platform).strip().lower() if platform else None
+    if clean_platform and clean_platform not in ("youtube", "tiktok"):
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=f"Plataforma '{clean_platform}' inválida. Use 'youtube' ou 'tiktok'.",
+        )
+
+    platforms_to_query = [clean_platform] if clean_platform else ["youtube", "tiktok"]
+    for plat in platforms_to_query:
+        try:
+            accs = post_for_me.list_connected_publishing_accounts(platform=plat)
+            if isinstance(accs, list):
+                accounts.extend(accs)
+        except Exception as exc:
+            logger.warning(f"Falha ao consultar contas conectadas de {plat}: {exc}")
+
+    return utils.get_response(200, {"accounts": accounts, "total": len(accounts)})

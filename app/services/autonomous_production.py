@@ -736,10 +736,13 @@ def get_autonomous_ready_stock(
                 "AND status IN ('published', 'cancelled')"
             )}
         base_eligible = []
+        plats_by_prof: Dict[Optional[str], List[str]] = {}
         for row in rows:
             tid = row["task_id"]
             t_prof = profile_manager.get_task_profile_id(tid, db_path=db_path)
-            t_plats = get_channel_active_platforms(t_prof, db_path=db_path)
+            if t_prof not in plats_by_prof:
+                plats_by_prof[t_prof] = get_channel_active_platforms(t_prof, db_path=db_path)
+            t_plats = plats_by_prof[t_prof]
             if not t_plats:
                 continue
 

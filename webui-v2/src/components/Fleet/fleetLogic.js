@@ -287,3 +287,41 @@ export function filterChannels(channels, { filter = 'all', query = '' } = {}) {
     return true;
   });
 }
+
+/**
+ * Formats a concise human-readable summary of configured publishing destinations.
+ * Examples:
+ * - "YouTube ✓ · TikTok ✓ sem auto-pub"
+ * - "YouTube ✓"
+ * - "TikTok ✓"
+ * - "YouTube ✓ sem auto-pub"
+ * - "Sem destino"
+ */
+export function formatDestinationsSummary(destinations) {
+  if (!destinations) return 'Sem destino';
+  let destList = [];
+  if (Array.isArray(destinations)) {
+    destList = destinations;
+  } else if (typeof destinations === 'object') {
+    destList = Object.values(destinations);
+  }
+  const enabled = destList.filter((d) => Boolean(d && d.is_enabled));
+  if (enabled.length === 0) return 'Sem destino';
+
+  // Sort: youtube first, then tiktok
+  const sortOrder = { youtube: 1, tiktok: 2 };
+  const sorted = [...enabled].sort((a, b) => {
+    const platA = String(a.platform || '').toLowerCase();
+    const platB = String(b.platform || '').toLowerCase();
+    return (sortOrder[platA] || 9) - (sortOrder[platB] || 9);
+  });
+
+  return sorted
+    .map((d) => {
+      const p = String(d.platform || '').toLowerCase();
+      const platLabel = p === 'youtube' ? 'YouTube' : p === 'tiktok' ? 'TikTok' : (d.platform || 'Destino');
+      const hasAutoPub = Boolean(d.auto_publish_authorized);
+      return hasAutoPub ? `${platLabel} ✓` : `${platLabel} ✓ sem auto-pub`;
+    })
+    .join(' · ');
+}

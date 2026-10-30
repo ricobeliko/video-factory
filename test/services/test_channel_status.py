@@ -188,6 +188,64 @@ class TestCanonicalChannelStatus(unittest.TestCase):
         self.assertEqual(res_attention["status"], "attention")
         self.assertEqual(res_attention["reason_code"], "STOCK_BELOW_TARGET")
 
+    def test_case_no_publish_destination_blocked(self):
+        """Sem destino de publicação com autônomo ligado => blocked com NO_PUBLISH_DESTINATION."""
+        res = evaluate_canonical_channel_status(
+            is_factory_paused=False,
+            is_channel_active=True,
+            autonomous_enabled=True,
+            has_publish_destination=False,
+            auto_state="idle",
+            ready_stock=5,
+            target_stock=3,
+        )
+        self.assertEqual(res["status"], "blocked")
+        self.assertEqual(res["label"], "Bloqueado")
+        self.assertEqual(res["reason_code"], "NO_PUBLISH_DESTINATION")
+        self.assertEqual(res["reason"], "Sem destino de publicação habilitado (YouTube ou TikTok)")
+
+    def test_case_no_publish_destination_priority_order(self):
+        """Ordem de prioridade de NO_PUBLISH_DESTINATION: abaixo de FACTORY_PAUSED, CHANNEL_INACTIVE, AUTONOMOUS_DISABLED e FACTORY_ERROR; acima de disjuntor e outros bloqueios."""
+        # 1. Fábrica pausada vence
+        res_p = evaluate_canonical_channel_status(
+            is_factory_paused=True,
+            autonomous_enabled=True,
+            has_publish_destination=False,
+        )
+        self.assertEqual(res_p["status"], "paused")
+        self.assertEqual(res_p["reason_code"], "FACTORY_PAUSED")
+
+        # 2. Autônomo desligado vence (paused)
+        res_dis = evaluate_canonical_channel_status(
+            is_factory_paused=False,
+            autonomous_enabled=False,
+            has_publish_destination=False,
+        )
+        self.assertEqual(res_dis["status"], "paused")
+        self.assertEqual(res_dis["reason_code"], "AUTONOMOUS_DISABLED")
+
+        # 3. FACTORY_ERROR vence NO_PUBLISH_DESTINATION
+        res_err = evaluate_canonical_channel_status(
+            factory_state="ERROR",
+            autonomous_enabled=True,
+            has_publish_destination=False,
+        )
+        self.assertEqual(res_err["status"], "blocked")
+        self.assertEqual(res_err["reason_code"], "FACTORY_ERROR")
+
+        # 4. NO_PUBLISH_DESTINATION vence REJECTION_BREAKER e auto_state='blocked'
+        res_dest = evaluate_canonical_channel_status(
+            is_factory_paused=False,
+            autonomous_enabled=True,
+            has_publish_destination=False,
+            consec_rejections=15,
+            max_rejections=10,
+            auto_state="blocked",
+            auto_message="Bloqueado por disjuntor",
+        )
+        self.assertEqual(res_dest["status"], "blocked")
+        self.assertEqual(res_dest["reason_code"], "NO_PUBLISH_DESTINATION")
+
 
 class TestAutonomousStatusFixes(unittest.TestCase):
     def setUp(self):

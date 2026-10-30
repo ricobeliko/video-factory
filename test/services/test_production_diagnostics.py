@@ -137,6 +137,38 @@ def _create_synthetic_test_db(db_path: str) -> None:
     finally:
         conn.close()
 
+def _add_test_destination(db_file: str, profile_id: str, platform: str = "youtube", is_enabled: int = 1) -> None:
+    """Helper de fixture para garantir que canais sintéticos de teste possuam destino habilitado por padrão."""
+    conn = sqlite3.connect(db_file)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS publishing_channels (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                display_name TEXT,
+                external_account_id TEXT,
+                project_id TEXT,
+                is_enabled INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO publishing_channels (
+                id, profile_id, platform, display_name, is_enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, '2026-10-27T00:00:00Z', '2026-10-27T00:00:00Z');
+            """,
+            (f"pub-{profile_id}-{platform}", profile_id, platform, f"Destino {platform.title()}", is_enabled),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 
 def test_detector_task_stuck_after_render_real_case_e9630f19():
     """Reproduz caso real e9630f19: vídeo final existe, Safety PASS, sem quality score, fora de agendamento."""
@@ -991,6 +1023,9 @@ def test_forced_stock_failure_handled_as_unknown():
         finally:
             conn.close()
 
+        _add_test_destination(db_file, "chan-stock-err")
+        _add_test_destination(db_file, "default")
+
         def _failing_stock_fetcher(**kwargs):
             raise RuntimeError("Falha simulada na leitura do estoque canônico")
 
@@ -1187,6 +1222,9 @@ def test_detector_daily_approved_cap_reached():
         finally:
             conn.close()
 
+        _add_test_destination(db_file, "chan-quiz")
+        _add_test_destination(db_file, "default")
+
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         chan = next(c for c in res["channels"] if c["profile_id"] == "chan-quiz")
 
@@ -1307,6 +1345,9 @@ def test_detector_approved_cap_exceeded():
         finally:
             conn.close()
 
+        _add_test_destination(db_file, "chan-escolhas")
+        _add_test_destination(db_file, "default")
+
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         chan = next(c for c in res["channels"] if c["profile_id"] == "chan-escolhas")
 
@@ -1371,6 +1412,10 @@ def test_detector_rejection_breaker_warning_and_critical():
         finally:
             conn.close()
 
+        _add_test_destination(db_file, "chan-warn")
+        _add_test_destination(db_file, "chan-crit")
+        _add_test_destination(db_file, "default")
+
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         chan_warn = next(c for c in res["channels"] if c["profile_id"] == "chan-warn")
         chan_crit = next(c for c in res["channels"] if c["profile_id"] == "chan-crit")
@@ -1431,6 +1476,9 @@ def test_detector_global_cost_guard_warning_and_critical():
             conn.commit()
         finally:
             conn.close()
+
+        _add_test_destination(db_file, "chan-guard")
+        _add_test_destination(db_file, "default")
 
         # 80% deve disparar warning
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
@@ -1503,6 +1551,9 @@ def test_detector_generation_failure_streak():
             conn.commit()
         finally:
             conn.close()
+
+        _add_test_destination(db_file, "chan-fail")
+        _add_test_destination(db_file, "default")
 
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         chan = next(c for c in res["channels"] if c["profile_id"] == "chan-fail")
@@ -1599,6 +1650,9 @@ def test_limit_query_failure_returns_null_and_warning_without_failing_channel():
         finally:
             conn.close()
 
+        _add_test_destination(db_file, "chan-err-lim")
+        _add_test_destination(db_file, "default")
+
         def _failing_limits(**kwargs):
             raise RuntimeError("Falha simulada ao ler limites operacionais")
 
@@ -1675,6 +1729,9 @@ def test_case_real_quiz_quiz_daily_goal_reached_is_ok():
         conn.commit()
         conn.close()
 
+        _add_test_destination(db_file, "channel-quiz")
+        _add_test_destination(db_file, "default")
+
         def _limits_mock(**kwargs):
             return {
                 "growth_mode": "NORMAL",
@@ -1747,6 +1804,9 @@ def test_case_real_stock_none_is_attention():
         )
         conn.commit()
         conn.close()
+
+        _add_test_destination(db_file, "channel-stock-none")
+        _add_test_destination(db_file, "default")
 
         def _stock_fail(**kwargs):
             raise RuntimeError("Falha de conexão com SQLite canônico")
@@ -1833,3 +1893,86 @@ def test_no_unassigned_events_key_when_empty():
 
         res = production_diagnostics.get_diagnostics_overview(db_path=db_file, now=now)
         assert "unassigned_events" not in res
+
+
+def test_parity_canonical_status_fleet_and_diagnostics():
+    """Garante paridade estrita de status canônico entre Frota (get_fleet_summary) e Diagnóstico (get_diagnostics_overview).
+
+    Princípio de Fonte Única:
+    1. Canal com autônomo ligado e SEM nenhum destino de publicação habilitado:
+       ambos devem retornar status='blocked' e reason_code='NO_PUBLISH_DESTINATION'.
+    2. Canal com destino habilitado:
+       ambos devem retornar o MESMO status ('ok' ou 'attention').
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_file = os.path.join(tmp_dir, "test_parity.db")
+        scheduler.init_db(db_file)
+        operator_console.init_operator_db(db_file)
+        profile_manager.ensure_default_profile(db_file)
+
+        now = datetime(2026, 10, 27, 16, 0, 0, tzinfo=timezone.utc)
+        now_iso = now.isoformat()
+
+        conn = sqlite3.connect(db_file)
+        try:
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-no-dest", "Canal Sem Destino", "chan-no-dest", now_iso, now_iso),
+            )
+            conn.execute(
+                "INSERT INTO content_profiles (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("chan-with-dest", "Canal Com Destino", "chan-with-dest", now_iso, now_iso),
+            )
+            conn.execute(
+                """
+                INSERT INTO autopilot_settings (key, value) VALUES
+                ('autonomous_mode_enabled', 'true'),
+                ('autonomous_mode_enabled:chan-no-dest', 'true'),
+                ('autonomous_mode_enabled:chan-with-dest', 'true'),
+                ('autonomous_state', 'IDLE'),
+                ('youtube_enabled', 'true'),
+                ('tiktok_enabled', 'true');
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Configura destino apenas para chan-with-dest
+        _add_test_destination(db_file, "chan-with-dest", platform="youtube", is_enabled=1)
+        _add_test_destination(db_file, "default", platform="youtube", is_enabled=1)
+
+        def _mock_stock(*args, **kwargs):
+            return {"total_ready": 3, "minimum_threshold": 3, "status": "ok"}
+
+        # 1. Executa Frota (get_fleet_summary)
+        with patch("app.services.operator_console.get_canonical_ready_stock", side_effect=_mock_stock):
+            fleet_res = operator_console.get_fleet_summary(db_path=db_file)
+
+        # 2. Executa Diagnóstico (get_diagnostics_overview)
+        diag_res = production_diagnostics.get_diagnostics_overview(
+            db_path=db_file,
+            now=now,
+            _stock_fetcher=_mock_stock,
+        )
+
+        fleet_channels = {c["profile_id"]: c for c in fleet_res.get("channels", [])}
+        diag_channels = {c["profile_id"]: c for c in diag_res.get("channels", [])}
+
+        # --- CENÁRIO 1: Canal SEM destino de publicação ---
+        fc_no_dest = fleet_channels["chan-no-dest"]
+        dc_no_dest = diag_channels["chan-no-dest"]
+
+        assert fc_no_dest["status"] == "blocked"
+        assert dc_no_dest["status"] == "blocked"
+        assert dc_no_dest["reason_code"] == "NO_PUBLISH_DESTINATION"
+        assert fc_no_dest["status"] == dc_no_dest["status"]
+
+        # --- CENÁRIO 2: Canal COM destino de publicação ---
+        fc_with_dest = fleet_channels["chan-with-dest"]
+        dc_with_dest = diag_channels["chan-with-dest"]
+
+        assert fc_with_dest["status"] != "blocked"
+        assert dc_with_dest["status"] != "blocked"
+        assert fc_with_dest["status"] == dc_with_dest["status"]
+        assert dc_with_dest["status"] == "ok"

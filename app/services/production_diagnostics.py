@@ -1142,8 +1142,14 @@ def get_diagnostics_overview(
         # Falhas nas últimas 24h
         failed_count_24h = counts_interrupted + sum(1 for e in chan_events if e.get("event_type") == "generation_failed")
 
+        if "publishing_channels" not in existing_tables:
+            has_dest = True
+        else:
+            has_dest = bool(autonomous_production.get_channel_active_platforms(pid, db_path=effective_db))
+
         status_eval = evaluate_canonical_channel_status(
             is_factory_paused=is_factory_paused,
+            has_publish_destination=has_dest,
             factory_state=factory_state,
             is_channel_active=is_channel_active,
             autonomous_enabled=bool(autonomous_enabled),

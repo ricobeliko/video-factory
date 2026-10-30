@@ -376,8 +376,7 @@ def create_channel(request: Request, payload: CreateChannelRequest):
         settings_obj.editorial.num_questions = None
 
     settings_obj.voice.voice_name = channel_voice
-    settings_obj.voice.voice_rate = 1.0
-    settings_obj.voice.voice_volume = 1.0
+    # voice_rate e voice_volume herdam (None por padrao no ChannelWorkspaceSettings, igual a V1)
 
     settings_obj.visual.visual_director_enabled = True
     settings_obj.visual.flow_enabled = True

@@ -230,6 +230,11 @@ class TestApiV2ChannelCreation(unittest.TestCase):
         effective_v = data_a.get("effective_voice", {}).get("voice_name", {})
         self.assertTrue(autonomous_production.is_valid_pt_br_voice(effective_v.get("value")))
 
+        # Verifica se voice_rate e voice_volume herdam (None no VoiceSettings, sem sobrescrita, igual a V1)
+        settings_a = profile_manager.get_profile_settings(data_a["profile_id"], db_path=self.db_path)
+        self.assertIsNone(settings_a.voice.voice_rate)
+        self.assertIsNone(settings_a.voice.voice_volume)
+
         # Caso B: Com voz homologada explícita -> salva override
         res_b = self.client.post(
             "/api/v2/channels",

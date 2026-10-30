@@ -231,6 +231,252 @@ def get_channels_overview(request: Request):
 
     return utils.get_response(200, {"channels": channels_data, "total": len(channels_data)})
 
+class CreateChannelRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="Nome do canal")
+    niche: str = Field(..., min_length=1, max_length=100, description="Nicho do canal")
+    video_format: Optional[str] = Field("traditional", description="traditional, quiz_dilemma, quiz_paper")
+    topic_brief: Optional[str] = Field(None, max_length=1000, description="Briefing editorial / tema")
+    language: Optional[str] = Field("pt-BR", description="Idioma do canal")
+    slug: Optional[str] = Field(None, max_length=100, description="Slug customizado opcional")
+    voice_name: Optional[str] = Field(None, description="Voz homologada opcional")
+
+    model_config = {"extra": "forbid"}
+
+
+@router.post(
+    "/channels",
+    status_code=201,
+    summary="Create a new channel workspace (UI-006 / M2.7)",
+)
+def create_channel(request: Request, payload: CreateChannelRequest):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+
+    # 1. Fail-closed: only PRIMARY instance can create channels
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message="Operation blocked: only primary instance can create channels",
+        )
+
+    # 2. Input validation
+    clean_name = str(payload.name or "").strip()
+    if not clean_name:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message="Nome do canal não pode ser vazio.",
+        )
+
+    clean_niche = str(payload.niche or "").strip()
+    if not clean_niche:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message="Nicho do canal não pode ser vazio.",
+        )
+
+    clean_format = str(payload.video_format or "traditional").strip().lower()
+    valid_formats = {"traditional", "quiz_dilemma", "quiz_paper"}
+    if clean_format not in valid_formats:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=f"Formato de vídeo '{clean_format}' inválido. Opções válidas: traditional, quiz_dilemma, quiz_paper.",
+        )
+
+    clean_topic = str(payload.topic_brief or "").strip() if payload.topic_brief else ""
+    clean_lang = str(payload.language or "pt-BR").strip() or "pt-BR"
+
+    # 3. Check duplicate name / slug
+    with profile_manager.get_connection(db_path) as conn:
+        dup_name = conn.execute(
+            "SELECT id, name FROM content_profiles WHERE LOWER(TRIM(name)) = LOWER(TRIM(?));",
+            (clean_name,),
+        ).fetchone()
+        if dup_name:
+            raise HttpException(
+                task_id=request_id,
+                status_code=409,
+                message=f"Já existe um canal cadastrado com o nome '{clean_name}'. Escolha um nome diferente.",
+            )
+
+        if payload.slug and str(payload.slug).strip():
+            clean_slug = str(payload.slug).strip().lower()
+            dup_slug = conn.execute(
+                "SELECT id, slug FROM content_profiles WHERE LOWER(TRIM(slug)) = LOWER(TRIM(?));",
+                (clean_slug,),
+            ).fetchone()
+            if dup_slug:
+                raise HttpException(
+                    task_id=request_id,
+                    status_code=409,
+                    message=f"Já existe um canal cadastrado com o slug '{clean_slug}'. Escolha um slug diferente.",
+                )
+        else:
+            clean_slug = None
+
+    # 4. Voice validation & canonical precedence:
+    # Precedência: Canal > Global UI > Padrão App > Fallback Brian
+    # O canal NÃO pode nascer herdando voz inválida:
+    # - Se voice_name foi fornecido, valida se pertence à allowlist homologada
+    # - Se omitido (None), deixa sem sobrescrita (voice_name = None) seguindo a precedência canônica
+    #   desde que o valor herdado seja válido pt-BR; se porventura a herança for inválida, força fallback seguro homologado.
+    if payload.voice_name and str(payload.voice_name).strip():
+        req_voice = str(payload.voice_name).strip()
+        allowed_list = [v.get("id") for v in profile_manager.get_allowed_voices()]
+        from app.services import autonomous_production, voice
+        is_allowed = (req_voice in allowed_list) or autonomous_production.is_valid_pt_br_voice(req_voice)
+        if not is_allowed:
+            raise HttpException(
+                task_id=request_id,
+                status_code=400,
+                message=f"Voz '{req_voice}' inválida ou não homologada para pt-BR. Use uma das vozes de /voices/allowed.",
+            )
+        canon_req = voice.canonicalize_voice_name(req_voice)
+        if canon_req.endswith(("-Male", "-Female")):
+            canon_req = voice.parse_voice_name(canon_req)
+        channel_voice = canon_req
+        voice_declaration = "override"
+    else:
+        from app.config import config
+        from app.services import autonomous_production, voice
+        candidate = (
+            config.ui.get("voice_name")
+            or config.app.get("voice_name")
+            or "en-US-BrianMultilingualNeural"
+        )
+        canon_candidate = voice.canonicalize_voice_name(candidate)
+        if canon_candidate.endswith(("-Male", "-Female")):
+            canon_candidate = voice.parse_voice_name(canon_candidate)
+
+        if autonomous_production.is_valid_pt_br_voice(canon_candidate):
+            channel_voice = None  # Sem sobrescrita, herdando via precedência canônica
+            voice_declaration = "inherited"
+        else:
+            channel_voice = "en-US-BrianMultilingualNeural"
+            voice_declaration = "fallback_protected"
+
+    # 5. Build ChannelWorkspaceSettings with safe defaults
+    settings_obj = profile_manager.ChannelWorkspaceSettings()
+    settings_obj.editorial.topic_brief = clean_topic
+    settings_obj.editorial.video_format = clean_format
+    settings_obj.editorial.content_style = clean_format
+    if clean_format == "quiz_paper":
+        settings_obj.editorial.closing_type = "comments"
+        settings_obj.editorial.num_questions = 5
+    elif clean_format == "quiz_dilemma":
+        settings_obj.editorial.closing_type = "auto"
+        settings_obj.editorial.num_questions = 8
+    else:
+        settings_obj.editorial.closing_type = None
+        settings_obj.editorial.num_questions = None
+
+    settings_obj.voice.voice_name = channel_voice
+    settings_obj.voice.voice_rate = 1.0
+    settings_obj.voice.voice_volume = 1.0
+
+    settings_obj.visual.visual_director_enabled = True
+    settings_obj.visual.flow_enabled = True
+    settings_obj.visual.flow_scene_count = profile_manager.DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT
+    settings_obj.visual.stock_fallback_enabled = True
+
+    # Defaults seguros da V1: modo autônomo DESLIGADO, meta de estoque 3
+    settings_obj.automation.autonomous_enabled = False
+    settings_obj.automation.target_ready_stock = 3
+
+    settings_obj.music.enabled = False
+    settings_obj.music.mode = "auto"
+    settings_obj.music.volume = 0.20
+    settings_obj.music.default_mood = "neutral"
+
+    # 6. Reutiliza profile_manager.onboard_channel_workspace
+    try:
+        res = profile_manager.onboard_channel_workspace(
+            name=clean_name,
+            niche=clean_niche,
+            topic_brief=clean_topic,
+            language=clean_lang,
+            region="BR",
+            settings=settings_obj,
+            autonomous_enabled=False,
+            require_destination=False,
+            destinations=[],
+            video_format=clean_format,
+            closing_type=settings_obj.editorial.closing_type,
+            num_questions=settings_obj.editorial.num_questions,
+            slug=clean_slug,
+            db_path=db_path,
+        )
+    except ValueError as ve:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(ve),
+        )
+    except Exception as exc:
+        logger.error(f"Erro ao criar canal: {exc}")
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message="Erro interno ao cadastrar canal.",
+        )
+
+    new_pid = res.get("profile_id")
+    prof_row = res.get("profile") or {}
+    slug_created = prof_row.get("slug")
+
+    # 7. Audit log in operational_events (CHANNEL_CREATED, sem dados sensíveis)
+    operator_console.log_operational_event(
+        component="channels",
+        severity=operator_console.SEVERITY_INFO,
+        event_type="CHANNEL_CREATED",
+        message=f"Novo canal '{clean_name}' cadastrado com sucesso (profile_id={new_pid}, slug={slug_created})",
+        metadata={
+            "profile_id": new_pid,
+            "channel_name": clean_name,
+            "niche": clean_niche,
+            "video_format": clean_format,
+            "slug": slug_created,
+            "autonomous_enabled": False,
+            "growth_mode": const.GROWTH_MODE_WARMUP,
+            "target_ready_stock": 3,
+            "voice_declaration": voice_declaration,
+            "voice_override": channel_voice,
+        },
+        db_path=db_path,
+    )
+
+    # Resolve effective voice for verification
+    effective_voice_info = profile_manager.get_effective_voice_settings(new_pid, db_path=db_path)
+
+    response_payload = {
+        "profile_id": new_pid,
+        "name": clean_name,
+        "slug": slug_created,
+        "niche": clean_niche,
+        "video_format": clean_format,
+        "growth_mode": const.GROWTH_MODE_WARMUP,
+        "autonomous_enabled": False,
+        "target_ready_stock": 3,
+        "profile": prof_row,
+        "channel": res.get("channel") or {},
+        "channel_ids": res.get("channel_ids") or [],
+        "voice_declaration": voice_declaration,
+        "voice_name": channel_voice,
+        "effective_voice": effective_voice_info,
+        "settings": settings_obj.model_dump(),
+    }
+
+    return utils.get_response(
+        201,
+        response_payload,
+        message=f"Canal '{clean_name}' cadastrado com sucesso",
+    )
+
 
 @router.get(
     "/profiles/{profile_id}/status",

@@ -1370,6 +1370,7 @@ def onboard_channel_workspace(
     closing_type: Optional[str] = None,
     num_questions: Optional[int] = None,
     destinations: Optional[List[Dict[str, Any]]] = None,
+    slug: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Onboarding atômico de novo workspace/canal.
@@ -1456,7 +1457,11 @@ def onboard_channel_workspace(
     settings_json_str = settings_model.to_json()
 
     new_pid = profile_id or f"profile-{uuid.uuid4().hex[:12]}"
-    new_slug = generate_slug(clean_name, db_path=db_path)
+    new_slug = (
+        slug.strip().lower()
+        if (slug and str(slug).strip())
+        else generate_slug(clean_name, db_path=db_path)
+    )
     new_cid = channel_id or f"channel-{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
 

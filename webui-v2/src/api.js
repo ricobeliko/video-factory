@@ -166,6 +166,19 @@ export async function runFactoryCycle(options = {}) {
   });
 }
 
+export async function createChannel(channelData) {
+  if (!channelData || !channelData.name) {
+    throw new Error('Nome do canal é obrigatório');
+  }
+  return fetchJson('/api/v2/channels', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(channelData),
+  });
+}
+
 export async function updateProfileGrowthMode(profileId, growthMode) {
   if (!profileId) throw new Error('profileId é obrigatório');
   return fetchJson(`/api/v2/channels/${encodeURIComponent(profileId)}/growth-mode`, {

@@ -250,6 +250,9 @@ A API fina é construída utilizando o FastAPI existente no projeto (`app/asgi.p
 | `PATCH`| `/api/v2/channels/{profile_id}/quotas` | Atualiza cotas operacionais do canal (`target_ready_stock`, `max_generations_24h`, `posts_per_day`) | `profile_manager.update_profile_quotas()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
 | `PATCH`| `/api/v2/channels/{profile_id}/schedule` | Atualiza janela de publicação e intervalo mínimo do canal | `profile_manager.update_profile_schedule()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
 | `PATCH`| `/api/v2/channels/{profile_id}/voice` | Atualiza voz, velocidade e volume por canal | `profile_manager.update_profile_voice_settings()` | WRITE | SQLite `content_profile_settings` | MEDIUM |
+| `GET` | `/api/v2/channels/{profile_id}/destinations` | Lista destinos de publicação do canal (YouTube e TikTok) com contas e flags de auto-pub | `profile_manager.list_channels()` | READ | SQLite `publishing_channels` | LOW |
+| `PATCH`| `/api/v2/channels/{profile_id}/destinations` | Atualiza destinos de publicação do canal com validação UC, auto_publish e auditoria sem segredos | `profile_manager.create_channel()`, `update_channel()`, `scheduler.set_channel_auto_publish_authorized()` | WRITE | SQLite `publishing_channels`, `operational_events` | HIGH |
+| `GET` | `/api/v2/publishing/accounts` | Lista contas sociais conectadas no provedor `post_for_me` (filtráveis por plataforma) | `post_for_me.list_connected_publishing_accounts()` | READ | Provedor Post for Me | LOW |
 | `GET` | `/api/v2/scheduler/posts` | Resumo da fila do scheduler e próximos posts agendados | `operator_console.get_scheduler_queue_summary()` | READ | SQLite `scheduled_posts` | LOW |
 | `PATCH`| `/api/v2/scheduler/settings` | Atualiza flags globais do agendador (`auto_publish_enabled`, `scheduler_enabled`, `dry_run`) | `scheduler.set_setting()` | WRITE | SQLite `operator_settings` / `scheduler_settings` | HIGH |
 | `POST` | `/api/v2/scheduler/run-cycle` | Dispara ciclo imediato de publicação supervisionada ("Publicar Agora") | `scheduler.run_scheduler_cycle()` | WRITE | SQLite `scheduled_posts` / `publication_events` | HIGH |
@@ -780,3 +783,21 @@ Após validação visual do operador, o layout linear contínuo de 12 estágios 
    - Transição assistida e homologada com o operador.
 
 
+
+
+### H. FASE V2.1 — Gestão de Destinos de Publicação por Canal e Guarda Fail-Safe
+
+1. **Subseção "Destinos de Publicação" em Sistema -> Canais:**
+   - Permite configurar independentemente destinos para **YouTube** e **TikTok** em cada canal.
+   - **YouTube:** Toggle de habilitação, campo de Channel ID com validação de formato rígida (prefixo `UC...` obrigatório), e seleção de conta conectada via Post for Me (`external_account_id` e `project_id`).
+   - **TikTok:** Toggle de habilitação, campo de Account/User ID e seleção de conta conectada via Post for Me.
+   - **Autorização de Publicação Automática (Fail-Closed):** Checkbox individual por plataforma (`auto_publish_authorized`). Ao tentar marcar o checkbox de publicação automática, um modal de confirmação explícito com alerta de segurança é exibido ("Atenção: Ao autorizar a publicação automática, vídeos gerados e aprovados pelo ciclo autônomo serão publicados imediatamente ou agendados para publicação pública real sem confirmação manual").
+
+2. **Resumo de Destinos na Frota e no Drawer:**
+   - Função canônica `formatDestinationsSummary(destinations)`: formata os destinos ativos de forma concisa e padronizada (ex.: `YT (auto-pub) + TT (auto-pub)`, `YT (auto-pub)`, `TT (manual)`, ou `Sem destino`).
+   - Coluna "Destino" na tabela da Frota (`FleetView.jsx`) e campo dedicado no drawer de detalhes da execução (`ExecutionDrawer.jsx`).
+
+3. **Guarda Fail-Safe de Ativação do Modo Autônomo:**
+   - O endpoint `PATCH /api/v2/channels/{profile_id}/autonomous` rejeita requisições com status `400 Bad Request` e mensagem `"Canal sem destino de publicação habilitado"` se o operador tentar ativar a produção autônoma de um canal sem nenhuma plataforma de publicação habilitada e válida (`autonomous_production.get_channel_active_platforms`).
+   - O botão de alternância do modo autônomo na Frota captura o erro 400 e apresenta aviso claro ao operador, impedindo que canais produzam vídeos em falso loop sem destino para publicação.
+   - Avaliação canônica de status (`evaluate_canonical_channel_status`): quando `autonomous_enabled=True` e `has_publish_destination=False`, o status é classificado como `blocked` com código `NO_PUBLISH_DESTINATION` e razão `"Sem destino de publicação habilitado (YouTube ou TikTok)"`.

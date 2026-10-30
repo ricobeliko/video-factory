@@ -1652,13 +1652,20 @@ def get_canonical_ready_stock(
     ready_items = auto_stock.get("ready_tasks") or auto_stock.get("youtube_ready", [])
     yt_count = auto_stock.get("youtube_count", 0)
     tt_count = auto_stock.get("tiktok_count", 0)
+    platforms_cache: Dict[str, List[str]] = {}
+    def _get_platforms(p_id: Optional[str]) -> List[str]:
+        lookup_id = p_id or target_prof
+        if lookup_id not in platforms_cache:
+            platforms_cache[lookup_id] = autonomous_production.get_channel_active_platforms(lookup_id, db_path=db_path)
+        return platforms_cache[lookup_id]
+
     youtube_items = [
         t for t in ready_items
-        if "youtube" in autonomous_production.get_channel_active_platforms(t.get("profile_id") or target_prof, db_path=db_path)
+        if "youtube" in _get_platforms(t.get("profile_id"))
     ]
     tiktok_items = [
         t for t in ready_items
-        if "tiktok" in autonomous_production.get_channel_active_platforms(t.get("profile_id") or target_prof, db_path=db_path)
+        if "tiktok" in _get_platforms(t.get("profile_id"))
     ]
     return {
         "total_ready": ready_total,
@@ -4138,6 +4145,21 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
             task_prof_map = {r["task_id"]: r["profile_id"] for r in tp_rows}
             task_prof_time = {r["task_id"]: r["created_at"] for r in tp_rows if r["created_at"]}
 
+        # H. Publishing Channels query (agregado por profile_id para a Frota)
+        destinations_by_profile: Dict[str, List[Dict[str, Any]]] = {}
+        if "publishing_channels" in existing_tables:
+            p_rows = conn.execute(
+                """
+                SELECT id, profile_id, platform, is_enabled, external_account_id, project_id, display_name, auto_publish_authorized
+                FROM publishing_channels;
+                """
+            ).fetchall()
+            for r in p_rows:
+                r_dict = dict(r)
+                r_dict["is_enabled"] = bool(r_dict.get("is_enabled", 0))
+                r_dict["auto_publish_authorized"] = bool(r_dict.get("auto_publish_authorized", 0))
+                destinations_by_profile.setdefault(r_dict["profile_id"], []).append(r_dict)
+
     finally:
         conn.close()
 
@@ -4278,8 +4300,22 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
 
         # Determinação determinística de status via função canônica única
         from app.services.channel_status import evaluate_canonical_channel_status
+        if "publishing_channels" not in existing_tables:
+            has_dest = True
+        else:
+            chans = destinations_by_profile.get(pid, [])
+            yt_on = str(settings_map.get("youtube_enabled", "true")).lower() == "true"
+            tt_on = str(settings_map.get("tiktok_enabled", "true")).lower() == "true"
+            active_plats = autonomous_production.compute_active_platforms(
+                channels=chans,
+                youtube_enabled=yt_on,
+                tiktok_enabled=tt_on,
+                profile_active=is_active,
+            )
+            has_dest = bool(active_plats)
 
         status_eval = evaluate_canonical_channel_status(
+            has_publish_destination=has_dest,
             is_factory_paused=is_factory_paused,
             factory_state=factory_state,
             is_channel_active=is_active,
@@ -4303,6 +4339,7 @@ def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
 
         channels_data.append({
             "profile_id": pid,
+            "destinations": destinations_by_profile.get(pid, []),
             "name": p.get("name"),
             "slug": p.get("slug"),
             "niche": p.get("niche") or "—",

@@ -3,11 +3,12 @@ import {
   getExecutionDetail,
   runFactoryCycle,
   getProfileSettings,
+  getChannelDestinations,
 } from '../api';
 import { STAGE_BY_CODE, sanitizeDisplayText } from '../utils/stageVisuals';
 import AgentAvatar from './AgentAvatar';
 import { buildSystemChannelHash } from './System/systemEditLogic';
-import { formatStatus } from './Fleet/fleetLogic';
+import { formatStatus, formatDestinationsSummary } from './Fleet/fleetLogic';
 
 /**
  * ExecutionDrawer — Narrative Mission Control & Causal Trace Panel (R6A.5 + R7 + Controles Únicos).
@@ -47,9 +48,28 @@ export default function ExecutionDrawer({
   const [publishStartHour, setPublishStartHour] = useState(10);
   const [publishEndHour, setPublishEndHour] = useState(22);
   const [minIntervalHours, setMinIntervalHours] = useState(2);
+  const [channelDestinations, setChannelDestinations] = useState(null);
 
   const currentGrowthMode = (channelData?.growth_mode || 'warmup').toLowerCase();
   const currentAutonomous = Boolean(channelData?.autonomous_enabled);
+
+  // Load destinations on drawer open (read-only display)
+  useEffect(() => {
+    if (!isOpen || !channelData?.profile_id) return;
+    let isMounted = true;
+    getChannelDestinations(channelData.profile_id)
+      .then((res) => {
+        if (!isMounted) return;
+        const d = res?.data || res || {};
+        setChannelDestinations(d.destinations || []);
+      })
+      .catch((err) => {
+        console.warn('Destinos do canal não puderam ser carregados:', err.message);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, channelData?.profile_id]);
 
   // Load factual profile settings on drawer open (read-only display)
   useEffect(() => {
@@ -369,6 +389,13 @@ export default function ExecutionDrawer({
                 <div className="info-box">
                   <div className="info-box-label">Posts / Dia</div>
                   <div className="info-box-value mono">{postsPerDayVal} / dia</div>
+                </div>
+
+                <div className="info-box">
+                  <div className="info-box-label">Destinos de Publicação</div>
+                  <div className="info-box-value mono">
+                    {formatDestinationsSummary(channelDestinations || channelData?.destinations)}
+                  </div>
                 </div>
 
                 <div className="info-box">

@@ -736,10 +736,13 @@ def get_autonomous_ready_stock(
                 "AND status IN ('published', 'cancelled')"
             )}
         base_eligible = []
+        plats_by_prof: Dict[Optional[str], List[str]] = {}
         for row in rows:
             tid = row["task_id"]
             t_prof = profile_manager.get_task_profile_id(tid, db_path=db_path)
-            t_plats = get_channel_active_platforms(t_prof, db_path=db_path)
+            if t_prof not in plats_by_prof:
+                plats_by_prof[t_prof] = get_channel_active_platforms(t_prof, db_path=db_path)
+            t_plats = plats_by_prof[t_prof]
             if not t_plats:
                 continue
 
@@ -1244,6 +1247,70 @@ def get_global_cost_guard_status(now: Optional[datetime] = None, db_path: Option
     }
 
 
+def compute_active_platforms(
+    channels: List[Dict[str, Any]],
+    youtube_enabled: bool,
+    tiktok_enabled: bool,
+    profile_active: bool = True,
+    channel_id: Optional[str] = None,
+) -> List[str]:
+    """Calcula determinística e puramente as plataformas ativas para um perfil/canal.
+
+    FONTE ÚNICA de regras de elegibilidade de destinos de publicação.
+    Função estritamente pura: sem acesso a banco de dados nem estado global.
+
+    Regras (Fail-closed estrito):
+    - Se perfil inativo (profile_active=False) -> retorna []
+    - Se channel_id fornecido:
+        - busca canal com id == channel_id em channels
+        - se não encontrar ou is_enabled for falso -> retorna []
+        - se plataforma for youtube -> retorna ["youtube"] se youtube_enabled senão []
+        - se plataforma for tiktok -> retorna ["tiktok"] se tiktok_enabled senão []
+        - qualquer outra plataforma -> []
+    - YouTube: youtube_enabled é True E existe ao menos 1 canal com platform == "youtube" e is_enabled == True
+    - TikTok: tiktok_enabled é True E existe EXATAMENTE 1 canal com platform == "tiktok" e is_enabled == True
+    - Ambos válidos -> ["youtube", "tiktok"]
+    - Apenas um válido -> [plataforma]
+    - Nenhum válido -> []
+    """
+    if not profile_active:
+        return []
+
+    if channel_id:
+        target = next(
+            (c for c in channels if str(c.get("id") or c.get("channel_id") or "") == str(channel_id)),
+            None,
+        )
+        if not target or not target.get("is_enabled"):
+            return []
+        plat = str(target.get("platform") or "").lower().strip()
+        if plat == "youtube":
+            return ["youtube"] if youtube_enabled else []
+        elif plat == "tiktok":
+            return ["tiktok"] if tiktok_enabled else []
+        return []
+
+    planned: List[str] = []
+
+    # 1. YouTube: setting ligado + ao menos 1 canal youtube habilitado
+    enabled_yt = [
+        c for c in channels
+        if str(c.get("platform") or "").lower().strip() == "youtube" and c.get("is_enabled")
+    ]
+    if youtube_enabled and enabled_yt:
+        planned.append("youtube")
+
+    # 2. TikTok: setting ligado + EXATAMENTE 1 canal tiktok habilitado
+    enabled_tt = [
+        c for c in channels
+        if str(c.get("platform") or "").lower().strip() == "tiktok" and c.get("is_enabled")
+    ]
+    if tiktok_enabled and len(enabled_tt) == 1:
+        planned.append("tiktok")
+
+    return planned
+
+
 def get_channel_active_platforms(
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
@@ -1253,15 +1320,7 @@ def get_channel_active_platforms(
 
     FONTE ÚNICA de verdade sobre quais plataformas de publicação estão habilitadas
     para um perfil/canal no loop autônomo.
-
-    Regras (Fail-closed estrito):
-    - Se perfil não existir ou estiver inativo -> retorna []
-    - Se channel_id for fornecido, restringe à plataforma daquele canal específico.
-    - YouTube é incluído se perfil ativo + youtube_enabled == True + canal YouTube ativo.
-    - TikTok é incluído se perfil ativo + tiktok_enabled == True + exatamente 1 canal TikTok ativo.
-    - Ambos válidos -> ["youtube", "tiktok"]
-    - Apenas um válido -> somente ele
-    - Nenhum válido -> []. NUNCA inventa destinos quando desabilitados ou indisponíveis.
+    Busca os dados no banco e delega as decisões puramente para compute_active_platforms.
     """
     prof_id = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
     if not prof_id:
@@ -1271,35 +1330,24 @@ def get_channel_active_platforms(
     if not prof or not prof.get("is_active"):
         return []
 
+    yt_enabled = str(scheduler.get_setting("youtube_enabled", "true", db_path=db_path)).lower() == "true"
+    tt_enabled = str(scheduler.get_setting("tiktok_enabled", "true", db_path=db_path)).lower() == "true"
+
     if channel_id:
         ch = profile_manager.get_channel(channel_id, db_path=db_path)
-        if not ch or not ch.get("is_enabled") or ch.get("profile_id") != prof_id:
+        if not ch or ch.get("profile_id") != prof_id:
             return []
-        plat = str(ch.get("platform") or "").lower().strip()
-        if plat == "youtube":
-            yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
-            return ["youtube"] if yt_enabled else []
-        elif plat == "tiktok":
-            tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
-            return ["tiktok"] if tt_enabled else []
-        return []
+        channels = [ch]
+    else:
+        channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
 
-    channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
-    planned: List[str] = []
-
-    # 1. YouTube
-    yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
-    enabled_yt = [c for c in channels if c.get("platform", "").lower().strip() == "youtube" and c.get("is_enabled")]
-    if yt_enabled and enabled_yt:
-        planned.append("youtube")
-
-    # 2. TikTok
-    tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
-    enabled_tt = [c for c in channels if c.get("platform", "").lower().strip() == "tiktok" and c.get("is_enabled")]
-    if tt_enabled and len(enabled_tt) == 1:
-        planned.append("tiktok")
-
-    return planned
+    return compute_active_platforms(
+        channels=channels,
+        youtube_enabled=yt_enabled,
+        tiktok_enabled=tt_enabled,
+        profile_active=bool(prof.get("is_active", True)),
+        channel_id=channel_id,
+    )
 
 
 def resolve_autonomous_planned_platforms(

@@ -374,3 +374,26 @@ export async function updateProviderSettings(settings = {}) {
     body: JSON.stringify(settings),
   });
 }
+
+export async function getChannelDestinations(channelId) {
+  if (!channelId) return null;
+  return fetchJson(`/api/v2/channels/${encodeURIComponent(channelId)}/destinations`);
+}
+
+export async function updateChannelDestinations(channelId, payload) {
+  if (!channelId) return null;
+  return fetchJson(`/api/v2/channels/${encodeURIComponent(channelId)}/destinations`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getPublishingAccounts(platform = null) {
+  const params = new URLSearchParams();
+  if (platform) params.set('platform', platform);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return fetchJson(`/api/v2/publishing/accounts${qs}`);
+}

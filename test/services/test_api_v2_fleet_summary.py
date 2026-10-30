@@ -113,6 +113,16 @@ class TestApiV2FleetSummary(unittest.TestCase):
             conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES ('autonomous_target_ready_stock:profile-quiz-paper', '10');")
             conn.execute("INSERT OR REPLACE INTO autopilot_settings (key, value) VALUES ('autonomous_target_ready_stock:profile-dilemma', '3');")
 
+            # Destinos de publicação ativos para perfis com modo autônomo ativo
+            conn.execute(
+                """
+                INSERT INTO publishing_channels (id, profile_id, platform, display_name, external_account_id, is_enabled, created_at, updated_at)
+                VALUES 
+                    ('chan-paper-yt', 'profile-quiz-paper', 'youtube', 'Quiz YouTube', 'UCquiz1234567890123', 1, '2026-10-24T00:00:00Z', '2026-10-24T00:00:00Z'),
+                    ('chan-default-yt', 'default', 'youtube', 'Default YouTube', 'UCdefault123456789012', 1, '2026-10-24T00:00:00Z', '2026-10-24T00:00:00Z');
+                """
+            )
+
             # Popula mais de 200 tarefas (> 230 tarefas prontas)
             # Perfil default: 150 tarefas prontas
             for i in range(150):

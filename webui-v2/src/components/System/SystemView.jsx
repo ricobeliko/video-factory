@@ -18,6 +18,9 @@ import {
   updateSchedulerSettings,
   getProviderSettings,
   updateProviderSettings,
+  getChannelDestinations,
+  updateChannelDestinations,
+  getPublishingAccounts,
 } from '../../api';
 import {
   formatFactoryState,
@@ -88,6 +91,8 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const [allowedVoices, setAllowedVoices] = useState([]);
   const [pinnedVoiceFields, setPinnedVoiceFields] = useState(new Set());
   const handledFocusChannelRef = useRef(null);
+  const [publishingAccounts, setPublishingAccounts] = useState([]);
+  const [autoPublishConfirmModal, setAutoPublishConfirmModal] = useState(null);
 
   // Estados de Chaves e Conexões (Provedores LLM e Upload-Post)
   const [providerSettings, setProviderSettings] = useState(null);
@@ -144,13 +149,14 @@ export default function SystemView({ onNavigate, focusChannelId }) {
     isFetchingRef.current = true;
 
     try {
-      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes] = await Promise.allSettled([
+      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes, accountsRes] = await Promise.allSettled([
         getSystemStatus(),
         getProviderHealth(),
         getHealth(),
         getChannelsOverview(),
         getAllowedVoices(),
         getProviderSettings(),
+        getPublishingAccounts(),
       ]);
 
       if (sysRes.status === 'fulfilled' && sysRes.value) {
@@ -165,6 +171,10 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       if (voiceRes.status === 'fulfilled' && voiceRes.value) {
         const rawV = voiceRes.value.data || voiceRes.value || [];
         setAllowedVoices(Array.isArray(rawV) ? rawV : []);
+      }
+      if (accountsRes && accountsRes.status === 'fulfilled' && accountsRes.value) {
+        const rawAcc = accountsRes.value.accounts || accountsRes.value.data?.accounts || accountsRes.value || [];
+        setPublishingAccounts(Array.isArray(rawAcc) ? rawAcc : []);
       }
       if (providerSettingsRes.status === 'fulfilled' && providerSettingsRes.value) {
         const pData = providerSettingsRes.value.data || providerSettingsRes.value;
@@ -453,6 +463,10 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       const growthMode = String(fullSettings.growth_mode || channel.growth_mode || 'WARMUP').toUpperCase();
       const isAuto = Boolean(fullSettings.autonomous_enabled ?? channel.autonomous_enabled);
 
+      const chDests = channel.destinations || channel.channels || [];
+      const ytDest = chDests.find((d) => String(d.platform).toLowerCase() === 'youtube') || {};
+      const ttDest = chDests.find((d) => String(d.platform).toLowerCase() === 'tiktok') || {};
+
       setEditingChannelId(pid);
       setPinnedVoiceFields(new Set());
       setChannelFormData({
@@ -467,6 +481,15 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         voice_name: effVoice.voice_name?.value || (allowedVoices[0]?.id || ''),
         voice_rate: isQuiz ? null : (effVoice.voice_rate?.value ?? 1.0),
         voice_volume: effVoice.voice_volume?.value ?? 1.0,
+        // Destinos de publicação
+        yt_enabled: Boolean(ytDest.is_enabled),
+        yt_external_account_id: ytDest.external_account_id || '',
+        yt_project_id: ytDest.project_id || '',
+        yt_auto_publish_authorized: Boolean(ytDest.auto_publish_authorized),
+        tt_enabled: Boolean(ttDest.is_enabled),
+        tt_external_account_id: ttDest.external_account_id || '',
+        tt_project_id: ttDest.project_id || '',
+        tt_auto_publish_authorized: Boolean(ttDest.auto_publish_authorized),
       });
       setChannelFormErrors({});
     },
@@ -584,6 +607,22 @@ export default function SystemView({ onNavigate, focusChannelId }) {
     }
   };
 
+  const handleAutoPublishToggle = (platformName, fieldName, isChecked) => {
+    if (isChecked) {
+      setAutoPublishConfirmModal({
+        platform: platformName,
+        onConfirm: () => {
+          setChannelFormData((prev) => ({ ...prev, [fieldName]: true }));
+        },
+        onCancel: () => {
+          setChannelFormData((prev) => ({ ...prev, [fieldName]: false }));
+        },
+      });
+    } else {
+      setChannelFormData((prev) => ({ ...prev, [fieldName]: false }));
+    }
+  };
+
   const handleSaveClick = (channel) => {
     const valResult = validateChannelForm(channelFormData);
     const pid = channel.profile_id || channel.channel_id;
@@ -615,13 +654,76 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       min_interval_hours: origSchedule.min_interval_hours ?? 4,
     };
 
+    // Validação de Destinos
+    if (channelFormData.yt_enabled && channelFormData.yt_external_account_id) {
+      const cleanYt = String(channelFormData.yt_external_account_id).trim();
+      if (cleanYt && !cleanYt.startsWith('UC')) {
+        setChannelFormErrors((prev) => ({
+          ...prev,
+          yt_external_account_id: "O YouTube Channel ID deve iniciar com 'UC'",
+        }));
+        return;
+      }
+    }
+
+    const chDests = channel.destinations || channel.channels || [];
+    const origYt = chDests.find((d) => String(d.platform).toLowerCase() === 'youtube') || {};
+    const origTt = chDests.find((d) => String(d.platform).toLowerCase() === 'tiktok') || {};
+
+    const destDiffList = [];
+    const destPayloads = [];
+
+    const isYtChanged =
+      Boolean(channelFormData.yt_enabled) !== Boolean(origYt.is_enabled) ||
+      String(channelFormData.yt_external_account_id || '').trim() !== String(origYt.external_account_id || '').trim() ||
+      String(channelFormData.yt_project_id || '').trim() !== String(origYt.project_id || '').trim() ||
+      Boolean(channelFormData.yt_auto_publish_authorized) !== Boolean(origYt.auto_publish_authorized);
+
+    if (isYtChanged) {
+      destDiffList.push({
+        field: 'Destino YouTube',
+        oldValue: origYt.is_enabled ? `Habilitado (${origYt.external_account_id || 'sem ID'}${origYt.auto_publish_authorized ? ', Auto-pub' : ''})` : 'Desabilitado',
+        newValue: channelFormData.yt_enabled ? `Habilitado (${channelFormData.yt_external_account_id || 'sem ID'}${channelFormData.yt_auto_publish_authorized ? ', Auto-pub' : ''})` : 'Desabilitado',
+        isWarning: Boolean(channelFormData.yt_auto_publish_authorized) && !origYt.auto_publish_authorized,
+      });
+      destPayloads.push({
+        platform: 'youtube',
+        is_enabled: Boolean(channelFormData.yt_enabled),
+        external_account_id: channelFormData.yt_external_account_id ? channelFormData.yt_external_account_id.trim() : null,
+        project_id: channelFormData.yt_project_id ? channelFormData.yt_project_id.trim() : null,
+        auto_publish_authorized: Boolean(channelFormData.yt_auto_publish_authorized),
+      });
+    }
+
+    const isTtChanged =
+      Boolean(channelFormData.tt_enabled) !== Boolean(origTt.is_enabled) ||
+      String(channelFormData.tt_external_account_id || '').trim() !== String(origTt.external_account_id || '').trim() ||
+      String(channelFormData.tt_project_id || '').trim() !== String(origTt.project_id || '').trim() ||
+      Boolean(channelFormData.tt_auto_publish_authorized) !== Boolean(origTt.auto_publish_authorized);
+
+    if (isTtChanged) {
+      destDiffList.push({
+        field: 'Destino TikTok',
+        oldValue: origTt.is_enabled ? `Habilitado (${origTt.external_account_id || 'sem ID'}${origTt.auto_publish_authorized ? ', Auto-pub' : ''})` : 'Desabilitado',
+        newValue: channelFormData.tt_enabled ? `Habilitado (${channelFormData.tt_external_account_id || 'sem ID'}${channelFormData.tt_auto_publish_authorized ? ', Auto-pub' : ''})` : 'Desabilitado',
+        isWarning: Boolean(channelFormData.tt_auto_publish_authorized) && !origTt.auto_publish_authorized,
+      });
+      destPayloads.push({
+        platform: 'tiktok',
+        is_enabled: Boolean(channelFormData.tt_enabled),
+        external_account_id: channelFormData.tt_external_account_id ? channelFormData.tt_external_account_id.trim() : null,
+        project_id: channelFormData.tt_project_id ? channelFormData.tt_project_id.trim() : null,
+        auto_publish_authorized: Boolean(channelFormData.tt_auto_publish_authorized),
+      });
+    }
+
     const settingsDiffList = calculateSettingsDiff(orig, channelFormData);
     const voiceDiffList = calculateVoiceDiff(fullSettings.effective_voice, channelFormData, {
       isQuiz,
       pinned: pinnedVoiceFields,
     });
 
-    if (settingsDiffList.length === 0 && voiceDiffList.length === 0) {
+    if (settingsDiffList.length === 0 && voiceDiffList.length === 0 && destDiffList.length === 0) {
       setActionFeedback({
         type: 'error',
         text: 'Nenhum campo foi alterado.',
@@ -635,10 +737,11 @@ export default function SystemView({ onNavigate, focusChannelId }) {
     setChannelConfirmDialog({
       profileId: pid,
       profileName: channel.name || pid,
-      diffList: [...settingsDiffList, ...voiceDiffList],
+      diffList: [...settingsDiffList, ...voiceDiffList, ...destDiffList],
       payloads: {
         ...payloads,
         voicePayload: voicePayloadResult.payload,
+        destinationsPayload: destPayloads,
       },
     });
   };
@@ -672,6 +775,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       }
       if (payloads.voicePayload) {
         await updateProfileVoice(profileId, payloads.voicePayload);
+      }
+      if (payloads.destinationsPayload && payloads.destinationsPayload.length > 0) {
+        await updateChannelDestinations(profileId, { destinations: payloads.destinationsPayload });
       }
 
       setActionFeedback({
@@ -2003,6 +2109,221 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                         </span>
                       </div>
 
+                      {/* Subseção de Destinos de Publicação */}
+                      <h4 className="sys-channel-group-title">Destinos de Publicação</h4>
+                      {isEditing ? (
+                        <div className="sys-input-group">
+                          {/* Card YouTube */}
+                          <div style={{ border: '1px solid #2B3342', borderRadius: '6px', padding: '12px', marginBottom: '12px', backgroundColor: '#131822' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                              <strong style={{ color: '#E8EBF1', fontSize: '13px' }}>▶️ YouTube</strong>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', color: '#C9CFDB' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(channelFormData.yt_enabled)}
+                                  onChange={(e) => handleFieldChange('yt_enabled', e.target.checked)}
+                                />
+                                Habilitar YouTube
+                              </label>
+                            </div>
+
+                            {channelFormData.yt_enabled && (
+                              <>
+                                <div className="sys-edit-row">
+                                  <label htmlFor={`yt-acc-${pid}`} className="sys-stat-label">Conta Conectada</label>
+                                  <select
+                                    id={`yt-acc-${pid}`}
+                                    className="sys-select"
+                                    value={channelFormData.yt_external_account_id || ''}
+                                    onChange={(e) => {
+                                      const selId = e.target.value;
+                                      const acc = publishingAccounts.find((a) => a.platform === 'youtube' && a.external_account_id === selId);
+                                      setChannelFormData((prev) => ({
+                                        ...prev,
+                                        yt_external_account_id: selId,
+                                        yt_project_id: acc?.project_id || prev.yt_project_id,
+                                      }));
+                                    }}
+                                  >
+                                    <option value="">(Entrada manual / Digitar ID)</option>
+                                    {publishingAccounts
+                                      .filter((a) => a.platform === 'youtube')
+                                      .map((a) => (
+                                        <option key={a.external_account_id} value={a.external_account_id}>
+                                          {a.display_name} ({a.external_account_id})
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+
+                                <div className="sys-edit-row">
+                                  <label htmlFor={`yt-ext-${pid}`} className="sys-stat-label">YouTube Channel ID (UC...)</label>
+                                  <input
+                                    id={`yt-ext-${pid}`}
+                                    type="text"
+                                    placeholder="UCxxxxxxxxxxxxxxxxxxxx"
+                                    className={`sys-input ${channelFormErrors.yt_external_account_id ? 'sys-input--error' : ''}`}
+                                    value={channelFormData.yt_external_account_id || ''}
+                                    onChange={(e) => handleFieldChange('yt_external_account_id', e.target.value)}
+                                  />
+                                </div>
+                                {channelFormErrors.yt_external_account_id && (
+                                  <span className="sys-field-error">{channelFormErrors.yt_external_account_id}</span>
+                                )}
+
+                                <div className="sys-edit-row">
+                                  <label htmlFor={`yt-proj-${pid}`} className="sys-stat-label">ID do Projeto</label>
+                                  <input
+                                    id={`yt-proj-${pid}`}
+                                    type="text"
+                                    placeholder="Ex: farme-videos"
+                                    className="sys-input"
+                                    value={channelFormData.yt_project_id || ''}
+                                    onChange={(e) => handleFieldChange('yt_project_id', e.target.value)}
+                                  />
+                                </div>
+
+                                <div style={{ marginTop: '8px', padding: '8px', borderRadius: '4px', backgroundColor: channelFormData.yt_auto_publish_authorized ? '#2C1613' : '#171B24', border: `1px solid ${channelFormData.yt_auto_publish_authorized ? '#B3402F' : '#2A3040'}` }}>
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer', color: channelFormData.yt_auto_publish_authorized ? '#FFB2A8' : '#C9CFDB' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(channelFormData.yt_auto_publish_authorized)}
+                                      onChange={(e) => handleAutoPublishToggle('YouTube', 'yt_auto_publish_authorized', e.target.checked)}
+                                    />
+                                    <strong>Autorizar publicação automática (Fail-Closed)</strong>
+                                  </label>
+                                  <div style={{ fontSize: '11px', color: '#9099AA', marginTop: '4px', marginLeft: '24px' }}>
+                                    Quando marcado, vídeos gerados e aprovados serão publicados automaticamente no YouTube sem aprovação manual.
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Card TikTok */}
+                          <div style={{ border: '1px solid #2B3342', borderRadius: '6px', padding: '12px', marginBottom: '8px', backgroundColor: '#131822' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                              <strong style={{ color: '#E8EBF1', fontSize: '13px' }}>🎵 TikTok</strong>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', color: '#C9CFDB' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(channelFormData.tt_enabled)}
+                                  onChange={(e) => handleFieldChange('tt_enabled', e.target.checked)}
+                                />
+                                Habilitar TikTok
+                              </label>
+                            </div>
+
+                            {channelFormData.tt_enabled && (
+                              <>
+                                <div className="sys-edit-row">
+                                  <label htmlFor={`tt-acc-${pid}`} className="sys-stat-label">Conta Conectada</label>
+                                  <select
+                                    id={`tt-acc-${pid}`}
+                                    className="sys-select"
+                                    value={channelFormData.tt_external_account_id || ''}
+                                    onChange={(e) => {
+                                      const selId = e.target.value;
+                                      const acc = publishingAccounts.find((a) => a.platform === 'tiktok' && a.external_account_id === selId);
+                                      setChannelFormData((prev) => ({
+                                        ...prev,
+                                        tt_external_account_id: selId,
+                                        tt_project_id: acc?.project_id || prev.tt_project_id,
+                                      }));
+                                    }}
+                                  >
+                                    <option value="">(Entrada manual / Digitar ID)</option>
+                                    {publishingAccounts
+                                      .filter((a) => a.platform === 'tiktok')
+                                      .map((a) => (
+                                        <option key={a.external_account_id} value={a.external_account_id}>
+                                          {a.display_name} ({a.external_account_id})
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+
+                                <div className="sys-edit-row">
+                                  <label htmlFor={`tt-ext-${pid}`} className="sys-stat-label">TikTok Account / User ID</label>
+                                  <input
+                                    id={`tt-ext-${pid}`}
+                                    type="text"
+                                    placeholder="Ex: user123 ou ID"
+                                    className="sys-input"
+                                    value={channelFormData.tt_external_account_id || ''}
+                                    onChange={(e) => handleFieldChange('tt_external_account_id', e.target.value)}
+                                  />
+                                </div>
+
+                                <div className="sys-edit-row">
+                                  <label htmlFor={`tt-proj-${pid}`} className="sys-stat-label">ID do Projeto</label>
+                                  <input
+                                    id={`tt-proj-${pid}`}
+                                    type="text"
+                                    placeholder="Ex: tiktok-proj"
+                                    className="sys-input"
+                                    value={channelFormData.tt_project_id || ''}
+                                    onChange={(e) => handleFieldChange('tt_project_id', e.target.value)}
+                                  />
+                                </div>
+
+                                <div style={{ marginTop: '8px', padding: '8px', borderRadius: '4px', backgroundColor: channelFormData.tt_auto_publish_authorized ? '#2C1613' : '#171B24', border: `1px solid ${channelFormData.tt_auto_publish_authorized ? '#B3402F' : '#2A3040'}` }}>
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer', color: channelFormData.tt_auto_publish_authorized ? '#FFB2A8' : '#C9CFDB' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(channelFormData.tt_auto_publish_authorized)}
+                                      onChange={(e) => handleAutoPublishToggle('TikTok', 'tt_auto_publish_authorized', e.target.checked)}
+                                    />
+                                    <strong>Autorizar publicação automática (Fail-Closed)</strong>
+                                  </label>
+                                  <div style={{ fontSize: '11px', color: '#9099AA', marginTop: '4px', marginLeft: '24px' }}>
+                                    Quando marcado, vídeos gerados e aprovados serão publicados automaticamente no TikTok sem aprovação manual.
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          {(() => {
+                            const chDests = ch.destinations || ch.channels || [];
+                            const ytDest = chDests.find((d) => String(d.platform).toLowerCase() === 'youtube');
+                            const ttDest = chDests.find((d) => String(d.platform).toLowerCase() === 'tiktok');
+                            return (
+                              <>
+                                <div className="sys-stat-row">
+                                  <span className="sys-stat-label">▶️ YouTube</span>
+                                  <span className="sys-stat-value">
+                                    {ytDest && ytDest.is_enabled ? (
+                                      <span style={{ color: '#34D399' }}>
+                                        Habilitado {ytDest.external_account_id ? `(${ytDest.external_account_id})` : ''}{' '}
+                                        {ytDest.auto_publish_authorized ? '· Auto-pub ✓' : '· Sem auto-pub'}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: '#9099AA' }}>Desabilitado</span>
+                                    )}
+                                  </span>
+                                </div>
+                                <div className="sys-stat-row">
+                                  <span className="sys-stat-label">🎵 TikTok</span>
+                                  <span className="sys-stat-value">
+                                    {ttDest && ttDest.is_enabled ? (
+                                      <span style={{ color: '#34D399' }}>
+                                        Habilitado {ttDest.external_account_id ? `(${ttDest.external_account_id})` : ''}{' '}
+                                        {ttDest.auto_publish_authorized ? '· Auto-pub ✓' : '· Sem auto-pub'}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: '#9099AA' }}>Desabilitado</span>
+                                    )}
+                                  </span>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+
                       {/* Botões de Ação na Edição */}
                       {isEditing && (
                         <div className="sys-edit-actions">
@@ -2035,6 +2356,51 @@ export default function SystemView({ onNavigate, focusChannelId }) {
           </div>
         </section>
       </main>
+
+      {/* Modal de Confirmação para Autorização de Publicação Automática */}
+      {autoPublishConfirmModal && (
+        <div
+          className="sys-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="autopub-modal-title"
+        >
+          <div className="sys-modal" style={{ maxWidth: '480px', border: '1px solid #B3402F' }}>
+            <h3 id="autopub-modal-title" className="sys-modal-title" style={{ color: '#FF8A7A' }}>
+              ⚠️ Autorizar Publicação Automática ({autoPublishConfirmModal.platform})
+            </h3>
+            <p className="sys-modal-desc">
+              <strong>ATENÇÃO:</strong> posts serão publicados de verdade sem sua aprovação no {autoPublishConfirmModal.platform} quando o agendador executar.
+            </p>
+            <p className="sys-modal-desc" style={{ fontSize: '13px', color: '#FFB2A8' }}>
+              Tem certeza de que deseja ativar a publicação automática para este canal?
+            </p>
+            <div className="sys-modal-actions">
+              <button
+                type="button"
+                className="sys-btn-cancel-edit"
+                onClick={() => {
+                  autoPublishConfirmModal.onCancel();
+                  setAutoPublishConfirmModal(null);
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="sys-btn-save"
+                style={{ backgroundColor: '#B3402F', color: '#fff' }}
+                onClick={() => {
+                  autoPublishConfirmModal.onConfirm();
+                  setAutoPublishConfirmModal(null);
+                }}
+              >
+                Sim, autorizar publicação
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Diálogo de Confirmação para Pausar / Retomar Fábrica */}
       {confirmDialog && (

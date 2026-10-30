@@ -30,6 +30,7 @@ def evaluate_canonical_channel_status(
     factory_state: Optional[str] = None,
     is_channel_active: bool = True,
     autonomous_enabled: bool = True,
+    has_publish_destination: bool = True,
     auto_state: str = "",
     auto_message: Optional[str] = None,
     auto_last_error: Optional[str] = None,
@@ -109,6 +110,14 @@ def evaluate_canonical_channel_status(
             "label": STATUS_LABELS["blocked"],
             "reason_code": "FACTORY_ERROR",
             "reason": "Fábrica em estado de erro",
+        }
+
+    if not has_publish_destination:
+        return {
+            "status": "blocked",
+            "label": STATUS_LABELS["blocked"],
+            "reason_code": "NO_PUBLISH_DESTINATION",
+            "reason": "Sem destino de publicação habilitado (YouTube ou TikTok)",
         }
 
     if global_cost_guard_blocked:

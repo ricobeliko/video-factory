@@ -50,11 +50,13 @@ def get_connection(db_path: Optional[str] = None):
     conn = sqlite3.connect(path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
-        if os.path.abspath(path) not in _INITIALIZED_DBS:
+        if os.path.abspath(path) not in _INITIALIZED_DBS or not os.path.isfile(path):
             conn.execute("PRAGMA journal_mode=WAL;")
         with conn:
             yield conn
         if conn.total_changes > 0:
+            with _INIT_DB_LOCK:
+                _INITIALIZED_DBS.discard(os.path.abspath(path))
             try:
                 from app.services import operator_console
                 operator_console.invalidate_render_pass_cache()
@@ -837,8 +839,9 @@ def init_db(db_path: Optional[str] = None, force: bool = False) -> None:
     resolved = os.path.abspath(get_db_path(db_path))
     if not force:
         with _INIT_DB_LOCK:
-            if resolved in _INITIALIZED_DBS:
+            if resolved in _INITIALIZED_DBS and os.path.isfile(resolved):
                 return
+            _INITIALIZED_DBS.discard(resolved)
 
     # CF-02: Elimina dependência de ordem entre init_db e init_profile_db
     try:
@@ -980,21 +983,32 @@ def set_metrics_baseline_started_at(timestamp_iso: str, db_path: Optional[str] =
     set_setting("metrics_baseline_started_at", str(timestamp_iso).strip(), db_path=db_path)
 
 
+def resolve_growth_mode(settings_map: Dict[str, Any], platform: Optional[str] = None) -> str:
+    """Função pura e fonte única para resolução do modo de crescimento (global ou por plataforma)."""
+    if platform:
+        clean_plat = str(platform).lower().strip()
+        plat_val = settings_map.get(f"growth_mode_{clean_plat}")
+        if plat_val and str(plat_val).lower().strip() in const.GROWTH_MODES:
+            return str(plat_val).lower().strip()
+
+    val = settings_map.get("growth_mode", const.DEFAULT_GROWTH_MODE)
+    if val and str(val).lower().strip() in const.GROWTH_MODES:
+        return str(val).lower().strip()
+    return const.DEFAULT_GROWTH_MODE
+
+
 def get_growth_mode(platform: Optional[str] = None, db_path: Optional[str] = None) -> str:
     """Retorna o modo de crescimento configurado (global ou por plataforma).
 
     Default para conta nova: WARMUP ('warmup').
     """
+    s_map: Dict[str, Any] = {
+        "growth_mode": get_setting("growth_mode", const.DEFAULT_GROWTH_MODE, db_path),
+    }
     if platform:
-        clean_plat = platform.lower().strip()
-        plat_val = get_setting(f"growth_mode_{clean_plat}", None, db_path)
-        if plat_val and str(plat_val).lower().strip() in const.GROWTH_MODES:
-            return str(plat_val).lower().strip()
-
-    val = get_setting("growth_mode", const.DEFAULT_GROWTH_MODE, db_path)
-    if val and str(val).lower().strip() in const.GROWTH_MODES:
-        return str(val).lower().strip()
-    return const.DEFAULT_GROWTH_MODE
+        clean_plat = str(platform).lower().strip()
+        s_map[f"growth_mode_{clean_plat}"] = get_setting(f"growth_mode_{clean_plat}", None, db_path)
+    return resolve_growth_mode(s_map, platform=platform)
 
 
 def set_growth_mode(mode: str, platform: Optional[str] = None, db_path: Optional[str] = None) -> None:
@@ -1135,23 +1149,9 @@ def get_all_settings(db_path: Optional[str] = None) -> Dict[str, Any]:
         rows = conn.execute("SELECT key, value FROM autopilot_settings;").fetchall()
         s_map = {r["key"]: str(r["value"]) for r in rows if r["key"] is not None}
 
-    global_growth = s_map.get("growth_mode", const.DEFAULT_GROWTH_MODE)
-    if global_growth and str(global_growth).lower().strip() in const.GROWTH_MODES:
-        growth_mode = str(global_growth).lower().strip()
-    else:
-        growth_mode = const.DEFAULT_GROWTH_MODE
-
-    yt_growth = s_map.get("growth_mode_youtube")
-    if yt_growth and str(yt_growth).lower().strip() in const.GROWTH_MODES:
-        growth_mode_youtube = str(yt_growth).lower().strip()
-    else:
-        growth_mode_youtube = growth_mode
-
-    tt_growth = s_map.get("growth_mode_tiktok")
-    if tt_growth and str(tt_growth).lower().strip() in const.GROWTH_MODES:
-        growth_mode_tiktok = str(tt_growth).lower().strip()
-    else:
-        growth_mode_tiktok = growth_mode
+    growth_mode = resolve_growth_mode(s_map)
+    growth_mode_youtube = resolve_growth_mode(s_map, platform="youtube")
+    growth_mode_tiktok = resolve_growth_mode(s_map, platform="tiktok")
 
     def _parse_int(val: Any, default_val: int) -> int:
         try:

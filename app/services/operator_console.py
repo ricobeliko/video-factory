@@ -158,8 +158,9 @@ def init_operator_db(db_path: Optional[str] = None, force: bool = False) -> None
     resolved = os.path.abspath(get_db_path(db_path))
     if not force:
         with _OPERATOR_INIT_LOCK:
-            if resolved in _INITIALIZED_OPERATOR_DBS:
+            if resolved in _INITIALIZED_OPERATOR_DBS and os.path.isfile(resolved):
                 return
+            _INITIALIZED_OPERATOR_DBS.discard(resolved)
 
     from app.services import scheduler
     scheduler.init_db(db_path, force=force)

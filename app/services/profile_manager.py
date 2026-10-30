@@ -153,7 +153,7 @@ def get_connection(db_path: Optional[str] = None):
     conn = sqlite3.connect(path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
-        if os.path.abspath(path) not in _INITIALIZED_PROFILE_DBS:
+        if os.path.abspath(path) not in _INITIALIZED_PROFILE_DBS or not os.path.isfile(path):
             conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
         with conn:
@@ -183,8 +183,9 @@ def init_profile_db(db_path: Optional[str] = None, force: bool = False) -> None:
     resolved = os.path.abspath(get_db_path(db_path))
     if not force:
         with _PROFILE_INIT_LOCK:
-            if resolved in _INITIALIZED_PROFILE_DBS:
+            if resolved in _INITIALIZED_PROFILE_DBS and os.path.isfile(resolved):
                 return
+            _INITIALIZED_PROFILE_DBS.discard(resolved)
 
     with get_connection(db_path) as conn:
         conn.execute(

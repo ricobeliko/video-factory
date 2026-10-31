@@ -1156,7 +1156,7 @@ def update_profile_voice_settings(
 
     if "voice_name" in voice_data:
         v_name = voice_data["voice_name"]
-        if v_name is not None:
+        if v_name is not None and str(v_name).strip() != "":
             from app.services import autonomous_production, voice
             if not autonomous_production.is_valid_pt_br_voice(v_name):
                 raise ValueError(f"Voz '{v_name}' inválida ou não homologada para pt-BR. Use uma voz pt-BR-* ou en-US-BrianMultilingualNeural.")

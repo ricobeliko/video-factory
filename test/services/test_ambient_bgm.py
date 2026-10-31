@@ -541,10 +541,10 @@ def test_preflight_checks_with_brian_passes_without_invalid_locale(tmp_path):
 
 
 # -----------------------------------------------------------------------------
-# 22. Channel Factory context impõe voz GLOBAL Brian ignorando override
+# 22. Contrato V2: voz do canal vence a global; canal sem voz herda a global
 # -----------------------------------------------------------------------------
-def test_channel_factory_context_enforces_global_brian_voice(tmp_path):
-    """get_generation_profile_context impõe a voz global mesmo se o perfil legado tiver outra voz salva."""
+def test_channel_factory_context_channel_voice_wins_over_global_and_inherits_when_empty(tmp_path):
+    """No contrato V2, voz configurada no canal vence a global; canal sem voz herda a global."""
     from app.services import profile_manager
     from app.config import config
 
@@ -560,17 +560,22 @@ def test_channel_factory_context_enforces_global_brian_voice(tmp_path):
         )
         pid = res["profile"]["id"]
 
-        # Força voice_name legado no perfil
+        # 1. Quando o canal tem voz definida, a voz do canal vence a global
         settings = profile_manager.get_profile_settings(pid, db_path=db_path)
         settings.voice.voice_name = "pt-BR-AntonioNeural"
         profile_manager.update_profile_settings(pid, settings, db_path=db_path)
 
-        # Confirma que settings persistidos guardam para retrocompatibilidade
         reloaded = profile_manager.get_profile_settings(pid, db_path=db_path)
         assert reloaded.voice.voice_name == "pt-BR-AntonioNeural"
 
-        # Mas o contexto de geração da fábrica autônoma impõe a voz global da fábrica
         ctx = profile_manager.get_generation_profile_context(pid, db_path=db_path)
-        assert ctx["voice_name"] == "en-US-BrianMultilingualNeural"
+        assert ctx["voice_name"] == "pt-BR-AntonioNeural"
+
+        # 2. Quando o canal não tem voz configurada (None/vazia), herda a voz global da fábrica
+        settings.voice.voice_name = None
+        profile_manager.update_profile_settings(pid, settings, db_path=db_path)
+
+        ctx_empty = profile_manager.get_generation_profile_context(pid, db_path=db_path)
+        assert ctx_empty["voice_name"] == "en-US-BrianMultilingualNeural"
 
 

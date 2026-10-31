@@ -1522,7 +1522,7 @@ def _get_profile_operations_overview_impl(db_path: Optional[str] = None, task_ba
             if ready_stock_val is not None:
                 ready_stock_val = int(ready_stock_val)
         except Exception as exc:
-            logger.warning(f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para perfil '{pid}': {exc}")
+            logger.opt(exception=True).warning(f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para perfil '{pid}': {exc}")
             ready_stock_val = None
 
         st_info = status_map.get(pid) or {"status": "paused", "label": "Pausado", "reason_code": "UNKNOWN", "reason": None}
@@ -3745,7 +3745,7 @@ def _get_live_execution_overview_impl(db_path: Optional[str] = None) -> Dict[str
             ready_stock_count = int(ready_stock_val) if ready_stock_val is not None else None
             target_stock_count = int(stock_info.get("minimum_threshold", 3))
         except Exception as exc:
-            logger.warning(f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para live execution '{pid}': {exc}")
+            logger.opt(exception=True).warning(f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para live execution '{pid}': {exc}")
             ready_stock_count = None
             target_stock_count = 3
 
@@ -4371,7 +4371,7 @@ def _get_fleet_summary_impl(db_path: Optional[str] = None) -> Dict[str, Any]:
                 else autonomous_production.get_target_ready_stock(profile_id=pid, db_path=effective_db)
             )
         except Exception as exc:
-            logger.warning(
+            logger.opt(exception=True).warning(
                 f"[OPERATOR_CONSOLE] Falha ao ler estoque canônico para o perfil '{pid}': {exc}"
             )
             ready_stock = None

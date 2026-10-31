@@ -15,7 +15,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -547,11 +547,14 @@ class TestApiV2FleetSummary(unittest.TestCase):
 
     def test_ready_stock_failure_returns_none_logs_warning_and_does_not_break_api(self):
         """9. Falha em get_canonical_ready_stock => ready_stock = None, log WARNING e API retorna 200 sem fallback falso."""
+        mock_warn = MagicMock()
+        mock_opt = MagicMock(return_value=MagicMock(warning=mock_warn))
         with patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
              patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
              patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
              patch("app.services.operator_console.get_canonical_ready_stock", side_effect=RuntimeError("disk I/O error")), \
-             patch.object(operator_console.logger, "warning") as mock_warn:
+             patch.object(operator_console.logger, "warning", mock_warn), \
+             patch.object(operator_console.logger, "opt", mock_opt):
 
             resp = self.client.get("/api/v2/fleet/summary")
             self.assertEqual(resp.status_code, 200)

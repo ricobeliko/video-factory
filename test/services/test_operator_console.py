@@ -444,6 +444,15 @@ class TestOperatorConsole(unittest.TestCase):
         os.makedirs(os.path.dirname(video_path), exist_ok=True)
         with open(video_path, "wb") as f:
             f.write(b"fake video content")
+        import json
+        with open(os.path.join(self.tasks_dir, task_id, "script.json"), "w", encoding="utf-8") as sf:
+            json.dump({
+                "params": {"bgm_type": "none"},
+                "asset_provenance": {
+                    "bgm": {"enabled": False, "source": "none"},
+                    "visual_clips": [{"provider": "pexels", "local_file": video_path}],
+                },
+            }, sf)
 
         safety_gate.save_safety_assessment(
             {"task_id": task_id, "safety_status": const.SAFETY_STATUS_PASS, "safety_reasons": []},

@@ -715,6 +715,7 @@ def get_autonomous_ready_stock(
         os.path.abspath(task_base_dir or utils.task_dir()),
         os.path.abspath(scheduler.get_db_path(db_path)),
     )
+    plats_by_prof: Dict[Optional[str], List[str]] = {}
     if rp_cache is not None and base_cache_key in rp_cache:
         base_eligible = rp_cache[base_cache_key]
     else:
@@ -739,7 +740,6 @@ def get_autonomous_ready_stock(
                 "AND status IN ('published', 'cancelled')"
             )}
         base_eligible = []
-        plats_by_prof: Dict[Optional[str], List[str]] = {}
         for row in rows:
             tid = row["task_id"]
             t_prof = row["profile_id"] or profile_manager.get_task_profile_id(tid, db_path=db_path)

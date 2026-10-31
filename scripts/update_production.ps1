@@ -464,6 +464,10 @@ try {
         $RemoteUrl = (git remote get-url origin).Trim()
         Write-DeployLog "Remote origin configurado: $RemoteUrl"
         Write-DeployLog "Executando fetch do remote origin..."
+        if ($TargetRef -match '^origin/(.+)$') {
+            $TargetBranch = $Matches[1]
+            git fetch origin "${TargetBranch}:refs/remotes/origin/${TargetBranch}" --quiet 2>&1 | Out-Null
+        }
         git fetch origin --quiet
         if ($LASTEXITCODE -ne 0) {
             Write-DeployLog "AVISO: Falha ao executar 'git fetch origin'." -Level "WARN"
@@ -663,49 +667,57 @@ sys.stdout.flush()
     $DistResult = "FAIL"
     $DistFailReason = ""
 
-    $DistCheckPsi = New-Object System.Diagnostics.ProcessStartInfo
-    $DistCheckPsi.FileName = $VenvPython
-    $DistCheckPsi.Arguments = "scripts\build_stamp.py --verify --git-ref $TargetSha"
-    $DistCheckPsi.WorkingDirectory = $RepoPathResolved
-    $DistCheckPsi.RedirectStandardOutput = $true
-    $DistCheckPsi.RedirectStandardError = $true
-    $DistCheckPsi.UseShellExecute = $false
-    $DistCheckPsi.CreateNoWindow = $true
-
-    try {
-        $DistProc = [System.Diagnostics.Process]::Start($DistCheckPsi)
-        $DistStdout = $DistProc.StandardOutput.ReadToEnd()
-        $DistStderr = $DistProc.StandardError.ReadToEnd()
-        $DistProc.WaitForExit()
-        $DistExit = $DistProc.ExitCode
-
-        if ($DistExit -eq 0) {
-            $DistResult = "PASS"
-        } else {
-            # Se o commit alvo ainda for o HEAD local em desenvolvimento, valida no working tree
-            if ($TargetSha -eq $CurrentSha) {
-                $DistCheckPsi.Arguments = "scripts\build_stamp.py --verify"
-                $DistProc2 = [System.Diagnostics.Process]::Start($DistCheckPsi)
-                $DistStdout2 = $DistProc2.StandardOutput.ReadToEnd()
-                $DistStderr2 = $DistProc2.StandardError.ReadToEnd()
-                $DistProc2.WaitForExit()
-                if ($DistProc2.ExitCode -eq 0) {
-                    $DistResult = "PASS (working tree)"
-                } else {
-                    $DistResult = "FAIL"
-                    $DistFailReason = if ($DistStderr2 -and $DistStderr2.Trim()) { $DistStderr2.Trim() } else { "DIST_OUTDATED_OR_MISSING" }
-                }
-            } else {
-                $DistResult = "FAIL"
-                $DistFailReason = if ($DistStderr -and $DistStderr.Trim()) { $DistStderr.Trim() } else { "DIST_OUTDATED_OR_MISSING_IN_TARGET" }
-            }
-        }
-    } catch {
-        $DistResult = "FAIL"
-        $DistFailReason = "DIST_CHECK_PROC_ERROR: $_"
+    # Verifica se scripts/build_stamp.py existe no commit alvo ($TargetSha)
+    $TargetHasBuildStamp = $false
+    $CatFileOut = @(git cat-file -e "${TargetSha}:scripts/build_stamp.py" 2>&1)
+    if ($LASTEXITCODE -eq 0) {
+        $TargetHasBuildStamp = $true
     }
 
-    if ($DistResult -notmatch "^PASS") {
+    if (-not $TargetHasBuildStamp) {
+        $DistResult = "NOT_APPLICABLE (commit alvo legado sem Web UI V2)"
+        Write-DeployLog "Commit alvo $TargetSha não possui scripts/build_stamp.py (versão legada sem Web UI V2). Pulando verificação de bundle." -Level "INFO"
+    } else {
+        $TempStampFile = Join-Path ([System.IO.Path]::GetTempPath()) "build_stamp_${TargetSha}_$PID.py"
+        try {
+            $ScriptLines = @(git show "${TargetSha}:scripts/build_stamp.py" 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Falha ao extrair scripts/build_stamp.py do commit alvo $TargetSha."
+            }
+            [System.IO.File]::WriteAllText($TempStampFile, ($ScriptLines -join "`n"), [System.Text.Encoding]::UTF8)
+
+            $DistCheckPsi = New-Object System.Diagnostics.ProcessStartInfo
+            $DistCheckPsi.FileName = $VenvPython
+            $DistCheckPsi.Arguments = "`"$TempStampFile`" --verify --git-ref $TargetSha --repo-root `"$RepoPathResolved`""
+            $DistCheckPsi.WorkingDirectory = $RepoPathResolved
+            $DistCheckPsi.RedirectStandardOutput = $true
+            $DistCheckPsi.RedirectStandardError = $true
+            $DistCheckPsi.UseShellExecute = $false
+            $DistCheckPsi.CreateNoWindow = $true
+
+            $DistProc = [System.Diagnostics.Process]::Start($DistCheckPsi)
+            $DistStdout = $DistProc.StandardOutput.ReadToEnd()
+            $DistStderr = $DistProc.StandardError.ReadToEnd()
+            $DistProc.WaitForExit()
+            $DistExit = $DistProc.ExitCode
+
+            if ($DistExit -eq 0) {
+                $DistResult = "PASS"
+            } else {
+                $DistResult = "FAIL"
+                $DistFailReason = if ($DistStderr -and $DistStderr.Trim()) { $DistStderr.Trim() } elseif ($DistStdout -and $DistStdout.Trim()) { $DistStdout.Trim() } else { "DIST_OUTDATED_OR_MISSING_IN_TARGET" }
+            }
+        } catch {
+            $DistResult = "FAIL"
+            $DistFailReason = "DIST_CHECK_ERROR: $_"
+        } finally {
+            if (Test-Path $TempStampFile) {
+                Remove-Item $TempStampFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    if ($DistResult -notmatch "^PASS|^NOT_APPLICABLE") {
         Write-DeployLog "ABORT: Validação do frontend Web UI V2 falhou: $DistFailReason" -Level "ERROR" -IsError
         if ($PreflightOnly) {
             Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult "NOT_ATTEMPTED" -UpdateResult "NOT_ATTEMPTED" -HealthResult "NOT_ATTEMPTED" -RollbackResult "NOT_REQUIRED" -FinalSha $CurrentSha -Status "PREFLIGHT_FAIL" -FailureReason "WEBUI_V2_DIST_INVALID: $DistFailReason" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary -DistResult $DistResult
@@ -893,20 +905,25 @@ sys.stdout.flush()
     $DependencySummary = "PASS"
 
     # 7.2 Validação de integridade do dist no working tree após update
-    Write-DeployLog "Validando bundle Web UI V2 no working tree pós-update..."
-    & $VenvPython scripts\build_stamp.py --verify 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-DeployLog "ABORT: Bundle Web UI V2 desincronizado após atualização. Executando rollback de emergência..." -Level "ERROR" -IsError
-        git switch --detach $CurrentSha 2>&1 | Out-Null
-        schtasks /Run /TN $TaskName 2>&1 | Out-Null
-        Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-        $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
-        if (-not $RollbackHealthPassed) {
-            Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
+    $WorkingTreeStamp = Join-Path $RepoPathResolved "scripts\build_stamp.py"
+    if (Test-Path $WorkingTreeStamp) {
+        Write-DeployLog "Validando bundle Web UI V2 no working tree pós-update..."
+        & $VenvPython $WorkingTreeStamp --verify --repo-root $RepoPathResolved 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-DeployLog "ABORT: Bundle Web UI V2 desincronizado após atualização. Executando rollback de emergência..." -Level "ERROR" -IsError
+            git switch --detach $CurrentSha 2>&1 | Out-Null
+            schtasks /Run /TN $TaskName 2>&1 | Out-Null
+            Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
+            $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+            if (-not $RollbackHealthPassed) {
+                Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
+            }
+            throw "WEBUI_V2_DIST_POST_UPDATE_SYNC_FAILED"
         }
-        throw "WEBUI_V2_DIST_POST_UPDATE_SYNC_FAILED"
+        Write-DeployLog "Bundle Web UI V2 pós-update validado com sucesso." -Level "SUCCESS"
+    } else {
+        Write-DeployLog "scripts\build_stamp.py não presente no commit pós-update. Pulando validação pós-update de dist." -Level "INFO"
     }
-    Write-DeployLog "Bundle Web UI V2 pós-update validado com sucesso." -Level "SUCCESS"
 
     # ==============================================================================
     # 8. START DA PRODUÇÃO

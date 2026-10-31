@@ -44,10 +44,10 @@ Acesse a interface da V1 no navegador em **`http://127.0.0.1:8501`** e clique no
 
 ### Passo 2: Confirmar Fábrica Ociosa (Somente Leitura)
 
-Executa a validação de ociosidade garantindo que a fábrica está pausada e nenhum vídeo está no meio de renderização ou publicação:
+Executa a validação de ociosidade garantindo que a fábrica está pausada e nenhum vídeo está no meio de renderização ou publicação, utilizando o script `C:\Temp\ocupado.py` já disponível na PC Forte:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\ocupado.py
+.\.venv\Scripts\python.exe C:\Temp\ocupado.py
 ```
 
 > **Critério de Aceite:** Código de saída 0 e mensagem:
@@ -58,15 +58,24 @@ Executa a validação de ociosidade garantindo que a fábrica está pausada e ne
 
 ---
 
-### Passo 3: Executar Preflight Passivo de Atualização
+### Passo 3: Extrair Script Novo e Executar Preflight Passivo de Atualização
 
 > [!NOTE]
-> **Definição de `<ALVO>`:** O parâmetro `<ALVO>` será `origin/main` ou `origin/v2/base` conforme a decisão na missão de merge. Substitua `<ALVO>` pela ref informada antes de rodar.
+> **Definição de `<ALVO>` e Bootstrap do Script:**
+> Como o repositório atual de produção está na versão V1 (`main`), o script de atualização novo (`update_production.ps1`) ainda não existe no working tree. Portanto, ele deve ser extraído do commit alvo para `C:\Temp\update_production_v2.ps1` e executado de fora do repositório apontando `-RepoPath C:\Projetos\MoneyPrinterTurbo`.
+> O parâmetro `<ALVO>` será `origin/main` ou `origin/v2/base` conforme a decisão na missão de merge.
 
-Audita a integridade do repositório, dependências, executáveis de mídia e bundle frontend do commit alvo antes de interromper qualquer serviço:
+1. Baixe os metadados remotos e extraia o script atualizado para `C:\Temp`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\update_production.ps1 -PreflightOnly -TargetRef <ALVO>
+git fetch origin
+git show origin/v2/base:scripts/update_production.ps1 | Out-File -Encoding utf8 C:\Temp\update_production_v2.ps1
+```
+
+2. Execute o preflight passivo a partir de `C:\Temp`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Temp\update_production_v2.ps1 -PreflightOnly -TargetRef <ALVO> -RepoPath C:\Projetos\MoneyPrinterTurbo
 ```
 
 > **Critério de Aceite:**
@@ -82,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\update_production.ps1 -Prefli
 Aplica o avanço Fast-Forward, gera o backup transacional, para a Scheduled Task, confere a liberação das portas 8501 e 8080, valida dependências e carimbo de build, e inicia o Motor V2 na porta 8080:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\update_production.ps1 -TargetRef <ALVO> -RollbackHealthUrl "http://127.0.0.1:8501/_stcore/health"
+powershell -ExecutionPolicy Bypass -File C:\Temp\update_production_v2.ps1 -TargetRef <ALVO> -RepoPath C:\Projetos\MoneyPrinterTurbo -RollbackHealthUrl "http://127.0.0.1:8501/_stcore/health"
 ```
 
 > **Critério de Aceite:**

@@ -129,8 +129,9 @@ export async function getPublications(limit = 10, profileId = null) {
   return fetchJson(`/api/v2/publications?${params.toString()}`);
 }
 
-export async function getProviderHealth() {
-  return fetchJson('/api/v2/providers/health');
+export async function getProviderHealth(force = false) {
+  const qs = force ? '?force=true' : '';
+  return fetchJson(`/api/v2/providers/health${qs}`);
 }
 
 export async function getAgentOps() {
@@ -391,9 +392,14 @@ export async function updateChannelDestinations(channelId, payload) {
   });
 }
 
-export async function getPublishingAccounts(platform = null) {
+export async function getPublishingAccounts(platform = null, force = false) {
   const params = new URLSearchParams();
+  if (typeof platform === 'boolean') {
+    force = platform;
+    platform = null;
+  }
   if (platform) params.set('platform', platform);
+  if (force) params.set('force', 'true');
   const qs = params.toString() ? `?${params.toString()}` : '';
   return fetchJson(`/api/v2/publishing/accounts${qs}`);
 }

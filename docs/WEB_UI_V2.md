@@ -801,3 +801,32 @@ Após validação visual do operador, o layout linear contínuo de 12 estágios 
    - O endpoint `PATCH /api/v2/channels/{profile_id}/autonomous` rejeita requisições com status `400 Bad Request` e mensagem `"Canal sem destino de publicação habilitado"` se o operador tentar ativar a produção autônoma de um canal sem nenhuma plataforma de publicação habilitada e válida (`autonomous_production.get_channel_active_platforms`).
    - O botão de alternância do modo autônomo na Frota captura o erro 400 e apresenta aviso claro ao operador, impedindo que canais produzam vídeos em falso loop sem destino para publicação.
    - Avaliação canônica de status (`evaluate_canonical_channel_status`): quando `autonomous_enabled=True` e `has_publish_destination=False`, o status é classificado como `blocked` com código `NO_PUBLISH_DESTINATION` e razão `"Sem destino de publicação habilitado (YouTube ou TikTok)"`.
+
+---
+
+### I. FASE V2.2 — Performance de Sistema, Caches Controlados e Índices SQLite
+
+1. **Interruptores de Sistema sem Refetch Completo (`SystemView.jsx`):**
+   - Ao acionar qualquer interruptor de agendamento (`scheduler_enabled`, `auto_publish_enabled`, `dry_run`), a UI aplica atualização otimista imediata com indicador `"SALVANDO..."`, consome o estado canônico retornado pelo `PATCH /api/v2/scheduler/settings` e **não** dispara `fetchData()` após o clique. Em caso de falha, reverte localmente o estado anterior e exibe o erro sem recarregar a página.
+   - O polling de 15s de `SystemView.jsx` não consulta mais `GET /api/v2/publishing/accounts` nem executa `N` chamadas `GET /api/v2/channels/{id}/settings` por canal (os dados de configuração vêm do lote `/api/v2/channels/overview`). As contas conectadas (`getPublishingAccounts`) são carregadas sob demanda ao abrir a edição de um canal e possuem botão explícito `"↻ Atualizar contas"` (`?force=true`).
+
+2. **Inventário de Caches Adicionados (Onde Vivem, TTL e Invalidação):**
+
+| Cache / Guarda | Onde Vive | Chave | TTL / Escopo | Como Invalida |
+| :--- | :--- | :--- | :--- | :--- |
+| **`_PUBLISHING_ACCOUNTS_CACHE`** | `app/controllers/v2/operations.py` (memória do processo) | `clean_platform or "__all__"` | **60 segundos** (`_PUBLISHING_ACCOUNTS_TTL = 60.0`) | Expira por TTL de 60s, ignora cache quando `?force=true` é enviado (`GET /api/v2/publishing/accounts?force=true`), ou via `clear_publishing_accounts_cache()`. |
+| **`_PROVIDER_HEALTH_CACHE`** | `app/services/operator_console.py` (memória do processo) | `os.path.abspath(get_db_path(db_path))` | **15 segundos** (`_PROVIDER_HEALTH_CACHE_TTL_SECONDS = 15.0`) | Expira por TTL de 15s, ignora cache quando `force=True` / `?force=true` (`GET /api/v2/providers/health?force=true`), ou via `clear_provider_health_cache()`. |
+| **`render_pass_scope` (`_render_pass_local.cache`)** | `app/services/operator_console.py` (`threading.local` por requisição HTTP) | Tuplas por operação e `abspath(db_path)`: `("autopilot_settings_map", db)`, `("list_profiles", db, active_only)`, `("get_profile", db, pid)`, `("list_channels", db, pid, enabled_only)`, `("get_profile_settings", db, pid)`, `("canonical_ready_stock", db, pid, cid)`, `("app_24h_batch", db)`, `("att_24h_batch", db)` | **Escopo único da requisição HTTP atual** (destruído no `finally` do `with render_pass_scope():`; fora do escopo retorna `None` e nada é cacheado) | Destruído automaticamente ao término da requisição HTTP e invalidado imediatamente (`invalidate_render_pass_cache()`) sempre que qualquer conexão SQLite em `scheduler.get_connection` ou `profile_manager.get_connection` registra escrita (`conn.total_changes > 0`). |
+| **Guardas de Schema (`_INITIALIZED_DBS`, `_INITIALIZED_PROFILE_DBS`, `_INITIALIZED_OPERATOR_DBS`)** | `scheduler.py`, `profile_manager.py`, `operator_console.py` (`set` global por processo) | `os.path.abspath(get_db_path(db_path))` | Vida do processo, condicionado à existência física do arquivo (`os.path.isfile(resolved)`) | Se `force=True`, se o arquivo `.db` não existir mais no disco (`not os.path.isfile(resolved)`), ou via `reset_initialized_*_dbs()`. |
+
+3. **Os 7 Índices SQLite Adicionados (Idempotentes via `CREATE INDEX IF NOT EXISTS`):**
+   - Em `app/services/scheduler.py` (`_run_migrations`):
+     1. `CREATE INDEX IF NOT EXISTS idx_scheduled_posts_task_id ON scheduled_posts(task_id);`
+     2. `CREATE INDEX IF NOT EXISTS idx_scheduled_posts_prof_st ON scheduled_posts(profile_id, status);`
+     3. `CREATE INDEX IF NOT EXISTS idx_pub_events_prof_st ON publication_events(profile_id, status);`
+   - Em `app/services/operator_console.py` (`init_operator_db`):
+     4. `CREATE INDEX IF NOT EXISTS idx_op_events_task ON operational_events(task_id);`
+     5. `CREATE INDEX IF NOT EXISTS idx_op_events_comp_ts ON operational_events(component, timestamp);`
+     6. `CREATE INDEX IF NOT EXISTS idx_op_events_comp_ev_ts ON operational_events(component, event_type, timestamp);`
+     7. `CREATE INDEX IF NOT EXISTS idx_op_events_task_comp_ev ON operational_events(task_id, component, event_type, timestamp);`
+

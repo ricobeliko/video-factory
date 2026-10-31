@@ -108,6 +108,21 @@ def get_production_overview(
     use_cache: bool = True,
 ) -> Dict[str, Any]:
     """Retorna o resumo operacional de produção da V2 com estoque, agendados e runs recentes."""
+    with operator_console.render_pass_scope():
+        return _get_production_overview_impl(
+            profile_id=profile_id,
+            limit_per_section=limit_per_section,
+            db_path=db_path,
+            use_cache=use_cache,
+        )
+
+
+def _get_production_overview_impl(
+    profile_id: Optional[str] = None,
+    limit_per_section: int = 20,
+    db_path: Optional[str] = None,
+    use_cache: bool = True,
+) -> Dict[str, Any]:
     effective_limit = max(1, min(int(limit_per_section), 100))
     clean_profile_id = str(profile_id).strip() if profile_id else None
     effective_db = scheduler.get_db_path(db_path)

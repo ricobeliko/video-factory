@@ -212,6 +212,25 @@ def get_diagnostics_overview(
     _limits_fetcher: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Retorna visão consolidada e detalhada de diagnóstico da fábrica e de cada canal."""
+    with operator_console.render_pass_scope():
+        return _get_diagnostics_overview_impl(
+            profile_id=profile_id,
+            db_path=db_path,
+            task_base_dir=task_base_dir,
+            now=now,
+            _stock_fetcher=_stock_fetcher,
+            _limits_fetcher=_limits_fetcher,
+        )
+
+
+def _get_diagnostics_overview_impl(
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+    task_base_dir: Optional[str] = None,
+    now: Optional[datetime] = None,
+    _stock_fetcher: Optional[Any] = None,
+    _limits_fetcher: Optional[Any] = None,
+) -> Dict[str, Any]:
     effective_db = scheduler.get_db_path(db_path)
     now_utc = now if now is not None else datetime.now(timezone.utc)
     if now_utc.tzinfo is None:
@@ -412,8 +431,68 @@ def get_diagnostics_overview(
                 if tid and p_in_meta and tid not in task_profile_map:
                     task_profile_map[tid] = str(p_in_meta)
 
+        # I. Generation counts 24h em lote para todos os perfis
+        app_24h_batch: Dict[str, int] = {}
+        att_24h_batch: Dict[str, int] = {}
+        if "operational_events" in existing_tables and "task_profiles" in existing_tables:
+            try:
+                att_rows = conn.execute(
+                    """
+                    SELECT
+                        COALESCE(tp.profile_id, 'default') AS pid,
+                        count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
+                    FROM operational_events o
+                    LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.event_type = 'generation_started'
+                      AND o.timestamp >= ?
+                    GROUP BY COALESCE(tp.profile_id, 'default');
+                    """,
+                    (h24_ago_iso,),
+                ).fetchall()
+                for r in att_rows:
+                    att_24h_batch[r["pid"]] = int(r["cnt"] or 0)
+
+                app_rows = conn.execute(
+                    """
+                    WITH started_tasks AS (
+                        SELECT DISTINCT task_id
+                        FROM operational_events
+                        WHERE component = 'autonomous_production'
+                          AND event_type = 'generation_started'
+                          AND timestamp >= ?
+                          AND task_id IS NOT NULL AND task_id != ''
+                    )
+                    SELECT
+                        COALESCE(tp.profile_id, 'default') AS pid,
+                        count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
+                    FROM operational_events o
+                    LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                    WHERE o.component = 'autonomous_production'
+                      AND o.timestamp >= ?
+                      AND (
+                          o.event_type = 'generation_approved'
+                          OR (
+                              o.event_type IN ('task_approved_and_scheduled', 'task_waiting_schedule')
+                              AND o.task_id IN (SELECT task_id FROM started_tasks)
+                          )
+                      )
+                    GROUP BY COALESCE(tp.profile_id, 'default');
+                    """,
+                    (h24_ago_iso, h24_ago_iso),
+                ).fetchall()
+                for r in app_rows:
+                    app_24h_batch[r["pid"]] = int(r["cnt"] or 0)
+            except Exception as batch_exc:
+                logger.warning(f"[PRODUCTION_DIAGNOSTICS] Erro na consulta em lote 24h: {batch_exc}")
+
     finally:
         conn.close()
+
+    rp_cache = operator_console.get_render_pass_cache()
+    if rp_cache is not None:
+        rp_cache.setdefault(("app_24h_batch", effective_db), app_24h_batch)
+        rp_cache.setdefault(("att_24h_batch", effective_db), att_24h_batch)
 
     # -----------------------------------------------------------------
     # 4. Tetos e Limites Globais (Global Cost Guard)

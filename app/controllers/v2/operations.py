@@ -1,7 +1,8 @@
 """Operational endpoints for Web UI V2."""
 
 import os
-from typing import List, Optional, Dict, Any
+import threading
+from typing import List, Optional, Dict, Any, Tuple
 from loguru import logger
 
 from fastapi import Depends, Query, Request
@@ -28,7 +29,8 @@ def get_system_status(
         default=None, description="Optional profile ID filter"
     ),
 ):
-    status = operator_console.get_system_status(profile_id=profile_id)
+    with operator_console.render_pass_scope():
+        status = operator_console.get_system_status(profile_id=profile_id)
     return utils.get_response(200, status)
 
 
@@ -189,6 +191,11 @@ def list_profiles(request: Request):
     summary="Get channels overview for Web UI V2",
 )
 def get_channels_overview(request: Request):
+    with operator_console.render_pass_scope():
+        return _get_channels_overview_impl(request)
+
+
+def _get_channels_overview_impl(request: Request):
     profile_overviews = operator_console.get_profile_operations_overview()
     channels_data = []
     for p in profile_overviews:
@@ -1238,8 +1245,11 @@ def list_publications(
     "/providers/health",
     summary="Get passive provider health summary",
 )
-def get_provider_health(request: Request):
-    health = operator_console.get_provider_health_summary()
+def get_provider_health(
+    request: Request,
+    force: bool = Query(default=False, description="Force bypass provider health cache"),
+):
+    health = operator_console.get_provider_health_summary(force=force)
     return utils.get_response(200, health)
 
 
@@ -1630,6 +1640,16 @@ def update_channel_destinations(
     )
 
 
+_PUBLISHING_ACCOUNTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+_PUBLISHING_ACCOUNTS_TTL: float = 60.0  # 60 segundos
+_ACCOUNTS_CACHE_LOCK = threading.RLock()
+
+
+def clear_publishing_accounts_cache() -> None:
+    with _ACCOUNTS_CACHE_LOCK:
+        _PUBLISHING_ACCOUNTS_CACHE.clear()
+
+
 @router.get(
     "/publishing/accounts",
     summary="List connected publishing accounts from post_for_me",
@@ -1637,10 +1657,11 @@ def update_channel_destinations(
 def list_publishing_accounts(
     request: Request,
     platform: Optional[str] = Query(default=None, description="Optional platform filter (youtube, tiktok)"),
+    force: bool = Query(default=False, description="Bypass cache and reload from provider"),
 ):
     request_id = base.get_task_id(request)
     from app.services import post_for_me
-    accounts = []
+    import time
     clean_platform = str(platform).strip().lower() if platform else None
     if clean_platform and clean_platform not in ("youtube", "tiktok"):
         raise HttpException(
@@ -1649,6 +1670,15 @@ def list_publishing_accounts(
             message=f"Plataforma '{clean_platform}' inválida. Use 'youtube' ou 'tiktok'.",
         )
 
+    cache_key = clean_platform or "all"
+    now_m = time.monotonic()
+    if not force:
+        with _ACCOUNTS_CACHE_LOCK:
+            cached = _PUBLISHING_ACCOUNTS_CACHE.get(cache_key)
+            if cached and (now_m - cached[0] < _PUBLISHING_ACCOUNTS_TTL):
+                return utils.get_response(200, {"accounts": cached[1], "total": len(cached[1])})
+
+    accounts = []
     platforms_to_query = [clean_platform] if clean_platform else ["youtube", "tiktok"]
     for plat in platforms_to_query:
         try:
@@ -1657,5 +1687,8 @@ def list_publishing_accounts(
                 accounts.extend(accs)
         except Exception as exc:
             logger.warning(f"Falha ao consultar contas conectadas de {plat}: {exc}")
+
+    with _ACCOUNTS_CACHE_LOCK:
+        _PUBLISHING_ACCOUNTS_CACHE[cache_key] = (now_m, accounts)
 
     return utils.get_response(200, {"accounts": accounts, "total": len(accounts)})

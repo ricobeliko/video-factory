@@ -24,6 +24,8 @@ from app import asgi
 from app.config import config
 from app.services import operator_console, scheduler
 
+config.app['api_key'] = ''
+
 
 class TestApiV2SchedulerControls(unittest.TestCase):
     def setUp(self):
@@ -181,3 +183,297 @@ class TestApiV2SchedulerControls(unittest.TestCase):
         with patch("app.services.operator_console.is_primary_instance", return_value=False):
             res = self.client.post("/api/v2/scheduler/plan")
             self.assertEqual(res.status_code, 403, res.text)
+
+    def test_init_db_guards_recreate_schema_when_db_deleted_in_live_process(self):
+        """10. Apagar o arquivo .db com o processo vivo e chamar init/API recria o schema nas 3 camadas."""
+        from app.services import profile_manager
+        live_db = os.path.join(self.temp_dir.name, "live_deleted.db")
+
+        # Inicializa as 3 camadas pela primeira vez (entra nos conjuntos _INITIALIZED_*_DBS)
+        scheduler.init_db(live_db)
+        profile_manager.init_profile_db(live_db)
+        operator_console.init_operator_db(live_db)
+        self.assertTrue(os.path.isfile(live_db))
+
+        # Apaga o arquivo .db com o processo vivo (sem limpar os conjuntos em memória)
+        for ext in ("", "-wal", "-shm"):
+            p_ext = live_db + ext
+            if os.path.exists(p_ext):
+                os.remove(p_ext)
+        self.assertFalse(os.path.isfile(live_db))
+
+        # 1) scheduler: deve recriar autopilot_settings e scheduled_posts sem erro
+        scheduler.set_setting("auto_publish_enabled", "true", db_path=live_db)
+        self.assertTrue(os.path.isfile(live_db))
+        self.assertEqual(scheduler.get_setting("auto_publish_enabled", db_path=live_db), "true")
+
+        # Apaga novamente para provar profile_manager isoladamente
+        for ext in ("", "-wal", "-shm"):
+            p_ext = live_db + ext
+            if os.path.exists(p_ext):
+                os.remove(p_ext)
+        self.assertFalse(os.path.isfile(live_db))
+
+        # 2) profile_manager: deve recriar content_profiles e publishing_channels sem erro
+        profile_manager.ensure_default_profile(live_db)
+        profs = profile_manager.list_profiles(db_path=live_db)
+        self.assertTrue(len(profs) >= 1)
+
+        # Apaga novamente para provar operator_console e API V2
+        for ext in ("", "-wal", "-shm"):
+            p_ext = live_db + ext
+            if os.path.exists(p_ext):
+                os.remove(p_ext)
+        self.assertFalse(os.path.isfile(live_db))
+
+        # 3) operator_console + chamada de API V2: deve recriar operational_events/instance_locks sem erro
+        operator_console.log_operational_event(
+            component="test",
+            severity="INFO",
+            event_type="DB_RECREATED",
+            message="recriado",
+            db_path=live_db,
+        )
+        evs = operator_console.get_operational_events(limit=5, db_path=live_db)
+        self.assertEqual(len(evs), 1)
+
+        with patch("app.services.scheduler.get_db_path", return_value=live_db), \
+             patch("app.services.profile_manager.get_db_path", return_value=live_db), \
+             patch("app.services.operator_console.get_db_path", return_value=live_db):
+            res = self.client.get("/api/v2/channels/overview")
+            self.assertEqual(res.status_code, 200, res.text)
+
+    def test_growth_mode_single_source_parity_and_invalid_numeric_fallback(self):
+        """11. Paridade entre get_all_settings e get_growth_mode (válidos, inválidos, ausentes, por plataforma) e fallback numérico."""
+        from app.models import const
+
+        # Caso 1: Ausentes -> default warmup em todos
+        s_all = scheduler.get_all_settings(self.db_path)
+        self.assertEqual(s_all["growth_mode"], scheduler.get_growth_mode(db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode_youtube"], scheduler.get_growth_mode("youtube", db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode_tiktok"], scheduler.get_growth_mode("tiktok", db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode"], const.DEFAULT_GROWTH_MODE)
+
+        # Caso 2: Global válido ('scale'), youtube específico ('warmup'), tiktok ausente (herda 'scale')
+        scheduler.set_setting("growth_mode", "SCALE", db_path=self.db_path)
+        scheduler.set_setting("growth_mode_youtube", "warmup", db_path=self.db_path)
+        s_all = scheduler.get_all_settings(self.db_path)
+        self.assertEqual(s_all["growth_mode"], "scale")
+        self.assertEqual(s_all["growth_mode_youtube"], "warmup")
+        self.assertEqual(s_all["growth_mode_tiktok"], "scale")
+        self.assertEqual(s_all["growth_mode"], scheduler.get_growth_mode(db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode_youtube"], scheduler.get_growth_mode("youtube", db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode_tiktok"], scheduler.get_growth_mode("tiktok", db_path=self.db_path))
+
+        # Caso 3: Valor inválido por plataforma -> cai para o global; valor global inválido -> cai para DEFAULT_GROWTH_MODE
+        scheduler.set_setting("growth_mode_youtube", "MODO_INEXISTENTE", db_path=self.db_path)
+        scheduler.set_setting("growth_mode_tiktok", "normal", db_path=self.db_path)
+        s_all = scheduler.get_all_settings(self.db_path)
+        self.assertEqual(s_all["growth_mode_youtube"], "scale")
+        self.assertEqual(s_all["growth_mode_tiktok"], "normal")
+        self.assertEqual(s_all["growth_mode_youtube"], scheduler.get_growth_mode("youtube", db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode_tiktok"], scheduler.get_growth_mode("tiktok", db_path=self.db_path))
+
+        scheduler.set_setting("growth_mode", "INVALID_GLOBAL", db_path=self.db_path)
+        s_all = scheduler.get_all_settings(self.db_path)
+        self.assertEqual(s_all["growth_mode"], const.DEFAULT_GROWTH_MODE)
+        self.assertEqual(s_all["growth_mode_youtube"], const.DEFAULT_GROWTH_MODE)
+        self.assertEqual(s_all["growth_mode"], scheduler.get_growth_mode(db_path=self.db_path))
+        self.assertEqual(s_all["growth_mode_youtube"], scheduler.get_growth_mode("youtube", db_path=self.db_path))
+
+        # Caso 4: Valor numérico inválido em estoque/limites cai no default sem levantar ValueError
+        scheduler.set_setting("tiktok_limit_24h", "abc_invalido", db_path=self.db_path)
+        scheduler.set_setting("youtube_limit_24h", "", db_path=self.db_path)
+        scheduler.set_setting("estoque_desejado", "nao_numero", db_path=self.db_path)
+        s_all = scheduler.get_all_settings(self.db_path)
+        self.assertEqual(s_all["tiktok_limit_24h"], scheduler.DEFAULT_TIKTOK_LIMIT)
+        self.assertEqual(s_all["youtube_limit_24h"], scheduler.DEFAULT_YOUTUBE_LIMIT)
+        self.assertEqual(s_all["estoque_desejado"], scheduler.DEFAULT_DESIRED_STOCK)
+
+    def test_render_pass_cache_invalidation_on_write_and_disabled_outside_scope(self):
+        """12. (a) Cache por requisição invalida após escrita na mesma requisição; (b) fora de render_pass_scope nada é cacheado."""
+        from app.services import profile_manager
+
+        profile_manager.init_profile_db(self.db_path)
+        profile_manager.ensure_default_profile(self.db_path)
+
+        # (b) Fora de render_pass_scope: get_render_pass_cache() é None (nada é cacheado)
+        self.assertIsNone(operator_console.get_render_pass_cache())
+        scheduler.set_setting("dry_run", "true", db_path=self.db_path)
+        self.assertEqual(scheduler.get_setting("dry_run", db_path=self.db_path), "true")
+        self.assertIsNone(operator_console.get_render_pass_cache())
+
+        # (a) Dentro de render_pass_scope:
+        with operator_console.render_pass_scope() as rp_cache:
+            self.assertIsInstance(rp_cache, dict)
+
+            # 1. get_setting popula cache; set_setting invalida; próximo get_setting devolve valor novo
+            v1 = scheduler.get_setting("dry_run", db_path=self.db_path)
+            self.assertEqual(v1, "true")
+            self.assertTrue(len(rp_cache) > 0)
+
+            scheduler.set_setting("dry_run", "false", db_path=self.db_path)
+            self.assertEqual(len(rp_cache), 0, "Cache deve ser limpo imediatamente após set_setting")
+            v2 = scheduler.get_setting("dry_run", db_path=self.db_path)
+            self.assertEqual(v2, "false")
+
+            # 2. list_profiles popula cache; create_profile invalida; próximo list_profiles traz o novo perfil
+            p_before = profile_manager.list_profiles(db_path=self.db_path)
+            ids_before = {p["id"] for p in p_before}
+            new_prof = profile_manager.create_profile(
+                name="Canal Cache Test",
+                slug="canal-cache-test",
+                niche="teste",
+                db_path=self.db_path,
+            )
+            p_after = profile_manager.list_profiles(db_path=self.db_path)
+            ids_after = {p["id"] for p in p_after}
+            self.assertIn(new_prof["id"], ids_after - ids_before)
+
+            # 3. list_channels popula cache; update_channel invalida; próximo list_channels reflete alteração
+            ch = profile_manager.create_channel(
+                profile_id=new_prof["id"],
+                platform="youtube",
+                display_name="YT Original",
+                external_account_id="UCcachetest123456789012",
+                is_enabled=True,
+                db_path=self.db_path,
+            )
+            chans_1 = profile_manager.list_channels(profile_id=new_prof["id"], db_path=self.db_path)
+            self.assertEqual(chans_1[0]["display_name"], "YT Original")
+
+            profile_manager.update_channel(
+                channel_id=ch["id"],
+                display_name="YT Atualizado",
+                db_path=self.db_path,
+            )
+            chans_2 = profile_manager.list_channels(profile_id=new_prof["id"], db_path=self.db_path)
+            self.assertEqual(chans_2[0]["display_name"], "YT Atualizado")
+
+        # Ao sair do with, o cache volta a ser None
+        self.assertIsNone(operator_console.get_render_pass_cache())
+
+    def test_ttl_caches_provider_health_and_publishing_accounts(self):
+        """13. (c) TTL do cache de saúde dos provedores (15s) e de publishing/accounts (60s): hit, expiração e force=true."""
+        from app.controllers.v2 import operations as v2_ops
+
+        operator_console.clear_provider_health_cache()
+        v2_ops.clear_publishing_accounts_cache()
+
+        # 1. Publishing Accounts Cache (TTL 60s)
+        fake_accounts = [{"id": "acc-1", "platform": "youtube", "username": "Canal YT"}]
+        with patch("app.services.post_for_me.list_connected_publishing_accounts", return_value=fake_accounts) as mock_pfm:
+            # 1ª chamada: miss -> chama post_for_me (2 plataformas: youtube + tiktok)
+            r1 = self.client.get("/api/v2/publishing/accounts")
+            self.assertEqual(r1.status_code, 200)
+            self.assertEqual(mock_pfm.call_count, 2)
+
+            # 2ª chamada dentro do TTL: hit -> não chama post_for_me novamente
+            r2 = self.client.get("/api/v2/publishing/accounts")
+            self.assertEqual(r2.status_code, 200)
+            self.assertEqual(mock_pfm.call_count, 2)
+
+            # 3ª chamada com force=true: ignora cache -> chama post_for_me novamente
+            r3 = self.client.get("/api/v2/publishing/accounts?force=true")
+            self.assertEqual(r3.status_code, 200)
+            self.assertEqual(mock_pfm.call_count, 4)
+
+            # 4ª chamada após expirar TTL (>60s): miss -> chama post_for_me novamente
+            for k in list(v2_ops._PUBLISHING_ACCOUNTS_CACHE.keys()):
+                ts, val = v2_ops._PUBLISHING_ACCOUNTS_CACHE[k]
+                v2_ops._PUBLISHING_ACCOUNTS_CACHE[k] = (ts - 61.0, val)
+            r4 = self.client.get("/api/v2/publishing/accounts")
+            self.assertEqual(r4.status_code, 200)
+            self.assertEqual(mock_pfm.call_count, 6)
+
+        # 2. Provider Health Cache (TTL 15s)
+        with patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.utils.utils.check_ffmpeg_ready", return_value=(True, "ffmpeg ok")) as mock_ff:
+            operator_console.clear_provider_health_cache()
+
+            # 1ª chamada: miss -> executa check
+            h1 = self.client.get("/api/v2/providers/health")
+            self.assertEqual(h1.status_code, 200)
+            c1 = mock_ff.call_count
+            self.assertGreaterEqual(c1, 1)
+
+            # 2ª chamada dentro do TTL (15s): hit -> não executa check novamente
+            h2 = self.client.get("/api/v2/providers/health")
+            self.assertEqual(h2.status_code, 200)
+            self.assertEqual(mock_ff.call_count, c1)
+
+            # 3ª chamada com force=true: bypassa cache -> executa check
+            h3 = self.client.get("/api/v2/providers/health?force=true")
+            self.assertEqual(h3.status_code, 200)
+            c3 = mock_ff.call_count
+            self.assertGreater(c3, c1)
+
+            # 4ª chamada após expirar TTL (>15s): miss -> executa check
+            operator_console._PROVIDER_HEALTH_CACHE['timestamp'] -= 16.0
+            h4 = self.client.get("/api/v2/providers/health")
+            self.assertEqual(h4.status_code, 200)
+            self.assertGreater(mock_ff.call_count, c3)
+
+
+    def test_writes_do_not_retrigger_init_db_migrations_or_ddl(self):
+        """14. PROVA: N requisições alternadas com escritas (set_setting e log_operational_event) executam 0 vezes _run_migrations/DDL após a primeira inicialização."""
+        from contextlib import contextmanager
+        from app.services import profile_manager
+
+        scheduler.init_db(self.db_path)
+        profile_manager.init_profile_db(self.db_path)
+        operator_console.init_operator_db(self.db_path)
+
+        ddl_statements = []
+        orig_get_conn = scheduler.get_connection
+
+        @contextmanager
+        def spy_get_connection(db_path=None):
+            with orig_get_conn(db_path) as conn:
+                conn.set_trace_callback(
+                    lambda sql: ddl_statements.append(sql)
+                    if any(k in sql.upper() for k in ("CREATE TABLE", "CREATE INDEX", "ALTER TABLE", "PRAGMA TABLE_INFO"))
+                    else None
+                )
+                yield conn
+
+        with patch("app.services.scheduler.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.get_db_path", return_value=self.db_path), \
+             patch("app.services.profile_manager.get_db_path", return_value=self.db_path), \
+             patch("app.services.operator_console.is_primary_instance", return_value=True), \
+             patch.object(scheduler, "_run_migrations", wraps=scheduler._run_migrations) as spy_migrations, \
+             patch.object(scheduler, "get_connection", side_effect=spy_get_connection):
+
+            for i in range(10):
+                flag = (i % 2 == 0)
+                scheduler.set_setting("auto_publish_enabled", flag, db_path=self.db_path)
+                operator_console.log_operational_event(
+                    component="scheduler",
+                    severity="INFO",
+                    event_type=f"test_write_{i}",
+                    message=f"Ciclo {i}",
+                    db_path=self.db_path,
+                )
+                r_patch = self.client.patch(
+                    "/api/v2/scheduler/settings",
+                    json={"dry_run": flag},
+                )
+                self.assertEqual(r_patch.status_code, 200)
+                r_get = self.client.get("/api/v2/system/status")
+                self.assertEqual(r_get.status_code, 200)
+                self.assertEqual(
+                    r_get.json()["data"]["dry_run_enabled"],
+                    flag,
+                )
+
+            self.assertEqual(
+                spy_migrations.call_count,
+                0,
+                f"_run_migrations deveria rodar 0 vezes após a 1ª inicialização, mas rodou {spy_migrations.call_count}",
+            )
+            self.assertEqual(
+                len(ddl_statements),
+                0,
+                f"Nenhuma instrução DDL de init_db deveria rodar após a 1ª inicialização, mas rodaram: {ddl_statements}",
+            )

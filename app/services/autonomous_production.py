@@ -722,8 +722,11 @@ def get_autonomous_ready_stock(
         quality_score.init_quality_db(db_path)
         with scheduler.get_connection(db_path) as conn:
             rows = conn.execute(
-                "SELECT task_id FROM monetization_safety WHERE safety_status = 'PASS' "
-                "ORDER BY checked_at, task_id"
+                "SELECT ms.task_id, tp.profile_id "
+                "FROM monetization_safety ms "
+                "LEFT JOIN task_profiles tp ON tp.task_id = ms.task_id "
+                "WHERE ms.safety_status = 'PASS' "
+                "ORDER BY ms.checked_at, ms.task_id"
             ).fetchall()
             excluded_yt = {r["task_id"] for r in conn.execute(
                 "SELECT task_id FROM publication_events WHERE platform='youtube' AND status='success' "
@@ -739,7 +742,7 @@ def get_autonomous_ready_stock(
         plats_by_prof: Dict[Optional[str], List[str]] = {}
         for row in rows:
             tid = row["task_id"]
-            t_prof = profile_manager.get_task_profile_id(tid, db_path=db_path)
+            t_prof = row["profile_id"] or profile_manager.get_task_profile_id(tid, db_path=db_path)
             if t_prof not in plats_by_prof:
                 plats_by_prof[t_prof] = get_channel_active_platforms(t_prof, db_path=db_path)
             t_plats = plats_by_prof[t_prof]
@@ -784,7 +787,7 @@ def get_autonomous_ready_stock(
     yt_count = 0
     for t in eligible:
         t_prof = t.get("profile_id")
-        t_plats = get_channel_active_platforms(t_prof, db_path=db_path)
+        t_plats = plats_by_prof.get(t_prof) or get_channel_active_platforms(t_prof, db_path=db_path)
         if "youtube" in t_plats:
             yt_count += 1
         if "tiktok" in t_plats:
@@ -962,6 +965,18 @@ def count_generations_in_last_24h(now: Optional[datetime] = None, db_path: Optio
     is_default = (not clean_profile) or (clean_profile == profile_manager.DEFAULT_PROFILE_ID) or (clean_profile == "default")
 
     try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+        if rp_cache is not None and not clean_channel:
+            batch = rp_cache.get(("app_24h_batch", scheduler.get_db_path(db_path)))
+            if batch is not None:
+                if not clean_profile or is_default:
+                    return int(batch.get("default", 0))
+                return int(batch.get(clean_profile, 0))
+    except Exception:
+        pass
+
+    try:
         with scheduler.get_connection(db_path) as conn:
             if clean_channel:
                 row = conn.execute(
@@ -1116,6 +1131,18 @@ def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_pat
     is_default = (not clean_profile) or (clean_profile == profile_manager.DEFAULT_PROFILE_ID) or (clean_profile == "default")
 
     try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+        if rp_cache is not None:
+            batch = rp_cache.get(("att_24h_batch", scheduler.get_db_path(db_path)))
+            if batch is not None:
+                if not clean_profile or is_default:
+                    return int(batch.get("default", 0))
+                return int(batch.get(clean_profile, 0))
+    except Exception:
+        pass
+
+    try:
         with scheduler.get_connection(db_path) as conn:
             if not clean_profile:
                 row = conn.execute(
@@ -1163,6 +1190,15 @@ def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_pat
 def count_all_profiles_generations_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
     """Conta de forma explícita e agregada quantas gerações APROVADAS foram concluídas
     por TODOS os perfis combinados nas últimas 24 horas."""
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+        if rp_cache is not None:
+            batch = rp_cache.get(("app_24h_batch", scheduler.get_db_path(db_path)))
+            if batch is not None:
+                return int(sum(batch.values()))
+    except Exception:
+        pass
     scheduler.init_db(db_path)
     try:
         operator_console.init_operator_db(db_path)
@@ -1206,6 +1242,15 @@ def count_all_profiles_generations_24h(now: Optional[datetime] = None, db_path: 
 def count_all_profiles_attempts_24h(now: Optional[datetime] = None, db_path: Optional[str] = None) -> int:
     """Conta de forma explícita e agregada quantas tentativas de geração foram iniciadas
     por TODOS os perfis combinados nas últimas 24 horas."""
+    try:
+        from app.services import operator_console
+        rp_cache = operator_console.get_render_pass_cache()
+        if rp_cache is not None:
+            batch = rp_cache.get(("att_24h_batch", scheduler.get_db_path(db_path)))
+            if batch is not None:
+                return int(sum(batch.values()))
+    except Exception:
+        pass
     scheduler.init_db(db_path)
     try:
         operator_console.init_operator_db(db_path)

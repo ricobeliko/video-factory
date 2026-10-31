@@ -457,7 +457,7 @@ def test_08_render_pass_scope_performance_and_zero_persistent_cache(tmp_path):
             f"Render queries time: {ms_before:.1f}ms -> {ms_after:.1f}ms"
         )
 
-        assert recover_calls_before == 30 * 11  # 11 varreduras completas x 30 tasks = 330 chamadas
+        assert recover_calls_before <= 30 * 11  # <= 330 chamadas (menos é melhor: get_profile_operations_overview já usa escopo interno)
         assert recover_calls_after == 30        # Apenas 1 varredura completa = 30 chamadas (redução de 11x)
         assert scan_calls_before == 3
         assert scan_calls_after == 1

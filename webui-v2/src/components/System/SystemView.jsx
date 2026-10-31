@@ -92,6 +92,8 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const [pinnedVoiceFields, setPinnedVoiceFields] = useState(new Set());
   const handledFocusChannelRef = useRef(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  const [pendingToggleKey, setPendingToggleKey] = useState(null);
   const [autoPublishConfirmModal, setAutoPublishConfirmModal] = useState(null);
 
   // Estados de Chaves e Conexões (Provedores LLM e Upload-Post)
@@ -143,20 +145,33 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const [secondsSinceSync, setSecondsSinceSync] = useState(0);
   const isFetchingRef = useRef(false);
 
-  // Busca dados de todos os endpoints do sistema
+  // Carrega contas conectadas de publicação sob demanda (com suporte a force=true para atualizar)
+  const loadPublishingAccounts = useCallback(async (force = false) => {
+    setIsLoadingAccounts(true);
+    try {
+      const res = await getPublishingAccounts(null, force);
+      const rawAcc = res.accounts || res.data?.accounts || res || [];
+      setPublishingAccounts(Array.isArray(rawAcc) ? rawAcc : []);
+    } catch (err) {
+      console.warn('Erro ao carregar contas de publicação:', err.message);
+    } finally {
+      setIsLoadingAccounts(false);
+    }
+  }, []);
+
+  // Busca dados de todos os endpoints do sistema (contas e N+1 settings removidos do poll)
   const fetchData = useCallback(async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
     try {
-      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes, accountsRes] = await Promise.allSettled([
+      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes] = await Promise.allSettled([
         getSystemStatus(),
         getProviderHealth(),
         getHealth(),
         getChannelsOverview(),
         getAllowedVoices(),
         getProviderSettings(),
-        getPublishingAccounts(),
       ]);
 
       if (sysRes.status === 'fulfilled' && sysRes.value) {
@@ -172,10 +187,6 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         const rawV = voiceRes.value.data || voiceRes.value || [];
         setAllowedVoices(Array.isArray(rawV) ? rawV : []);
       }
-      if (accountsRes && accountsRes.status === 'fulfilled' && accountsRes.value) {
-        const rawAcc = accountsRes.value.accounts || accountsRes.value.data?.accounts || accountsRes.value || [];
-        setPublishingAccounts(Array.isArray(rawAcc) ? rawAcc : []);
-      }
       if (providerSettingsRes.status === 'fulfilled' && providerSettingsRes.value) {
         const pData = providerSettingsRes.value.data || providerSettingsRes.value;
         setProviderSettings(pData);
@@ -187,24 +198,15 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         const rawChannels = chanRes.value.data?.channels || chanRes.value.channels || [];
         setChannelsData(rawChannels);
 
-        // Busca settings individuais para cada canal para garantir detalhes de workspace e agendamento
-        const settingsPromises = rawChannels.map(async (c) => {
+        // Preenche o map de configurações diretamente a partir do retorno em lote de /channels
+        const newMap = {};
+        rawChannels.forEach((c) => {
           const pid = c.profile_id || c.channel_id;
-          try {
-            const sRes = await getProfileSettings(pid);
-            return { pid, settings: sRes.data || sRes };
-          } catch {
-            return { pid, settings: c.settings || null };
+          if (pid && c.settings) {
+            newMap[pid] = c.settings;
           }
         });
-
-        Promise.all(settingsPromises).then((results) => {
-          const newMap = {};
-          results.forEach((r) => {
-            if (r.pid) newMap[r.pid] = r.settings;
-          });
-          setChannelSettingsMap((prev) => ({ ...prev, ...newMap }));
-        });
+        setChannelSettingsMap((prev) => ({ ...prev, ...newMap }));
       }
 
       // Se todas falharem, reporta erro geral mantendo o último dado bom
@@ -422,10 +424,25 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       return;
     }
 
+    const previousValue = systemStatus?.[key];
+    // Atualização otimista imediata no estado local
+    setSystemStatus((prev) => (prev ? { ...prev, [key]: nextValue } : { [key]: nextValue }));
     setIsActionPending(true);
-    setActionFeedback(null);
+    setPendingToggleKey(key);
+    setActionFeedback({
+      type: 'info',
+      text: 'Salvando configuração...',
+    });
+
     try {
-      await updateSchedulerSettings({ [key]: nextValue });
+      const res = await updateSchedulerSettings({ [key]: nextValue });
+      const updatedData = res?.data || res || {};
+      // Atualiza estado local diretamente com os dados retornados pelo PATCH
+      setSystemStatus((prev) => ({
+        ...prev,
+        ...updatedData,
+      }));
+
       const labelMap = {
         scheduler_enabled: 'Agendamento Automático',
         auto_publish_enabled: 'Auto Publicação',
@@ -436,14 +453,17 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         type: 'success',
         text: `Configuração '${label}' alterada com sucesso para ${nextValue ? 'ATIVADO' : 'DESATIVADO'}.`,
       });
-      await fetchData();
+      // NÃO refetch de fetchData() após toggle
     } catch (err) {
+      // Reverte estado local em caso de erro sem recarregar a tela inteira
+      setSystemStatus((prev) => (prev ? { ...prev, [key]: previousValue } : prev));
       setActionFeedback({
         type: 'error',
         text: formatApiError(err, 'atualizar configuração do agendador'),
       });
     } finally {
       setIsActionPending(false);
+      setPendingToggleKey(null);
     }
   };
 
@@ -454,7 +474,19 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       if (!togglePermission.canToggle) return;
       setActionFeedback(null);
 
+      // Carrega contas sob demanda se ainda não carregadas
+      loadPublishingAccounts(false);
+
       const pid = channel.profile_id || channel.channel_id;
+      // Busca settings frescas sob demanda para o canal em edição
+      getProfileSettings(pid)
+        .then((sRes) => {
+          const fresh = sRes?.data || sRes;
+          if (fresh) {
+            setChannelSettingsMap((prev) => ({ ...prev, [pid]: fresh }));
+          }
+        })
+        .catch(() => {});
       const fullSettings = channelSettingsMap[pid] || channel.settings || {};
       const quotas = fullSettings.quotas || channel.quotas || {};
       const schedule = fullSettings.schedule || channel.schedule || {};
@@ -978,8 +1010,8 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   <span className="sys-switch-desc">Ativa o planejamento e verificação da fila</span>
                 </div>
                 <div className="sys-switch-control">
-                  <span className="sys-switch-status-text" style={{ color: isSchedulerEnabled ? '#10B981' : '#8E96A4' }}>
-                    {isSchedulerEnabled ? 'ATIVO' : 'DESATIVADO'}
+                  <span className="sys-switch-status-text" style={{ color: pendingToggleKey === 'scheduler_enabled' ? '#F59E0B' : (isSchedulerEnabled ? '#10B981' : '#8E96A4') }}>
+                    {pendingToggleKey === 'scheduler_enabled' ? 'SALVANDO...' : (isSchedulerEnabled ? 'ATIVO' : 'DESATIVADO')}
                   </span>
                   <label className="sys-switch">
                     <input
@@ -1000,8 +1032,8 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   <span className="sys-switch-desc">Autoriza envio de posts prontos para redes sociais</span>
                 </div>
                 <div className="sys-switch-control">
-                  <span className="sys-switch-status-text" style={{ color: isAutoPublish ? '#10B981' : '#8E96A4' }}>
-                    {isAutoPublish ? 'ATIVO' : 'DESATIVADO'}
+                  <span className="sys-switch-status-text" style={{ color: pendingToggleKey === 'auto_publish_enabled' ? '#F59E0B' : (isAutoPublish ? '#10B981' : '#8E96A4') }}>
+                    {pendingToggleKey === 'auto_publish_enabled' ? 'SALVANDO...' : (isAutoPublish ? 'ATIVO' : 'DESATIVADO')}
                   </span>
                   <label className="sys-switch">
                     <input
@@ -1022,8 +1054,8 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                   <span className="sys-switch-desc">Simula despacho sem postar externamente</span>
                 </div>
                 <div className="sys-switch-control">
-                  <span className="sys-switch-status-text" style={{ color: isDryRun ? '#F59E0B' : '#8E96A4' }}>
-                    {isDryRun ? 'SIMULAÇÃO' : 'REAL'}
+                  <span className="sys-switch-status-text" style={{ color: pendingToggleKey === 'dry_run' ? '#F59E0B' : (isDryRun ? '#F59E0B' : '#8E96A4') }}>
+                    {pendingToggleKey === 'dry_run' ? 'SALVANDO...' : (isDryRun ? 'SIMULAÇÃO' : 'REAL')}
                   </span>
                   <label className="sys-switch">
                     <input
@@ -2130,7 +2162,19 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                             {channelFormData.yt_enabled && (
                               <>
                                 <div className="sys-edit-row">
-                                  <label htmlFor={`yt-acc-${pid}`} className="sys-stat-label">Conta Conectada</label>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                    <label htmlFor={`yt-acc-${pid}`} className="sys-stat-label" style={{ margin: 0 }}>Conta Conectada</label>
+                                    <button
+                                      type="button"
+                                      className="sys-btn sys-btn--secondary"
+                                      style={{ padding: '2px 8px', fontSize: '11px', height: '22px' }}
+                                      onClick={() => loadPublishingAccounts(true)}
+                                      disabled={isLoadingAccounts}
+                                      title="Atualizar contas conectadas do provedor externo agora"
+                                    >
+                                      {isLoadingAccounts ? 'Atualizando...' : '↻ Atualizar contas'}
+                                    </button>
+                                  </div>
                                   <select
                                     id={`yt-acc-${pid}`}
                                     className="sys-select"

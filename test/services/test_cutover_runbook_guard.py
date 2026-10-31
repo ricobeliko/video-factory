@@ -71,6 +71,26 @@ class TestCutoverRunbookGuard(unittest.TestCase):
         """Garante que o Passo 4 declara explicitamente -RollbackHealthUrl com a URL do Streamlit."""
         self.assertIn('-RollbackHealthUrl "http://127.0.0.1:8501/_stcore/health"', self.content)
 
+    def test_passo_2_uses_c_temp_ocupado(self):
+        """Garante que o Passo 2 utiliza C:\\Temp\\ocupado.py já presente na PC Forte."""
+        self.assertIn(r".\.venv\Scripts\python.exe C:\Temp\ocupado.py", self.content)
+        self.assertNotIn(
+            r".\.venv\Scripts\python.exe scripts\ocupado.py",
+            self.content,
+            "Passo 2 não deve chamar scripts\\ocupado.py do repositório porque a V1 atual não possui esse arquivo.",
+        )
+
+    def test_passos_3_and_4_use_c_temp_update_production_v2(self):
+        """Garante que Passos 3 e 4 extraem e rodam C:\\Temp\\update_production_v2.ps1 de fora do repositório."""
+        self.assertIn("git show origin/v2/base:scripts/update_production.ps1", self.content)
+        self.assertIn(r"C:\Temp\update_production_v2.ps1", self.content)
+        self.assertIn(r"-RepoPath C:\Projetos\MoneyPrinterTurbo", self.content)
+        self.assertNotIn(
+            r".\scripts\update_production.ps1",
+            self.content,
+            "Passos 3 e 4 não devem chamar .\\scripts\\update_production.ps1 porque na V1 atual o script antigo ainda está lá.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

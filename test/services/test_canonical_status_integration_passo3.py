@@ -85,6 +85,20 @@ class TestCanonicalStatusIntegrationPasso3(unittest.TestCase):
                         now_iso,
                     ),
                 )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO publishing_channels
+                    (id, profile_id, platform, display_name, is_enabled, auto_publish_authorized, created_at, updated_at)
+                    VALUES (?, ?, 'youtube', ?, 1, 1, ?, ?);
+                    """,
+                    (
+                        f"chan-{p['id']}-youtube",
+                        p["id"],
+                        f"YouTube {p.get('name', p['id'])}",
+                        now_iso,
+                        now_iso,
+                    ),
+                )
             conn.commit()
 
     def _set_profile_autonomous(self, pid: str, enabled: bool, state: str = "idle"):

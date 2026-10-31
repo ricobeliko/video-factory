@@ -91,6 +91,17 @@ class TestCutoverRunbookGuard(unittest.TestCase):
             "Passos 3 e 4 não devem chamar .\\scripts\\update_production.ps1 porque na V1 atual o script antigo ainda está lá.",
         )
 
+    def test_subsequent_v2_to_v2_updates_section(self):
+        """Garante que a seção de atualizações seguintes (V2 -> V2) cobre pausa e retomada via API V2 e update sem -RollbackHealthUrl."""
+        self.assertIn("Atualizações Seguintes (V2 -> V2)", self.content)
+        self.assertIn('Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v2/factory/pause"', self.content)
+        self.assertIn('Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v2/factory/resume"', self.content)
+        self.assertIn(r".\.venv\Scripts\python.exe C:\Temp\ocupado.py", self.content)
+        u4_text = self.content.split("### Passo U4:")[1].split("### Passo U5:")[0]
+        u4_cmd = u4_text.split("```powershell")[1].split("```")[0]
+        self.assertNotIn("-RollbackHealthUrl", u4_cmd)
+        self.assertIn(r"C:\Temp\update_production_v2.ps1", u4_cmd)
+
 
 if __name__ == "__main__":
     unittest.main()

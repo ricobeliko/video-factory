@@ -24,7 +24,7 @@ param(
     [string]$RepoPath = "C:\Projetos\MoneyPrinterTurbo",
     [string]$TaskName = "VideoFactory Production",
     [string]$HealthUrl = "http://127.0.0.1:8080/api/v2/health",
-    [string]$RollbackHealthUrl = "http://127.0.0.1:8501/_stcore/health",
+    [string]$RollbackHealthUrl = "http://127.0.0.1:8080/api/v2/health",
     [switch]$PreflightOnly,
     [switch]$SkipTaskCheck = $false
 )
@@ -162,6 +162,18 @@ function Test-LegacyHealthEndpoint {
     }
     $Watch.Stop()
     return $false
+}
+
+function Test-RollbackHealthEndpoint {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds = 75,
+        [int]$IntervalSeconds = 3
+    )
+    if ($Url -like "*/_stcore/health*") {
+        return Test-LegacyHealthEndpoint -Url $Url -TimeoutSeconds $TimeoutSeconds -IntervalSeconds $IntervalSeconds
+    }
+    return Test-V2HealthEndpoint -Url $Url -TimeoutSeconds $TimeoutSeconds -IntervalSeconds $IntervalSeconds
 }
 
 function Test-VenvDependencies {
@@ -748,7 +760,12 @@ sys.stdout.flush()
         Write-Host "BACKUP_STRATEGY : Snapshot SQLite transacional (PRAGMA integrity_check + SHA-256)"
         Write-Host "UPDATE_STRATEGY : Fast-Forward FF-only para $TargetSha (com produção parada)"
         Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout 75s, HTTP 200 + 'healthy' + is_primary=true)"
-        Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout 75s, HTTP 200 + 'ok')"
+        $RollbackContractDesc = if ($RollbackHealthUrl -like "*/_stcore/health*") {
+            "Contrato Legado V1 (HTTP 200 + 'ok')"
+        } else {
+            "Contrato V2 (HTTP 200 + 'healthy' + is_primary=true)"
+        }
+        Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout 75s, $RollbackContractDesc)"
         Write-Host "ROLLBACK_PLAN   : git switch --detach $CurrentSha (não-destrutivo)"
         Write-Host "STATUS          : PREFLIGHT_PASS"
         Write-Host "==================================================" -ForegroundColor Cyan
@@ -894,7 +911,7 @@ sys.stdout.flush()
             git switch --detach $CurrentSha 2>&1 | Out-Null
             schtasks /Run /TN $TaskName 2>&1 | Out-Null
             Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-            $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+            $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
             if (-not $RollbackHealthPassed) {
                 Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
             }
@@ -914,7 +931,7 @@ sys.stdout.flush()
             git switch --detach $CurrentSha 2>&1 | Out-Null
             schtasks /Run /TN $TaskName 2>&1 | Out-Null
             Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-            $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+            $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
             if (-not $RollbackHealthPassed) {
                 Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
             }
@@ -970,9 +987,9 @@ sys.stdout.flush()
     Write-DeployLog "Reiniciando Scheduled Task '$TaskName' após rollback..."
     schtasks /Run /TN $TaskName 2>&1 | Out-Null
 
-    # 10.4 Health check do rollback (V1 Legado)
+    # 10.4 Health check do rollback
     Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-    $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+    $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
 
     if ($RollbackHealthPassed) {
         Write-DeployLog "ROLLBACK_SUCCESS: Produção restaurada e saudável em DETACHED HEAD no CURRENT_SHA ($CurrentSha) checada em $RollbackHealthUrl. Branch main preservada." -Level "SUCCESS"

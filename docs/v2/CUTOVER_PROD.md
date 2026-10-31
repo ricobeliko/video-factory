@@ -249,3 +249,40 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8501/_stcore/health"
 ```
 
 > **Critério de Aceite:** Retorno com status HTTP 200 e conteúdo `ok`.
+
+
+---
+
+## 4. Atualizações Seguintes (V2 -> V2)
+
+Após o cutover inicial estar concluído e a produção já estar operando no Motor V2, as atualizações seguintes (da V2 para novas versões da V2) seguem este roteiro simplificado com rollback automático V2 -> V2:
+
+### Passo U1: Pausar a Fábrica pela API da V2
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v2/factory/pause"
+```
+
+### Passo U2: Confirmar Fábrica Ociosa
+```powershell
+.\.venv\Scripts\python.exe C:\Temp\ocupado.py
+```
+> *(Aguarde até o diagnóstico indicar `SEGURO prosseguir`).*
+
+### Passo U3: Extrair Script Novo de origin/v2/base e Rodar Pré-flight
+```powershell
+git fetch origin
+git show origin/v2/base:scripts/update_production.ps1 | Out-File -Encoding utf8 C:\Temp\update_production_v2.ps1
+powershell -ExecutionPolicy Bypass -File C:\Temp\update_production_v2.ps1 -PreflightOnly -TargetRef <ALVO> -RepoPath C:\Projetos\MoneyPrinterTurbo
+```
+> *(Confira no plano de pré-flight que `ROLLBACK_HEALTH` exibe o Contrato V2).*
+
+### Passo U4: Executar Atualização Segura (sem passar -RollbackHealthUrl)
+Como o valor padrão de `-RollbackHealthUrl` é a URL de saúde da V2 (`http://127.0.0.1:8080/api/v2/health`), não é necessário passar o parâmetro:
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Temp\update_production_v2.ps1 -TargetRef <ALVO> -RepoPath C:\Projetos\MoneyPrinterTurbo
+```
+
+### Passo U5: Retomar a Fábrica pela API da V2
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v2/factory/resume"
+```

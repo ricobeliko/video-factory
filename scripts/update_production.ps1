@@ -12,7 +12,7 @@
     - Somente aceita avanço Fast-Forward (merge-base --is-ancestor obrigatório)
     - Backup transacional do SQLite com PRAGMA integrity_check e SHA-256 antes da parada
     - Parada e inicialização exclusivas via Scheduled Task do Windows
-    - Health check delimitado em http://127.0.0.1:8501/_stcore/health (HTTP 200 + 'ok')
+    - Health check delimitado em http://127.0.0.1:8080/api/v2/health (HTTP 200 + 'healthy' ou 'ok')
     - Rollback via 'git switch --detach CURRENT_SHA' preservando a branch main intacta
     - Lock exclusivo contra execuções simultâneas
     - Registro de auditoria sanitizado em logs/deploy/ (zero credenciais ou segredos)
@@ -23,7 +23,8 @@ param(
     [string]$TargetRef = "origin/main",
     [string]$RepoPath = "C:\Projetos\MoneyPrinterTurbo",
     [string]$TaskName = "VideoFactory Production",
-    [string]$HealthUrl = "http://127.0.0.1:8501/_stcore/health",
+    [string]$HealthUrl = "http://127.0.0.1:8080/api/v2/health",
+    [string]$RollbackHealthUrl = "http://127.0.0.1:8501/_stcore/health",
     [switch]$PreflightOnly,
     [switch]$SkipTaskCheck = $false
 )
@@ -74,7 +75,73 @@ function Write-DeployLog {
     }
 }
 
-function Test-HealthEndpoint {
+function Test-PortListening {
+    param([int]$Port)
+    $IsOpen = $false
+    try {
+        $TcpClient = New-Object System.Net.Sockets.TcpClient
+        $ConnectTask = $TcpClient.ConnectAsync("127.0.0.1", $Port)
+        if ($ConnectTask.Wait(400) -and $TcpClient.Connected) {
+            $IsOpen = $true
+            $TcpClient.Close()
+        }
+    } catch {}
+    return $IsOpen
+}
+
+function Get-ActiveProductionProcesses {
+    $Procs = @()
+    try {
+        $CimProcs = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue
+        foreach ($p in $CimProcs) {
+            if ($p.CommandLine -match "streamlit|engine_entrypoint") {
+                $Procs += [PSCustomObject]@{ Id = $p.ProcessId; Name = $p.Name; CommandLine = $p.CommandLine }
+            }
+        }
+    } catch {}
+    $DirectStreamlit = Get-Process -Name "*streamlit*" -ErrorAction SilentlyContinue
+    if ($DirectStreamlit) {
+        foreach ($ds in $DirectStreamlit) {
+            if ($ds.Id -notin $Procs.Id) {
+                $Procs += [PSCustomObject]@{ Id = $ds.Id; Name = $ds.ProcessName; CommandLine = "" }
+            }
+        }
+    }
+    return $Procs
+}
+
+function Test-V2HealthEndpoint {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds = 75,
+        [int]$IntervalSeconds = 3
+    )
+    $Watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($Watch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        try {
+            $Response = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            if ($Response.StatusCode -eq 200 -and $Response.Content) {
+                try {
+                    $Json = $Response.Content | ConvertFrom-Json
+                    $Payload = if ($Json.data) { $Json.data } else { $Json }
+                    $StatusOk = ($Payload.status -eq "healthy")
+                    $PrimaryOk = ($null -eq $Payload.is_primary -or $Payload.is_primary -eq $true)
+                    if ($StatusOk -and $PrimaryOk) {
+                        $Watch.Stop()
+                        return $true
+                    }
+                } catch {}
+            }
+        } catch {
+            # Conexão recusada ou servidor inicializando; aguarda retry
+        }
+        Start-Sleep -Seconds $IntervalSeconds
+    }
+    $Watch.Stop()
+    return $false
+}
+
+function Test-LegacyHealthEndpoint {
     param(
         [string]$Url,
         [int]$TimeoutSeconds = 75,
@@ -251,7 +318,8 @@ function Format-Summary {
         [string]$FfmpegResult = "",
         [string]$FfprobeResult = "",
         [string]$MediaRuntimeResult = "",
-        [string]$DependencyResult = ""
+        [string]$DependencyResult = "",
+        [string]$DistResult = ""
     )
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Cyan
@@ -270,6 +338,9 @@ function Format-Summary {
     }
     if ($DependencyResult -ne "") {
         Write-Host "DEPENDENCIES    = $DependencyResult"
+    }
+    if ($DistResult -ne "") {
+        Write-Host "WEBUI_V2_DIST   = $DistResult"
     }
     Write-Host "BACKUP          = $BackupResult"
     Write-Host "UPDATE          = $UpdateResult"
@@ -579,7 +650,7 @@ sys.stdout.flush()
     if ($DepCheck.status -ne "PASS") {
         Write-DeployLog "ABORT: Divergência de dependências detectada: $($DepCheck.failure_reason)" -Level "ERROR" -IsError
         if ($PreflightOnly) {
-            Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult "NOT_ATTEMPTED" -UpdateResult "NOT_ATTEMPTED" -HealthResult "NOT_ATTEMPTED" -RollbackResult "NOT_REQUIRED" -FinalSha $CurrentSha -Status "PREFLIGHT_FAIL" -FailureReason $DepCheck.failure_reason -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary
+            Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult "NOT_ATTEMPTED" -UpdateResult "NOT_ATTEMPTED" -HealthResult "NOT_ATTEMPTED" -RollbackResult "NOT_REQUIRED" -FinalSha $CurrentSha -Status "PREFLIGHT_FAIL" -FailureReason $DepCheck.failure_reason -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary -DistResult "NOT_ATTEMPTED"
             exit 1
         } else {
             throw $DepCheck.failure_reason
@@ -587,7 +658,65 @@ sys.stdout.flush()
     }
     Write-DeployLog "Dependências do .venv verificadas: PASS." -Level "SUCCESS"
 
-    # 4.11 Execução em Modo PreflightOnly
+    # 4.11 Validação do Bundle Frontend Web UI V2 no commit alvo (TargetSha)
+    Write-DeployLog "Executando verificação de integridade do Web UI V2 bundle no commit alvo ($TargetSha)..."
+    $DistResult = "FAIL"
+    $DistFailReason = ""
+
+    $DistCheckPsi = New-Object System.Diagnostics.ProcessStartInfo
+    $DistCheckPsi.FileName = $VenvPython
+    $DistCheckPsi.Arguments = "scripts\build_stamp.py --verify --git-ref $TargetSha"
+    $DistCheckPsi.WorkingDirectory = $RepoPathResolved
+    $DistCheckPsi.RedirectStandardOutput = $true
+    $DistCheckPsi.RedirectStandardError = $true
+    $DistCheckPsi.UseShellExecute = $false
+    $DistCheckPsi.CreateNoWindow = $true
+
+    try {
+        $DistProc = [System.Diagnostics.Process]::Start($DistCheckPsi)
+        $DistStdout = $DistProc.StandardOutput.ReadToEnd()
+        $DistStderr = $DistProc.StandardError.ReadToEnd()
+        $DistProc.WaitForExit()
+        $DistExit = $DistProc.ExitCode
+
+        if ($DistExit -eq 0) {
+            $DistResult = "PASS"
+        } else {
+            # Se o commit alvo ainda for o HEAD local em desenvolvimento, valida no working tree
+            if ($TargetSha -eq $CurrentSha) {
+                $DistCheckPsi.Arguments = "scripts\build_stamp.py --verify"
+                $DistProc2 = [System.Diagnostics.Process]::Start($DistCheckPsi)
+                $DistStdout2 = $DistProc2.StandardOutput.ReadToEnd()
+                $DistStderr2 = $DistProc2.StandardError.ReadToEnd()
+                $DistProc2.WaitForExit()
+                if ($DistProc2.ExitCode -eq 0) {
+                    $DistResult = "PASS (working tree)"
+                } else {
+                    $DistResult = "FAIL"
+                    $DistFailReason = if ($DistStderr2 -and $DistStderr2.Trim()) { $DistStderr2.Trim() } else { "DIST_OUTDATED_OR_MISSING" }
+                }
+            } else {
+                $DistResult = "FAIL"
+                $DistFailReason = if ($DistStderr -and $DistStderr.Trim()) { $DistStderr.Trim() } else { "DIST_OUTDATED_OR_MISSING_IN_TARGET" }
+            }
+        }
+    } catch {
+        $DistResult = "FAIL"
+        $DistFailReason = "DIST_CHECK_PROC_ERROR: $_"
+    }
+
+    if ($DistResult -notmatch "^PASS") {
+        Write-DeployLog "ABORT: Validação do frontend Web UI V2 falhou: $DistFailReason" -Level "ERROR" -IsError
+        if ($PreflightOnly) {
+            Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult "NOT_ATTEMPTED" -UpdateResult "NOT_ATTEMPTED" -HealthResult "NOT_ATTEMPTED" -RollbackResult "NOT_REQUIRED" -FinalSha $CurrentSha -Status "PREFLIGHT_FAIL" -FailureReason "WEBUI_V2_DIST_INVALID: $DistFailReason" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary -DistResult $DistResult
+            exit 1
+        } else {
+            throw "WEBUI_V2_DIST_INVALID: $DistFailReason"
+        }
+    }
+    Write-DeployLog "Frontend Web UI V2 (dist + BUILD_STAMP) verificado: $DistResult." -Level "SUCCESS"
+
+    # 4.12 Execução em Modo PreflightOnly
     if ($PreflightOnly) {
         Write-Host ""
         Write-Host "==================================================" -ForegroundColor Cyan
@@ -603,9 +732,11 @@ sys.stdout.flush()
         Write-Host "FFPROBE         : $FfprobeSummary"
         Write-Host "MEDIA_RUNTIME   : $MediaRuntimeSummary"
         Write-Host "DEPENDENCIES    : $DependencySummary"
+        Write-Host "WEBUI_V2_DIST   : $DistResult"
         Write-Host "BACKUP_STRATEGY : Snapshot SQLite transacional (PRAGMA integrity_check + SHA-256)"
         Write-Host "UPDATE_STRATEGY : Fast-Forward FF-only para $TargetSha (com produção parada)"
-        Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout 75s, HTTP 200 + 'ok')"
+        Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout 75s, HTTP 200 + 'healthy' + is_primary=true)"
+        Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout 75s, HTTP 200 + 'ok')"
         Write-Host "ROLLBACK_PLAN   : git switch --detach $CurrentSha (não-destrutivo)"
         Write-Host "STATUS          : PREFLIGHT_PASS"
         Write-Host "==================================================" -ForegroundColor Cyan
@@ -683,23 +814,21 @@ sys.stdout.flush()
     $StopTimeoutSeconds = 30
     $StopWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $StoppedSafely = $false
+    $Port8501Open = $false
+    $Port8080Open = $false
+    $ActiveProcs = @()
+    $TaskRunning = $false
 
     while ($StopWatch.Elapsed.TotalSeconds -lt $StopTimeoutSeconds) {
         Start-Sleep -Seconds 2
         $TaskQuery = schtasks /Query /TN $TaskName /FO CSV /NH 2>&1
-        $IsRunning = ($TaskQuery -match "Running|Em execução")
+        $TaskRunning = ($TaskQuery -match "Running|Em execução")
 
-        $PortOpen = $false
-        try {
-            $TcpClient = New-Object System.Net.Sockets.TcpClient
-            $ConnectTask = $TcpClient.ConnectAsync("127.0.0.1", 8501)
-            if ($ConnectTask.Wait(500) -and $TcpClient.Connected) {
-                $PortOpen = $true
-                $TcpClient.Close()
-            }
-        } catch {}
+        $Port8501Open = Test-PortListening -Port 8501
+        $Port8080Open = Test-PortListening -Port 8080
+        $ActiveProcs = Get-ActiveProductionProcesses
 
-        if (-not $IsRunning -and -not $PortOpen) {
+        if (-not $TaskRunning -and -not $Port8501Open -and -not $Port8080Open -and $ActiveProcs.Count -eq 0) {
             $StoppedSafely = $true
             break
         }
@@ -707,10 +836,19 @@ sys.stdout.flush()
     $StopWatch.Stop()
 
     if (-not $StoppedSafely) {
-        Write-DeployLog "ABORT: Não foi possível confirmar a parada segura da aplicação dentro de $StopTimeoutSeconds s." -Level "ERROR" -IsError
-        throw "Timeout ao parar a produção de forma segura."
+        $OpenDetails = @()
+        if ($Port8501Open) { $OpenDetails += "Porta 8501 aberta" }
+        if ($Port8080Open) { $OpenDetails += "Porta 8080 aberta" }
+        if ($ActiveProcs.Count -gt 0) {
+            $Pids = ($ActiveProcs | ForEach-Object { "$($_.Name):$($_.Id)" }) -join ", "
+            $OpenDetails += "Processos ativos ($Pids)"
+        }
+        if ($TaskRunning) { $OpenDetails += "Scheduled Task em execução" }
+        $FailDetails = $OpenDetails -join "; "
+        Write-DeployLog "ABORT: Não foi possível confirmar a parada segura da aplicação dentro de $StopTimeoutSeconds s ($FailDetails). Abortando sem alterar nada." -Level "ERROR" -IsError
+        throw "Timeout ao parar a produção de forma segura: $FailDetails."
     }
-    Write-DeployLog "Serviço de produção parado com sucesso."
+    Write-DeployLog "Serviço de produção parado com sucesso (portas 8501 e 8080 livres; zero processos streamlit/engine_entrypoint)."
 
     # ==============================================================================
     # 7. UPDATE (FF-ONLY)
@@ -743,11 +881,32 @@ sys.stdout.flush()
             Write-DeployLog "ABORT: Dependências obrigatórias ainda ausentes após sincronização: $($PostDepCheck.failure_reason). Executando rollback de emergência..." -Level "ERROR" -IsError
             git switch --detach $CurrentSha 2>&1 | Out-Null
             schtasks /Run /TN $TaskName 2>&1 | Out-Null
+            Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
+            $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+            if (-not $RollbackHealthPassed) {
+                Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
+            }
             throw "DEPENDENCY_DRIFT: $($PostDepCheck.failure_reason)"
         }
         Write-DeployLog "Dependências do .venv sincronizadas com sucesso." -Level "SUCCESS"
     }
     $DependencySummary = "PASS"
+
+    # 7.2 Validação de integridade do dist no working tree após update
+    Write-DeployLog "Validando bundle Web UI V2 no working tree pós-update..."
+    & $VenvPython scripts\build_stamp.py --verify 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-DeployLog "ABORT: Bundle Web UI V2 desincronizado após atualização. Executando rollback de emergência..." -Level "ERROR" -IsError
+        git switch --detach $CurrentSha 2>&1 | Out-Null
+        schtasks /Run /TN $TaskName 2>&1 | Out-Null
+        Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
+        $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+        if (-not $RollbackHealthPassed) {
+            Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
+        }
+        throw "WEBUI_V2_DIST_POST_UPDATE_SYNC_FAILED"
+    }
+    Write-DeployLog "Bundle Web UI V2 pós-update validado com sucesso." -Level "SUCCESS"
 
     # ==============================================================================
     # 8. START DA PRODUÇÃO
@@ -764,11 +923,11 @@ sys.stdout.flush()
     # ==============================================================================
 
     Write-DeployLog "Aguardando startup e executando health check em $HealthUrl (timeout 75s)..."
-    $HealthPassed = Test-HealthEndpoint -Url $HealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+    $HealthPassed = Test-V2HealthEndpoint -Url $HealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
 
     if ($HealthPassed) {
-        Write-DeployLog "Health check passou com sucesso (HTTP 200 'ok'). Atualização concluída com êxito!" -Level "SUCCESS"
-        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS" -HealthResult "PASS" -RollbackResult "NOT_REQUIRED" -FinalSha $NewSha -Status "DEPLOY_SUCCESS" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary
+        Write-DeployLog "Health check da V2 passou com sucesso (HTTP 200, status=healthy, is_primary=true). Atualização concluída com êxito!" -Level "SUCCESS"
+        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS" -HealthResult "PASS" -RollbackResult "NOT_REQUIRED" -FinalSha $NewSha -Status "DEPLOY_SUCCESS" -FfmpegResult $FfmpegSummary -FfprobeResult $FfprobeSummary -MediaRuntimeResult $MediaRuntimeSummary -DependencyResult $DependencySummary -DistResult $DistResult
         exit 0
     }
 
@@ -794,17 +953,17 @@ sys.stdout.flush()
     Write-DeployLog "Reiniciando Scheduled Task '$TaskName' após rollback..."
     schtasks /Run /TN $TaskName 2>&1 | Out-Null
 
-    # 10.4 Health check do rollback
-    Write-DeployLog "Avaliando saúde do serviço pós-rollback em $HealthUrl (timeout 75s)..."
-    $RollbackHealthPassed = Test-HealthEndpoint -Url $HealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+    # 10.4 Health check do rollback (V1 Legado)
+    Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
+    $RollbackHealthPassed = Test-LegacyHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
 
     if ($RollbackHealthPassed) {
-        Write-DeployLog "ROLLBACK_SUCCESS: Produção restaurada e saudável em DETACHED HEAD no CURRENT_SHA ($CurrentSha). Branch main preservada." -Level "SUCCESS"
-        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS (REVERTED)" -HealthResult "FAIL" -RollbackResult "ROLLBACK_SUCCESS (DETACHED HEAD em $CurrentSha)" -FinalSha $RollbackHead -Status "ROLLBACK_SUCCESS" -FailureReason "Health check inicial falhou; rollback executado com sucesso."
+        Write-DeployLog "ROLLBACK_SUCCESS: Produção restaurada e saudável em DETACHED HEAD no CURRENT_SHA ($CurrentSha) checada em $RollbackHealthUrl. Branch main preservada." -Level "SUCCESS"
+        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS (REVERTED)" -HealthResult "FAIL" -RollbackResult "ROLLBACK_SUCCESS (DETACHED HEAD em $CurrentSha)" -FinalSha $RollbackHead -Status "ROLLBACK_SUCCESS" -FailureReason "Health check da V2 falhou; rollback para V1 concluído com sucesso."
         exit 0
     } else {
-        Write-DeployLog "ROLLBACK_FAILED: Aplicação permaneceu instável após rollback. Intervenção humana necessária!" -Level "ERROR" -IsError
-        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS (REVERTED)" -HealthResult "FAIL" -RollbackResult "ROLLBACK_FAILED" -FinalSha $RollbackHead -Status "ROLLBACK_FAILED" -FailureReason "Health check falhou após update E após tentativa de rollback. Intervenção humana urgente necessária."
+        Write-DeployLog "ROLLBACK_FAILED: Aplicação permaneceu instável após rollback em $RollbackHealthUrl. Intervenção humana necessária!" -Level "ERROR" -IsError
+        Format-Summary -CurrentSha $CurrentSha -TargetSha $TargetSha -BackupResult $BackupSummary -UpdateResult "PASS (REVERTED)" -HealthResult "FAIL" -RollbackResult "ROLLBACK_FAILED" -FinalSha $RollbackHead -Status "ROLLBACK_FAILED" -FailureReason "Health check falhou após update E após tentativa de rollback em $RollbackHealthUrl. Intervenção humana urgente necessária."
         exit 1
     }
 

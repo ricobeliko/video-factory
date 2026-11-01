@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import copy
+import functools
 import threading
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,6 +47,7 @@ def clear_probe_media_cache() -> None:
         _PROBE_MEDIA_CACHE.clear()
 
 
+@functools.lru_cache(maxsize=1)
 def get_ffprobe_binary() -> Optional[str]:
     """Resolve o executável do ffprobe utilizando a mesma estratégia do ecossistema."""
     configured = config.app.get("ffprobe_path") or os.environ.get("FFPROBE_PATH")

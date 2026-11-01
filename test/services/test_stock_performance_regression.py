@@ -189,3 +189,50 @@ def test_media_probe_and_clip_caches():
             media_quality.clear_probe_media_cache()
             p3 = media_quality.probe_media(dummy_file)
             assert mock_sub.call_count == 2
+
+
+
+def test_ready_stock_cache_warmer_lifecycle():
+    """Valida inicializacao, pre-warm e encerramento limpo do cache warmer daemon."""
+    autonomous_production.stop_ready_stock_cache_warmer()
+
+    with patch("app.services.autonomous_production.get_autonomous_ready_stock") as mock_stock:
+        mock_stock.return_value = {"tasks": []}
+        warmer = autonomous_production.start_ready_stock_cache_warmer(interval_seconds=0.1)
+        assert warmer.is_alive()
+        assert warmer.daemon is True
+
+        # Aguarda trigger inicial
+        time.sleep(0.05)
+        assert mock_stock.call_count >= 1
+
+        autonomous_production.stop_ready_stock_cache_warmer()
+        warmer.join(timeout=1.0)
+        assert not warmer.is_alive()
+
+
+def test_candidate_evaluation_parallelism_capped_at_4():
+    """Valida que o paralelismo de avaliacao de candidatos e limitado a no maximo 4 workers."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_cap.db")
+        scheduler.init_db(db_path)
+        operator_console.init_operator_db(db_path)
+        with scheduler.get_connection(db_path) as conn:
+            for i in range(10):
+                conn.execute(
+                    "INSERT INTO task_platforms (task_id, platform) VALUES (?, 'youtube');",
+                    (f"task-cap-{i}",)
+                )
+                conn.execute(
+                    "INSERT INTO monetization_safety (task_id, preset, safety_status, checked_at) VALUES (?, 'curiosidades', 'PASS', '2026-11-01');",
+                    (f"task-cap-{i}",)
+                )
+        with patch("concurrent.futures.ThreadPoolExecutor") as mock_executor:
+            mock_pool = MagicMock()
+            mock_pool.map.return_value = []
+            mock_executor.return_value.__enter__.return_value = mock_pool
+
+            autonomous_production.get_autonomous_ready_stock(db_path=db_path, fresh=True)
+            assert mock_executor.call_count >= 1
+            _, kwargs = mock_executor.call_args
+            assert kwargs.get("max_workers", 0) <= 4

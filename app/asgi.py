@@ -39,11 +39,14 @@ async def application_lifespan(_: FastAPI):
     # 跨平台发布由当前进程线程池执行，不会在服务重启后恢复。启动时把 Redis
     # 中确认已失去执行进程的活动状态收敛为失败，避免任务永久无法删除。
     from app.services import task as task_service
+    from app.services import autonomous_production
 
     task_service.recover_interrupted_cross_posts()
+    autonomous_production.start_ready_stock_cache_warmer()
     try:
         yield
     finally:
+        autonomous_production.stop_ready_stock_cache_warmer()
         logger.info("shutdown event")
 
 

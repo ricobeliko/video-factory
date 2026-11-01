@@ -260,6 +260,9 @@ def run_benchmark(db_path: str, task_base_dir: str, num_iterations: int = 5):
     os.environ["STORAGE_DIR"] = os.path.dirname(task_base_dir)
 
     from unittest.mock import patch
+    from app.services import media_quality, autonomous_production
+    from scripts import flow_playwright
+
     endpoints = [
         ("GET /fleet/summary", "/api/v2/fleet/summary"),
         ("GET /channels", "/api/v2/channels"),
@@ -278,36 +281,59 @@ def run_benchmark(db_path: str, task_base_dir: str, num_iterations: int = 5):
          patch("app.utils.utils.storage_dir", return_value=os.path.dirname(task_base_dir)), \
          patch("app.utils.utils.task_dir", return_value=task_base_dir):
 
-        # Reset caches
-        operator_console.reset_initialized_operator_dbs()
-        scheduler.reset_initialized_dbs()
-
+        print("\n=== ETAPA 1: MEDICAO FRIA (caches vazios) ===")
+        cold_latencies = {}
         for label, url in endpoints:
-            latencies = []
-            for it in range(num_iterations):
+            # Limpa todos os caches (ffprobe, clipes, ready stock)
+            media_quality.clear_probe_media_cache()
+            flow_playwright.clear_validate_clip_cache()
+            autonomous_production.invalidate_autonomous_ready_stock_cache()
+            operator_console.reset_initialized_operator_dbs()
+            scheduler.reset_initialized_dbs()
+
+            t0 = time.perf_counter()
+            resp = client.get(url)
+            elapsed = time.perf_counter() - t0
+            print(f"[FRIA] [{label}]: {elapsed:.3f}s", flush=True)
+            if resp.status_code != 200:
+                print(f"Error {resp.status_code} on {url}: {resp.text[:200]}")
+            cold_latencies[label] = elapsed
+
+            if label == "GET /fleet/summary" and not channel_stocks:
+                data = resp.json().get("data", {})
+                channels = data.get("channels", [])
+                for ch in channels:
+                    pid = ch.get("profile_id") or ch.get("channel_id")
+                    channel_stocks[pid] = ch.get("ready_stock")
+
+        print("\n=== ETAPA 2: MEDICAO POS-EXPIRACAO (5 rodadas, aguardando 13s, ffprobe em cache) ===")
+        # Mantem o cache de ffprobe / clipes intacto para avaliar a velocidade pos-expiracao do TTL de 12s
+        post_exp_rounds = {label: [] for label, _ in endpoints}
+
+        for round_idx in range(num_iterations):
+            print(f"\nAguardando 13s entre rodadas para expirar TTL de 12s (rodada {round_idx+1}/{num_iterations})...", flush=True)
+            time.sleep(13)
+
+            for label, url in endpoints:
+                # Invalida o cache curto de 12s para simular expiracao isolada por endpoint
+                autonomous_production.invalidate_autonomous_ready_stock_cache()
+
                 t0 = time.perf_counter()
                 resp = client.get(url)
                 elapsed = time.perf_counter() - t0
-                print(f"[{label}] iter {it+1}/{num_iterations}: {elapsed:.3f}s", flush=True)
-                if resp.status_code != 200:
-                    print(f"Error {resp.status_code} on {url}: {resp.text[:200]}")
-                latencies.append(elapsed)
+                print(f"[POS-EXPIRACAO r{round_idx+1}] [{label}]: {elapsed:.3f}s", flush=True)
+                post_exp_rounds[label].append(elapsed)
 
-                if label == "GET /fleet/summary" and it == 0:
-                    data = resp.json().get("data", {})
-                    channels = data.get("channels", [])
-                    for ch in channels:
-                        pid = ch.get("profile_id") or ch.get("channel_id")
-                        channel_stocks[pid] = ch.get("ready_stock")
-
+        for label, _ in endpoints:
+            latencies = post_exp_rounds[label]
             p50 = percentile(latencies, 50)
             p95 = percentile(latencies, 95)
-            cold = latencies[0]
+            cold = cold_latencies[label]
             results[label] = {
                 "cold_s": round(cold, 3),
-                "p50_s": round(p50, 3),
-                "p95_s": round(p95, 3),
-                "raw": [round(x, 3) for x in latencies],
+                "post_exp_p50_s": round(p50, 3),
+                "post_exp_p95_s": round(p95, 3),
+                "raw_post_exp": [round(x, 3) for x in latencies],
             }
 
     return results, channel_stocks

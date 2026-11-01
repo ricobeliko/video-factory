@@ -749,6 +749,85 @@ def invalidate_autonomous_ready_stock_cache() -> None:
     _API_READY_STOCK_CACHE.invalidate()
 
 
+class ReadyStockCacheWarmer(threading.Thread):
+    """Thread daemon que pré-aquece no boot e renova o cache de estoque em segundo plano antes de vencer."""
+
+    def __init__(
+        self,
+        interval_seconds: float = 8.0,
+        task_base_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
+    ):
+        super().__init__(name="ReadyStockCacheWarmer", daemon=True)
+        self.interval_seconds = interval_seconds
+        self.task_base_dir = task_base_dir
+        self.db_path = db_path
+        self._stop_event = threading.Event()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def run(self) -> None:
+        logger.info(
+            f"[STOCK_CACHE_WARMER] Warmer ativo (intervalo: {self.interval_seconds}s, daemon=True)."
+        )
+        # 1. Warmup imediato de boot em segundo plano
+        try:
+            get_autonomous_ready_stock(
+                task_base_dir=self.task_base_dir,
+                db_path=self.db_path,
+                fresh=False,
+            )
+            logger.info("[STOCK_CACHE_WARMER] Pré-aquecimento inicial de boot concluído.")
+        except Exception as exc:
+            logger.debug(f"[STOCK_CACHE_WARMER] Erro no pré-aquecimento inicial: {exc}")
+
+        # 2. Renovação proativa do cache antes do vencimento do TTL de 12s
+        while not self._stop_event.wait(self.interval_seconds):
+            try:
+                get_autonomous_ready_stock(
+                    task_base_dir=self.task_base_dir,
+                    db_path=self.db_path,
+                    fresh=True,
+                )
+                logger.debug("[STOCK_CACHE_WARMER] Cache de estoque renovado proativamente.")
+            except Exception as exc:
+                logger.debug(f"[STOCK_CACHE_WARMER] Erro na renovação proativa: {exc}")
+        logger.info("[STOCK_CACHE_WARMER] Warmer de estoque finalizado.")
+
+
+_GLOBAL_CACHE_WARMER: Optional[ReadyStockCacheWarmer] = None
+_GLOBAL_CACHE_WARMER_LOCK = threading.Lock()
+
+
+def start_ready_stock_cache_warmer(
+    interval_seconds: float = 8.0,
+    task_base_dir: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> ReadyStockCacheWarmer:
+    """Inicia a thread daemon de pre-warm e renovação proativa em background."""
+    global _GLOBAL_CACHE_WARMER
+    with _GLOBAL_CACHE_WARMER_LOCK:
+        if _GLOBAL_CACHE_WARMER is None or not _GLOBAL_CACHE_WARMER.is_alive():
+            warmer = ReadyStockCacheWarmer(
+                interval_seconds=interval_seconds,
+                task_base_dir=task_base_dir,
+                db_path=db_path,
+            )
+            warmer.start()
+            _GLOBAL_CACHE_WARMER = warmer
+        return _GLOBAL_CACHE_WARMER
+
+
+def stop_ready_stock_cache_warmer() -> None:
+    """Para a thread daemon de cache warmer."""
+    global _GLOBAL_CACHE_WARMER
+    with _GLOBAL_CACHE_WARMER_LOCK:
+        if _GLOBAL_CACHE_WARMER is not None:
+            _GLOBAL_CACHE_WARMER.stop()
+            _GLOBAL_CACHE_WARMER = None
+
+
 def get_autonomous_ready_stock(
     task_base_dir: Optional[str] = None,
     db_path: Optional[str] = None,
@@ -853,19 +932,19 @@ def get_autonomous_ready_stock(
                     for tpr in conn.execute(f"SELECT task_id, profile_id FROM task_profiles WHERE task_id IN ({ph});", chunk).fetchall():
                         task_prof_map[tpr["task_id"]] = tpr["profile_id"]
 
-            # 7. Status de direitos autorais adverso pré-computado via operational_events
-            has_op = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operational_events';").fetchone()
-            if has_op:
-                for row_op in conn.execute("SELECT metadata_json FROM operational_events WHERE event_type = 'PUBLICATION_COPYRIGHT_STATUS_SET' ORDER BY id DESC;").fetchall():
-                    try:
-                        m = json.loads(row_op["metadata_json"] or "{}")
-                        st_cp = m.get("copyright_status")
-                        if st_cp in ("claimed", "blocked", "strike"):
-                            tid_cp = m.get("task_id")
-                            if tid_cp:
-                                adverse_copyright.add(tid_cp)
-                    except Exception:
-                        pass
+            # 7. Status de direitos autorais adverso pré-computado com semântica canônica idêntica
+            from app.services import copyright_gate
+            batch_cp_statuses = copyright_gate.get_batch_publication_copyright_status(
+                candidate_tids, db_path=db_path, conn=conn
+            )
+            adverse_copyright: Set[str] = {
+                tid for tid, st in batch_cp_statuses.items()
+                if st in (
+                    copyright_gate.COPYRIGHT_STATUS_CLAIMED,
+                    copyright_gate.COPYRIGHT_STATUS_BLOCKED,
+                    copyright_gate.COPYRIGHT_STATUS_STRIKE,
+                )
+            }
 
         # Perfis e canais ativos pré-carregados
         all_profiles = {p["id"]: dict(p) for p in profile_manager.list_profiles(db_path=db_path)}
@@ -882,9 +961,14 @@ def get_autonomous_ready_stock(
             "task_platforms": task_plats_map,
             "task_profiles": task_prof_map,
             "adverse_copyright": adverse_copyright,
+            "copyright_statuses": batch_cp_statuses,
             "profiles": all_profiles,
             "channels_by_prof": channels_by_prof,
             "plats_by_prof": local_plats_by_prof,
+            "settings": {
+                "youtube_enabled": scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true",
+                "tiktok_enabled": scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true",
+            },
         }
 
         for row in rows:
@@ -912,16 +996,19 @@ def get_autonomous_ready_stock(
             except (ValueError, TypeError, OSError):
                 return None
 
-            if "youtube" not in t_plats and "tiktok" in t_plats:
-                tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
-                if not tt_check.get("eligible"):
+            if "tiktok" in t_plats:
+                tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path, batch_context=batch_ctx)
+                t["is_tiktok_eligible"] = bool(tt_check.get("eligible"))
+                if "youtube" not in t_plats and not t["is_tiktok_eligible"]:
                     return None
+            else:
+                t["is_tiktok_eligible"] = False
 
             return t
 
         if len(rows) > 4:
             from concurrent.futures import ThreadPoolExecutor
-            max_workers = min(12, (os.cpu_count() or 4) * 2)
+            max_workers = min(4, os.cpu_count() or 4)
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 results = list(pool.map(_evaluate_candidate, rows))
             eligible_list = [t for t in results if t is not None]
@@ -964,9 +1051,13 @@ def get_autonomous_ready_stock(
         if "youtube" in t_plats:
             yt_count += 1
         if "tiktok" in t_plats:
-            tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
-            if tt_check.get("eligible"):
-                tt_count += 1
+            if "is_tiktok_eligible" in t:
+                if t["is_tiktok_eligible"]:
+                    tt_count += 1
+            else:
+                tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
+                if tt_check.get("eligible"):
+                    tt_count += 1
     return {
         "ready_count": len(eligible),
         "youtube_count": yt_count,
@@ -1583,6 +1674,7 @@ def check_asset_eligibility_for_destination(
     task_data: Dict[str, Any],
     platform: str,
     db_path: Optional[str] = None,
+    batch_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Avalia a elegibilidade de um asset aprovado para um destino específico.
 
@@ -1594,7 +1686,12 @@ def check_asset_eligibility_for_destination(
     - canal daquela plataforma existente e habilitado para o perfil
     """
     clean_plat = str(platform or "").lower().strip()
-    prof_id = task_data.get("profile_id") or profile_manager.get_active_profile_id(db_path=db_path)
+    prof_id = task_data.get("profile_id")
+    if not prof_id:
+        if batch_context and "active_profile_id" in batch_context:
+            prof_id = batch_context["active_profile_id"]
+        else:
+            prof_id = profile_manager.get_active_profile_id(db_path=db_path)
     if not prof_id:
         return {
             "platform": clean_plat,
@@ -1603,7 +1700,11 @@ def check_asset_eligibility_for_destination(
             "reasons": ["profile_not_found_or_inactive"],
         }
 
-    prof = profile_manager.get_profile(prof_id, db_path=db_path)
+    if batch_context and "profiles" in batch_context:
+        prof = batch_context["profiles"].get(prof_id)
+    else:
+        prof = profile_manager.get_profile(prof_id, db_path=db_path)
+
     if not prof or not prof.get("is_active"):
         return {
             "platform": clean_plat,
@@ -1612,12 +1713,18 @@ def check_asset_eligibility_for_destination(
             "reasons": ["profile_not_found_or_inactive"],
         }
 
-    channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
+    if batch_context and "channels_by_prof" in batch_context:
+        channels = batch_context["channels_by_prof"].get(prof_id, [])
+    else:
+        channels = profile_manager.list_channels(profile_id=prof_id, db_path=db_path)
 
     dur = float(task_data.get("audio_duration") or task_data.get("duration") or 0.0)
 
     if clean_plat == "youtube":
-        yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
+        if batch_context and "settings" in batch_context:
+            yt_enabled = bool(batch_context["settings"].get("youtube_enabled", True))
+        else:
+            yt_enabled = scheduler.get_setting("youtube_enabled", "true", db_path=db_path).lower() == "true"
         enabled_yt = [c for c in channels if c.get("platform", "").lower().strip() == "youtube" and c.get("is_enabled")]
         if not yt_enabled:
             return {
@@ -1658,7 +1765,10 @@ def check_asset_eligibility_for_destination(
             "reasons": [],
         }
     elif clean_plat == "tiktok":
-        tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
+        if batch_context and "settings" in batch_context:
+            tt_enabled = bool(batch_context["settings"].get("tiktok_enabled", True))
+        else:
+            tt_enabled = scheduler.get_setting("tiktok_enabled", "true", db_path=db_path).lower() == "true"
         enabled_tt = [c for c in channels if c.get("platform", "").lower().strip() == "tiktok" and c.get("is_enabled")]
         if not tt_enabled:
             return {
@@ -2681,6 +2791,8 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         if target_platforms and profile and profile["profile_id"]:
             scheduler.save_task_platforms(task_id, target_platforms, db_path=db_path)
             persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+            if batch_context and "task_platforms" in batch_context:
+                batch_context["task_platforms"][task_id] = persisted_plats
         else:
             raise ValueError("waiting_destination_missing")
 
@@ -2715,7 +2827,8 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
     # NOTA DE OTIMIZAÇÃO: O Copyright Provenance Gate já é validado de forma estrita e fail-closed
     # acima dentro de scheduler.validate_candidate_technical_and_safety_gates (passagem única).
 
-    target_platforms = resolve_autonomous_planned_platforms(prof_id, db_path=db_path)
+    if not (batch_context and "plats_by_prof" in batch_context and target_platforms):
+        target_platforms = resolve_autonomous_planned_platforms(prof_id, db_path=db_path)
     combined_plats = [p for p in target_platforms if p in persisted_plats or p in target_platforms]
     if not combined_plats:
         raise ValueError("waiting_no_eligible_destinations")

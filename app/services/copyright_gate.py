@@ -1127,12 +1127,16 @@ def evaluate_copyright_provenance_gate(
     if batch_context and "adverse_copyright" in batch_context:
         is_adverse = task_id in batch_context["adverse_copyright"]
         if is_adverse:
+            cp_st = (
+                batch_context.get("copyright_statuses", {}).get(task_id)
+                or "claimed"
+            )
             return (
                 False,
-                "Tarefa com status de direitos autorais adverso registrado: claimed",
+                f"Tarefa com status de direitos autorais adverso registrado: {cp_st}",
                 {
                     "copyright_provenance_gate": "FAIL",
-                    "copyright_status": "claimed",
+                    "copyright_status": cp_st,
                 },
             )
     else:
@@ -1512,6 +1516,120 @@ def get_publication_copyright_status(
         "timestamp": None,
         "note": None,
     }
+
+
+def get_batch_publication_copyright_status(
+    task_ids: List[str],
+    db_path: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
+) -> Dict[str, str]:
+    """Consulta em lote o status de copyright vigente e auditavel para uma lista de tarefas (V14-B.2).
+
+    Mantem paridade semantica estrita com get_publication_copyright_status:
+    - Para cada tarefa, busca o registro mais recente em publication_events para platform='youtube'
+      para resolver resolved_pub_id e resolved_external_id.
+    - Avalia operational_events com event_type='PUBLICATION_COPYRIGHT_STATUS_SET' ordenados por id DESC.
+    - O primeiro evento que casar com a tarefa (por publication_event_id, depois task_id, depois external_id)
+      define o status vigente da tarefa.
+    - Se nenhum registro casar, o status e 'unknown'.
+    - Nunca chama rede nem APIs externas.
+    """
+    if not task_ids:
+        return {}
+
+    clean_tasks = [str(t).strip() for t in task_ids if t and str(t).strip()]
+    if not clean_tasks:
+        return {}
+
+    from app.services import scheduler
+    from app.services import operator_console
+    try:
+        operator_console.init_operator_db(db_path)
+    except Exception:
+        pass
+
+    def _resolve(c: sqlite3.Connection) -> Dict[str, str]:
+        # 1. Busca os publication_events mais recentes por tarefa para youtube
+        pub_targets: Dict[str, Tuple[Optional[int], str, Optional[str]]] = {}
+        for tid in clean_tasks:
+            pub_targets[tid] = (None, tid, None)
+
+        chunks = [clean_tasks[i:i+400] for i in range(0, len(clean_tasks), 400)]
+        for chunk in chunks:
+            ph = ",".join("?" * len(chunk))
+            try:
+                rows = c.execute(
+                    f"SELECT id, task_id, external_id FROM publication_events "
+                    f"WHERE task_id IN ({ph}) AND platform = 'youtube' ORDER BY id DESC;",
+                    chunk,
+                ).fetchall()
+                for r in rows:
+                    t_id = r["task_id"]
+                    if pub_targets[t_id][0] is None and pub_targets[t_id][2] is None:
+                        pub_targets[t_id] = (
+                            int(r["id"]) if r["id"] is not None else None,
+                            t_id,
+                            str(r["external_id"]).strip() if r["external_id"] else None,
+                        )
+            except sqlite3.OperationalError:
+                pass
+
+        # 2. Carrega operational_events do tipo PUBLICATION_COPYRIGHT_STATUS_SET
+        try:
+            op_rows = c.execute(
+                "SELECT id, timestamp, metadata_json FROM operational_events "
+                "WHERE event_type = 'PUBLICATION_COPYRIGHT_STATUS_SET' "
+                "ORDER BY id DESC;"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            op_rows = []
+
+        parsed_events = []
+        for row in op_rows:
+            try:
+                meta = json.loads(row["metadata_json"] or "{}")
+                m_pub_id = meta.get("publication_event_id")
+                try:
+                    m_pub_id = int(m_pub_id) if m_pub_id is not None else None
+                except (ValueError, TypeError):
+                    m_pub_id = None
+                m_task_id = str(meta.get("task_id")).strip() if meta.get("task_id") is not None else None
+                m_ext_id = str(meta.get("external_id")).strip() if meta.get("external_id") is not None else None
+                c_status = str(meta.get("copyright_status") or COPYRIGHT_STATUS_UNKNOWN).strip().lower()
+                if c_status not in ALLOWED_COPYRIGHT_STATUSES:
+                    c_status = COPYRIGHT_STATUS_UNKNOWN
+                parsed_events.append((m_pub_id, m_task_id, m_ext_id, c_status))
+            except Exception:
+                continue
+
+        # 3. Para cada tarefa, encontra o primeiro evento correspondente
+        result_statuses: Dict[str, str] = {}
+        for tid in clean_tasks:
+            res_pub_id, res_task_id, res_ext_id = pub_targets[tid]
+            matched_status = COPYRIGHT_STATUS_UNKNOWN
+            for m_pub_id, m_task_id, m_ext_id, c_status in parsed_events:
+                match = False
+                if res_pub_id is not None and m_pub_id is not None:
+                    if m_pub_id == res_pub_id:
+                        match = True
+                elif res_task_id and m_task_id:
+                    if m_task_id == res_task_id:
+                        match = True
+                elif res_ext_id and m_ext_id:
+                    if m_ext_id == res_ext_id:
+                        match = True
+
+                if match:
+                    matched_status = c_status
+                    break
+            result_statuses[tid] = matched_status
+
+        return result_statuses
+
+    if conn is not None:
+        return _resolve(conn)
+    with scheduler.get_connection(db_path) as c:
+        return _resolve(c)
 
 
 def set_publication_copyright_status_op(*args, **kwargs):

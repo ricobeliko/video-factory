@@ -46,7 +46,9 @@ def get_db_path(custom_path: Optional[str] = None) -> str:
 def get_connection(db_path: Optional[str] = None):
     """Abre conexão com o banco SQLite e garante commit e fechamento no Windows."""
     path = get_db_path(db_path)
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    db_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(path, timeout=15.0)
     conn.row_factory = sqlite3.Row
     try:
@@ -145,6 +147,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_task_id ON scheduled_posts(task_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_prof_st ON scheduled_posts(profile_id, status);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pub_events_prof_st ON publication_events(profile_id, status);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_plat_st_task ON scheduled_posts(platform, status, task_id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pub_events_plat_st_task ON publication_events(platform, status, task_id);")
 
     # Migração Missão E (Capacidade ESCALA 10 / Global Cost Guard): elevação idempotente e aditiva
     cur_sett = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='autopilot_settings';").fetchone()
@@ -629,6 +633,7 @@ def validate_candidate_technical_and_safety_gates(
     task_data: Optional[Dict[str, Any]] = None,
     db_path: Optional[str] = None,
     task_base_dir: Optional[str] = None,
+    batch_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Centraliza a validação fail-closed dos gates técnico, segurança e copyright.
 
@@ -740,29 +745,36 @@ def validate_candidate_technical_and_safety_gates(
     # 5.2 Consulta persistida no banco SQLite: monetization_safety e quiz_safety_history
     db_safety_error = None
     persisted_safety_status = None
-    try:
-        from app.services import safety_gate
-        s_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
+    persisted_quiz_safety = None
+    if batch_context and "safety" in batch_context:
+        s_rec = batch_context["safety"].get(clean_tid)
         if s_rec and s_rec.get("safety_status"):
             persisted_safety_status = str(s_rec.get("safety_status")).upper().strip()
-    except Exception as exc:
-        db_safety_error = f"monetization_safety query error: {exc}"
+        if "quiz_safety" in batch_context:
+            persisted_quiz_safety = batch_context["quiz_safety"].get(clean_tid)
+    else:
+        try:
+            from app.services import safety_gate
+            s_rec = safety_gate.get_safety_assessment(clean_tid, db_path=db_path)
+            if s_rec and s_rec.get("safety_status"):
+                persisted_safety_status = str(s_rec.get("safety_status")).upper().strip()
+        except Exception as exc:
+            db_safety_error = f"monetization_safety query error: {exc}"
 
-    persisted_quiz_safety = None
-    try:
-        with get_connection(db_path) as conn:
-            has_qsh = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
-            ).fetchone()
-            if has_qsh:
-                q_row = conn.execute(
-                    "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
-                    (clean_tid,),
+        try:
+            with get_connection(db_path) as conn:
+                has_qsh = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';"
                 ).fetchone()
-                if q_row and q_row["safety_status"]:
-                    persisted_quiz_safety = str(q_row["safety_status"]).upper().strip()
-    except Exception as exc:
-        db_safety_error = f"quiz_safety_history query error: {exc}"
+                if has_qsh:
+                    q_row = conn.execute(
+                        "SELECT safety_status FROM quiz_safety_history WHERE task_id = ? LIMIT 1;",
+                        (clean_tid,),
+                    ).fetchone()
+                    if q_row and q_row["safety_status"]:
+                        persisted_quiz_safety = str(q_row["safety_status"]).upper().strip()
+        except Exception as exc:
+            db_safety_error = f"quiz_safety_history query error: {exc}"
 
     if db_safety_error:
         return False, f"SAFETY_GATE_DB_ERROR: {db_safety_error}", {
@@ -799,6 +811,7 @@ def validate_candidate_technical_and_safety_gates(
             task_data=merged_data,
             task_base_dir=effective_task_base,
             db_path=db_path,
+            batch_context=batch_context,
         )
         cp_ok = bool(c_pass)
         cp_reason = str(c_reason or "")

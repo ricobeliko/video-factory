@@ -20,7 +20,10 @@ import os
 import re
 import shutil
 import sys
+import copy
+import threading
 import time
+from collections import OrderedDict
 from typing import Any, Dict, Optional, Set, Tuple
 
 from loguru import logger
@@ -207,6 +210,17 @@ def match_tile_label_to_scene(
     return False
 
 
+_VALIDATE_CLIP_CACHE: "OrderedDict[Tuple[str, int, int], Dict[str, Any]]" = OrderedDict()
+_VALIDATE_CLIP_CACHE_LOCK = threading.Lock()
+_VALIDATE_CLIP_CACHE_MAXSIZE = 2048
+
+
+def clear_validate_clip_cache() -> None:
+    """Limpa o cache de validação de clipes (útil para testes)."""
+    with _VALIDATE_CLIP_CACHE_LOCK:
+        _VALIDATE_CLIP_CACHE.clear()
+
+
 def validate_clip_file(file_path: str) -> Dict[str, Any]:
     """Valida integridade e streams do vídeo via probe_media/ffprobe."""
     res: Dict[str, Any] = {
@@ -234,6 +248,17 @@ def validate_clip_file(file_path: str) -> Dict[str, Any]:
     if size <= 0:
         res["error"] = "EMPTY_FILE"
         return res
+
+    cache_key: Optional[Tuple[str, int, int]] = None
+    try:
+        st = os.stat(file_path)
+        cache_key = (os.path.abspath(file_path), int(st.st_size), int(st.st_mtime_ns))
+        with _VALIDATE_CLIP_CACHE_LOCK:
+            if cache_key in _VALIDATE_CLIP_CACHE:
+                _VALIDATE_CLIP_CACHE.move_to_end(cache_key)
+                return copy.deepcopy(_VALIDATE_CLIP_CACHE[cache_key])
+    except (OSError, ValueError):
+        cache_key = None
 
     try:
         from app.services.media_quality import probe_media
@@ -270,6 +295,11 @@ def validate_clip_file(file_path: str) -> Dict[str, Any]:
             return res
 
         res["valid"] = True
+        if cache_key is not None:
+            with _VALIDATE_CLIP_CACHE_LOCK:
+                _VALIDATE_CLIP_CACHE[cache_key] = copy.deepcopy(res)
+                if len(_VALIDATE_CLIP_CACHE) > _VALIDATE_CLIP_CACHE_MAXSIZE:
+                    _VALIDATE_CLIP_CACHE.popitem(last=False)
         return res
 
     except Exception as exc:

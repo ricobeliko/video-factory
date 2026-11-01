@@ -106,6 +106,9 @@ def init_review_db(db_path: Optional[str] = None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_op_vid_reviews_dec ON operator_video_reviews(decision);"
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_vid_reviews_task_dec ON operator_video_reviews(task_id, decision);"
+        )
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS operator_review_commands (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -299,7 +299,9 @@ def get_safety_db_path(custom_path: Optional[str] = None) -> str:
 def init_safety_db(db_path: Optional[str] = None) -> None:
     """Cria a tabela monetization_safety se não existir, de forma idempotente."""
     path = get_safety_db_path(db_path)
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    db_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(path, timeout=15.0)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -330,6 +332,7 @@ def init_safety_db(db_path: Optional[str] = None) -> None:
         ]
         if "topic" not in cols:
             conn.execute("ALTER TABLE monetization_safety ADD COLUMN topic TEXT;")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ms_status_checked ON monetization_safety(safety_status, checked_at, task_id);")
         conn.commit()
     finally:
         conn.close()

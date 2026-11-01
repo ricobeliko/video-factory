@@ -164,9 +164,12 @@ export default function ExecutionDrawer({
     }
 
     let isMounted = true;
+    let isFetching = false;
     setLoading(true);
 
     const fetchDetail = async () => {
+      if (isFetching) return;
+      isFetching = true;
       try {
         const res = await getExecutionDetail(activeTaskId);
         if (isMounted) {
@@ -178,12 +181,17 @@ export default function ExecutionDrawer({
           setError(err.message);
         }
       } finally {
+        isFetching = false;
         if (isMounted) setLoading(false);
       }
     };
 
     fetchDetail();
-    const interval = setInterval(fetchDetail, 3000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchDetail();
+      }
+    }, 3000);
 
     return () => {
       isMounted = false;

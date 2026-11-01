@@ -108,6 +108,11 @@ def invalidate_render_pass_cache() -> None:
     cache = getattr(_render_pass_local, "cache", None)
     if isinstance(cache, dict):
         cache.clear()
+    try:
+        from app.services import autonomous_production
+        autonomous_production.invalidate_autonomous_ready_stock_cache()
+    except Exception:
+        pass
 
 
 @contextlib.contextmanager
@@ -197,6 +202,9 @@ def init_operator_db(db_path: Optional[str] = None, force: bool = False) -> None
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_op_events_task_comp_ev ON operational_events(task_id, component, event_type, timestamp);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_op_events_type_id ON operational_events(event_type, id DESC);"
         )
         conn.execute(
             """
@@ -1459,7 +1467,7 @@ def get_profile_operations_overview(db_path: Optional[str] = None, task_base_dir
         return _get_profile_operations_overview_impl(db_path=db_path, task_base_dir=task_base_dir)
 
 
-def _get_profile_operations_overview_impl(db_path: Optional[str] = None, task_base_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+def _get_profile_operations_overview_impl(db_path: Optional[str] = None, task_base_dir: Optional[str] = None, fresh: bool = False) -> List[Dict[str, Any]]:
     init_operator_db(db_path)
     from app.services import profile_manager, scheduler
     from app.services import state as sm
@@ -1517,7 +1525,7 @@ def _get_profile_operations_overview_impl(db_path: Optional[str] = None, task_ba
         t_counts = task_counts.get(pid, {})
 
         try:
-            canon = get_canonical_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=pid)
+            canon = get_canonical_ready_stock(task_base_dir=task_base_dir, db_path=db_path, profile_id=pid, fresh=fresh)
             ready_stock_val = canon.get("total_ready")
             if ready_stock_val is not None:
                 ready_stock_val = int(ready_stock_val)
@@ -1667,6 +1675,7 @@ def get_canonical_ready_stock(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    fresh: bool = True,
 ) -> Dict[str, Any]:
     """Retorna o estoque pronto usando a fonte canônica da produção autônoma (YouTube-first, fail-closed).
 
@@ -1687,6 +1696,7 @@ def get_canonical_ready_stock(
         db_path=db_path,
         profile_id=target_prof,
         channel_id=target_chan,
+        fresh=fresh,
     )
     ready_total = auto_stock.get("ready_count", 0)
     target = auto_stock.get("target_stock", 3)
@@ -3333,7 +3343,7 @@ def get_live_execution_overview(db_path: Optional[str] = None) -> Dict[str, Any]
         return _get_live_execution_overview_impl(db_path=db_path)
 
 
-def _get_live_execution_overview_impl(db_path: Optional[str] = None) -> Dict[str, Any]:
+def _get_live_execution_overview_impl(db_path: Optional[str] = None, fresh: bool = False) -> Dict[str, Any]:
     init_operator_db(db_path)
     from app.services import autonomous_production, profile_manager, scheduler
     from app.services import state as sm
@@ -3740,7 +3750,7 @@ def _get_live_execution_overview_impl(db_path: Optional[str] = None) -> Dict[str
                 status = "IDLE"
 
         try:
-            stock_info = get_canonical_ready_stock(db_path=db_path, profile_id=pid)
+            stock_info = get_canonical_ready_stock(db_path=db_path, profile_id=pid, fresh=fresh)
             ready_stock_val = stock_info.get("total_ready")
             ready_stock_count = int(ready_stock_val) if ready_stock_val is not None else None
             target_stock_count = int(stock_info.get("minimum_threshold", 3))
@@ -4042,12 +4052,12 @@ def _get_fleet_ro_connection(target_path: str) -> sqlite3.Connection:
     return conn
 
 
-def get_fleet_summary(db_path: Optional[str] = None) -> Dict[str, Any]:
+def get_fleet_summary(db_path: Optional[str] = None, fresh: bool = False) -> Dict[str, Any]:
     with render_pass_scope():
-        return _get_fleet_summary_impl(db_path=db_path)
+        return _get_fleet_summary_impl(db_path=db_path, fresh=fresh)
 
 
-def _get_fleet_summary_impl(db_path: Optional[str] = None) -> Dict[str, Any]:
+def _get_fleet_summary_impl(db_path: Optional[str] = None, fresh: bool = False) -> Dict[str, Any]:
     """Retorna visão consolidada e aditiva da frota de canais para a Web UI V2.
 
     Regras de Status (status):
@@ -4362,7 +4372,7 @@ def _get_fleet_summary_impl(db_path: Optional[str] = None) -> Dict[str, Any]:
         # 1 & 2. Estoque pronto e meta de estoque: fonte canônica única (get_canonical_ready_stock)
         # Sem fallback para sqlite_ready/mem_ready; falha na leitura -> ready_stock = None + log WARNING.
         try:
-            canon = get_canonical_ready_stock(db_path=effective_db, profile_id=pid)
+            canon = get_canonical_ready_stock(db_path=effective_db, profile_id=pid, fresh=fresh)
             ready_stock: Optional[int] = int(canon["total_ready"])
             canon_min = canon.get("minimum_threshold")
             target_stock = (

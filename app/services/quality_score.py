@@ -72,7 +72,9 @@ def _get_default_db_path() -> str:
 def get_connection(db_path: Optional[str] = None):
     """Abre conexão com o SQLite em modo WAL garantindo integridade e fechamento."""
     path = db_path or _get_default_db_path()
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    db_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -123,6 +125,9 @@ def init_quality_db(db_path: Optional[str] = None) -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_quality_created ON content_quality_scores(created_at);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cqs_task_created_id ON content_quality_scores(task_id, created_at DESC, id DESC);"
         )
 
 

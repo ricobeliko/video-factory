@@ -1096,6 +1096,7 @@ def evaluate_copyright_provenance_gate(
     task_data: Optional[Dict[str, Any]] = None,
     task_base_dir: Optional[str] = None,
     db_path: Optional[str] = None,
+    batch_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """
     Avalia a conformidade de procedência e direitos autorais da tarefa (V14-B).
@@ -1123,20 +1124,32 @@ def evaluate_copyright_provenance_gate(
     from app.services import task_artifacts
 
     # 0. Verificação Prévia de Status Adverso Conhecido (claimed, blocked, strike)
-    pub_status = get_publication_copyright_status(task_id=task_id, db_path=db_path)
-    if pub_status.get("copyright_status") in (
-        COPYRIGHT_STATUS_CLAIMED,
-        COPYRIGHT_STATUS_BLOCKED,
-        COPYRIGHT_STATUS_STRIKE,
-    ):
-        return (
-            False,
-            f"Tarefa com status de direitos autorais adverso registrado: {pub_status.get('copyright_status')}",
-            {
-                "copyright_provenance_gate": "FAIL",
-                "copyright_status": pub_status.get("copyright_status"),
-            },
-        )
+    if batch_context and "adverse_copyright" in batch_context:
+        is_adverse = task_id in batch_context["adverse_copyright"]
+        if is_adverse:
+            return (
+                False,
+                "Tarefa com status de direitos autorais adverso registrado: claimed",
+                {
+                    "copyright_provenance_gate": "FAIL",
+                    "copyright_status": "claimed",
+                },
+            )
+    else:
+        pub_status = get_publication_copyright_status(task_id=task_id, db_path=db_path)
+        if pub_status.get("copyright_status") in (
+            COPYRIGHT_STATUS_CLAIMED,
+            COPYRIGHT_STATUS_BLOCKED,
+            COPYRIGHT_STATUS_STRIKE,
+        ):
+            return (
+                False,
+                f"Tarefa com status de direitos autorais adverso registrado: {pub_status.get('copyright_status')}",
+                {
+                    "copyright_provenance_gate": "FAIL",
+                    "copyright_status": pub_status.get("copyright_status"),
+                },
+            )
 
     # Obtém dados da memória ou do disco
     task_mem = task_data or sm.state.get_task(task_id) or {}

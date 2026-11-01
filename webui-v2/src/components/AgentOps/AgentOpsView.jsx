@@ -63,9 +63,12 @@ export default function AgentOpsView() {
 
   const timelineEndRef = useRef(null);
   const timelineContainerRef = useRef(null);
+  const isFetchingRef = useRef(false);
 
-  // Polling loop — runs every 2s strictly while Agent Ops is open
+  // Polling loop — runs every 2.5s strictly while Agent Ops is open and tab is visible
   const fetchTelemetry = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       const data = await getAgentOps();
       setTelemetry(data);
@@ -75,13 +78,18 @@ export default function AgentOpsView() {
       console.warn('Agent Ops poll failed:', err.message);
       setIsApiOnline(false);
     } finally {
+      isFetchingRef.current = false;
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 2000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchTelemetry();
+      }
+    }, 2500);
     return () => clearInterval(interval);
   }, [fetchTelemetry]);
 

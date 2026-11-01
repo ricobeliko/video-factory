@@ -12,10 +12,12 @@ Transforma a Video Factory em uma fábrica de conteúdo autônoma e self-feeding
 8. NÃO constrói segundo pipeline; reutiliza estritamente os serviços existentes.
 9. NUNCA publica diretamente: o Scheduler Worker permanece como único executor da publicação.
 """
+import copy
 import math
 import os
 import shutil
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -690,11 +692,69 @@ def set_channel_rejected_narrative_structure(
 # 2. Telemetria e Status
 # ---------------------------------------------------------------------------
 
+class SingleFlightCache:
+    """Thread-safe single-flight + TTL in-memory cache for API read paths."""
+
+    def __init__(self, ttl_seconds: float = 12.0):
+        self.ttl_seconds = ttl_seconds
+        self._lock = threading.Lock()
+        self._cache: Dict[Any, Tuple[float, Any]] = {}
+        self._inflight: Dict[Any, threading.Event] = {}
+
+    def get_or_compute(self, key: Any, compute_fn, fresh: bool = False):
+        if fresh:
+            return compute_fn()
+
+        now = time.monotonic()
+        with self._lock:
+            if key in self._cache:
+                ts, val = self._cache[key]
+                if (now - ts) < self.ttl_seconds:
+                    return copy.deepcopy(val)
+            if key in self._inflight:
+                event = self._inflight[key]
+                wait_on_inflight = True
+            else:
+                event = threading.Event()
+                self._inflight[key] = event
+                wait_on_inflight = False
+
+        if wait_on_inflight:
+            event.wait(timeout=30.0)
+            with self._lock:
+                if key in self._cache:
+                    return copy.deepcopy(self._cache[key][1])
+            return compute_fn()
+
+        try:
+            res = compute_fn()
+            with self._lock:
+                self._cache[key] = (time.monotonic(), copy.deepcopy(res))
+            return res
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+                event.set()
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+
+_API_READY_STOCK_CACHE = SingleFlightCache(ttl_seconds=12.0)
+
+
+def invalidate_autonomous_ready_stock_cache() -> None:
+    """Invalida o cache single-flight da API quando tarefas ou canais são alterados."""
+    _API_READY_STOCK_CACHE.invalidate()
+
+
 def get_autonomous_ready_stock(
     task_base_dir: Optional[str] = None,
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
+    fresh: bool = True,
 ) -> Dict[str, Any]:
     """Calcula o estoque pronto elegível para o loop autônomo (fail-closed em Safety e Quality).
 
@@ -716,9 +776,9 @@ def get_autonomous_ready_stock(
         os.path.abspath(scheduler.get_db_path(db_path)),
     )
     plats_by_prof: Dict[Optional[str], List[str]] = {}
-    if rp_cache is not None and base_cache_key in rp_cache:
-        base_eligible = rp_cache[base_cache_key]
-    else:
+
+    def _compute_base_eligible() -> Tuple[List[Dict[str, Any]], Dict[Optional[str], List[str]]]:
+        local_plats_by_prof: Dict[Optional[str], List[str]] = {}
         scheduler.init_db(db_path)
         quality_score.init_quality_db(db_path)
         with scheduler.get_connection(db_path) as conn:
@@ -739,37 +799,150 @@ def get_autonomous_ready_stock(
                 "UNION SELECT task_id FROM scheduled_posts WHERE platform='tiktok' "
                 "AND status IN ('published', 'cancelled')"
             )}
-        base_eligible = []
-        for row in rows:
-            tid = row["task_id"]
-            t_prof = row["profile_id"] or profile_manager.get_task_profile_id(tid, db_path=db_path)
-            if t_prof not in plats_by_prof:
-                plats_by_prof[t_prof] = get_channel_active_platforms(t_prof, db_path=db_path)
-            t_plats = plats_by_prof[t_prof]
-            if not t_plats:
-                continue
 
+            # Batch loading de tabelas auxiliares para evitar consultas O(N) por task
+            candidate_tids = [r["task_id"] for r in rows]
+            safety_map: Dict[str, Dict[str, Any]] = {}
+            quality_map: Dict[str, Dict[str, Any]] = {}
+            hr_map: Dict[str, Dict[str, Any]] = {}
+            qsh_map: Dict[str, str] = {}
+            task_plats_map: Dict[str, List[str]] = {}
+            task_prof_map: Dict[str, str] = {}
+            adverse_copyright: Set[str] = set()
+
+            if candidate_tids:
+                # 1. Carrega monetization_safety em lote
+                chunks = [candidate_tids[i:i+400] for i in range(0, len(candidate_tids), 400)]
+                for chunk in chunks:
+                    ph = ",".join("?" * len(chunk))
+                    for sr in conn.execute(f"SELECT * FROM monetization_safety WHERE task_id IN ({ph});", chunk).fetchall():
+                        sd = dict(sr)
+                        sd["safety_reasons"] = [r.strip() for r in (sd.get("safety_reasons") or "").split(";") if r.strip()]
+                        safety_map[sd["task_id"]] = sd
+
+                    # 2. Carrega content_quality_scores mais recentes em lote
+                    q_rows = conn.execute(
+                        f"SELECT task_id, quality_score, quality_label FROM content_quality_scores "
+                        f"WHERE task_id IN ({ph}) ORDER BY created_at DESC, id DESC;", chunk
+                    ).fetchall()
+                    for qr in q_rows:
+                        qid = qr["task_id"]
+                        if qid not in quality_map:
+                            quality_map[qid] = {"quality_score": qr["quality_score"], "quality_label": qr["quality_label"]}
+
+                    # 3. Carrega operator_video_reviews (APPROVED) em lote
+                    has_review = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';").fetchone()
+                    if has_review:
+                        for hr in conn.execute(
+                            f"SELECT task_id, decision, operator_id, approved_below_threshold FROM operator_video_reviews "
+                            f"WHERE task_id IN ({ph}) AND decision = 'APPROVED';", chunk
+                        ).fetchall():
+                            hr_map[hr["task_id"]] = dict(hr)
+
+                    # 4. Carrega quiz_safety_history em lote
+                    has_qsh = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='quiz_safety_history';").fetchone()
+                    if has_qsh:
+                        for qr in conn.execute(f"SELECT task_id, safety_status FROM quiz_safety_history WHERE task_id IN ({ph});", chunk).fetchall():
+                            qsh_map[qr["task_id"]] = qr["safety_status"]
+
+                    # 5. Carrega task_platforms em lote
+                    for tr in conn.execute(f"SELECT task_id, platform FROM task_platforms WHERE task_id IN ({ph});", chunk).fetchall():
+                        task_plats_map.setdefault(tr["task_id"], []).append(tr["platform"])
+
+                    # 6. Carrega task_profiles em lote
+                    for tpr in conn.execute(f"SELECT task_id, profile_id FROM task_profiles WHERE task_id IN ({ph});", chunk).fetchall():
+                        task_prof_map[tpr["task_id"]] = tpr["profile_id"]
+
+            # 7. Status de direitos autorais adverso pré-computado via operational_events
+            has_op = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operational_events';").fetchone()
+            if has_op:
+                for row_op in conn.execute("SELECT metadata_json FROM operational_events WHERE event_type = 'PUBLICATION_COPYRIGHT_STATUS_SET' ORDER BY id DESC;").fetchall():
+                    try:
+                        m = json.loads(row_op["metadata_json"] or "{}")
+                        st_cp = m.get("copyright_status")
+                        if st_cp in ("claimed", "blocked", "strike"):
+                            tid_cp = m.get("task_id")
+                            if tid_cp:
+                                adverse_copyright.add(tid_cp)
+                    except Exception:
+                        pass
+
+        # Perfis e canais ativos pré-carregados
+        all_profiles = {p["id"]: dict(p) for p in profile_manager.list_profiles(db_path=db_path)}
+        all_channels = profile_manager.list_channels(db_path=db_path)
+        channels_by_prof: Dict[str, List[Dict[str, Any]]] = {}
+        for c in all_channels:
+            channels_by_prof.setdefault(c.get("profile_id"), []).append(dict(c))
+
+        batch_ctx = {
+            "safety": safety_map,
+            "quality": quality_map,
+            "human_review": hr_map,
+            "quiz_safety": qsh_map,
+            "task_platforms": task_plats_map,
+            "task_profiles": task_prof_map,
+            "adverse_copyright": adverse_copyright,
+            "profiles": all_profiles,
+            "channels_by_prof": channels_by_prof,
+            "plats_by_prof": local_plats_by_prof,
+        }
+
+        for row in rows:
+            t_prof = row["profile_id"] or task_prof_map.get(row["task_id"]) or profile_manager.get_task_profile_id(row["task_id"], db_path=db_path)
+            if t_prof not in local_plats_by_prof:
+                local_plats_by_prof[t_prof] = get_channel_active_platforms(t_prof, db_path=db_path)
+
+        def _evaluate_candidate(row):
+            tid = row["task_id"]
+            t_prof = row["profile_id"] or task_prof_map.get(tid)
+            t_plats = local_plats_by_prof.get(t_prof) or []
+            if not t_plats:
+                return None
             if "youtube" in t_plats:
                 if tid in excluded_yt:
-                    continue
+                    return None
             elif "tiktok" in t_plats:
                 if tid in excluded_tt:
-                    continue
+                    return None
             else:
-                continue
+                return None
 
             try:
-                t = _recover_waiting_task(tid, db_path, task_base_dir)
+                t = _recover_waiting_task(tid, db_path, task_base_dir, batch_context=batch_ctx)
             except (ValueError, TypeError, OSError):
-                continue
+                return None
 
             if "youtube" not in t_plats and "tiktok" in t_plats:
                 tt_check = check_asset_eligibility_for_destination(t, "tiktok", db_path=db_path)
                 if not tt_check.get("eligible"):
-                    continue
+                    return None
 
-            base_eligible.append(t)
+            return t
 
+        if len(rows) > 4:
+            from concurrent.futures import ThreadPoolExecutor
+            max_workers = min(12, (os.cpu_count() or 4) * 2)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                results = list(pool.map(_evaluate_candidate, rows))
+            eligible_list = [t for t in results if t is not None]
+        else:
+            eligible_list = []
+            for row in rows:
+                t = _evaluate_candidate(row)
+                if t is not None:
+                    eligible_list.append(t)
+
+        return eligible_list, local_plats_by_prof
+
+    if rp_cache is not None and base_cache_key in rp_cache:
+        base_eligible = rp_cache[base_cache_key]
+    else:
+        if fresh:
+            base_eligible, plats_by_prof = _compute_base_eligible()
+        else:
+            base_eligible, plats_by_prof = _API_READY_STOCK_CACHE.get_or_compute(
+                base_cache_key, _compute_base_eligible, fresh=False
+            )
         if rp_cache is not None:
             rp_cache[base_cache_key] = base_eligible
 
@@ -2403,7 +2576,8 @@ def check_required_providers_preflight(
 # ---------------------------------------------------------------------------
 
 def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
-                          task_base_dir: Optional[str] = None) -> Dict[str, Any]:
+                          task_base_dir: Optional[str] = None,
+                          batch_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Revalidate persisted approval before retrying the existing scheduler."""
     from app.services import state as sm
 
@@ -2423,28 +2597,38 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         except Exception:
             pass
 
-    safety = safety_gate.get_safety_assessment(task_id, db_path=db_path) or {}
+    if batch_context and "safety" in batch_context:
+        safety = batch_context["safety"].get(task_id) or {}
+    else:
+        safety = safety_gate.get_safety_assessment(task_id, db_path=db_path) or {}
     if safety.get("safety_status") != const.SAFETY_STATUS_PASS:
         raise ValueError("waiting_safety_not_pass")
-    with scheduler.get_connection(db_path) as conn:
-        quality = conn.execute(
-            "SELECT quality_score, quality_label FROM content_quality_scores "
-            "WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-            (task_id,),
-        ).fetchone()
-        profile = conn.execute(
-            "SELECT profile_id FROM task_profiles WHERE task_id = ?", (task_id,),
-        ).fetchone()
 
-        human_review = None
-        has_review_tbl = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';"
-        ).fetchone()
-        if has_review_tbl:
-            human_review = conn.execute(
-                "SELECT decision, operator_id, approved_below_threshold FROM operator_video_reviews WHERE task_id = ? AND decision = 'APPROVED';",
+    if batch_context and "quality" in batch_context:
+        quality = batch_context["quality"].get(task_id)
+        prof_id_ctx = batch_context.get("task_profiles", {}).get(task_id)
+        profile = {"profile_id": prof_id_ctx} if prof_id_ctx else None
+        human_review = batch_context.get("human_review", {}).get(task_id)
+    else:
+        with scheduler.get_connection(db_path) as conn:
+            quality = conn.execute(
+                "SELECT quality_score, quality_label FROM content_quality_scores "
+                "WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (task_id,),
             ).fetchone()
+            profile = conn.execute(
+                "SELECT profile_id FROM task_profiles WHERE task_id = ?", (task_id,),
+            ).fetchone()
+
+            human_review = None
+            has_review_tbl = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_video_reviews';"
+            ).fetchone()
+            if has_review_tbl:
+                human_review = conn.execute(
+                    "SELECT decision, operator_id, approved_below_threshold FROM operator_video_reviews WHERE task_id = ? AND decision = 'APPROVED';",
+                    (task_id,),
+                ).fetchone()
 
     score = float(quality["quality_score"]) if quality else float("nan")
     is_auto_quality_approved = (
@@ -2465,16 +2649,28 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
         task_data=task,
         db_path=db_path,
         task_base_dir=task_base_dir,
+        batch_context=batch_context,
     )
     if not ts_ok:
         raise ValueError(f"waiting_technical_or_safety_failed: {ts_reason}")
-    persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+
+    if batch_context and "task_platforms" in batch_context:
+        persisted_plats = batch_context["task_platforms"].get(task_id, [])
+    else:
+        persisted_plats = scheduler.get_task_platforms(task_id, db_path=db_path)
+
     prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
-    target_platforms = get_channel_active_platforms(prof_id, db_path=db_path)
+    if batch_context and "plats_by_prof" in batch_context:
+        target_platforms = batch_context["plats_by_prof"].get(prof_id) or get_channel_active_platforms(prof_id, db_path=db_path)
+    else:
+        target_platforms = get_channel_active_platforms(prof_id, db_path=db_path)
     if not target_platforms:
         raise ValueError("waiting_no_eligible_destinations")
 
-    prof = profile_manager.get_profile(prof_id, db_path=db_path) if profile else None
+    if batch_context and "profiles" in batch_context:
+        prof = batch_context["profiles"].get(prof_id)
+    else:
+        prof = profile_manager.get_profile(prof_id, db_path=db_path) if profile else None
     if not prof or not prof.get("is_active"):
         raise ValueError("waiting_profile_unavailable")
 
@@ -2489,30 +2685,35 @@ def _recover_waiting_task(task_id: str, db_path: Optional[str] = None,
             raise ValueError("waiting_destination_missing")
 
     resolved_channel = None
-    if "youtube" in target_platforms:
-        resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
-        if not resolved_channel:
-            raise ValueError("waiting_youtube_channel_unavailable")
-    elif "tiktok" in target_platforms:
-        resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
-        if not resolved_channel:
-            raise ValueError("waiting_tiktok_channel_unavailable")
+    if batch_context and "channels_by_prof" in batch_context:
+        prof_chans = [c for c in batch_context["channels_by_prof"].get(prof_id, []) if c.get("is_enabled")]
+        if "youtube" in target_platforms:
+            resolved_channel = [c for c in prof_chans if c.get("platform") == "youtube"]
+            if not resolved_channel:
+                raise ValueError("waiting_youtube_channel_unavailable")
+        elif "tiktok" in target_platforms:
+            resolved_channel = [c for c in prof_chans if c.get("platform") == "tiktok"]
+            if not resolved_channel:
+                raise ValueError("waiting_tiktok_channel_unavailable")
+        else:
+            raise ValueError("waiting_channel_unavailable")
     else:
-        raise ValueError("waiting_channel_unavailable")
+        if "youtube" in target_platforms:
+            resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["youtube"], db_path=db_path)
+            if not resolved_channel:
+                raise ValueError("waiting_youtube_channel_unavailable")
+        elif "tiktok" in target_platforms:
+            resolved_channel = profile_manager.resolve_task_channels(task_id, platforms=["tiktok"], db_path=db_path)
+            if not resolved_channel:
+                raise ValueError("waiting_tiktok_channel_unavailable")
+        else:
+            raise ValueError("waiting_channel_unavailable")
 
     chan_id = resolved_channel[0].get("channel_id") or resolved_channel[0].get("id")
     prof_id = profile["profile_id"] if profile else profile_manager.DEFAULT_PROFILE_ID
 
-    # Validação do Copyright Provenance Gate (V14-B.1: fail-closed para assets existentes)
-    from app.services import copyright_gate
-    cp_ok, cp_reason, _ = copyright_gate.evaluate_copyright_provenance_gate(
-        task_id=task_id,
-        task_data=task,
-        task_base_dir=task_base_dir,
-        db_path=db_path,
-    )
-    if not cp_ok:
-        raise ValueError(f"waiting_copyright_provenance_failed: {cp_reason}")
+    # NOTA DE OTIMIZAÇÃO: O Copyright Provenance Gate já é validado de forma estrita e fail-closed
+    # acima dentro de scheduler.validate_candidate_technical_and_safety_gates (passagem única).
 
     target_platforms = resolve_autonomous_planned_platforms(prof_id, db_path=db_path)
     combined_plats = [p for p in target_platforms if p in persisted_plats or p in target_platforms]

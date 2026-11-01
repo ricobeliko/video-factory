@@ -73,7 +73,13 @@ class MemoryState(BaseState):
                 "progress": progress,
                 **kwargs,
             })
-            self._tasks[task_id] = existing
+            self._tasks[task_id] = existing
+        if state in (const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED):
+            try:
+                from app.services import operator_console
+                operator_console.invalidate_render_pass_cache()
+            except Exception:
+                pass
 
     def get_task(self, task_id: str):
         with self._lock:
@@ -94,6 +100,11 @@ class MemoryState(BaseState):
     def delete_task(self, task_id: str):
         with self._lock:
             self._tasks.pop(task_id, None)
+        try:
+            from app.services import operator_console
+            operator_console.invalidate_render_pass_cache()
+        except Exception:
+            pass
 
 
 # Redis state management

@@ -15,7 +15,10 @@ import math
 import os
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+import copy
+import threading
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -31,6 +34,16 @@ MIN_PORTRAIT_HEIGHT = 1280
 MIN_LANDSCAPE_WIDTH = 1280
 MIN_LANDSCAPE_HEIGHT = 720
 MIN_SQUARE_DIMENSION = 720
+
+_PROBE_MEDIA_CACHE: "OrderedDict[Tuple[str, int, int, int], Dict[str, Any]]" = OrderedDict()
+_PROBE_MEDIA_CACHE_LOCK = threading.Lock()
+_PROBE_MEDIA_CACHE_MAXSIZE = 2048
+
+
+def clear_probe_media_cache() -> None:
+    """Limpa o cache de sondagem de mídia (útil para testes)."""
+    with _PROBE_MEDIA_CACHE_LOCK:
+        _PROBE_MEDIA_CACHE.clear()
 
 
 def get_ffprobe_binary() -> Optional[str]:
@@ -93,6 +106,22 @@ def probe_media(
         base_result["error_code"] = "FINAL_MEDIA_NOT_A_FILE"
         base_result["error_message"] = f"path is not a regular file: {file_path}"
         return base_result
+
+    cache_key: Optional[Tuple[str, int, int, int]] = None
+    try:
+        st = os.stat(file_path)
+        cache_key = (
+            os.path.abspath(file_path),
+            int(st.st_size),
+            int(st.st_mtime_ns),
+            int(timeout_seconds),
+        )
+        with _PROBE_MEDIA_CACHE_LOCK:
+            if cache_key in _PROBE_MEDIA_CACHE:
+                _PROBE_MEDIA_CACHE.move_to_end(cache_key)
+                return copy.deepcopy(_PROBE_MEDIA_CACHE[cache_key])
+    except (OSError, ValueError):
+        cache_key = None
 
     ffprobe_bin = get_ffprobe_binary()
     if not ffprobe_bin:
@@ -211,7 +240,7 @@ def probe_media(
         except Exception:
             format_sz = 0
 
-    return {
+    res = {
         "valid": True,
         "error_code": None,
         "error_message": None,
@@ -221,6 +250,12 @@ def probe_media(
         "format_duration": format_dur,
         "format_size": format_sz,
     }
+    if cache_key is not None:
+        with _PROBE_MEDIA_CACHE_LOCK:
+            _PROBE_MEDIA_CACHE[cache_key] = copy.deepcopy(res)
+            if len(_PROBE_MEDIA_CACHE) > _PROBE_MEDIA_CACHE_MAXSIZE:
+                _PROBE_MEDIA_CACHE.popitem(last=False)
+    return res
 
 
 def evaluate_final_media_quality(

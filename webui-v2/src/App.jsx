@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import FactoryHeader from './components/FactoryHeader';
 import ChannelCard from './components/ChannelCard';
 import FlowAccountsSection from './components/FlowAccountsSection';
@@ -61,8 +61,13 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Poll live execution data every 2 seconds
+  const isFetchingLiveRef = useRef(false);
+  const isFetchingSystemRef = useRef(false);
+
+  // Poll live execution data with in-flight guard
   const fetchLiveData = useCallback(async () => {
+    if (isFetchingLiveRef.current) return;
+    isFetchingLiveRef.current = true;
     try {
       const res = await getLiveExecutions();
       if (res && res.data) {
@@ -71,11 +76,15 @@ export default function App() {
     } catch (err) {
       console.error('Failed to fetch live executions:', err);
       setError('Falha ao sincronizar estado da fábrica');
+    } finally {
+      isFetchingLiveRef.current = false;
     }
   }, []);
 
-  // Poll general system status
+  // Poll general system status with in-flight guard
   const fetchSystemData = useCallback(async () => {
+    if (isFetchingSystemRef.current) return;
+    isFetchingSystemRef.current = true;
     try {
       const res = await getSystemStatus();
       if (res && res.data) {
@@ -84,20 +93,35 @@ export default function App() {
     } catch (err) {
       console.error('Failed to fetch system status:', err);
     } finally {
+      isFetchingSystemRef.current = false;
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // 1. Initial load staggered to prevent simultaneous endpoint bursts
     fetchLiveData();
-    fetchSystemData();
+    const staggerTimer = setTimeout(fetchSystemData, 400);
 
-    const interval = setInterval(() => {
-      fetchLiveData();
-      fetchSystemData();
-    }, 2000);
+    // 2. Poll live telemetry every 2.5s (when page is visible)
+    const liveInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchLiveData();
+      }
+    }, 2500);
 
-    return () => clearInterval(interval);
+    // 3. Poll general system status every 15s (infrequent mutations)
+    const systemInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchSystemData();
+      }
+    }, 15000);
+
+    return () => {
+      clearTimeout(staggerTimer);
+      clearInterval(liveInterval);
+      clearInterval(systemInterval);
+    };
   }, [fetchLiveData, fetchSystemData]);
 
   const channels = liveData.channels || [];

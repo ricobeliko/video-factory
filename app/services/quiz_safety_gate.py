@@ -154,7 +154,9 @@ def init_quiz_safety_db(db_path: Optional[str] = None) -> None:
     except Exception:
         pass
     path = get_safety_db_path(db_path)
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    db_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(path, timeout=15.0)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")

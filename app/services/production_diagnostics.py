@@ -210,6 +210,7 @@ def get_diagnostics_overview(
     now: Optional[datetime] = None,
     _stock_fetcher: Optional[Any] = None,
     _limits_fetcher: Optional[Any] = None,
+    fresh: bool = False,
 ) -> Dict[str, Any]:
     """Retorna visão consolidada e detalhada de diagnóstico da fábrica e de cada canal."""
     with operator_console.render_pass_scope():
@@ -220,6 +221,7 @@ def get_diagnostics_overview(
             now=now,
             _stock_fetcher=_stock_fetcher,
             _limits_fetcher=_limits_fetcher,
+            fresh=fresh,
         )
 
 
@@ -230,6 +232,7 @@ def _get_diagnostics_overview_impl(
     now: Optional[datetime] = None,
     _stock_fetcher: Optional[Any] = None,
     _limits_fetcher: Optional[Any] = None,
+    fresh: bool = False,
 ) -> Dict[str, Any]:
     effective_db = scheduler.get_db_path(db_path)
     now_utc = now if now is not None else datetime.now(timezone.utc)
@@ -670,6 +673,7 @@ def _get_diagnostics_overview_impl(
                     task_base_dir=task_base_dir,
                     db_path=effective_db,
                     profile_id=pid,
+                    fresh=fresh,
                 )
 
             if isinstance(stock_info, dict):

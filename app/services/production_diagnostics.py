@@ -159,50 +159,6 @@ def _format_iso_utc(dt: Optional[datetime]) -> Optional[str]:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class _LazyEventMetadata(dict):
-    """Wrapper preguiçoso para evitar json.loads em dezenas de milhares de eventos operacionais."""
-    __slots__ = ("_raw_json", "_parsed")
-
-    def __init__(self, raw_json: Optional[str]):
-        super().__init__()
-        self._raw_json = raw_json
-        self._parsed = False
-
-    def _ensure_parsed(self):
-        if not self._parsed:
-            self._parsed = True
-            if self._raw_json:
-                try:
-                    data = json.loads(self._raw_json) if isinstance(self._raw_json, str) else self._raw_json
-                    if isinstance(data, dict):
-                        super().update(data)
-                except Exception:
-                    pass
-
-    def get(self, key, default=None):
-        if not self._parsed:
-            if not self._raw_json or f'"{key}"' not in self._raw_json:
-                return default
-            self._ensure_parsed()
-        return super().get(key, default)
-
-    def __getitem__(self, key):
-        self._ensure_parsed()
-        return super().__getitem__(key)
-
-    def __contains__(self, key):
-        if not self._parsed:
-            if not self._raw_json or f'"{key}"' not in self._raw_json:
-                return False
-            self._ensure_parsed()
-        return super().__contains__(key)
-
-    def __bool__(self):
-        if not self._parsed:
-            return bool(self._raw_json and self._raw_json.strip() not in ("", "{}"))
-        return super().__bool__()
-
-
 def _extract_rejection_reason(msg: str, metadata: Dict[str, Any]) -> str:
     """Extrai motivo cru e fidedigno de reprovação a partir dos metadados e mensagem do evento."""
     unauth = metadata.get("unauthorized_provider")
@@ -464,7 +420,13 @@ def _get_diagnostics_overview_impl(
             for r in oe_rows:
                 ed = dict(r)
                 raw_m = ed.get("metadata_json")
-                ed["metadata"] = _LazyEventMetadata(raw_m) if raw_m else {}
+                meta = {}
+                if raw_m:
+                    try:
+                        meta = json.loads(raw_m) if isinstance(raw_m, str) else raw_m
+                    except Exception:
+                        meta = {}
+                ed["metadata"] = meta if isinstance(meta, dict) else {}
                 events.append(ed)
 
                 tid = ed.get("task_id")
@@ -648,7 +610,8 @@ def _get_diagnostics_overview_impl(
                 channel_warnings.append(f"Erro ao obter teto de aprovações 24h: {exc}")
 
             try:
-                app_used = autonomous_production.count_generations_in_last_24h(now=now_utc, db_path=effective_db, profile_id=pid)
+                yt_channel = autonomous_production.resolve_autonomous_youtube_channel(pid, db_path=effective_db)
+                app_used = autonomous_production.count_generations_in_last_24h(now=now_utc, db_path=effective_db, profile_id=pid, channel_id=yt_channel)
             except Exception as exc:
                 channel_warnings.append(f"Erro ao contar gerações aprovadas 24h: {exc}")
 

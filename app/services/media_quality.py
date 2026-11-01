@@ -47,15 +47,37 @@ def clear_probe_media_cache() -> None:
         _PROBE_MEDIA_CACHE.clear()
 
 
-@functools.lru_cache(maxsize=1)
+_FFPROBE_BINARY_LOCK = threading.Lock()
+_CACHED_FFPROBE_BINARY: Optional[str] = None
+
+
+def clear_ffprobe_binary_cache() -> None:
+    """Limpa o cache do binário do ffprobe (útil para testes ou reconfiguração)."""
+    global _CACHED_FFPROBE_BINARY
+    with _FFPROBE_BINARY_LOCK:
+        _CACHED_FFPROBE_BINARY = None
+
+
 def get_ffprobe_binary() -> Optional[str]:
-    """Resolve o executável do ffprobe utilizando a mesma estratégia do ecossistema."""
+    """Resolve o executável do ffprobe utilizando a mesma estratégia do ecossistema.
+
+    Apenas armazena em cache se o binário for encontrado com sucesso (não cacheia None/ausente).
+    """
+    global _CACHED_FFPROBE_BINARY
+    with _FFPROBE_BINARY_LOCK:
+        if _CACHED_FFPROBE_BINARY is not None:
+            return _CACHED_FFPROBE_BINARY
+
     configured = config.app.get("ffprobe_path") or os.environ.get("FFPROBE_PATH")
     if configured and (shutil.which(configured) or os.path.isfile(configured)):
+        with _FFPROBE_BINARY_LOCK:
+            _CACHED_FFPROBE_BINARY = configured
         return configured
 
     sys_ffprobe = shutil.which("ffprobe")
     if sys_ffprobe:
+        with _FFPROBE_BINARY_LOCK:
+            _CACHED_FFPROBE_BINARY = sys_ffprobe
         return sys_ffprobe
 
     try:
@@ -66,11 +88,16 @@ def get_ffprobe_binary() -> Optional[str]:
                 ffmpeg_dir, "ffprobe.exe" if os.name == "nt" else "ffprobe"
             )
             if os.path.isfile(candidate):
+                with _FFPROBE_BINARY_LOCK:
+                    _CACHED_FFPROBE_BINARY = candidate
                 return candidate
     except Exception:
         pass
 
     return None
+
+
+get_ffprobe_binary.cache_clear = clear_ffprobe_binary_cache
 
 
 def probe_media(

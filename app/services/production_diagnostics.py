@@ -159,6 +159,50 @@ def _format_iso_utc(dt: Optional[datetime]) -> Optional[str]:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+class _LazyEventMetadata(dict):
+    """Wrapper preguiçoso para evitar json.loads em dezenas de milhares de eventos operacionais."""
+    __slots__ = ("_raw_json", "_parsed")
+
+    def __init__(self, raw_json: Optional[str]):
+        super().__init__()
+        self._raw_json = raw_json
+        self._parsed = False
+
+    def _ensure_parsed(self):
+        if not self._parsed:
+            self._parsed = True
+            if self._raw_json:
+                try:
+                    data = json.loads(self._raw_json) if isinstance(self._raw_json, str) else self._raw_json
+                    if isinstance(data, dict):
+                        super().update(data)
+                except Exception:
+                    pass
+
+    def get(self, key, default=None):
+        if not self._parsed:
+            if not self._raw_json or f'"{key}"' not in self._raw_json:
+                return default
+            self._ensure_parsed()
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self._ensure_parsed()
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        if not self._parsed:
+            if not self._raw_json or f'"{key}"' not in self._raw_json:
+                return False
+            self._ensure_parsed()
+        return super().__contains__(key)
+
+    def __bool__(self):
+        if not self._parsed:
+            return bool(self._raw_json and self._raw_json.strip() not in ("", "{}"))
+        return super().__bool__()
+
+
 def _extract_rejection_reason(msg: str, metadata: Dict[str, Any]) -> str:
     """Extrai motivo cru e fidedigno de reprovação a partir dos metadados e mensagem do evento."""
     unauth = metadata.get("unauthorized_provider")
@@ -419,14 +463,8 @@ def _get_diagnostics_overview_impl(
             ).fetchall()
             for r in oe_rows:
                 ed = dict(r)
-                meta = {}
                 raw_m = ed.get("metadata_json")
-                if raw_m:
-                    try:
-                        meta = json.loads(raw_m) if isinstance(raw_m, str) else raw_m
-                    except Exception:
-                        meta = {}
-                ed["metadata"] = meta if isinstance(meta, dict) else {}
+                ed["metadata"] = _LazyEventMetadata(raw_m) if raw_m else {}
                 events.append(ed)
 
                 tid = ed.get("task_id")
@@ -610,8 +648,7 @@ def _get_diagnostics_overview_impl(
                 channel_warnings.append(f"Erro ao obter teto de aprovações 24h: {exc}")
 
             try:
-                yt_channel = autonomous_production.resolve_autonomous_youtube_channel(pid, db_path=effective_db)
-                app_used = autonomous_production.count_generations_in_last_24h(now=now_utc, db_path=effective_db, profile_id=pid, channel_id=yt_channel)
+                app_used = autonomous_production.count_generations_in_last_24h(now=now_utc, db_path=effective_db, profile_id=pid)
             except Exception as exc:
                 channel_warnings.append(f"Erro ao contar gerações aprovadas 24h: {exc}")
 
@@ -790,38 +827,36 @@ def _get_diagnostics_overview_impl(
         # -------------------------------------------------------------
         for gen in generations_list:
             tid = gen["task_id"]
-            final_vid = scheduler.get_task_final_video(tid, task_base_dir=task_base_dir)
-            has_final_vid = bool(final_vid and os.path.isfile(final_vid) and os.path.getsize(final_vid) > 0)
-
+            in_stock = tid in ready_task_ids
+            in_scheduled = tid in scheduled_tasks
+            in_quality = tid in quality_map
             safety_record = safety_map.get(tid)
             has_safety_pass = bool(safety_record and safety_record.get("safety_status") == const.SAFETY_STATUS_PASS)
 
-            in_quality = tid in quality_map
-            in_scheduled = tid in scheduled_tasks
-            in_stock = tid in ready_task_ids
+            if has_safety_pass and not in_quality and not in_scheduled and not in_stock:
+                final_vid = scheduler.get_task_final_video(tid, task_base_dir=task_base_dir)
+                if bool(final_vid and os.path.isfile(final_vid) and os.path.getsize(final_vid) > 0):
+                    ref_time = _parse_iso_to_utc(safety_record.get("checked_at")) or gen["started_at"] or now_utc
+                    age_min = max(0.0, (now_utc - ref_time).total_seconds() / 60.0)
 
-            if has_final_vid and has_safety_pass and not in_quality and not in_scheduled and not in_stock:
-                ref_time = _parse_iso_to_utc(safety_record.get("checked_at")) or gen["started_at"] or now_utc
-                age_min = max(0.0, (now_utc - ref_time).total_seconds() / 60.0)
-
-                if age_min >= DEFAULT_STUCK_AFTER_RENDER_MINUTES:
-                    ev_ids = [e["id"] for e in gen.get("events", []) if "id" in e]
-                    diagnoses.append({
-                        "code": CODE_TASK_STUCK_AFTER_RENDER,
-                        "severity": SEVERITY_CRITICAL,
-                        "title": "Tarefa renderizada e segura travada antes da avaliação de qualidade",
-                        "detail": (
-                            f"A tarefa {tid} concluiu a renderização com vídeo final íntegro e validação de segurança "
-                            f"aprovada (Safety PASS), mas permaneceu fora do estoque, sem nota de qualidade ou agendamento "
-                            f"há {int(round(age_min))} minutos."
-                        ),
-                        "since": _format_iso_utc(ref_time),
-                        "evidence": {
-                            "task_ids": [tid],
-                            "event_ids": ev_ids,
-                        },
-                        "suggested_action": "Disparar avaliação de gates para a tarefa ou incluí-la manualmente no estoque de publicação.",
-                    })
+                    if age_min >= DEFAULT_STUCK_AFTER_RENDER_MINUTES:
+                        ev_ids = [e["id"] for e in gen.get("events", []) if "id" in e]
+                        diagnoses.append({
+                            "code": CODE_TASK_STUCK_AFTER_RENDER,
+                            "severity": SEVERITY_CRITICAL,
+                            "title": "Tarefa renderizada e segura travada antes da avaliação de qualidade",
+                            "detail": (
+                                f"A tarefa {tid} concluiu a renderização com vídeo final íntegro e validação de segurança "
+                                f"aprovada (Safety PASS), mas permaneceu fora do estoque, sem nota de qualidade ou agendamento "
+                                f"há {int(round(age_min))} minutos."
+                            ),
+                            "since": _format_iso_utc(ref_time),
+                            "evidence": {
+                                "task_ids": [tid],
+                                "event_ids": ev_ids,
+                            },
+                            "suggested_action": "Disparar avaliação de gates para a tarefa ou incluí-la manualmente no estoque de publicação.",
+                        })
 
         # -------------------------------------------------------------
         # Detector 2: FALSE_INTERRUPTION_LIKELY

@@ -500,7 +500,7 @@ def get_profile_status(request: Request, profile_id: str):
 
     pid = profile.get("id", profile_id)
     auto_status = autonomous_production.get_autonomous_status(profile_id=pid)
-    ready_stock = operator_console.get_canonical_ready_stock(profile_id=pid)
+    ready_stock = operator_console.get_canonical_ready_stock(profile_id=pid, fresh=False)
     channels = profile_manager.list_channels(profile_id=pid)
     youtube_channel_id = autonomous_production.resolve_autonomous_youtube_channel(pid)
 

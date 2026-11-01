@@ -700,6 +700,23 @@ class SingleFlightCache:
         self._lock = threading.Lock()
         self._cache: Dict[Any, Tuple[float, Any]] = {}
         self._inflight: Dict[Any, threading.Event] = {}
+        self._last_read_ts: float = 0.0
+
+    def record_read(self) -> None:
+        """Registra leitura da API para tracking de atividade recente."""
+        with self._lock:
+            self._last_read_ts = time.monotonic()
+
+    def get_last_read_ts(self) -> float:
+        with self._lock:
+            return self._last_read_ts
+
+    def is_active_recently(self, max_idle_seconds: float = 60.0) -> bool:
+        """Verifica se o cache foi lido pela API nos últimos max_idle_seconds."""
+        with self._lock:
+            if self._last_read_ts <= 0:
+                return False
+            return (time.monotonic() - self._last_read_ts) <= max_idle_seconds
 
     def get_or_compute(self, key: Any, compute_fn, fresh: bool = False):
         if fresh:
@@ -707,6 +724,7 @@ class SingleFlightCache:
 
         now = time.monotonic()
         with self._lock:
+            self._last_read_ts = now
             if key in self._cache:
                 ts, val = self._cache[key]
                 if (now - ts) < self.ttl_seconds:
@@ -725,6 +743,38 @@ class SingleFlightCache:
                 if key in self._cache:
                     return copy.deepcopy(self._cache[key][1])
             return compute_fn()
+
+        try:
+            res = compute_fn()
+            with self._lock:
+                self._cache[key] = (time.monotonic(), copy.deepcopy(res))
+            return res
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+                event.set()
+
+    def refresh(self, key: Any, compute_fn):
+        """Calcula e atualiza o cache atomicamente, respeitando single-flight.
+
+        Usado pelo warmer para repovoar o cache da API sem depender de chamada de tela.
+        Não atualiza _last_read_ts (apenas leituras de consumidores contam como atividade).
+        """
+        with self._lock:
+            if key in self._inflight:
+                event = self._inflight[key]
+                wait_on_inflight = True
+            else:
+                event = threading.Event()
+                self._inflight[key] = event
+                wait_on_inflight = False
+
+        if wait_on_inflight:
+            event.wait(timeout=30.0)
+            with self._lock:
+                if key in self._cache:
+                    return copy.deepcopy(self._cache[key][1])
+            return self.refresh(key, compute_fn)
 
         try:
             res = compute_fn()
@@ -771,24 +821,27 @@ class ReadyStockCacheWarmer(threading.Thread):
         logger.info(
             f"[STOCK_CACHE_WARMER] Warmer ativo (intervalo: {self.interval_seconds}s, daemon=True)."
         )
-        # 1. Warmup imediato de boot em segundo plano
+        # 1. Warmup imediato de boot em segundo plano (popula o cache sem simular leitura de tela)
         try:
             get_autonomous_ready_stock(
                 task_base_dir=self.task_base_dir,
                 db_path=self.db_path,
-                fresh=False,
+                warm_refresh=True,
             )
             logger.info("[STOCK_CACHE_WARMER] Pré-aquecimento inicial de boot concluído.")
         except Exception as exc:
             logger.debug(f"[STOCK_CACHE_WARMER] Erro no pré-aquecimento inicial: {exc}")
 
-        # 2. Renovação proativa do cache antes do vencimento do TTL de 12s
+        # 2. Renovação proativa do cache antes do vencimento do TTL de 12s, apenas se ativo recentemente (< 60s)
         while not self._stop_event.wait(self.interval_seconds):
+            if not _API_READY_STOCK_CACHE.is_active_recently(max_idle_seconds=60.0):
+                logger.debug("[STOCK_CACHE_WARMER] Cache ocioso (>60s sem leitura da API); pulando renovação.")
+                continue
             try:
                 get_autonomous_ready_stock(
                     task_base_dir=self.task_base_dir,
                     db_path=self.db_path,
-                    fresh=True,
+                    warm_refresh=True,
                 )
                 logger.debug("[STOCK_CACHE_WARMER] Cache de estoque renovado proativamente.")
             except Exception as exc:
@@ -834,6 +887,7 @@ def get_autonomous_ready_stock(
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
     fresh: bool = True,
+    warm_refresh: bool = False,
 ) -> Dict[str, Any]:
     """Calcula o estoque pronto elegível para o loop autônomo (fail-closed em Safety e Quality).
 
@@ -1021,10 +1075,14 @@ def get_autonomous_ready_stock(
 
         return eligible_list, local_plats_by_prof
 
-    if rp_cache is not None and base_cache_key in rp_cache:
+    if rp_cache is not None and base_cache_key in rp_cache and not warm_refresh:
         base_eligible = rp_cache[base_cache_key]
     else:
-        if fresh:
+        if warm_refresh:
+            base_eligible, plats_by_prof = _API_READY_STOCK_CACHE.refresh(
+                base_cache_key, _compute_base_eligible
+            )
+        elif fresh:
             base_eligible, plats_by_prof = _compute_base_eligible()
         else:
             base_eligible, plats_by_prof = _API_READY_STOCK_CACHE.get_or_compute(

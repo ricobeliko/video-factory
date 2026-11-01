@@ -1675,7 +1675,7 @@ def get_canonical_ready_stock(
     db_path: Optional[str] = None,
     profile_id: Optional[str] = None,
     channel_id: Optional[str] = None,
-    fresh: bool = True,
+    fresh: bool = False,
 ) -> Dict[str, Any]:
     """Retorna o estoque pronto usando a fonte canônica da produção autônoma (YouTube-first, fail-closed).
 

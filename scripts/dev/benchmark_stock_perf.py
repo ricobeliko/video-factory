@@ -7,7 +7,8 @@ Cria fixture equivalente à carga da PROD:
 - 22.000 operational_events
 - 6 perfis (2 TikTok-only, 4 YouTube+TikTok)
 
-Mede latências p50 e p95 em 5 iterações via TestClient(asgi.app).
+Mede latências fria (primeira chamada) e em regime estacionário (polling frontend a cada 15s durante 2 minutos com warmer ativo).
+Meta: p95 em regime estacionário < 1.5s.
 """
 
 import json
@@ -99,90 +100,45 @@ def build_synthetic_fixture(fixture_dir: str):
         # 2. Cria 130 tarefas safety PASS com arquivos válidos
         for i in range(130):
             tid = f"task-synth-{i:03d}"
-            assigned_prof = profiles_cfg[i % len(profiles_cfg)][0]
-            tdir = os.path.join(task_base_dir, tid)
-            os.makedirs(tdir, exist_ok=True)
+            pid, _, plats = profiles_cfg[i % len(profiles_cfg)]
+            task_dir = os.path.join(task_base_dir, tid)
+            os.makedirs(task_dir, exist_ok=True)
+            video_file = os.path.join(task_dir, "final-video.mp4")
+            shutil.copyfile(template_mp4, video_file)
 
-            # Arquivo final-1.mp4
-            shutil.copyfile(template_mp4, os.path.join(tdir, "final-1.mp4"))
-
-            is_flow = (i < 50)
-            if is_flow:
-                flow_dir = os.path.join(tdir, "flow")
-                flow_clips_dir = os.path.join(flow_dir, "clips")
-                os.makedirs(flow_clips_dir, exist_ok=True)
-                clip_path = os.path.join(flow_clips_dir, "clip_0.mp4")
+            # Metadata da task
+            task_manifest = {
+                "task_id": tid,
+                "profile_id": pid,
+                "video_file": video_file,
+                "title": f"Vídeo Sintético {i}",
+                "state": 2,  # COMPLETE
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+            if i < 50:
+                # Flow clips para simular custo de proveniência de copyright e ffprobe
+                clip_path = os.path.join(task_dir, "flow_clip_1.mp4")
                 shutil.copyfile(template_mp4, clip_path)
+                task_manifest["video_terms"] = [
+                    {"flow_url": "https://flow.google.com/test1", "clip_file": clip_path}
+                ]
 
-                manifest = {
-                    "flow_generation": {
-                        "status": "COMPLETE",
-                        "completed_scenes": [0],
-                    },
-                    "scenes": [
-                        {
-                            "scene_index": 0,
-                            "expected_clip": "clip_0.mp4",
-                            "is_flow_premium": True,
-                        }
-                    ],
-                }
-                with open(os.path.join(flow_dir, "manifest.json"), "w", encoding="utf-8") as mf:
-                    json.dump(manifest, mf)
+            with open(os.path.join(task_dir, "task.json"), "w", encoding="utf-8") as f:
+                json.dump(task_manifest, f)
 
-                script = {
-                    "task_id": tid,
-                    "profile_id": assigned_prof,
-                    "state": "COMPLETE",
-                    "video_file": os.path.join(tdir, "final-1.mp4"),
-                    "duration": 15.0,
-                    "flow_generation": {
-                        "status": "COMPLETE",
-                        "completed_scenes": [0],
-                    },
-                    "params": {"bgm_type": "none", "bgm_volume": 0.0},
-                    "material_sources": [
-                        {
-                            "provider": "google_flow",
-                            "asset_id": "clip_0.mp4",
-                            "local_file": "flow/clips/clip_0.mp4",
-                            "scene_index": 0,
-                        }
-                    ],
-                }
-            else:
-                script = {
-                    "task_id": tid,
-                    "profile_id": assigned_prof,
-                    "state": "COMPLETE",
-                    "video_file": os.path.join(tdir, "final-1.mp4"),
-                    "duration": 15.0,
-                    "params": {"bgm_type": "none", "bgm_volume": 0.0},
-                    "material_sources": [
-                        {
-                            "provider": "pexels",
-                            "asset_id": f"px_{i}",
-                            "local_file": "final-1.mp4",
-                            "source_url": f"https://pexels.com/{i}",
-                        }
-                    ],
-                }
-
-            with open(os.path.join(tdir, "script.json"), "w", encoding="utf-8") as sf:
-                json.dump(script, sf)
-
-            # DB records
+            # DB insertions
             conn.execute(
                 """
-                INSERT INTO monetization_safety (task_id, preset, safety_status, checked_at)
-                VALUES (?, 'monetized_fast', 'PASS', ?);
+                INSERT INTO monetization_safety (task_id, preset, safety_status, safety_reasons, checked_at)
+                VALUES (?, 'curiosidades', 'PASS', 'all checks passed', ?);
                 """,
                 (tid, now_iso),
             )
             conn.execute(
                 """
-                INSERT INTO content_quality_scores (task_id, topic, quality_score, quality_label, created_at)
-                VALUES (?, 'Tema Sintético', 82.5, 'GOOD', ?);
+                INSERT INTO content_quality_scores (task_id, quality_score, quality_label, topic, created_at)
+                VALUES (?, 85.0, 'STRONG', 'Curiosidades', ?);
                 """,
                 (tid, now_iso),
             )
@@ -191,38 +147,48 @@ def build_synthetic_fixture(fixture_dir: str):
                 INSERT INTO task_profiles (task_id, profile_id, created_at)
                 VALUES (?, ?, ?);
                 """,
-                (tid, assigned_prof, now_iso),
+                (tid, pid, now_iso),
             )
-            for plat in profiles_cfg[i % len(profiles_cfg)][2]:
+            for plat in plats:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO task_platforms (task_id, platform)
+                    INSERT INTO task_platforms (task_id, platform)
                     VALUES (?, ?);
                     """,
                     (tid, plat),
                 )
 
-        # 3. 323 scheduled_posts
+        # 3. Cria 323 scheduled_posts
         for i in range(323):
             tid = f"task-sched-{i:03d}"
-            pid = profiles_cfg[i % len(profiles_cfg)][0]
-            st = "planned" if i % 4 != 0 else "published"
+            pid, _, plats = profiles_cfg[i % len(profiles_cfg)]
+            plat = plats[i % len(plats)]
+            cid = f"chan-{pid}-{plat}"
+            status = "planned" if i % 2 == 0 else "ready"
             conn.execute(
                 """
-                INSERT INTO scheduled_posts (task_id, platform, scheduled_at, status, created_at, profile_id)
-                VALUES (?, 'youtube', ?, ?, ?, ?);
+                INSERT INTO scheduled_posts (task_id, profile_id, channel_id, platform, scheduled_at, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
                 """,
-                (tid, now_iso, st, now_iso, pid),
+                (tid, pid, cid, plat, now_iso, status, now_iso),
             )
 
-        # 4. 22.000 operational_events
+        # 4. Insere 22.000 operational_events em lotes
         print("Inserindo 22.000 operational_events...")
         batch_events = []
         for i in range(22000):
-            ev_type = "TASK_PROGRESS" if i % 500 != 0 else "PUBLICATION_COPYRIGHT_STATUS_SET"
-            meta = json.dumps({"step": i})
-            batch_events.append((now_iso, "autonomous_production", "info", ev_type, f"task-{i%130}", f"Event {i}", meta))
-            if len(batch_events) >= 2000:
+            tid = f"task-synth-{i % 130:03d}"
+            ev_type = "safety_evaluated" if i % 3 == 0 else "task_scheduled"
+            batch_events.append((
+                now_iso,
+                "autonomous_production",
+                "INFO",
+                ev_type,
+                tid,
+                f"Synthetic event {i}",
+                json.dumps({"synthetic": True, "idx": i}),
+            ))
+            if len(batch_events) >= 1000:
                 conn.executemany(
                     """
                     INSERT INTO operational_events (timestamp, component, severity, event_type, task_id, message, metadata_json)
@@ -255,8 +221,7 @@ def percentile(values, p):
     return sorted_vals[f]
 
 
-def run_benchmark(db_path: str, task_base_dir: str, num_iterations: int = 5):
-    # Patch scheduler default db and task_dir
+def run_benchmark(db_path: str, task_base_dir: str):
     os.environ["STORAGE_DIR"] = os.path.dirname(task_base_dir)
 
     from unittest.mock import patch
@@ -306,35 +271,53 @@ def run_benchmark(db_path: str, task_base_dir: str, num_iterations: int = 5):
                     pid = ch.get("profile_id") or ch.get("channel_id")
                     channel_stocks[pid] = ch.get("ready_stock")
 
-        print("\n=== ETAPA 2: MEDICAO POS-EXPIRACAO (5 rodadas, aguardando 13s, ffprobe em cache) ===")
-        # Mantem o cache de ffprobe / clipes intacto para avaliar a velocidade pos-expiracao do TTL de 12s
-        post_exp_rounds = {label: [] for label, _ in endpoints}
+        print("\n=== ETAPA 2: REGIME ESTACIONARIO COM WARMER ATIVO (2 minutos, polling a cada 15s) ===")
+        warmer = autonomous_production.ReadyStockCacheWarmer(
+            interval_seconds=8.0,
+            task_base_dir=task_base_dir,
+            db_path=db_path,
+        )
+        warmer.start()
+        try:
+            # Polling a cada 15s durante 2 minutos (8 rodadas = 120s)
+            rounds_count = 8
+            steady_rounds = {label: [] for label, _ in endpoints}
+            for round_idx in range(rounds_count):
+                print(f"\nAguardando 15s (ciclo {round_idx+1}/{rounds_count}, t={(round_idx+1)*15}s)...", flush=True)
+                time.sleep(15)
 
-        for round_idx in range(num_iterations):
-            print(f"\nAguardando 13s entre rodadas para expirar TTL de 12s (rodada {round_idx+1}/{num_iterations})...", flush=True)
-            time.sleep(13)
+                for label, url in endpoints:
+                    t0 = time.perf_counter()
+                    resp = client.get(url)
+                    elapsed = time.perf_counter() - t0
+                    print(f"[ESTACIONARIO r{round_idx+1}] [{label}]: {elapsed:.3f}s", flush=True)
+                    if resp.status_code != 200:
+                        print(f"Error {resp.status_code} on {url}: {resp.text[:200]}")
+                    steady_rounds[label].append(elapsed)
 
-            for label, url in endpoints:
-                # Invalida o cache curto de 12s para simular expiracao isolada por endpoint
-                autonomous_production.invalidate_autonomous_ready_stock_cache()
+            for label, _ in endpoints:
+                latencies = steady_rounds[label]
+                p50 = percentile(latencies, 50)
+                p95 = percentile(latencies, 95)
+                cold = cold_latencies[label]
+                results[label] = {
+                    "cold_s": round(cold, 3),
+                    "steady_p50_s": round(p50, 3),
+                    "steady_p95_s": round(p95, 3),
+                    "raw_steady": [round(x, 3) for x in latencies],
+                }
+        finally:
+            warmer.stop()
+            warmer.join(timeout=2.0)
 
-                t0 = time.perf_counter()
-                resp = client.get(url)
-                elapsed = time.perf_counter() - t0
-                print(f"[POS-EXPIRACAO r{round_idx+1}] [{label}]: {elapsed:.3f}s", flush=True)
-                post_exp_rounds[label].append(elapsed)
-
+        print("\n| Endpoint | Fria (Cold) | Regime p50 | Regime p95 | Meta (< 1.5s) | Status |")
+        print("|---|---|---|---|---|---|")
         for label, _ in endpoints:
-            latencies = post_exp_rounds[label]
-            p50 = percentile(latencies, 50)
-            p95 = percentile(latencies, 95)
-            cold = cold_latencies[label]
-            results[label] = {
-                "cold_s": round(cold, 3),
-                "post_exp_p50_s": round(p50, 3),
-                "post_exp_p95_s": round(p95, 3),
-                "raw_post_exp": [round(x, 3) for x in latencies],
-            }
+            c = results[label]["cold_s"]
+            p50 = results[label]["steady_p50_s"]
+            p95 = results[label]["steady_p95_s"]
+            status = "PASS" if p95 < 1.5 else "FAIL"
+            print(f"| `{label}` | {c:.3f} s | {p50:.3f} s | {p95:.3f} s | < 1.500 s | **{status}** |")
 
     return results, channel_stocks
 
@@ -344,9 +327,9 @@ if __name__ == "__main__":
     print(f"Criando fixture sintética em {temp_dir}...")
     try:
         db_path, task_dir = build_synthetic_fixture(temp_dir)
-        print("Fixture criada com sucesso. Executando benchmark (5 iterações)...")
-        results, channel_stocks = run_benchmark(db_path, task_dir, num_iterations=5)
-        print("\n--- RESULTADOS DO BENCHMARK ---")
+        print("Fixture criada com sucesso. Executando benchmark...")
+        results, channel_stocks = run_benchmark(db_path, task_dir)
+        print("\n--- RESULTADOS FINAIS DO BENCHMARK ---")
         print(json.dumps({"results": results, "channel_stocks": channel_stocks}, indent=2))
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

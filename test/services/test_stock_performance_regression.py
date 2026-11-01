@@ -236,3 +236,168 @@ def test_candidate_evaluation_parallelism_capped_at_4():
             assert mock_executor.call_count >= 1
             _, kwargs = mock_executor.call_args
             assert kwargs.get("max_workers", 0) <= 4
+
+
+def test_warmer_logic_with_compute_counters():
+    """Valida a lógica de refresh, tracking de atividade recente e bypass de fresh=True."""
+    cache = autonomous_production.SingleFlightCache(ttl_seconds=1.0)
+    compute_count = 0
+
+    def compute():
+        nonlocal compute_count
+        compute_count += 1
+        return [f"item_{compute_count}"]
+
+    # (b) Sem leitura recente da API, is_active_recently é False: warmer não deve recalcular
+    assert not cache.is_active_recently(max_idle_seconds=60.0)
+
+    # Simula tick do warmer quando ocioso:
+    if cache.is_active_recently(60.0):
+        cache.refresh("key", compute)
+    assert compute_count == 0  # não recalculou!
+
+    # API faz uma leitura inicial (fresh=False) -> calcula 1 vez e ativa o timestamp
+    val1 = cache.get_or_compute("key", compute, fresh=False)
+    assert val1 == ["item_1"]
+    assert compute_count == 1
+    assert cache.is_active_recently(max_idle_seconds=60.0)
+
+    # (a) O warmer faz um tick após haver leitura recente -> renova o cache via refresh
+    val_warm = cache.refresh("key", compute)
+    assert val_warm == ["item_2"]
+    assert compute_count == 2
+
+    # Leitura subsequente da API (fresh=False) NÃO recalcula (reutiliza o valor renovado pelo warmer)
+    val2 = cache.get_or_compute("key", compute, fresh=False)
+    assert val2 == ["item_2"]
+    assert compute_count == 2  # Continua 2!
+
+    # (c) O loop autônomo com fresh=True sempre recalcula e NÃO grava no cache da API
+    val_auto1 = cache.get_or_compute("key", compute, fresh=True)
+    assert val_auto1 == ["item_3"]
+    assert compute_count == 3
+
+    val_auto2 = cache.get_or_compute("key", compute, fresh=True)
+    assert val_auto2 == ["item_4"]
+    assert compute_count == 4
+
+    # Leitura da API ainda obtém o valor do cache (item_2), sem ser afetada pelo fresh=True do loop autônomo
+    val_api = cache.get_or_compute("key", compute, fresh=False)
+    assert val_api == ["item_2"]
+    assert compute_count == 4
+
+
+def test_ready_stock_cache_warmer_integration_counters():
+    """Valida thread ReadyStockCacheWarmer: tick repovoa cache, ociosidade inibe e fresh=True isolado."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test_warmer.db")
+        scheduler.init_db(db_path)
+        operator_console.init_operator_db(db_path)
+        task_dir = os.path.join(tmpdir, "tasks")
+        os.makedirs(task_dir, exist_ok=True)
+
+        autonomous_production.invalidate_autonomous_ready_stock_cache()
+        cache = autonomous_production._API_READY_STOCK_CACHE
+
+        with cache._lock:
+            cache._last_read_ts = 0.0
+
+        # (b) Sem leitura recente da API (is_active_recently é False)
+        assert not cache.is_active_recently(60.0)
+
+        compute_counter = 0
+        original_refresh = cache.refresh
+
+        def counted_refresh(key, compute_fn):
+            nonlocal compute_counter
+            compute_counter += 1
+            return original_refresh(key, compute_fn)
+
+        with patch.object(cache, "refresh", side_effect=counted_refresh):
+            warmer = autonomous_production.ReadyStockCacheWarmer(
+                interval_seconds=0.05,
+                task_base_dir=task_dir,
+                db_path=db_path,
+            )
+            warmer.start()
+            try:
+                # Boot pre-warm executa 1 refresh
+                time.sleep(0.08)
+                assert compute_counter == 1
+
+                # (b) Sem leitura da API, warmer fica ocioso e não incrementa refresh
+                time.sleep(0.12)
+                assert compute_counter == 1
+
+                # (a) API faz leitura (fresh=False) -> ativa last_read_ts
+                autonomous_production.get_autonomous_ready_stock(
+                    task_base_dir=task_dir, db_path=db_path, fresh=False
+                )
+                assert cache.is_active_recently(60.0)
+
+                # Próximo tick do warmer detecta atividade recente e repovoa o cache
+                time.sleep(0.12)
+                assert compute_counter >= 2
+
+                # Para o warmer para isolar asserções determinísticas de leitura e loop autônomo
+                warmer.stop()
+                warmer.join(timeout=1.0)
+
+                # Leitura subsequente da API não incrementa refresh nem recalcula
+                current_count = compute_counter
+                autonomous_production.get_autonomous_ready_stock(
+                    task_base_dir=task_dir, db_path=db_path, fresh=False
+                )
+                assert compute_counter == current_count
+
+                # (c) Loop autônomo com fresh=True sempre recalcula e não grava no cache (não chama refresh)
+                autonomous_production.get_autonomous_ready_stock(
+                    task_base_dir=task_dir, db_path=db_path, fresh=True
+                )
+                assert compute_counter == current_count
+            finally:
+                warmer.stop()
+                warmer.join(timeout=1.0)
+
+
+def test_get_ffprobe_binary_does_not_cache_none():
+    """Valida que get_ffprobe_binary não armazena None/ausente no cache e que clear_ffprobe_binary_cache limpa."""
+    media_quality.clear_ffprobe_binary_cache()
+
+    call_count = 0
+
+    def mock_which(cmd):
+        nonlocal call_count
+        if cmd == "ffprobe":
+            call_count += 1
+            if call_count == 1:
+                return None
+            return "/usr/bin/ffprobe"
+        return None
+
+    with patch("shutil.which", side_effect=mock_which), \
+         patch.dict("os.environ", {}, clear=True), \
+         patch.object(media_quality.config.app, "get", return_value=None), \
+         patch("app.utils.utils.get_ffmpeg_binary", return_value=None):
+
+        # 1ª chamada: ffprobe não encontrado -> retorna None
+        res1 = media_quality.get_ffprobe_binary()
+        assert res1 is None
+        assert call_count == 1
+
+        # 2ª chamada: ffprobe agora está disponível -> deve tentar encontrar e retornar o novo binário (não pode retornar None cacheado!)
+        res2 = media_quality.get_ffprobe_binary()
+        assert res2 == "/usr/bin/ffprobe"
+        assert call_count == 2
+
+        # 3ª chamada: binário encontrado foi armazenado no cache -> não chama shutil.which de novo
+        res3 = media_quality.get_ffprobe_binary()
+        assert res3 == "/usr/bin/ffprobe"
+        assert call_count == 2
+
+        # 4ª chamada: clear_ffprobe_binary_cache limpa o cache
+        media_quality.clear_ffprobe_binary_cache()
+        res4 = media_quality.get_ffprobe_binary()
+        assert res4 == "/usr/bin/ffprobe"
+        assert call_count == 3
+

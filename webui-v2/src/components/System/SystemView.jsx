@@ -1,4 +1,5 @@
 import { formatStatus, formatVideoFormat } from '../Fleet/fleetLogic';
+import FlowAccountsSection from '../FlowAccountsSection';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   getSystemStatus,
@@ -21,6 +22,7 @@ import {
   getChannelDestinations,
   updateChannelDestinations,
   getPublishingAccounts,
+  getLiveExecutions,
 } from '../../api';
 import {
   formatFactoryState,
@@ -61,6 +63,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
   const [apiHealth, setApiHealth] = useState(null);
   const [channelsData, setChannelsData] = useState([]);
   const [channelSettingsMap, setChannelSettingsMap] = useState({});
+  const [flowPool, setFlowPool] = useState(null);
 
   // Estados de controle e ciclo de vida
   const [isLoading, setIsLoading] = useState(true);
@@ -165,13 +168,14 @@ export default function SystemView({ onNavigate, focusChannelId }) {
     isFetchingRef.current = true;
 
     try {
-      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes] = await Promise.allSettled([
+      const [sysRes, provRes, healthRes, chanRes, voiceRes, providerSettingsRes, liveRes] = await Promise.allSettled([
         getSystemStatus(),
         getProviderHealth(),
         getHealth(),
         getChannelsOverview(),
         getAllowedVoices(),
         getProviderSettings(),
+        getLiveExecutions(),
       ]);
 
       if (sysRes.status === 'fulfilled' && sysRes.value) {
@@ -193,6 +197,10 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         if (!isProviderDirtyRef.current) {
           syncFormFromSnapshot(pData);
         }
+      }
+      if (liveRes.status === 'fulfilled' && liveRes.value) {
+        const liveVal = liveRes.value.data || liveRes.value;
+        setFlowPool(liveVal.flow_pool || liveVal.flow_accounts || null);
       }
       if (chanRes.status === 'fulfilled' && chanRes.value) {
         const rawChannels = chanRes.value.data?.channels || chanRes.value.channels || [];
@@ -890,20 +898,6 @@ export default function SystemView({ onNavigate, focusChannelId }) {
           >
             Revisão
           </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('factory-live')}
-          >
-            Factory Live
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('agent-ops')}
-          >
-            Agent Ops
-          </button>
           <button type="button" className="fleet-nav-link active">
             Sistema
           </button>
@@ -1255,6 +1249,10 @@ export default function SystemView({ onNavigate, focusChannelId }) {
             </table>
           </div>
         </section>
+
+        
+        {/* Cartão Flow Accounts / Provider Pool */}
+        <FlowAccountsSection flowPool={flowPool} />
 
         {/* Seção: Chaves e Conexões (M7 / Paridade V1-V2 Itens 4.1 e 4.2) */}
         <section className="sys-section" aria-labelledby="section-keys-title">

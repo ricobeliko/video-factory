@@ -888,3 +888,46 @@ def test_12_approval_blocked_when_copyright_unknown(env):
 
 
 
+
+
+def test_review_queue_cache_prevents_redundant_evaluations(env, monkeypatch):
+    """Garante que chamadas subsequentes a get_review_queue reutilizam o cache _QG_V2_CACHE
+    e não executam reavaliações redundantes de qualidade (evita I/O e CPU repetidos).
+    """
+    quality_recovery.clear_qg_v2_cache()
+    tid = "task-cache-regression-01"
+    _create_task_fixture(
+        env,
+        task_id=tid,
+        topic="Fatos Curiosos sobre o Universo",
+        orig_score=62.0,
+        orig_label="REVIEW",
+    )
+
+    # 1. Primeira chamada: popula o cache
+    res1 = quality_recovery.get_review_queue(db_path=env["db"], task_base_dir=env["tasks_dir"])
+    tasks1 = res1.get("tasks", [])
+    found1 = next((t for t in tasks1 if t["task_id"] == tid), None)
+    assert found1 is not None
+    assert tid in quality_recovery._QG_V2_CACHE
+
+    # 2. Patch em quality_score.evaluate_quality para falhar se for chamada novamente
+    eval_call_count = 0
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal eval_call_count
+        eval_call_count += 1
+        raise AssertionError("evaluate_quality não deveria ser chamada quando a tarefa está no cache!")
+
+    monkeypatch.setattr(quality_score, "evaluate_quality", _fail_if_called)
+
+    # 3. Segunda chamada: deve usar o cache sem chamar evaluate_quality
+    res2 = quality_recovery.get_review_queue(db_path=env["db"], task_base_dir=env["tasks_dir"])
+    tasks2 = res2.get("tasks", [])
+    found2 = next((t for t in tasks2 if t["task_id"] == tid), None)
+    assert found2 is not None
+    assert eval_call_count == 0
+
+    # 4. Limpeza do cache
+    quality_recovery.clear_qg_v2_cache()
+    assert tid not in quality_recovery._QG_V2_CACHE

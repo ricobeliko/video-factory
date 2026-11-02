@@ -273,20 +273,6 @@ export default function ProductionView({ onNavigate }) {
           <button
             type="button"
             className="fleet-nav-link"
-            onClick={() => handleNavClick('factory-live')}
-          >
-            Factory Live
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('agent-ops')}
-          >
-            Agent Ops
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
             onClick={() => handleNavClick('sistema')}
           >
             Sistema

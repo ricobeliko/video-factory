@@ -15,7 +15,7 @@ export default function FactoryHeader({
   lastUpdated,
   isApiOnline,
   onRefresh,
-  activeTab = 'factory-live',
+  activeTab = 'frota',
   onSelectTab,
 }) {
   const factoryStateInfo = formatFactoryState(systemStatus);
@@ -40,7 +40,7 @@ export default function FactoryHeader({
           <div className="brand-title">
             <span>⚙️ VIDEO FACTORY</span>
             <span className="brand-badge">
-              {activeTab === 'agent-ops' ? 'Agent Ops' : activeTab === 'video-review' ? 'Revisão' : 'Factory Live'}
+              {activeTab === 'video-review' ? 'Revisão' : 'Frota'}
             </span>
           </div>
 
@@ -53,22 +53,6 @@ export default function FactoryHeader({
             >
               <span className="tab-icon">🚀</span>
               <span>Frota</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-switch-tab ${activeTab === 'factory-live' ? 'active' : ''}`}
-              onClick={() => onSelectTab && onSelectTab('factory-live')}
-            >
-              <span className="tab-icon">🏭</span>
-              <span>Factory Live</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-switch-tab ${activeTab === 'agent-ops' ? 'active' : ''}`}
-              onClick={() => onSelectTab && onSelectTab('agent-ops')}
-            >
-              <span className="tab-icon">🤖</span>
-              <span>Agent Ops</span>
             </button>
             <button
               type="button"

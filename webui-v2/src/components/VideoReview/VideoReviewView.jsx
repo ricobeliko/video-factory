@@ -5,6 +5,7 @@ import {
   approveReviewTask,
   discardReviewTask,
 } from '../../api';
+import '../Fleet/fleet.css';
 import './videoReview.css';
 
 /**
@@ -184,7 +185,7 @@ function VideoReviewView({ onNavigate }) {
   };
 
   return (
-    <div className="review-view">
+    <div className="fleet-root review-view">
       {/* 1. Header Global com Navegação Unificada */}
       <header className="fleet-header">
         <div className="fleet-brand">

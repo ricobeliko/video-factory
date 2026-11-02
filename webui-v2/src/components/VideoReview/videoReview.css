@@ -5,11 +5,14 @@
  */
 
 .review-view {
-  min-height: 100vh;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
   background-color: var(--fleet-bg, #0B0D13);
   color: var(--fleet-text, #E1E7EC);
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 .review-main {
@@ -126,6 +129,9 @@
   .review-arena {
     grid-template-columns: 1fr;
   }
+  .review-player-card {
+    position: static;
+  }
 }
 
 /* Card do Player Vertical */
@@ -135,6 +141,8 @@
   border: 1px solid var(--fleet-border, #1E2330);
   overflow: hidden;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  position: sticky;
+  top: 76px;
 }
 
 .review-player-header {

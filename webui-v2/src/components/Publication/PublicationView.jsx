@@ -20,38 +20,19 @@ const INITIAL_LIMIT = 50;
 const MAX_LIMIT = 100;
 
 /**
- * Renderiza o selo semântico de status conforme valores canônicos de publication_events:
- * - success: Sucesso (verde)
- * - failed: Falha (vermelho + error_code)
- * - error: Erro (vermelho + error_code)
- * - skipped: Ignorado (âmbar)
- * - Desconhecido: exibido como veio, sem inventar rótulos.
+ * Renderiza o selo semântico de status de publicação:
+ * - success: "Publicado" (verde)
+ * - Qualquer outro valor: exibido como veio (fallback "unknown").
+ * A tabela publication_events registra exclusivamente publicações concluídas com sucesso.
  */
-function renderStatusBadge(status, errorCode) {
+function renderStatusBadge(status) {
   const s = String(status || '').toLowerCase().trim();
   if (s === 'success') {
-    return <span className="pub-status-badge pub-status-badge--success">Sucesso</span>;
-  }
-  if (s === 'failed') {
-    return (
-      <span className="pub-status-badge pub-status-badge--failed">
-        Falha {errorCode ? <span className="pub-error-code">({errorCode})</span> : null}
-      </span>
-    );
-  }
-  if (s === 'error') {
-    return (
-      <span className="pub-status-badge pub-status-badge--error">
-        Erro {errorCode ? <span className="pub-error-code">({errorCode})</span> : null}
-      </span>
-    );
-  }
-  if (s === 'skipped') {
-    return <span className="pub-status-badge pub-status-badge--skipped">Ignorado</span>;
+    return <span className="pub-status-badge pub-status-badge--success">Publicado</span>;
   }
   return (
     <span className="pub-status-badge pub-status-badge--unknown">
-      {status || '—'} {errorCode ? <span className="pub-error-code">({errorCode})</span> : null}
+      {status || '—'}
     </span>
   );
 }
@@ -59,7 +40,7 @@ function renderStatusBadge(status, errorCode) {
 /**
  * PublicationView — Tela de Publicação SOMENTE LEITURA (Missão v2/tela-publicacao).
  * Fontes Únicas:
- * 1. Histórico: GET /api/v2/publications (tabela publication_events).
+ * 1. Histórico: GET /api/v2/publications (tabela publication_events — publicações concluídas).
  * 2. Fila: GET /api/v2/production/overview (seção scheduled) + ScheduledPostsSection compartilhado.
  * 3. Navegação: FleetNav compartilhado com as demais 5 telas.
  */
@@ -72,7 +53,6 @@ export default function PublicationView({ onNavigate }) {
   const [channelsList, setChannelsList] = useState([]);
 
   const [selectedProfileId, setSelectedProfileId] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState('');
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -191,14 +171,6 @@ export default function PublicationView({ onNavigate }) {
     };
   }, [productionData, selectedProfileId]);
 
-  // Histórico filtrado por status
-  const filteredPublications = useMemo(() => {
-    if (!selectedStatus) return publications;
-    return publications.filter(
-      (p) => String(p.status || '').toLowerCase() === selectedStatus.toLowerCase()
-    );
-  }, [publications, selectedStatus]);
-
   const handleLoadMore = () => {
     if (pubLimit < MAX_LIMIT) {
       setPubLimit(MAX_LIMIT);
@@ -266,19 +238,22 @@ export default function PublicationView({ onNavigate }) {
           emptyMessage="Nenhum post agendado na fila de publicação."
         />
 
-        {/* Seção 2: Histórico de Publicações */}
+        {/* Seção 2: Histórico de Publicações Concluídas */}
         <section className="prod-section-card" aria-labelledby="heading-historico">
           <div className="prod-section-header">
             <div className="prod-section-title-group">
               <h2 id="heading-historico" className="prod-section-title">
-                📢 Histórico de Publicações
+                📢 Publicações Concluídas
               </h2>
               <span className="prod-badge-count fleet-mono">
-                {filteredPublications.length}
+                {publications.length}
+              </span>
+              <span className="pub-section-hint">
+                Vídeos publicados com sucesso (falhas não aparecem aqui)
               </span>
             </div>
 
-            {/* Filtros por canal e por status */}
+            {/* Filtro por canal */}
             <div className="pub-filters-bar">
               <div className="pub-filter-group">
                 <label htmlFor="pub-filter-channel" className="pub-filter-label">
@@ -301,29 +276,11 @@ export default function PublicationView({ onNavigate }) {
                   })}
                 </select>
               </div>
-
-              <div className="pub-filter-group">
-                <label htmlFor="pub-filter-status" className="pub-filter-label">
-                  Status:
-                </label>
-                <select
-                  id="pub-filter-status"
-                  className="pub-select"
-                  value={selectedStatus}
-                  onChange={(e) => setSelectedStatus(e.target.value)}
-                >
-                  <option value="">Todos os status</option>
-                  <option value="success">Sucesso</option>
-                  <option value="failed">Falha</option>
-                  <option value="error">Erro</option>
-                  <option value="skipped">Ignorado</option>
-                </select>
-              </div>
             </div>
           </div>
 
           <div className="prod-table-wrapper">
-            {filteredPublications.length === 0 ? (
+            {publications.length === 0 ? (
               <div className="prod-empty-box">
                 <span className="prod-empty-icon" aria-hidden="true">
                   📭
@@ -331,7 +288,7 @@ export default function PublicationView({ onNavigate }) {
                 <span>
                   {isLoading
                     ? 'Carregando histórico...'
-                    : 'Nenhum evento de publicação encontrado.'}
+                    : 'Nenhuma publicação concluída encontrada.'}
                 </span>
               </div>
             ) : (
@@ -346,7 +303,7 @@ export default function PublicationView({ onNavigate }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredPublications.map((item) => {
+                  {publications.map((item) => {
                     const channelName =
                       channelNameMap[item.profile_id] ||
                       channelNameMap[item.channel_id] ||
@@ -360,7 +317,7 @@ export default function PublicationView({ onNavigate }) {
                         </td>
                         <td className="prod-col-channel">{channelName}</td>
                         <td className="pub-col-platform">{item.platform || '—'}</td>
-                        <td>{renderStatusBadge(item.status, item.error_code)}</td>
+                        <td>{renderStatusBadge(item.status)}</td>
                         <td>
                           {item.external_url ? (
                             <a
@@ -387,7 +344,7 @@ export default function PublicationView({ onNavigate }) {
           {/* Barra de Paginação / Carregar Mais */}
           <div className="pub-pagination-bar">
             <span className="pub-pagination-hint">
-              Exibindo {filteredPublications.length} de até {pubLimit} eventos
+              Exibindo {publications.length} de até {pubLimit} publicações concluídas
             </span>
             {pubLimit < MAX_LIMIT ? (
               <button

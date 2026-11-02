@@ -20,6 +20,14 @@
   gap: 24px;
 }
 
+/* Indicador e Dica do Cabeçalho da Seção */
+.pub-section-hint {
+  font-size: 12.5px;
+  color: var(--fleet-text-muted);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
 /* Barra de Filtros e Controles do Histórico */
 .pub-filters-bar {
   display: flex;
@@ -76,31 +84,10 @@
   border: 1px solid rgba(52, 211, 153, 0.3);
 }
 
-.pub-status-badge--failed,
-.pub-status-badge--error {
-  color: #FF8A7A;
-  background-color: rgba(255, 138, 122, 0.15);
-  border: 1px solid rgba(255, 138, 122, 0.3);
-}
-
-.pub-status-badge--skipped {
-  color: #F5B546;
-  background-color: rgba(245, 181, 70, 0.15);
-  border: 1px solid rgba(245, 181, 70, 0.3);
-}
-
 .pub-status-badge--unknown {
   color: #9099AA;
   background-color: rgba(144, 153, 170, 0.15);
   border: 1px solid rgba(144, 153, 170, 0.25);
-}
-
-.pub-error-code {
-  font-family: var(--fleet-font-mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  color: #FF8A7A;
-  margin-left: 3px;
 }
 
 /* Link Externo do Vídeo */

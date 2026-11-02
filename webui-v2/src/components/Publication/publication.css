@@ -1,0 +1,164 @@
+/**
+ * publication.css — Estilos da Tela de Publicação (webui-v2).
+ * Utiliza estritamente variáveis canônicas definidas em fleet.css / styles.css.
+ */
+
+.publication-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.publication-main {
+  flex: 1;
+  padding: 24px 32px 48px;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Barra de Filtros e Controles do Histórico */
+.pub-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.pub-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pub-filter-label {
+  font-size: 12px;
+  color: var(--fleet-text-muted);
+  font-weight: 500;
+}
+
+.pub-select {
+  background-color: var(--fleet-input-bg);
+  color: var(--fleet-text-main);
+  border: 1px solid var(--fleet-border-subtle);
+  border-radius: var(--fleet-radius-sm);
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.pub-select:focus {
+  border-color: var(--fleet-blue);
+}
+
+/* Badges Semânticos de Status de Publicação */
+.pub-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.pub-status-badge--success {
+  color: #34D399;
+  background-color: rgba(52, 211, 153, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.pub-status-badge--failed,
+.pub-status-badge--error {
+  color: #FF8A7A;
+  background-color: rgba(255, 138, 122, 0.15);
+  border: 1px solid rgba(255, 138, 122, 0.3);
+}
+
+.pub-status-badge--skipped {
+  color: #F5B546;
+  background-color: rgba(245, 181, 70, 0.15);
+  border: 1px solid rgba(245, 181, 70, 0.3);
+}
+
+.pub-status-badge--unknown {
+  color: #9099AA;
+  background-color: rgba(144, 153, 170, 0.15);
+  border: 1px solid rgba(144, 153, 170, 0.25);
+}
+
+.pub-error-code {
+  font-family: var(--fleet-font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #FF8A7A;
+  margin-left: 3px;
+}
+
+/* Link Externo do Vídeo */
+.pub-external-link {
+  color: #6AA8FF;
+  text-decoration: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pub-external-link:hover {
+  text-decoration: underline;
+  color: #8B9DFF;
+}
+
+/* Botão Carregar Mais */
+.pub-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-top: 1px solid var(--fleet-border-subtle);
+  background-color: #0E121A;
+}
+
+.pub-pagination-hint {
+  font-size: 12px;
+  color: var(--fleet-text-muted);
+}
+
+.pub-load-more-btn {
+  background-color: #171E2D;
+  color: var(--fleet-text-main);
+  border: 1px solid var(--fleet-card-border);
+  border-radius: var(--fleet-radius-sm);
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pub-load-more-btn:hover:not(:disabled) {
+  background-color: #20293D;
+  border-color: var(--fleet-blue);
+  color: #FFFFFF;
+}
+
+.pub-load-more-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Coluna Plataforma */
+.pub-col-platform {
+  text-transform: capitalize;
+  font-weight: 500;
+}

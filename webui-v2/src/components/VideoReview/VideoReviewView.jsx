@@ -1,3 +1,4 @@
+import FleetNav from '../FleetNav';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   getReviewTasks,
@@ -29,11 +30,6 @@ function VideoReviewView({ onNavigate }) {
   const [showFullScript, setShowFullScript] = useState(false);
   const videoRef = useRef(null);
 
-  const handleNavClick = (tab) => {
-    if (onNavigate) {
-      onNavigate(tab);
-    }
-  };
 
   // Carrega fila de revisão do backend
   const loadReviewQueue = useCallback(async (currentFilter = filter) => {
@@ -207,43 +203,7 @@ function VideoReviewView({ onNavigate }) {
           <span className="fleet-mono fleet-brand-badge">V2</span>
         </div>
 
-        <nav className="fleet-nav" aria-label="Navegação da Aplicação">
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('frota')}
-          >
-            Frota
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('producao')}
-          >
-            Produção
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('diagnostico')}
-          >
-            Diagnóstico
-          </button>
-          <button type="button" className="fleet-nav-link" disabled title="Em breve">
-            <span>Publicação</span>
-            <span className="fleet-nav-soon">em breve</span>
-          </button>
-          <button type="button" className="fleet-nav-link active">
-            Revisão
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('sistema')}
-          >
-            Sistema
-          </button>
-        </nav>
+        <FleetNav activeTab="video-review" onNavigate={onNavigate} />
 
         <div className="fleet-header-right">
           <div className="fleet-sync-pill" title="Fila de revisão de qualidade">

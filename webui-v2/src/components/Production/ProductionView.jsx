@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getProductionOverview, runSchedulerCycle, planSchedule } from '../../api';
+import FleetNav from '../FleetNav';
+import ScheduledPostsSection from './ScheduledPostsSection';
 import { formatVideoFormat } from '../Fleet/fleetLogic';
 import {
   formatAgeHours,
@@ -169,13 +171,6 @@ export default function ProductionView({ onNavigate }) {
     return () => clearInterval(timer);
   }, [lastFetchTime]);
 
-  const handleNavClick = (tab) => {
-    if (onNavigate) {
-      onNavigate(tab);
-    } else {
-      window.location.hash = `#${tab}`;
-    }
-  };
 
   // Dados resolvidos
   const rawChannels = useMemo(() => data?.channels || [], [data]);
@@ -241,43 +236,7 @@ export default function ProductionView({ onNavigate }) {
           <span className="fleet-mono fleet-brand-badge">V2</span>
         </div>
 
-        <nav className="fleet-nav" aria-label="Navegação da Aplicação">
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('frota')}
-          >
-            Frota
-          </button>
-          <button type="button" className="fleet-nav-link active">
-            Produção
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('diagnostico')}
-          >
-            Diagnóstico
-          </button>
-          <button type="button" className="fleet-nav-link" disabled title="Em breve">
-            <span>Publicação</span>
-            <span className="fleet-nav-soon">em breve</span>
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('video-review')}
-          >
-            Revisão
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('sistema')}
-          >
-            Sistema
-          </button>
-        </nav>
+        <FleetNav activeTab="producao" onNavigate={onNavigate} />
 
         <div className="fleet-header-right">
           <div className="fleet-sync-pill" title="Intervalo automático de 15 segundos">
@@ -525,21 +484,13 @@ export default function ProductionView({ onNavigate }) {
         </section>
 
         {/* 4) Seção "Agendados" */}
-        <section className="prod-section-card" aria-labelledby="heading-agendados">
-          <div className="prod-section-header">
-            <div className="prod-section-title-group">
-              <h2 id="heading-agendados" className="prod-section-title">
-                🗓️ Agendados
-              </h2>
-              <span className="prod-badge-count fleet-mono">{scheduledSection.total}</span>
-              {formatShowingCount(scheduledSection.items.length, scheduledSection.total) && (
-                <span className="prod-section-showing-hint">
-                  {formatShowingCount(scheduledSection.items.length, scheduledSection.total)}
-                </span>
-              )}
-            </div>
-
-            <div className="prod-actions-group">
+        <ScheduledPostsSection
+          items={scheduledSection.items}
+          total={scheduledSection.total}
+          actionResult={actionResult}
+          onCloseActionResult={() => setActionResult(null)}
+          actions={
+            <>
               <button
                 type="button"
                 className="prod-btn-action prod-btn-action--plan"
@@ -558,71 +509,9 @@ export default function ProductionView({ onNavigate }) {
               >
                 ⚡ Publicar Agora
               </button>
-            </div>
-          </div>
-
-          {actionResult && (
-            <div
-              className={`prod-action-banner prod-action-banner--${actionResult.type}`}
-              role="status"
-            >
-              <span className="prod-action-banner-text">{actionResult.text}</span>
-              <button
-                type="button"
-                className="prod-action-banner-close"
-                onClick={() => setActionResult(null)}
-                aria-label="Fechar notificação"
-              >
-                ×
-              </button>
-            </div>
-          )}
-
-          <div className="prod-table-wrapper">
-            {scheduledSection.items.length === 0 ? (
-              <div className="prod-empty-box">
-                <span className="prod-empty-icon" aria-hidden="true">⏳</span>
-                <span>Nenhum post agendado na fila.</span>
-              </div>
-            ) : (
-              <table className="prod-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Data / Hora (BR)</th>
-                    <th scope="col">Canal</th>
-                    <th scope="col">Assunto</th>
-                    <th scope="col">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scheduledSection.items.map((item, idx) => (
-                    <tr key={item.post_id || idx}>
-                      <td className="prod-col-mono">{formatDateTimeBR(item.scheduled_at)}</td>
-                      <td className="prod-col-channel">{item.channel_name || '—'}</td>
-                      <td className="prod-col-topic" title={item.topic || ''}>
-                        {item.topic || '—'}
-                      </td>
-                      <td>
-                        <span
-                          className="prod-status-chip"
-                          style={{
-                            color: item.status === 'ready' ? '#34D399' : '#8B9DFF',
-                            backgroundColor:
-                              item.status === 'ready'
-                                ? 'rgba(52, 211, 153, 0.15)'
-                                : 'rgba(139, 157, 255, 0.15)',
-                          }}
-                        >
-                          {formatScheduledStatus(item.status)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
+            </>
+          }
+        />
 
         {/* 5) Seção "Últimas 24 h" */}
         <section className="prod-section-card" aria-labelledby="heading-recent-runs">

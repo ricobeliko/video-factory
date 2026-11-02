@@ -1,3 +1,4 @@
+import FleetNav from '../FleetNav';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getFleetSummary, createChannel, updateProfileAutonomousMode } from '../../api';
 import {
@@ -224,13 +225,6 @@ export default function FleetView({ onNavigate }) {
     return { all: total, attention, quiz, traditional, paused };
   }, [rawChannels]);
 
-  const handleNavClick = (tab) => {
-    if (onNavigate) {
-      onNavigate(tab);
-    } else {
-      window.location.hash = `#${tab}`;
-    }
-  };
 
   return (
     <div className="fleet-root">
@@ -255,43 +249,7 @@ export default function FleetView({ onNavigate }) {
           <span className="fleet-mono fleet-brand-badge">V2</span>
         </div>
 
-        <nav className="fleet-nav" aria-label="Navegação da Aplicação">
-          <button type="button" className="fleet-nav-link active">
-            Frota
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('producao')}
-          >
-            Produção
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('diagnostico')}
-          >
-            Diagnóstico
-          </button>
-          <button type="button" className="fleet-nav-link" disabled title="Em breve">
-            <span>Publicação</span>
-            <span className="fleet-nav-soon">em breve</span>
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('video-review')}
-          >
-            Revisão
-          </button>
-          <button
-            type="button"
-            className="fleet-nav-link"
-            onClick={() => handleNavClick('sistema')}
-          >
-            Sistema
-          </button>
-        </nav>
+        <FleetNav activeTab="frota" onNavigate={onNavigate} />
 
         <div className="fleet-header-spacer" />
 

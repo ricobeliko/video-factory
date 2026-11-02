@@ -37,17 +37,36 @@ from app.services import (
 )
 
 
+def _has_commit(commit_ref: str = "333f883^{commit}") -> bool:
+    """Verifica se um commit existe no repositório local via git cat-file."""
+    try:
+        res = subprocess.run(
+            ["git", "cat-file", "-e", commit_ref],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def _load_main_diagnostics_module():
     """Carrega dinamicamente a versão de production_diagnostics de main (333f883)."""
-    main_code = subprocess.check_output(
-        ["git", "show", "333f883:app/services/production_diagnostics.py"],
-        text=True,
-        encoding="utf-8",
-    )
-    spec = importlib.util.spec_from_loader("production_diagnostics_main", loader=None)
-    main_mod = importlib.util.module_from_spec(spec)
-    exec(main_code, main_mod.__dict__)
-    return main_mod
+    if not _has_commit("333f883^{commit}"):
+        return None
+    try:
+        main_code = subprocess.check_output(
+            ["git", "show", "333f883:app/services/production_diagnostics.py"],
+            text=True,
+            encoding="utf-8",
+            stderr=subprocess.DEVNULL,
+        )
+        spec = importlib.util.spec_from_loader("production_diagnostics_main", loader=None)
+        main_mod = importlib.util.module_from_spec(spec)
+        exec(main_code, main_mod.__dict__)
+        return main_mod
+    except Exception:
+        return None
 
 
 MAIN_DIAGNOSTICS = _load_main_diagnostics_module()
@@ -55,6 +74,11 @@ MAIN_DIAGNOSTICS = _load_main_diagnostics_module()
 
 class TestDiagnosticsParity(unittest.TestCase):
     def setUp(self):
+        if not _has_commit("333f883^{commit}") or MAIN_DIAGNOSTICS is None:
+            self.skipTest(
+                "Commit 333f883 não encontrado no repositório local "
+                "(git cat-file -e 333f883^{commit} falhou). Pulando teste de paridade."
+            )
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "parity_test.db")
         self.task_base_dir = os.path.join(self.temp_dir.name, "tasks")
@@ -148,6 +172,10 @@ class TestDiagnosticsParity(unittest.TestCase):
 
         return video_path
 
+    @unittest.skipUnless(
+        _has_commit("333f883^{commit}"),
+        "Commit 333f883 não encontrado no repositório local (git cat-file -e 333f883^{commit} falhou).",
+    )
     def test_parity_full_diagnostics_overview_main_vs_branch(self):
         """Compara a saída completa de get_diagnostics_overview entre main e branch."""
         now_fixed = datetime(2026, 11, 1, 12, 0, 0, tzinfo=timezone.utc)

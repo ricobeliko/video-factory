@@ -129,9 +129,6 @@
   .review-arena {
     grid-template-columns: 1fr;
   }
-  .review-player-card {
-    position: static;
-  }
 }
 
 /* Card do Player Vertical */
@@ -141,8 +138,6 @@
   border: 1px solid var(--fleet-border, #1E2330);
   overflow: hidden;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-  position: sticky;
-  top: 76px;
 }
 
 .review-player-header {

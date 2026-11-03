@@ -570,6 +570,23 @@ def _get_production_overview_impl(
                 or None
             )
 
+            # Se a tarefa falhou e não tem failure_stage ou error_msg em memória (ex: pós-reboot), recupera do evento operacional
+            if not failure_stage or not error_msg:
+                for ev in reversed(t_events):
+                    if ev.get("event_type") == "generation_failed":
+                        m_raw = ev.get("metadata_json")
+                        if m_raw:
+                            try:
+                                m_data = json.loads(m_raw) if isinstance(m_raw, str) else m_raw
+                                if isinstance(m_data, dict):
+                                    if not failure_stage:
+                                        failure_stage = m_data.get("failed_stage")
+                                    if not error_msg:
+                                        error_msg = m_data.get("error_code") or m_data.get("error")
+                            except Exception:
+                                pass
+                        break
+
             # (d) status: RUNNING, FAILED, REJECTED, SUCCESS (só quando COMPLETE sem erro/rejeição), senão UNKNOWN
             if is_active:
                 status = "RUNNING"

@@ -2798,13 +2798,40 @@ def _run_quiz_pipeline(
     os.makedirs(images_dir, exist_ok=True)
 
     # 1. Geração de Conteúdo Estruturado (QuizContentGenerator)
+    task_profile_id = getattr(params, "profile_id", None)
+    if not task_profile_id and task_id:
+        from app.services import profile_manager
+        discovered_pid = profile_manager.get_task_profile_id(task_id)
+        if discovered_pid and discovered_pid != profile_manager.DEFAULT_PROFILE_ID:
+            task_profile_id = discovered_pid
+
+    task_channel_id = getattr(params, "channel_id", None)
+
     sm.state.update_task(
         task_id,
         state=const.TASK_STATE_PROCESSING,
         progress=10,
         stage="SCRIPT",
-        profile_id=getattr(params, "profile_id", None),
+        profile_id=task_profile_id,
     )
+
+    excluded_channel_dilemmas: List[Dict[str, Any]] = []
+    if format_type == "subjective" and not is_paper_quiz:
+        try:
+            from app.services import quiz_safety_gate
+            if task_profile_id and task_profile_id != "default":
+                channel_history = quiz_safety_gate.get_isolated_quiz_history(
+                    profile_id=task_profile_id,
+                    channel_id=task_channel_id,
+                    exclude_task_id=task_id,
+                    limit=20,
+                )
+                for h in channel_history:
+                    for d in h.get("dilemmas", []):
+                        if not d.get("is_closing"):
+                            excluded_channel_dilemmas.append(d)
+        except Exception as hist_err:
+            logger.warning(f"[QUIZ_GEN] Erro ao carregar histórico isolado para exclusão: {hist_err}")
 
     try:
         from app.services.quiz_generator import QuizContentGenerator
@@ -2825,10 +2852,18 @@ def _run_quiz_pipeline(
                 quiz_title=params.video_subject if params.video_subject and params.video_subject != "auto" else None,
                 closing_type=closing_type,
                 topic_brief=topic_brief,
+                excluded_dilemmas=excluded_channel_dilemmas,
             )
     except Exception as exc:
         logger.error(f"[QUIZ_GEN][ERROR] task_id={task_id}: {exc}")
-        return _mark_task_failed(task_id, "script", f"Quiz generation failed: {exc}")
+        err_msg = str(exc)
+        err_details = {}
+        if "SEM_DILEMAS_NOVOS" in err_msg:
+            err_details = {
+                "error_code": "SEM_DILEMAS_NOVOS",
+                "reason": err_msg,
+            }
+        return _mark_task_failed(task_id, "script", f"Quiz generation failed: {exc}", details=err_details if err_details else None)
 
     questions = raw_quiz.get("questions", [])
     if not questions:
@@ -2866,6 +2901,7 @@ def _run_quiz_pipeline(
             narrative_structure=narrative_structure or const.STRUCTURE_QUIZ_DILEMMA,
             platform=getattr(params, "platform", None) or "youtube",
             profile_id=task_profile_id,
+            channel_id=task_channel_id,
         )
         params.safety_status = assessment.get("safety_status")
         params.safety_reasons = "; ".join(assessment.get("safety_reasons", []))

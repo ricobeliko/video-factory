@@ -28,6 +28,7 @@ import requests
 
 from app.config import config
 from app.services import llm, material
+from app.services.quiz_safety_gate import dilemma_similarity
 from scripts.poc_quiz_render import QuizConfig
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1002,6 +1003,51 @@ class QuizContentGenerator:
     # -------------------------------------------------------------------------
     # Geração Principal de Conteúdo Automatizado
     # -------------------------------------------------------------------------
+    @staticmethod
+    def _normalize_dilemma_for_comparison(q: Dict[str, Any]) -> Dict[str, Any]:
+        """Normaliza qualquer representação de dilema para o formato esperado por dilemma_similarity."""
+        top_title = q.get("top_title")
+        if top_title is None and isinstance(q.get("top"), dict):
+            top_title = q["top"].get("title", "")
+        bottom_title = q.get("bottom_title")
+        if bottom_title is None and isinstance(q.get("bottom"), dict):
+            bottom_title = q["bottom"].get("title", "")
+        return {
+            "top_title": str(top_title or "").strip(),
+            "bottom_title": str(bottom_title or "").strip(),
+            "narration": str(q.get("narration") or "").strip(),
+        }
+
+    def _is_dilemma_duplicate(
+        self,
+        candidate: Dict[str, Any],
+        excluded_dilemmas: List[Dict[str, Any]],
+        current_accepted: List[Dict[str, Any]],
+        threshold: float = 0.80,
+    ) -> Tuple[bool, str]:
+        """
+        FONTE ÚNICA 2: Valida se o candidato a dilema repete o histórico do canal (FONTE ÚNICA 1)
+        ou se é repetido internamente na própria tarefa, usando estritamente o critério dilemma_similarity >= 0.80.
+        """
+        cand_norm = self._normalize_dilemma_for_comparison(candidate)
+
+        # 1. Checagem contra histórico do canal (FONTE ÚNICA 1)
+        for exc in excluded_dilemmas:
+            exc_norm = self._normalize_dilemma_for_comparison(exc)
+            sim = dilemma_similarity(cand_norm, exc_norm)
+            if sim >= threshold:
+                return True, f"Repetição de histórico do canal ({sim:.2f} >= {threshold}): '{exc_norm.get('narration', '')[:50]}'"
+
+        # 2. Checagem interna no próprio vídeo
+        for acc in current_accepted:
+            acc_norm = self._normalize_dilemma_for_comparison(acc)
+            sim = dilemma_similarity(cand_norm, acc_norm)
+            if sim >= threshold:
+                return True, f"Repetição interna no mesmo vídeo ({sim:.2f} >= {threshold}): '{acc_norm.get('narration', '')[:50]}'"
+
+        return False, ""
+
+
     def generate_quiz_structure(
         self,
         niche: str,
@@ -1010,6 +1056,7 @@ class QuizContentGenerator:
         quiz_title: Optional[str] = None,
         closing_type: str = "engagement_cta",
         topic_brief: Optional[str] = None,
+        excluded_dilemmas: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Gera conteúdo completo de quiz com perguntas, alternativas e metadados.
@@ -1017,35 +1064,299 @@ class QuizContentGenerator:
         """
         logger.info(f"[QUIZ_GEN] Gerando quiz: nicho='{niche}', formato='{format_type}', perguntas={num_questions}")
 
-        prompt = self._build_generation_prompt(
-            niche=niche,
-            format_type=format_type,
-            num_questions=num_questions,
-            quiz_title=quiz_title,
-            closing_type=closing_type,
-            topic_brief=topic_brief,
-        )
-        raw_response = ""
-        parsed_data = None
+        if format_type == "subjective":
+            # 1. Determina quantos dilemas ativos de conteúdo devem ser obtidos
+            is_religious_or_dilemma = (closing_type == "quiz_choice_religious" or num_questions >= 7)
+            if is_religious_or_dilemma:
+                target_active = max(1, num_questions - 2)
+            elif closing_type in ("score_challenge", "comments"):
+                target_active = max(1, num_questions - 1)
+            else:
+                target_active = num_questions
 
-        try:
-            raw_response = llm._generate_response(prompt)
-            parsed_data = self._parse_llm_json(raw_response)
-        except Exception as exc:
-            logger.warning(f"[QUIZ_GEN] LLM falhou ou timeout: {exc}. Usando gerador factual estruturado de fallback.")
+            channel_exclusions = list(excluded_dilemmas or [])
+            validated_dilemmas: List[Dict[str, Any]] = []
+            rejected_dilemmas: List[Dict[str, Any]] = []
+            max_llm_rounds = 3
+            last_parsed_meta = {}
 
-        if not parsed_data or not parsed_data.get("questions"):
-            logger.warning("[QUIZ_GEN] Resposta da LLM inválida. Aplicando fallback determinístico do nicho.")
-            parsed_data = self._generate_fallback_content(niche, format_type, num_questions, quiz_title, closing_type)
+            # Rodadas de LLM (até 3 rodadas: 1 inicial + até 2 adicionais)
+            for round_idx in range(1, max_llm_rounds + 1):
+                needed = target_active - len(validated_dilemmas)
+                if needed <= 0:
+                    break
 
-        # Filtra duplicatas e valida
-        validated_questions = []
-        for q in parsed_data.get("questions", []):
-            q_text = q.get("narration", "")
-            opts_text = f"{q.get('top', {}).get('title', '')} {q.get('bottom', {}).get('title', '')}"
+                logger.info(
+                    f"[QUIZ_GEN] Rodada LLM {round_idx}/{max_llm_rounds}: "
+                    f"solicitando {needed} dilemas (já aceitos: {len(validated_dilemmas)}/{target_active})"
+                )
 
-            # Governança factual: LLM self-attestation NÃO concede verified: True!
-            if format_type == "factual":
+                additional_avoid = list(validated_dilemmas) + list(rejected_dilemmas)
+                prompt = self._build_generation_prompt(
+                    niche=niche,
+                    format_type=format_type,
+                    num_questions=needed,
+                    quiz_title=quiz_title,
+                    closing_type=closing_type,
+                    topic_brief=topic_brief,
+                    excluded_dilemmas=channel_exclusions,
+                    additional_avoid=additional_avoid,
+                    round_number=round_idx,
+                )
+
+                parsed_data = None
+                try:
+                    raw_response = llm._generate_response(prompt)
+                    parsed_data = self._parse_llm_json(raw_response)
+                except Exception as exc:
+                    logger.warning(f"[QUIZ_GEN] LLM rodada {round_idx} falhou ou timeout: {exc}")
+
+                if parsed_data and isinstance(parsed_data, dict):
+                    last_parsed_meta = parsed_data
+                    for q in parsed_data.get("questions", []):
+                        if len(validated_dilemmas) >= target_active:
+                            break
+                        if not isinstance(q, dict):
+                            continue
+
+                        # Validação anti-duplicação via FONTE ÚNICA 1 e FONTE ÚNICA 2
+                        is_dup, dup_reason = self._is_dilemma_duplicate(
+                            candidate=q,
+                            excluded_dilemmas=channel_exclusions,
+                            current_accepted=validated_dilemmas,
+                            threshold=0.80,
+                        )
+
+                        if not is_dup:
+                            validated_dilemmas.append(q)
+                            logger.info(
+                                f"[QUIZ_GEN] Dilema aceito ({len(validated_dilemmas)}/{target_active}): "
+                                f"{q.get('narration', '')[:50]}"
+                            )
+                        else:
+                            rejected_dilemmas.append(q)
+                            logger.info(f"[QUIZ_GEN] Dilema rejeitado: {dup_reason}")
+
+            # Se ainda faltarem dilemas após as rodadas de LLM, tenta completar com CANONICAL_DILEMMA_CATALOG sob Critério 2
+            if len(validated_dilemmas) < target_active:
+                missing_count = target_active - len(validated_dilemmas)
+                logger.warning(
+                    f"[QUIZ_GEN] LLM não forneceu dilemas suficientes após {max_llm_rounds} rodadas. "
+                    f"Faltam {missing_count} dilemas. Tentando catálogo canônico sob Critério 2..."
+                )
+
+                for cat_item in CANONICAL_DILEMMA_CATALOG:
+                    if len(validated_dilemmas) >= target_active:
+                        break
+
+                    is_dup, dup_reason = self._is_dilemma_duplicate(
+                        candidate=cat_item,
+                        excluded_dilemmas=channel_exclusions,
+                        current_accepted=validated_dilemmas,
+                        threshold=0.80,
+                    )
+                    if not is_dup:
+                        q_id = f"q{len(validated_dilemmas) + 1}"
+                        validated_dilemmas.append({
+                            "id": q_id,
+                            "header": cat_item.get("header") or "DECISÃO DIFÍCIL:",
+                            "narration": cat_item["narration"].strip(),
+                            "top": {
+                                "title": cat_item["top"]["title"],
+                                "tag": "OPÇÃO A",
+                                "image_query": cat_item["top"]["image_query"],
+                                "image_name": f"{q_id}_top_v2.jpg",
+                                "theme": cat_item["top"].get("theme", "red"),
+                            },
+                            "bottom": {
+                                "title": cat_item["bottom"]["title"],
+                                "tag": "OPÇÃO B",
+                                "image_query": cat_item["bottom"]["image_query"],
+                                "image_name": f"{q_id}_bot_v2.jpg",
+                                "theme": cat_item["bottom"].get("theme", "blue"),
+                            },
+                            "percentage_top": cat_item.get("percentage_top", 50),
+                            "percentage_bottom": cat_item.get("percentage_bottom", 50),
+                            "countdown_sec": cat_item.get("countdown_sec", 3.0),
+                        })
+                        logger.info(f"[QUIZ_GEN] Catálogo canônico aceito: {cat_item['narration'][:50]}")
+                    else:
+                        logger.debug(f"[QUIZ_GEN] Catálogo canônico descartado por duplicidade: {dup_reason}")
+
+            # Se ainda faltarem dilemas, FALHA com SEM_DILEMAS_NOVOS (NUNCA completa com repetidos)
+            if len(validated_dilemmas) < target_active:
+                err_msg = (
+                    f"SEM_DILEMAS_NOVOS: Não foi possível obter {target_active} dilemas inéditos para o canal. "
+                    f"Obtidos {len(validated_dilemmas)}/{target_active} após {max_llm_rounds} rodadas de LLM e catálogo canônico esgotado. "
+                    f"Interrupção segura para evitar repetição no safety gate."
+                )
+                logger.error(f"[QUIZ_GEN] {err_msg}")
+                raise RuntimeError(err_msg)
+
+            # Grava no histórico persistente
+            for q in validated_dilemmas:
+                q_text = q.get("narration", "")
+                opts_text = f"{q.get('top', {}).get('title', '')} {q.get('bottom', {}).get('title', '')}"
+                self.record_question(q_text, niche, format_type, opts_text)
+
+            final_questions = list(validated_dilemmas)
+            seed_val = len(self.question_history) + abs(hash(str(quiz_title or niche)))
+
+            # Adiciona dilemas de fechamento editorial (Jesus e CTA)
+            if num_questions >= 8:
+                q7_idx = len(final_questions) + 1
+                var7 = DILEMMA_7_JESUS_VARIATIONS[seed_val % len(DILEMMA_7_JESUS_VARIATIONS)]
+                final_questions.append({
+                    "id": f"q{q7_idx}",
+                    "is_closing_choice": True,
+                    "role": "editorial_closing",
+                    "header": "ESCOLHA RÁPIDO:",
+                    "narration": var7["narration"],
+                    "top": {
+                        "title": var7["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var7["top"]["image_query"],
+                        "image_name": f"q{q7_idx}_top_v2.jpg",
+                        "theme": var7["top"].get("theme", "red"),
+                    },
+                    "bottom": {
+                        "title": var7["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var7["bottom"]["image_query"],
+                        "image_name": f"q{q7_idx}_bot_v2.jpg",
+                        "theme": var7["bottom"].get("theme", "gold_red"),
+                    },
+                    "percentage_top": var7.get("percentage_top", 14),
+                    "percentage_bottom": var7.get("percentage_bottom", 86),
+                    "countdown_sec": 2.4,
+                })
+
+                q8_idx = len(final_questions) + 1
+                var8 = DILEMMA_8_CTA_VARIATIONS[(seed_val + 1) % len(DILEMMA_8_CTA_VARIATIONS)]
+                final_questions.append({
+                    "id": f"q{q8_idx}",
+                    "is_closing_choice": True,
+                    "role": "editorial_closing",
+                    "header": "QUAL O SEU DESTINO:",
+                    "narration": var8["narration"],
+                    "top": {
+                        "title": var8["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var8["top"]["image_query"],
+                        "image_name": f"q{q8_idx}_top_v2.jpg",
+                        "theme": var8["top"].get("theme", "blue_neutral"),
+                    },
+                    "bottom": {
+                        "title": var8["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var8["bottom"]["image_query"],
+                        "image_name": f"q{q8_idx}_bot_v2.jpg",
+                        "theme": var8["bottom"].get("theme", "gold_red"),
+                    },
+                    "percentage_top": var8.get("percentage_top", 9),
+                    "percentage_bottom": var8.get("percentage_bottom", 91),
+                    "countdown_sec": 2.4,
+                })
+            elif closing_type == "quiz_choice_religious" and num_questions >= 2:
+                q_penult = len(final_questions) + 1
+                var7 = DILEMMA_7_JESUS_VARIATIONS[seed_val % len(DILEMMA_7_JESUS_VARIATIONS)]
+                final_questions.append({
+                    "id": f"q{q_penult}",
+                    "is_closing_choice": True,
+                    "role": "editorial_closing",
+                    "header": "ESCOLHA RÁPIDO:",
+                    "narration": var7["narration"],
+                    "top": {
+                        "title": var7["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var7["top"]["image_query"],
+                        "image_name": f"q{q_penult}_top_v2.jpg",
+                        "theme": var7["top"].get("theme", "red"),
+                    },
+                    "bottom": {
+                        "title": var7["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var7["bottom"]["image_query"],
+                        "image_name": f"q{q_penult}_bot_v2.jpg",
+                        "theme": var7["bottom"].get("theme", "gold_red"),
+                    },
+                    "percentage_top": var7.get("percentage_top", 14),
+                    "percentage_bottom": var7.get("percentage_bottom", 86),
+                    "countdown_sec": 2.4,
+                })
+                q_last = len(final_questions) + 1
+                var8 = DILEMMA_8_CTA_VARIATIONS[(seed_val + 1) % len(DILEMMA_8_CTA_VARIATIONS)]
+                final_questions.append({
+                    "id": f"q{q_last}",
+                    "is_closing_choice": True,
+                    "role": "editorial_closing",
+                    "header": "QUAL O SEU DESTINO:",
+                    "narration": var8["narration"],
+                    "top": {
+                        "title": var8["top"]["title"],
+                        "tag": "OPÇÃO A",
+                        "image_query": var8["top"]["image_query"],
+                        "image_name": f"q{q_last}_top_v2.jpg",
+                        "theme": var8["top"].get("theme", "blue_neutral"),
+                    },
+                    "bottom": {
+                        "title": var8["bottom"]["title"],
+                        "tag": "OPÇÃO B",
+                        "image_query": var8["bottom"]["image_query"],
+                        "image_name": f"q{q_last}_bot_v2.jpg",
+                        "theme": var8["bottom"].get("theme", "gold_red"),
+                    },
+                    "percentage_top": var8.get("percentage_top", 9),
+                    "percentage_bottom": var8.get("percentage_bottom", 91),
+                    "countdown_sec": 2.4,
+                })
+
+            parsed_data = {
+                "niche": niche or "curiosidades_dilemas",
+                "quiz_title": quiz_title or last_parsed_meta.get("quiz_title") or "QUAL VOCÊ ESCOLHERIA?",
+                "format_type": "subjective",
+                "closing_type": closing_type,
+                "questions": final_questions[:num_questions],
+            }
+
+            # Renumera os IDs para consistência q1..qN
+            for idx, q in enumerate(parsed_data["questions"]):
+                q["id"] = f"q{idx + 1}"
+                if isinstance(q.get("top"), dict):
+                    q["top"]["image_name"] = f"q{idx + 1}_top_v2.jpg"
+                if isinstance(q.get("bottom"), dict):
+                    q["bottom"]["image_name"] = f"q{idx + 1}_bot_v2.jpg"
+
+        else:
+            # Geração factual existente (mantida intacta)
+            prompt = self._build_generation_prompt(
+                niche=niche,
+                format_type=format_type,
+                num_questions=num_questions,
+                quiz_title=quiz_title,
+                closing_type=closing_type,
+                topic_brief=topic_brief,
+            )
+            raw_response = ""
+            parsed_data = None
+
+            try:
+                raw_response = llm._generate_response(prompt)
+                parsed_data = self._parse_llm_json(raw_response)
+            except Exception as exc:
+                logger.warning(f"[QUIZ_GEN] LLM falhou ou timeout: {exc}. Usando gerador factual estruturado de fallback.")
+
+            if not parsed_data or not parsed_data.get("questions"):
+                logger.warning("[QUIZ_GEN] Resposta da LLM inválida. Aplicando fallback determinístico do nicho.")
+                parsed_data = self._generate_fallback_content(niche, format_type, num_questions, quiz_title, closing_type)
+
+            # Filtra duplicatas e valida
+            validated_questions = []
+            for q in parsed_data.get("questions", []):
+                q_text = q.get("narration", "")
+                opts_text = f"{q.get('top', {}).get('title', '')} {q.get('bottom', {}).get('title', '')}"
+
+                # Governança factual: LLM self-attestation NÃO concede verified: True!
                 if not q.get("evidence_source") or "LLM" in str(q.get("evidence_source", "")):
                     q["verified"] = False
                     q["fact_status"] = "UNVERIFIED_LLM_HEURISTIC"
@@ -1056,36 +1367,32 @@ class QuizContentGenerator:
                     q["fact_status"] = "VERIFIED_CANONICAL"
                     q["publication_gate"] = "READY"
 
-            if not self.is_question_duplicate(q_text, opts_text):
-                self.record_question(q_text, niche, format_type, opts_text)
-                validated_questions.append(q)
-            else:
-                logger.info(f"[QUIZ_GEN] Duplicata evitada: {q_text[:40]}...")
-
-        # Garante quantidade de perguntas
-        if len(validated_questions) < num_questions:
-            # Completa com fallback se faltaram perguntas, garantindo validação anti-duplicação
-            fb = self._generate_fallback_content(niche, format_type, num_questions, quiz_title, closing_type)
-            for q in fb["questions"]:
-                if len(validated_questions) >= num_questions:
-                    break
-                q_text = q.get("narration", "")
-                opts_text = f"{q.get('top', {}).get('title', '')} {q.get('bottom', {}).get('title', '')}"
-                if not self.is_question_duplicate(q_text, opts_text) and q["id"] not in [x["id"] for x in validated_questions]:
+                if not self.is_question_duplicate(q_text, opts_text):
                     self.record_question(q_text, niche, format_type, opts_text)
                     validated_questions.append(q)
+                else:
+                    logger.info(f"[QUIZ_GEN] Duplicata evitada: {q_text[:40]}...")
 
-            # Se ainda assim faltarem perguntas após o filtro estrito, permite as do fallback não colidentes por ID
             if len(validated_questions) < num_questions:
+                fb = self._generate_fallback_content(niche, format_type, num_questions, quiz_title, closing_type)
                 for q in fb["questions"]:
                     if len(validated_questions) >= num_questions:
                         break
-                    if q["id"] not in [x["id"] for x in validated_questions]:
+                    q_text = q.get("narration", "")
+                    opts_text = f"{q.get('top', {}).get('title', '')} {q.get('bottom', {}).get('title', '')}"
+                    if not self.is_question_duplicate(q_text, opts_text) and q["id"] not in [x["id"] for x in validated_questions]:
+                        self.record_question(q_text, niche, format_type, opts_text)
                         validated_questions.append(q)
 
-        parsed_data["questions"] = validated_questions[:num_questions]
+                if len(validated_questions) < num_questions:
+                    for q in fb["questions"]:
+                        if len(validated_questions) >= num_questions:
+                            break
+                        if q["id"] not in [x["id"] for x in validated_questions]:
+                            validated_questions.append(q)
 
-        # Sanitização e normalização de retenção Q0-R
+            parsed_data["questions"] = validated_questions[:num_questions]
+
         for idx, q in enumerate(parsed_data["questions"]):
             # Garante porcentagens simuladas coerentes
             pct_top = q.get("percentage_top")
@@ -1140,13 +1447,49 @@ class QuizContentGenerator:
         quiz_title: Optional[str],
         closing_type: str,
         topic_brief: Optional[str] = None,
+        excluded_dilemmas: Optional[List[Dict[str, Any]]] = None,
+        additional_avoid: Optional[List[Dict[str, Any]]] = None,
+        round_number: int = 1,
     ) -> str:
-        recent_subj = [x.get("question_text", "") for x in self.question_history if x.get("question_text") and x.get("format_type") == "subjective"]
-        recent_other = [x.get("question_text", "") for x in self.question_history[-30:] if x.get("question_text")]
-        recent_questions = recent_subj[-20:] if recent_subj else recent_other[-15:]
         avoid_clause = ""
-        if recent_questions:
-            avoid_clause = f"\nEvite expressamente repetir ou criar variações das seguintes perguntas já usadas recentemente:\n" + "\n".join([f"- {q}" for q in recent_questions[-16:]])
+        if format_type == "subjective":
+            forbidden_lines = []
+            all_exclusions: List[Dict[str, Any]] = []
+            if excluded_dilemmas:
+                all_exclusions.extend(excluded_dilemmas)
+            if additional_avoid:
+                all_exclusions.extend(additional_avoid)
+
+            for d in all_exclusions:
+                d_norm = self._normalize_dilemma_for_comparison(d)
+                top = d_norm.get("top_title", "")
+                bot = d_norm.get("bottom_title", "")
+                narr = d_norm.get("narration", "")
+                if top and bot:
+                    forbidden_lines.append(f"- Opção A: {top} | Opção B: {bot} ({narr})")
+                elif narr:
+                    forbidden_lines.append(f"- {narr}")
+
+            unique_forbidden = list(dict.fromkeys(forbidden_lines))
+            if unique_forbidden:
+                avoid_clause = (
+                    "\n=======================================================\n"
+                    "DILEMAS PROIBIDOS - NÃO REPETIR NENHUM DESTES:\n"
+                    "O canal já utilizou os seguintes dilemas em vídeos recentes ou nesta sessão.\n"
+                    "É ESTRITAMENTE PROIBIDO repetir qualquer um deles ou criar variações sinônimas ou temas quase idênticos!\n"
+                    + "\n".join(unique_forbidden)
+                    + "\n=======================================================\n"
+                    "INSTRUÇÃO DE DIVERSIFICAÇÃO OBRIGATÓRIA:\n"
+                    "Crie dilemas COMPLETAMENTE NOVOS, originais e surpreendentes, explorando temas variados "
+                    "(ética, sobrevivência, superpoderes com pegadinhas, ficção científica, dilemas sociais, psicologia reversa, escolhas absurdas). "
+                    "NÃO repita clichês já usados.\n"
+                )
+        else:
+            recent_subj = [x.get("question_text", "") for x in self.question_history if x.get("question_text") and x.get("format_type") == "subjective"]
+            recent_other = [x.get("question_text", "") for x in self.question_history[-30:] if x.get("question_text")]
+            recent_questions = recent_subj[-20:] if recent_subj else recent_other[-15:]
+            if recent_questions:
+                avoid_clause = f"\nEvite expressamente repetir ou criar variações das seguintes perguntas já usadas recentemente:\n" + "\n".join([f"- {q}" for q in recent_questions[-16:]])
 
         brief_clause = ""
         if topic_brief and str(topic_brief).strip():
@@ -1218,16 +1561,14 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
 Gere um quiz SUBJETIVO de dilemas impossíveis no nicho '{niche}' com exatamente {num_questions} escolhas.
 
 REGRAS DE RETENÇÃO ABSOLUTA (Q0-R):
-1. NARRAÇÃO DIRETA: Use "O que você prefere?" SOMENTE na primeira pergunta (q1).
-2. Da 2ª pergunta em diante, NUNCA anuncie "segunda pergunta", "terceira escolha" ou "o que você prefere". Narre direto as alternativas: "Alternativa A... Ou Alternativa B?".
-3. Sem pausas artificiais. Ritmo ágil e dinâmico.
-4. Sem certo ou errado: as duas alternativas devem ser tentadoras ou aterrorizantes, provocando curiosidade e debate.
-5. Textos curtos e chamativos para os cards (máximo 4 a 5 palavras).
-6. Queries de imagens ('image_query') em inglês para busca no Pexels.
-7. Adicione 'percentage_top' e 'percentage_bottom' somando 100 (simulação de votação popular).
-8. DURAÇÃO E CONCISÃO: Narrações diretas com 10 a 14 palavras por dilema para garantir duração de 60 a 70 segundos.
-9. DILEMA 7 (PENÚLTIMO): Apelo a Jesus com menção explícita a Ele. Opção A deve ser perda, sacrifício ou inconveniência (ex: ficar 30 dias sem internet, perder celular). Opção B deve ser curtir e comentar por Jesus. Varie a frase naturalmente.
-10. DILEMA 8 (ÚLTIMO): CTA final incentivando seguir o perfil/canal e apoiar o canal (Opção A: passar direto e perder os próximos vídeos; Opção B: seguir o perfil agora e apoiar o canal).
+1. NARRAÇÃO DIRETA: Da 2ª pergunta em diante, NUNCA anuncie "segunda pergunta", "terceira escolha" ou "o que você prefere". Narre direto as alternativas: "Alternativa A... Ou Alternativa B?".
+2. Sem pausas artificiais. Ritmo ágil e dinâmico.
+3. Sem certo ou errado: as duas alternativas devem ser tentadoras ou aterrorizantes, provocando curiosidade e debate.
+4. Textos curtos e chamativos para os cards (máximo 4 a 5 palavras).
+5. Queries de imagens ('image_query') em inglês para busca no Pexels.
+6. Adicione 'percentage_top' e 'percentage_bottom' somando 100 (simulação de votação popular).
+7. DURAÇÃO E CONCISÃO: Narrações diretas com 10 a 14 palavras por dilema para garantir ritmo ágil.
+8. Retorne exatamente {num_questions} escolhas inéditas.
 {brief_clause}{cluster_clause}{avoid_clause}
 
 Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explicações):
@@ -1586,16 +1927,12 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
                 if not self.is_question_duplicate(q_text, opts_text):
                     candidate_dilemmas.append(item)
 
-            # 2. Se o catálogo filtrado tiver menos que o necessário, completa por rotação determinística
+            # 2. Se o catálogo filtrado tiver menos que o necessário, FALHA limpa com SEM_DILEMAS_NOVOS (nunca rotação com repetidos)
             if len(candidate_dilemmas) < target_active:
-                seed = len(self.question_history)
-                for i in range(len(CANONICAL_DILEMMA_CATALOG)):
-                    idx = (seed + i) % len(CANONICAL_DILEMMA_CATALOG)
-                    cat_item = CANONICAL_DILEMMA_CATALOG[idx]
-                    if cat_item not in candidate_dilemmas:
-                        candidate_dilemmas.append(cat_item)
-                    if len(candidate_dilemmas) >= target_active:
-                        break
+                raise RuntimeError(
+                    f"SEM_DILEMAS_NOVOS: Catálogo canônico esgotado sem itens inéditos suficientes "
+                    f"({len(candidate_dilemmas)}/{target_active} disponíveis)."
+                )
 
             chosen_active = candidate_dilemmas[:target_active]
 

@@ -77,7 +77,7 @@ def test_generate_subjective_quiz(temp_generator):
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
         out_path = tf.name
     try:
-        cfg = gen.export_to_quiz_config(raw, out_path)
+        cfg = gen.export_to_quiz_config(raw, out_path, voice_name="pt-BR-AntonioNeural")
         assert isinstance(cfg, QuizConfig)
         assert cfg.niche == "curiosidades_dilemas"
         assert len(cfg.questions) == 6
@@ -110,7 +110,7 @@ def test_generate_factual_quiz_fact_checking(temp_generator):
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
         out_path = tf.name
     try:
-        cfg = gen.export_to_quiz_config(raw, out_path)
+        cfg = gen.export_to_quiz_config(raw, out_path, voice_name="pt-BR-AntonioNeural")
         assert isinstance(cfg, QuizConfig)
         assert cfg.niche == "curiosidades_animais"
         assert len(cfg.questions) == 6

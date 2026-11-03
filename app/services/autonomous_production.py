@@ -3097,6 +3097,7 @@ def _run_autonomous_cycle(
                 }
             else:
                 err_detail = task_data.get("error") or failed_stage or "Falha na geração"
+                err_code = task_data.get("error_code")
                 msg = f"Geração da tarefa {failed_task_id} falhou: {err_detail}"
                 _set_status(KEY_AUTONOMOUS_LAST_ERROR, msg)
                 _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
@@ -3106,6 +3107,11 @@ def _run_autonomous_cycle(
                     event_type="generation_failed",
                     task_id=failed_task_id,
                     message=msg,
+                    metadata={
+                        "failed_stage": failed_stage or task_data.get("failed_stage") or task_data.get("stage"),
+                        "error_code": err_code,
+                        "error": err_detail,
+                    },
                     db_path=db_path,
                 )
                 return {

@@ -824,7 +824,1513 @@ CANONICAL_PAPER_QUIZ_CATALOG: List[Dict[str, Any]] = [
         "explanation": "O símbolo Au tem origem na palavra latina Aurum, que significa brilhante ou resplandecente.",
         "source": "IUPAC (International Union of Pure and Applied Chemistry)",
     },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual é o planeta mais próximo do Sol?",
+        "options": [
+            {"letter": "A", "text": "Vênus"},
+            {"letter": "B", "text": "Marte"},
+            {"letter": "C", "text": "Terra"},
+            {"letter": "D", "text": "Mercúrio"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o planeta mais próximo do Sol?",
+        "explanation": "Mercúrio orbita o Sol a cerca de 58 milhões de km, em média.",
+        "source": "NASA Solar System Exploration (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual planeta é famoso pelos seus anéis largos e brilhantes?",
+        "options": [
+            {"letter": "A", "text": "Vênus"},
+            {"letter": "B", "text": "Mercúrio"},
+            {"letter": "C", "text": "Saturno"},
+            {"letter": "D", "text": "Marte"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual planeta é famoso pelos seus anéis largos e brilhantes?",
+        "explanation": "Os anéis de Saturno são feitos de gelo e rocha e são os mais visíveis do Sistema Solar.",
+        "source": "NASA Solar System Exploration (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual é a estrela mais próxima da Terra?",
+        "options": [
+            {"letter": "A", "text": "Betelgeuse"},
+            {"letter": "B", "text": "Sirius"},
+            {"letter": "C", "text": "Proxima Centauri"},
+            {"letter": "D", "text": "O Sol"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é a estrela mais próxima da Terra?",
+        "explanation": "O Sol está a cerca de 150 milhões de km, bem mais perto que qualquer outra estrela.",
+        "source": "NASA Science (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Em quantos dias a Terra dá uma volta completa ao redor do Sol?",
+        "options": [
+            {"letter": "A", "text": "Cerca de 90 dias"},
+            {"letter": "B", "text": "Cerca de 30 dias"},
+            {"letter": "C", "text": "Cerca de 730 dias"},
+            {"letter": "D", "text": "Cerca de 365 dias"},
+        ],
+        "correct_option": "D",
+        "narration": "Em quantos dias a Terra dá uma volta completa ao redor do Sol?",
+        "explanation": "A translação dura cerca de 365 dias e 6 horas, por isso existe o ano bissexto.",
+        "source": "NASA Science (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual é o nome da galáxia onde fica o Sistema Solar?",
+        "options": [
+            {"letter": "A", "text": "Triângulo"},
+            {"letter": "B", "text": "Via Láctea"},
+            {"letter": "C", "text": "Redemoinho"},
+            {"letter": "D", "text": "Andrômeda"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o nome da galáxia onde fica o Sistema Solar?",
+        "explanation": "O Sistema Solar fica em um dos braços da espiral da Via Láctea.",
+        "source": "NASA Science (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Quem foi o primeiro ser humano a pisar na Lua?",
+        "options": [
+            {"letter": "A", "text": "Neil Armstrong"},
+            {"letter": "B", "text": "John Glenn"},
+            {"letter": "C", "text": "Buzz Aldrin"},
+            {"letter": "D", "text": "Yuri Gagarin"},
+        ],
+        "correct_option": "A",
+        "narration": "Quem foi o primeiro ser humano a pisar na Lua?",
+        "explanation": "Armstrong pisou na Lua em 20 de julho de 1969, na missão Apollo 11.",
+        "source": "NASA History (nasa.gov/history)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual planeta é conhecido como o Planeta Vermelho?",
+        "options": [
+            {"letter": "A", "text": "Netuno"},
+            {"letter": "B", "text": "Marte"},
+            {"letter": "C", "text": "Júpiter"},
+            {"letter": "D", "text": "Mercúrio"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual planeta é conhecido como o Planeta Vermelho?",
+        "explanation": "A cor vermelha de Marte vem do óxido de ferro presente no solo.",
+        "source": "NASA Solar System Exploration (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual é a maior lua de Júpiter e a maior de todo o Sistema Solar?",
+        "options": [
+            {"letter": "A", "text": "Titã"},
+            {"letter": "B", "text": "Ganimedes"},
+            {"letter": "C", "text": "Io"},
+            {"letter": "D", "text": "Europa"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a maior lua de Júpiter e a maior de todo o Sistema Solar?",
+        "explanation": "Ganimedes é maior que o planeta Mercúrio.",
+        "source": "NASA Solar System Exploration (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Quantos planetas tem o Sistema Solar?",
+        "options": [
+            {"letter": "A", "text": "9"},
+            {"letter": "B", "text": "7"},
+            {"letter": "C", "text": "10"},
+            {"letter": "D", "text": "8"},
+        ],
+        "correct_option": "D",
+        "narration": "Quantos planetas tem o Sistema Solar?",
+        "explanation": "Plutão foi reclassificado como planeta anão pela União Astronômica Internacional em 2006.",
+        "source": "União Astronômica Internacional (iau.org)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Durante um eclipse solar, qual astro passa entre a Terra e o Sol?",
+        "options": [
+            {"letter": "A", "text": "A Lua"},
+            {"letter": "B", "text": "Um cometa"},
+            {"letter": "C", "text": "Vênus"},
+            {"letter": "D", "text": "Marte"},
+        ],
+        "correct_option": "A",
+        "narration": "Durante um eclipse solar, qual astro passa entre a Terra e o Sol?",
+        "explanation": "No eclipse solar, a Lua bloqueia a luz do Sol para quem está na sua sombra.",
+        "source": "NASA Science (science.nasa.gov)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual planeta anão já foi considerado o nono planeta do Sistema Solar?",
+        "options": [
+            {"letter": "A", "text": "Éris"},
+            {"letter": "B", "text": "Makemake"},
+            {"letter": "C", "text": "Plutão"},
+            {"letter": "D", "text": "Ceres"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual planeta anão já foi considerado o nono planeta do Sistema Solar?",
+        "explanation": "Plutão foi descoberto em 1930 e reclassificado em 2006.",
+        "source": "União Astronômica Internacional (iau.org)",
+    },
+    {
+        "category": "ASTRONOMIA",
+        "question": "Qual telescópio espacial foi lançado em 1990 e orbita a Terra até hoje?",
+        "options": [
+            {"letter": "A", "text": "James Webb"},
+            {"letter": "B", "text": "Spitzer"},
+            {"letter": "C", "text": "Hubble"},
+            {"letter": "D", "text": "Kepler"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual telescópio espacial foi lançado em 1990 e orbita a Terra até hoje?",
+        "explanation": "O Hubble foi lançado em abril de 1990 e revolucionou a astronomia.",
+        "source": "NASA Hubble Space Telescope (science.nasa.gov/mission/hubble)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital do Brasil?",
+        "options": [
+            {"letter": "A", "text": "Rio de Janeiro"},
+            {"letter": "B", "text": "São Paulo"},
+            {"letter": "C", "text": "Brasília"},
+            {"letter": "D", "text": "Salvador"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é a capital do Brasil?",
+        "explanation": "Brasília foi inaugurada em 1960 como capital federal.",
+        "source": "IBGE (ibge.gov.br)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o maior país do mundo em área?",
+        "options": [
+            {"letter": "A", "text": "Estados Unidos"},
+            {"letter": "B", "text": "Rússia"},
+            {"letter": "C", "text": "Canadá"},
+            {"letter": "D", "text": "China"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior país do mundo em área?",
+        "explanation": "A Rússia tem mais de 17 milhões de km².",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o menor país do mundo em área?",
+        "options": [
+            {"letter": "A", "text": "San Marino"},
+            {"letter": "B", "text": "Liechtenstein"},
+            {"letter": "C", "text": "Mônaco"},
+            {"letter": "D", "text": "Vaticano"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o menor país do mundo em área?",
+        "explanation": "O Vaticano tem cerca de 0,44 km².",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital da Austrália?",
+        "options": [
+            {"letter": "A", "text": "Melbourne"},
+            {"letter": "B", "text": "Sydney"},
+            {"letter": "C", "text": "Canberra"},
+            {"letter": "D", "text": "Perth"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é a capital da Austrália?",
+        "explanation": "Canberra foi criada especialmente para ser a capital, entre Sydney e Melbourne.",
+        "source": "Governo da Austrália (australia.gov.au)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o maior país da América do Sul em área?",
+        "options": [
+            {"letter": "A", "text": "Colômbia"},
+            {"letter": "B", "text": "Argentina"},
+            {"letter": "C", "text": "Peru"},
+            {"letter": "D", "text": "Brasil"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o maior país da América do Sul em área?",
+        "explanation": "O Brasil ocupa cerca de metade do território sul-americano.",
+        "source": "IBGE (ibge.gov.br)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual rio atravessa a cidade de Paris?",
+        "options": [
+            {"letter": "A", "text": "Rio Danúbio"},
+            {"letter": "B", "text": "Rio Sena"},
+            {"letter": "C", "text": "Rio Tâmisa"},
+            {"letter": "D", "text": "Rio Reno"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual rio atravessa a cidade de Paris?",
+        "explanation": "O Sena corta Paris e passa ao lado da Torre Eiffel e da Catedral de Notre-Dame.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital do Japão?",
+        "options": [
+            {"letter": "A", "text": "Pequim"},
+            {"letter": "B", "text": "Tóquio"},
+            {"letter": "C", "text": "Osaka"},
+            {"letter": "D", "text": "Quioto"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a capital do Japão?",
+        "explanation": "Tóquio é uma das maiores regiões metropolitanas do mundo.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual oceano banha toda a costa leste do Brasil?",
+        "options": [
+            {"letter": "A", "text": "Oceano Pacífico"},
+            {"letter": "B", "text": "Oceano Índico"},
+            {"letter": "C", "text": "Oceano Atlântico"},
+            {"letter": "D", "text": "Oceano Ártico"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual oceano banha toda a costa leste do Brasil?",
+        "explanation": "O litoral brasileiro tem cerca de 7.400 km banhados pelo Atlântico.",
+        "source": "IBGE (ibge.gov.br)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital da Argentina?",
+        "options": [
+            {"letter": "A", "text": "Montevidéu"},
+            {"letter": "B", "text": "Buenos Aires"},
+            {"letter": "C", "text": "Lima"},
+            {"letter": "D", "text": "Santiago"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a capital da Argentina?",
+        "explanation": "Buenos Aires fica às margens do Rio da Prata.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a cordilheira continental mais longa do mundo?",
+        "options": [
+            {"letter": "A", "text": "Andes"},
+            {"letter": "B", "text": "Montanhas Rochosas"},
+            {"letter": "C", "text": "Alpes"},
+            {"letter": "D", "text": "Himalaia"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é a cordilheira continental mais longa do mundo?",
+        "explanation": "Os Andes se estendem por cerca de 7.000 km ao longo da América do Sul.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Quantos estados tem o Brasil, sem contar o Distrito Federal?",
+        "options": [
+            {"letter": "A", "text": "24"},
+            {"letter": "B", "text": "25"},
+            {"letter": "C", "text": "27"},
+            {"letter": "D", "text": "26"},
+        ],
+        "correct_option": "D",
+        "narration": "Quantos estados tem o Brasil, sem contar o Distrito Federal?",
+        "explanation": "O Brasil tem 26 estados e o Distrito Federal.",
+        "source": "IBGE (ibge.gov.br)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Em qual país fica o famoso Taj Mahal?",
+        "options": [
+            {"letter": "A", "text": "Índia"},
+            {"letter": "B", "text": "Turquia"},
+            {"letter": "C", "text": "Egito"},
+            {"letter": "D", "text": "Paquistão"},
+        ],
+        "correct_option": "A",
+        "narration": "Em qual país fica o famoso Taj Mahal?",
+        "explanation": "O Taj Mahal fica em Agra e foi construído no século XVII.",
+        "source": "UNESCO World Heritage (whc.unesco.org)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o maior lago de água doce do mundo em área de superfície?",
+        "options": [
+            {"letter": "A", "text": "Lago Michigan"},
+            {"letter": "B", "text": "Lago Vitória"},
+            {"letter": "C", "text": "Lago Baikal"},
+            {"letter": "D", "text": "Lago Superior"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o maior lago de água doce do mundo em área de superfície?",
+        "explanation": "O Lago Superior, na fronteira entre EUA e Canadá, é o maior em área.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a maior ilha do mundo?",
+        "options": [
+            {"letter": "A", "text": "Groenlândia"},
+            {"letter": "B", "text": "Nova Guiné"},
+            {"letter": "C", "text": "Bornéu"},
+            {"letter": "D", "text": "Madagascar"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é a maior ilha do mundo?",
+        "explanation": "A Groenlândia tem cerca de 2,1 milhões de km².",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o rio mais caudaloso do mundo?",
+        "options": [
+            {"letter": "A", "text": "Rio Amazonas"},
+            {"letter": "B", "text": "Rio Nilo"},
+            {"letter": "C", "text": "Rio Mississippi"},
+            {"letter": "D", "text": "Rio Yangtzé"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é o rio mais caudaloso do mundo?",
+        "explanation": "O Amazonas despeja mais água no mar do que qualquer outro rio.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual país tem o formato de uma bota no mapa?",
+        "options": [
+            {"letter": "A", "text": "Portugal"},
+            {"letter": "B", "text": "Itália"},
+            {"letter": "C", "text": "Grécia"},
+            {"letter": "D", "text": "Espanha"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual país tem o formato de uma bota no mapa?",
+        "explanation": "A península italiana lembra uma bota chutando a ilha da Sicília.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Em qual continente fica o Deserto do Atacama?",
+        "options": [
+            {"letter": "A", "text": "África"},
+            {"letter": "B", "text": "Ásia"},
+            {"letter": "C", "text": "América do Sul"},
+            {"letter": "D", "text": "Oceania"},
+        ],
+        "correct_option": "C",
+        "narration": "Em qual continente fica o Deserto do Atacama?",
+        "explanation": "O Atacama fica no Chile e é um dos desertos mais áridos do planeta.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o ponto mais alto do Brasil?",
+        "options": [
+            {"letter": "A", "text": "Pico das Agulhas Negras"},
+            {"letter": "B", "text": "Pico da Bandeira"},
+            {"letter": "C", "text": "Monte Roraima"},
+            {"letter": "D", "text": "Pico da Neblina"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o ponto mais alto do Brasil?",
+        "explanation": "O Pico da Neblina, no Amazonas, tem cerca de 2.995 metros.",
+        "source": "IBGE (ibge.gov.br)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o maior bioma do Brasil em extensão?",
+        "options": [
+            {"letter": "A", "text": "Cerrado"},
+            {"letter": "B", "text": "Amazônia"},
+            {"letter": "C", "text": "Mata Atlântica"},
+            {"letter": "D", "text": "Caatinga"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior bioma do Brasil em extensão?",
+        "explanation": "A Amazônia ocupa cerca de 49% do território brasileiro.",
+        "source": "IBGE (ibge.gov.br)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital de Portugal?",
+        "options": [
+            {"letter": "A", "text": "Lisboa"},
+            {"letter": "B", "text": "Madri"},
+            {"letter": "C", "text": "Porto"},
+            {"letter": "D", "text": "Coimbra"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é a capital de Portugal?",
+        "explanation": "Lisboa é a capital e maior cidade de Portugal.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital do Canadá?",
+        "options": [
+            {"letter": "A", "text": "Ottawa"},
+            {"letter": "B", "text": "Toronto"},
+            {"letter": "C", "text": "Montreal"},
+            {"letter": "D", "text": "Vancouver"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é a capital do Canadá?",
+        "explanation": "Ottawa é a capital, e não Toronto, que é a maior cidade.",
+        "source": "Governo do Canadá (canada.ca)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é a capital do Egito?",
+        "options": [
+            {"letter": "A", "text": "Luxor"},
+            {"letter": "B", "text": "Alexandria"},
+            {"letter": "C", "text": "Cairo"},
+            {"letter": "D", "text": "Gizé"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é a capital do Egito?",
+        "explanation": "O Cairo fica às margens do Rio Nilo.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o menor oceano do mundo?",
+        "options": [
+            {"letter": "A", "text": "Oceano Índico"},
+            {"letter": "B", "text": "Oceano Pacífico"},
+            {"letter": "C", "text": "Oceano Ártico"},
+            {"letter": "D", "text": "Oceano Atlântico"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o menor oceano do mundo?",
+        "explanation": "O Ártico cobre cerca de 14 milhões de km² e fica em volta do Polo Norte.",
+        "source": "National Geographic (education.nationalgeographic.org)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual é o maior deserto do mundo, contando também os desertos polares?",
+        "options": [
+            {"letter": "A", "text": "Antártida"},
+            {"letter": "B", "text": "Saara"},
+            {"letter": "C", "text": "Gobi"},
+            {"letter": "D", "text": "Ártico"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é o maior deserto do mundo, contando também os desertos polares?",
+        "explanation": "A Antártida é um deserto frio, com pouquíssima precipitação.",
+        "source": "National Geographic (education.nationalgeographic.org)",
+    },
+    {
+        "category": "GEOGRAFIA",
+        "question": "Qual era o nome do supercontinente que existiu há cerca de 300 milhões de anos?",
+        "options": [
+            {"letter": "A", "text": "Gondwana"},
+            {"letter": "B", "text": "Atlântida"},
+            {"letter": "C", "text": "Pangeia"},
+            {"letter": "D", "text": "Laurásia"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual era o nome do supercontinente que existiu há cerca de 300 milhões de anos?",
+        "explanation": "A Pangeia se dividiu e deu origem aos continentes atuais.",
+        "source": "USGS (usgs.gov)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Em que ano o Brasil declarou a sua independência de Portugal?",
+        "options": [
+            {"letter": "A", "text": "1500"},
+            {"letter": "B", "text": "1822"},
+            {"letter": "C", "text": "1808"},
+            {"letter": "D", "text": "1889"},
+        ],
+        "correct_option": "B",
+        "narration": "Em que ano o Brasil declarou a sua independência de Portugal?",
+        "explanation": "Dom Pedro I proclamou a independência em 7 de setembro de 1822.",
+        "source": "Arquivo Nacional (gov.br/arquivonacional)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Qual navegador português comandou a frota que chegou ao Brasil em 1500?",
+        "options": [
+            {"letter": "A", "text": "Pedro Álvares Cabral"},
+            {"letter": "B", "text": "Bartolomeu Dias"},
+            {"letter": "C", "text": "Vasco da Gama"},
+            {"letter": "D", "text": "Fernão de Magalhães"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual navegador português comandou a frota que chegou ao Brasil em 1500?",
+        "explanation": "A frota de Cabral chegou à costa da Bahia em abril de 1500.",
+        "source": "Arquivo Nacional (gov.br/arquivonacional)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Em que ano começou a Segunda Guerra Mundial?",
+        "options": [
+            {"letter": "A", "text": "1914"},
+            {"letter": "B", "text": "1929"},
+            {"letter": "C", "text": "1945"},
+            {"letter": "D", "text": "1939"},
+        ],
+        "correct_option": "D",
+        "narration": "Em que ano começou a Segunda Guerra Mundial?",
+        "explanation": "A guerra começou com a invasão da Polônia pela Alemanha, em setembro de 1939.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Qual civilização construiu a cidade de Machu Picchu?",
+        "options": [
+            {"letter": "A", "text": "Asteca"},
+            {"letter": "B", "text": "Olmeca"},
+            {"letter": "C", "text": "Maia"},
+            {"letter": "D", "text": "Inca"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual civilização construiu a cidade de Machu Picchu?",
+        "explanation": "Machu Picchu foi construída no século XV, nos Andes peruanos.",
+        "source": "UNESCO World Heritage (whc.unesco.org)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Quem foi o primeiro presidente do Brasil?",
+        "options": [
+            {"letter": "A", "text": "Dom Pedro II"},
+            {"letter": "B", "text": "Getúlio Vargas"},
+            {"letter": "C", "text": "Marechal Deodoro da Fonseca"},
+            {"letter": "D", "text": "Juscelino Kubitschek"},
+        ],
+        "correct_option": "C",
+        "narration": "Quem foi o primeiro presidente do Brasil?",
+        "explanation": "Deodoro governou após a Proclamação da República, em 1889.",
+        "source": "Presidência da República (gov.br/planalto)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Em que ano caiu o Muro de Berlim?",
+        "options": [
+            {"letter": "A", "text": "1975"},
+            {"letter": "B", "text": "1991"},
+            {"letter": "C", "text": "1961"},
+            {"letter": "D", "text": "1989"},
+        ],
+        "correct_option": "D",
+        "narration": "Em que ano caiu o Muro de Berlim?",
+        "explanation": "A queda do muro, em 9 de novembro de 1989, abriu caminho para a reunificação alemã.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Qual cidade romana foi soterrada pela erupção do Vesúvio em 79 d.C.?",
+        "options": [
+            {"letter": "A", "text": "Cartago"},
+            {"letter": "B", "text": "Roma"},
+            {"letter": "C", "text": "Pompeia"},
+            {"letter": "D", "text": "Atenas"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual cidade romana foi soterrada pela erupção do Vesúvio em 79 d.C.?",
+        "explanation": "As cinzas preservaram Pompeia quase intacta por quase 1.700 anos.",
+        "source": "UNESCO World Heritage (whc.unesco.org)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Qual navegador, a serviço da Espanha, chegou à América em 1492?",
+        "options": [
+            {"letter": "A", "text": "Cristóvão Colombo"},
+            {"letter": "B", "text": "Pedro Álvares Cabral"},
+            {"letter": "C", "text": "Vasco da Gama"},
+            {"letter": "D", "text": "Américo Vespúcio"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual navegador, a serviço da Espanha, chegou à América em 1492?",
+        "explanation": "Colombo chegou às ilhas do Caribe em 12 de outubro de 1492.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Em que ano foi assinada a Lei Áurea, que aboliu a escravidão no Brasil?",
+        "options": [
+            {"letter": "A", "text": "1889"},
+            {"letter": "B", "text": "1822"},
+            {"letter": "C", "text": "1850"},
+            {"letter": "D", "text": "1888"},
+        ],
+        "correct_option": "D",
+        "narration": "Em que ano foi assinada a Lei Áurea, que aboliu a escravidão no Brasil?",
+        "explanation": "A Lei Áurea foi assinada pela Princesa Isabel em 13 de maio de 1888.",
+        "source": "Senado Federal (senado.leg.br)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Qual era a capital do Brasil antes de Brasília?",
+        "options": [
+            {"letter": "A", "text": "Salvador"},
+            {"letter": "B", "text": "São Paulo"},
+            {"letter": "C", "text": "Rio de Janeiro"},
+            {"letter": "D", "text": "Belo Horizonte"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual era a capital do Brasil antes de Brasília?",
+        "explanation": "O Rio de Janeiro foi capital de 1763 até 1960.",
+        "source": "Arquivo Nacional (gov.br/arquivonacional)",
+    },
+    {
+        "category": "HISTÓRIA",
+        "question": "Qual povo da Antiguidade construiu as pirâmides de Gizé?",
+        "options": [
+            {"letter": "A", "text": "Gregos"},
+            {"letter": "B", "text": "Romanos"},
+            {"letter": "C", "text": "Persas"},
+            {"letter": "D", "text": "Egípcios"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual povo da Antiguidade construiu as pirâmides de Gizé?",
+        "explanation": "As pirâmides de Gizé foram construídas há cerca de 4.500 anos, como tumbas de faraós.",
+        "source": "UNESCO World Heritage (whc.unesco.org)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual órgão do corpo humano bombeia o sangue?",
+        "options": [
+            {"letter": "A", "text": "Fígado"},
+            {"letter": "B", "text": "Rim"},
+            {"letter": "C", "text": "Pulmão"},
+            {"letter": "D", "text": "Coração"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual órgão do corpo humano bombeia o sangue?",
+        "explanation": "O coração bate cerca de 100 mil vezes por dia.",
+        "source": "Instituto Nacional de Cardiologia (inc.saude.gov.br)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Quantos dentes tem um adulto, contando os sisos?",
+        "options": [
+            {"letter": "A", "text": "32"},
+            {"letter": "B", "text": "30"},
+            {"letter": "C", "text": "28"},
+            {"letter": "D", "text": "36"},
+        ],
+        "correct_option": "A",
+        "narration": "Quantos dentes tem um adulto, contando os sisos?",
+        "explanation": "A dentição adulta completa tem 32 dentes.",
+        "source": "Organização Mundial da Saúde (who.int)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual é o maior órgão do corpo humano?",
+        "options": [
+            {"letter": "A", "text": "Intestino"},
+            {"letter": "B", "text": "Pulmão"},
+            {"letter": "C", "text": "Fígado"},
+            {"letter": "D", "text": "Pele"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o maior órgão do corpo humano?",
+        "explanation": "A pele cobre cerca de 2 m² em um adulto.",
+        "source": "National Institutes of Health (nih.gov)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual vitamina o corpo produz quando a pele recebe luz solar?",
+        "options": [
+            {"letter": "A", "text": "Vitamina D"},
+            {"letter": "B", "text": "Vitamina A"},
+            {"letter": "C", "text": "Vitamina B12"},
+            {"letter": "D", "text": "Vitamina C"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual vitamina o corpo produz quando a pele recebe luz solar?",
+        "explanation": "A luz do sol ativa a produção de vitamina D na pele.",
+        "source": "National Institutes of Health (ods.od.nih.gov)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Quantos cromossomos tem uma célula humana normal?",
+        "options": [
+            {"letter": "A", "text": "48"},
+            {"letter": "B", "text": "46"},
+            {"letter": "C", "text": "23"},
+            {"letter": "D", "text": "44"},
+        ],
+        "correct_option": "B",
+        "narration": "Quantos cromossomos tem uma célula humana normal?",
+        "explanation": "São 23 pares de cromossomos, ou seja, 46 no total.",
+        "source": "National Human Genome Research Institute (genome.gov)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual é o maior osso do corpo humano?",
+        "options": [
+            {"letter": "A", "text": "Tíbia"},
+            {"letter": "B", "text": "Úmero"},
+            {"letter": "C", "text": "Costela"},
+            {"letter": "D", "text": "Fêmur"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o maior osso do corpo humano?",
+        "explanation": "O fêmur, na coxa, é o osso mais longo e mais forte do corpo.",
+        "source": "National Institutes of Health (nih.gov)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual é o menor osso do corpo humano?",
+        "options": [
+            {"letter": "A", "text": "Martelo"},
+            {"letter": "B", "text": "Estribo"},
+            {"letter": "C", "text": "Rótula"},
+            {"letter": "D", "text": "Falange"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o menor osso do corpo humano?",
+        "explanation": "O estribo fica no ouvido médio e mede cerca de 3 mm.",
+        "source": "National Institutes of Health (nih.gov)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Quantas câmaras tem o coração humano?",
+        "options": [
+            {"letter": "A", "text": "5"},
+            {"letter": "B", "text": "2"},
+            {"letter": "C", "text": "3"},
+            {"letter": "D", "text": "4"},
+        ],
+        "correct_option": "D",
+        "narration": "Quantas câmaras tem o coração humano?",
+        "explanation": "São dois átrios e dois ventrículos.",
+        "source": "Instituto Nacional de Cardiologia (inc.saude.gov.br)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual órgão filtra o sangue e produz a urina?",
+        "options": [
+            {"letter": "A", "text": "Rim"},
+            {"letter": "B", "text": "Estômago"},
+            {"letter": "C", "text": "Baço"},
+            {"letter": "D", "text": "Fígado"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual órgão filtra o sangue e produz a urina?",
+        "explanation": "Os rins filtram o sangue e eliminam o excesso de água e resíduos.",
+        "source": "National Institutes of Health (niddk.nih.gov)",
+    },
+    {
+        "category": "CORPO HUMANO",
+        "question": "Qual célula do sangue transporta oxigênio pelo corpo?",
+        "options": [
+            {"letter": "A", "text": "Plaqueta"},
+            {"letter": "B", "text": "Linfócito"},
+            {"letter": "C", "text": "Hemácia"},
+            {"letter": "D", "text": "Leucócito"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual célula do sangue transporta oxigênio pelo corpo?",
+        "explanation": "As hemácias levam oxigênio graças à hemoglobina.",
+        "source": "National Institutes of Health (nhlbi.nih.gov)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é a fórmula química da água?",
+        "options": [
+            {"letter": "A", "text": "O₂"},
+            {"letter": "B", "text": "CO₂"},
+            {"letter": "C", "text": "NaCl"},
+            {"letter": "D", "text": "H₂O"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é a fórmula química da água?",
+        "explanation": "Uma molécula de água tem dois átomos de hidrogênio e um de oxigênio.",
+        "source": "IUPAC (iupac.org)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é o símbolo químico do sódio?",
+        "options": [
+            {"letter": "A", "text": "So"},
+            {"letter": "B", "text": "S"},
+            {"letter": "C", "text": "Na"},
+            {"letter": "D", "text": "Sd"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o símbolo químico do sódio?",
+        "explanation": "Na vem do latim natrium.",
+        "source": "IUPAC (iupac.org)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é o símbolo químico do ferro?",
+        "options": [
+            {"letter": "A", "text": "Fe"},
+            {"letter": "B", "text": "F"},
+            {"letter": "C", "text": "Fr"},
+            {"letter": "D", "text": "Fo"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é o símbolo químico do ferro?",
+        "explanation": "Fe vem do latim ferrum.",
+        "source": "IUPAC (iupac.org)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é o gás mais abundante na atmosfera da Terra?",
+        "options": [
+            {"letter": "A", "text": "Gás carbônico"},
+            {"letter": "B", "text": "Oxigênio"},
+            {"letter": "C", "text": "Nitrogênio"},
+            {"letter": "D", "text": "Hidrogênio"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o gás mais abundante na atmosfera da Terra?",
+        "explanation": "O nitrogênio forma cerca de 78% do ar que respiramos.",
+        "source": "NASA Science (science.nasa.gov)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual metal é líquido à temperatura ambiente?",
+        "options": [
+            {"letter": "A", "text": "Mercúrio"},
+            {"letter": "B", "text": "Alumínio"},
+            {"letter": "C", "text": "Cobre"},
+            {"letter": "D", "text": "Chumbo"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual metal é líquido à temperatura ambiente?",
+        "explanation": "O mercúrio é líquido a 25 °C e solidifica só a -39 °C.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual destes é um gás nobre?",
+        "options": [
+            {"letter": "A", "text": "Hidrogênio"},
+            {"letter": "B", "text": "Nitrogênio"},
+            {"letter": "C", "text": "Oxigênio"},
+            {"letter": "D", "text": "Hélio"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual destes é um gás nobre?",
+        "explanation": "O hélio é um gás nobre, muito pouco reativo.",
+        "source": "IUPAC (iupac.org)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é a fórmula química do sal de cozinha?",
+        "options": [
+            {"letter": "A", "text": "NaCl"},
+            {"letter": "B", "text": "H₂SO₄"},
+            {"letter": "C", "text": "CaCO₃"},
+            {"letter": "D", "text": "KCl"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é a fórmula química do sal de cozinha?",
+        "explanation": "O sal de cozinha é cloreto de sódio.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "QUÍMICA",
+        "question": "Qual é o valor do pH de uma solução neutra, como a água pura?",
+        "options": [
+            {"letter": "A", "text": "0"},
+            {"letter": "B", "text": "7"},
+            {"letter": "C", "text": "5"},
+            {"letter": "D", "text": "14"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o valor do pH de uma solução neutra, como a água pura?",
+        "explanation": "Abaixo de 7 a solução é ácida e acima de 7 é básica.",
+        "source": "US Geological Survey (usgs.gov)",
+    },
+    {
+        "category": "FÍSICA",
+        "question": "Qual é a temperatura de ebulição da água ao nível do mar?",
+        "options": [
+            {"letter": "A", "text": "80 °C"},
+            {"letter": "B", "text": "100 °C"},
+            {"letter": "C", "text": "90 °C"},
+            {"letter": "D", "text": "120 °C"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a temperatura de ebulição da água ao nível do mar?",
+        "explanation": "Ao nível do mar, a água ferve a 100 °C.",
+        "source": "NIST (nist.gov)",
+    },
+    {
+        "category": "FÍSICA",
+        "question": "Qual cientista formulou a teoria da relatividade?",
+        "options": [
+            {"letter": "A", "text": "Albert Einstein"},
+            {"letter": "B", "text": "Stephen Hawking"},
+            {"letter": "C", "text": "Isaac Newton"},
+            {"letter": "D", "text": "Galileu Galilei"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual cientista formulou a teoria da relatividade?",
+        "explanation": "Einstein publicou a relatividade restrita em 1905 e a geral em 1915.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "FÍSICA",
+        "question": "Qual cientista formulou a lei da gravitação universal?",
+        "options": [
+            {"letter": "A", "text": "Marie Curie"},
+            {"letter": "B", "text": "Isaac Newton"},
+            {"letter": "C", "text": "Nikola Tesla"},
+            {"letter": "D", "text": "Albert Einstein"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual cientista formulou a lei da gravitação universal?",
+        "explanation": "Newton publicou a lei da gravitação em 1687.",
+        "source": "Royal Society (royalsociety.org)",
+    },
+    {
+        "category": "FÍSICA",
+        "question": "Qual é a unidade de medida de força no Sistema Internacional?",
+        "options": [
+            {"letter": "A", "text": "Joule"},
+            {"letter": "B", "text": "Pascal"},
+            {"letter": "C", "text": "Watt"},
+            {"letter": "D", "text": "Newton"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é a unidade de medida de força no Sistema Internacional?",
+        "explanation": "Um newton é a força que acelera 1 kg a 1 m/s².",
+        "source": "Bureau Internacional de Pesos e Medidas (bipm.org)",
+    },
+    {
+        "category": "FÍSICA",
+        "question": "Qual é a velocidade aproximada do som no ar, a 20 °C?",
+        "options": [
+            {"letter": "A", "text": "34 metros por segundo"},
+            {"letter": "B", "text": "300.000 km por segundo"},
+            {"letter": "C", "text": "343 metros por segundo"},
+            {"letter": "D", "text": "3.430 metros por segundo"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é a velocidade aproximada do som no ar, a 20 °C?",
+        "explanation": "O som viaja a cerca de 343 m/s, ou 1.235 km/h, no ar a 20 °C.",
+        "source": "NASA Glenn Research Center (nasa.gov)",
+    },
+    {
+        "category": "CIÊNCIA",
+        "question": "Qual cientista descobriu a penicilina?",
+        "options": [
+            {"letter": "A", "text": "Alexander Fleming"},
+            {"letter": "B", "text": "Louis Pasteur"},
+            {"letter": "C", "text": "Marie Curie"},
+            {"letter": "D", "text": "Charles Darwin"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual cientista descobriu a penicilina?",
+        "explanation": "Fleming descobriu a penicilina em 1928, e ela deu origem aos antibióticos.",
+        "source": "Nobel Prize (nobelprize.org)",
+    },
+    {
+        "category": "CIÊNCIA",
+        "question": "Qual gás as plantas absorvem do ar na fotossíntese?",
+        "options": [
+            {"letter": "A", "text": "Oxigênio"},
+            {"letter": "B", "text": "Gás carbônico"},
+            {"letter": "C", "text": "Hélio"},
+            {"letter": "D", "text": "Nitrogênio"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual gás as plantas absorvem do ar na fotossíntese?",
+        "explanation": "Na fotossíntese, as plantas usam gás carbônico, água e luz para produzir açúcar.",
+        "source": "National Geographic (education.nationalgeographic.org)",
+    },
+    {
+        "category": "CIÊNCIA",
+        "question": "Qual organela é conhecida como a usina de energia da célula?",
+        "options": [
+            {"letter": "A", "text": "Lisossomo"},
+            {"letter": "B", "text": "Mitocôndria"},
+            {"letter": "C", "text": "Ribossomo"},
+            {"letter": "D", "text": "Núcleo"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual organela é conhecida como a usina de energia da célula?",
+        "explanation": "A mitocôndria produz a maior parte do ATP, a energia da célula.",
+        "source": "National Human Genome Research Institute (genome.gov)",
+    },
+    {
+        "category": "CIÊNCIA",
+        "question": "Como se chama o processo em que uma célula se divide em duas células idênticas?",
+        "options": [
+            {"letter": "A", "text": "Osmose"},
+            {"letter": "B", "text": "Mitose"},
+            {"letter": "C", "text": "Fotossíntese"},
+            {"letter": "D", "text": "Meiose"},
+        ],
+        "correct_option": "B",
+        "narration": "Como se chama o processo em que uma célula se divide em duas células idênticas?",
+        "explanation": "Na mitose, a célula-mãe origina duas células-filhas com o mesmo material genético.",
+        "source": "National Human Genome Research Institute (genome.gov)",
+    },
+    {
+        "category": "CIÊNCIA",
+        "question": "Qual é a camada mais externa e sólida da Terra?",
+        "options": [
+            {"letter": "A", "text": "Crosta"},
+            {"letter": "B", "text": "Núcleo externo"},
+            {"letter": "C", "text": "Manto"},
+            {"letter": "D", "text": "Núcleo interno"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual é a camada mais externa e sólida da Terra?",
+        "explanation": "A crosta tem de 5 a 70 km de espessura, conforme o local.",
+        "source": "USGS (usgs.gov)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual é o maior animal terrestre vivo?",
+        "options": [
+            {"letter": "A", "text": "Rinoceronte-branco"},
+            {"letter": "B", "text": "Elefante-africano"},
+            {"letter": "C", "text": "Hipopótamo"},
+            {"letter": "D", "text": "Girafa"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior animal terrestre vivo?",
+        "explanation": "O elefante-africano pode pesar mais de 6 toneladas.",
+        "source": "WWF (worldwildlife.org)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual destes mamíferos põe ovos?",
+        "options": [
+            {"letter": "A", "text": "Ornitorrinco"},
+            {"letter": "B", "text": "Golfinho"},
+            {"letter": "C", "text": "Morcego"},
+            {"letter": "D", "text": "Canguru"},
+        ],
+        "correct_option": "A",
+        "narration": "Qual destes mamíferos põe ovos?",
+        "explanation": "O ornitorrinco, da Austrália, é um mamífero que põe ovos.",
+        "source": "Australian Museum (australian.museum)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual é a maior ave do mundo?",
+        "options": [
+            {"letter": "A", "text": "Emu"},
+            {"letter": "B", "text": "Avestruz"},
+            {"letter": "C", "text": "Albatroz"},
+            {"letter": "D", "text": "Condor"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é a maior ave do mundo?",
+        "explanation": "O avestruz pode ter 2,7 m de altura e não voa.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Quantas patas tem uma aranha?",
+        "options": [
+            {"letter": "A", "text": "8"},
+            {"letter": "B", "text": "6"},
+            {"letter": "C", "text": "12"},
+            {"letter": "D", "text": "10"},
+        ],
+        "correct_option": "A",
+        "narration": "Quantas patas tem uma aranha?",
+        "explanation": "As aranhas são aracnídeos e têm 8 patas, diferentemente dos insetos, que têm 6.",
+        "source": "Smithsonian National Zoo (nationalzoo.si.edu)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual é o único mamífero capaz de voar de verdade?",
+        "options": [
+            {"letter": "A", "text": "Pinguim"},
+            {"letter": "B", "text": "Lêmure"},
+            {"letter": "C", "text": "Esquilo-voador"},
+            {"letter": "D", "text": "Morcego"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o único mamífero capaz de voar de verdade?",
+        "explanation": "O morcego bate as asas para voar, e o esquilo-voador apenas plana.",
+        "source": "Smithsonian National Zoo (nationalzoo.si.edu)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual é o maior felino do mundo?",
+        "options": [
+            {"letter": "A", "text": "Leopardo"},
+            {"letter": "B", "text": "Onça-pintada"},
+            {"letter": "C", "text": "Leão"},
+            {"letter": "D", "text": "Tigre"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é o maior felino do mundo?",
+        "explanation": "O tigre-siberiano pode ultrapassar 300 kg.",
+        "source": "WWF (worldwildlife.org)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual é o maior réptil vivo do mundo?",
+        "options": [
+            {"letter": "A", "text": "Dragão-de-komodo"},
+            {"letter": "B", "text": "Crocodilo-de-água-salgada"},
+            {"letter": "C", "text": "Jacaré-açu"},
+            {"letter": "D", "text": "Anaconda"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o maior réptil vivo do mundo?",
+        "explanation": "Os maiores machos passam de 5 metros e de 1.000 kg.",
+        "source": "Smithsonian National Zoo (nationalzoo.si.edu)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Com que as abelhas produzem o mel?",
+        "options": [
+            {"letter": "A", "text": "Pólen seco"},
+            {"letter": "B", "text": "Água da chuva"},
+            {"letter": "C", "text": "Seiva das árvores"},
+            {"letter": "D", "text": "Néctar das flores"},
+        ],
+        "correct_option": "D",
+        "narration": "Com que as abelhas produzem o mel?",
+        "explanation": "As abelhas coletam néctar, e o processam na colmeia até virar mel.",
+        "source": "FAO (fao.org)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Os golfinhos pertencem a qual grupo de animais?",
+        "options": [
+            {"letter": "A", "text": "Mamíferos"},
+            {"letter": "B", "text": "Peixes"},
+            {"letter": "C", "text": "Anfíbios"},
+            {"letter": "D", "text": "Répteis"},
+        ],
+        "correct_option": "A",
+        "narration": "Os golfinhos pertencem a qual grupo de animais?",
+        "explanation": "Golfinhos respiram ar e amamentam os filhotes, como todos os mamíferos.",
+        "source": "NOAA Fisheries (fisheries.noaa.gov)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Qual animal tem o pescoço mais longo e é o mais alto do mundo?",
+        "options": [
+            {"letter": "A", "text": "Avestruz"},
+            {"letter": "B", "text": "Camelo"},
+            {"letter": "C", "text": "Girafa"},
+            {"letter": "D", "text": "Elefante"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual animal tem o pescoço mais longo e é o mais alto do mundo?",
+        "explanation": "A girafa pode chegar a 5,5 metros de altura.",
+        "source": "WWF (worldwildlife.org)",
+    },
+    {
+        "category": "ANIMAIS",
+        "question": "Quanto tempo dura a gestação de uma elefanta, em média?",
+        "options": [
+            {"letter": "A", "text": "Cerca de 12 meses"},
+            {"letter": "B", "text": "Cerca de 22 meses"},
+            {"letter": "C", "text": "Cerca de 9 meses"},
+            {"letter": "D", "text": "Cerca de 6 meses"},
+        ],
+        "correct_option": "B",
+        "narration": "Quanto tempo dura a gestação de uma elefanta, em média?",
+        "explanation": "É a gestação mais longa entre os mamíferos terrestres.",
+        "source": "WWF (worldwildlife.org)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem escreveu o romance Dom Casmurro?",
+        "options": [
+            {"letter": "A", "text": "Machado de Assis"},
+            {"letter": "B", "text": "Graciliano Ramos"},
+            {"letter": "C", "text": "Clarice Lispector"},
+            {"letter": "D", "text": "José de Alencar"},
+        ],
+        "correct_option": "A",
+        "narration": "Quem escreveu o romance Dom Casmurro?",
+        "explanation": "Dom Casmurro foi publicado em 1899.",
+        "source": "Academia Brasileira de Letras (academia.org.br)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem pintou a obra A Noite Estrelada?",
+        "options": [
+            {"letter": "A", "text": "Claude Monet"},
+            {"letter": "B", "text": "Pablo Picasso"},
+            {"letter": "C", "text": "Vincent van Gogh"},
+            {"letter": "D", "text": "Salvador Dalí"},
+        ],
+        "correct_option": "C",
+        "narration": "Quem pintou a obra A Noite Estrelada?",
+        "explanation": "Van Gogh pintou A Noite Estrelada em 1889.",
+        "source": "MoMA (moma.org)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem escreveu a peça Romeu e Julieta?",
+        "options": [
+            {"letter": "A", "text": "Miguel de Cervantes"},
+            {"letter": "B", "text": "Charles Dickens"},
+            {"letter": "C", "text": "William Shakespeare"},
+            {"letter": "D", "text": "Molière"},
+        ],
+        "correct_option": "C",
+        "narration": "Quem escreveu a peça Romeu e Julieta?",
+        "explanation": "Shakespeare escreveu a tragédia por volta de 1595.",
+        "source": "Royal Shakespeare Company (rsc.org.uk)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quantas teclas tem um piano tradicional?",
+        "options": [
+            {"letter": "A", "text": "66"},
+            {"letter": "B", "text": "88"},
+            {"letter": "C", "text": "100"},
+            {"letter": "D", "text": "76"},
+        ],
+        "correct_option": "B",
+        "narration": "Quantas teclas tem um piano tradicional?",
+        "explanation": "O piano padrão tem 52 teclas brancas e 36 pretas.",
+        "source": "Steinway & Sons (steinway.com)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quantas cordas tem um violão tradicional?",
+        "options": [
+            {"letter": "A", "text": "4"},
+            {"letter": "B", "text": "8"},
+            {"letter": "C", "text": "5"},
+            {"letter": "D", "text": "6"},
+        ],
+        "correct_option": "D",
+        "narration": "Quantas cordas tem um violão tradicional?",
+        "explanation": "O violão clássico tem seis cordas.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem compôs a Nona Sinfonia, que traz a Ode à Alegria?",
+        "options": [
+            {"letter": "A", "text": "Ludwig van Beethoven"},
+            {"letter": "B", "text": "Wolfgang Mozart"},
+            {"letter": "C", "text": "Johann Sebastian Bach"},
+            {"letter": "D", "text": "Antonio Vivaldi"},
+        ],
+        "correct_option": "A",
+        "narration": "Quem compôs a Nona Sinfonia, que traz a Ode à Alegria?",
+        "explanation": "Beethoven estreou a Nona Sinfonia em 1824, já completamente surdo.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Em qual país nasceram os Jogos Olímpicos da Antiguidade?",
+        "options": [
+            {"letter": "A", "text": "Itália"},
+            {"letter": "B", "text": "Grécia"},
+            {"letter": "C", "text": "Turquia"},
+            {"letter": "D", "text": "Egito"},
+        ],
+        "correct_option": "B",
+        "narration": "Em qual país nasceram os Jogos Olímpicos da Antiguidade?",
+        "explanation": "Os jogos aconteciam em Olímpia, na Grécia, desde 776 a.C.",
+        "source": "Comitê Olímpico Internacional (olympics.com)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Qual é a língua com mais falantes nativos no mundo?",
+        "options": [
+            {"letter": "A", "text": "Inglês"},
+            {"letter": "B", "text": "Hindi"},
+            {"letter": "C", "text": "Mandarim"},
+            {"letter": "D", "text": "Espanhol"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é a língua com mais falantes nativos no mundo?",
+        "explanation": "O mandarim tem mais de 900 milhões de falantes nativos.",
+        "source": "Ethnologue (ethnologue.com)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem escreveu O Pequeno Príncipe?",
+        "options": [
+            {"letter": "A", "text": "Antoine de Saint-Exupéry"},
+            {"letter": "B", "text": "Victor Hugo"},
+            {"letter": "C", "text": "Alexandre Dumas"},
+            {"letter": "D", "text": "Júlio Verne"},
+        ],
+        "correct_option": "A",
+        "narration": "Quem escreveu O Pequeno Príncipe?",
+        "explanation": "O livro foi publicado em 1943 e é um dos mais traduzidos do mundo.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem escreveu o poema épico Os Lusíadas?",
+        "options": [
+            {"letter": "A", "text": "Fernando Pessoa"},
+            {"letter": "B", "text": "Luís de Camões"},
+            {"letter": "C", "text": "Eça de Queirós"},
+            {"letter": "D", "text": "Gil Vicente"},
+        ],
+        "correct_option": "B",
+        "narration": "Quem escreveu o poema épico Os Lusíadas?",
+        "explanation": "Os Lusíadas foi publicado em 1572 e conta a viagem de Vasco da Gama.",
+        "source": "Instituto Camões (instituto-camoes.pt)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Em qual cidade brasileira fica a estátua do Cristo Redentor?",
+        "options": [
+            {"letter": "A", "text": "Salvador"},
+            {"letter": "B", "text": "Brasília"},
+            {"letter": "C", "text": "Rio de Janeiro"},
+            {"letter": "D", "text": "São Paulo"},
+        ],
+        "correct_option": "C",
+        "narration": "Em qual cidade brasileira fica a estátua do Cristo Redentor?",
+        "explanation": "O Cristo Redentor foi inaugurado em 1931 no topo do Corcovado.",
+        "source": "IPHAN (gov.br/iphan)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Quem pintou o teto da Capela Sistina, no Vaticano?",
+        "options": [
+            {"letter": "A", "text": "Michelangelo"},
+            {"letter": "B", "text": "Donatello"},
+            {"letter": "C", "text": "Rafael"},
+            {"letter": "D", "text": "Leonardo da Vinci"},
+        ],
+        "correct_option": "A",
+        "narration": "Quem pintou o teto da Capela Sistina, no Vaticano?",
+        "explanation": "Michelangelo pintou o teto entre 1508 e 1512.",
+        "source": "Museus do Vaticano (museivaticani.va)",
+    },
+    {
+        "category": "CULTURA",
+        "question": "Qual é a moeda oficial do Japão?",
+        "options": [
+            {"letter": "A", "text": "Yuan"},
+            {"letter": "B", "text": "Rupia"},
+            {"letter": "C", "text": "Won"},
+            {"letter": "D", "text": "Iene"},
+        ],
+        "correct_option": "D",
+        "narration": "Qual é a moeda oficial do Japão?",
+        "explanation": "O iene é a moeda do Japão desde 1871.",
+        "source": "Banco do Japão (boj.or.jp)",
+    },
+    {
+        "category": "MATEMÁTICA",
+        "question": "Quantos lados tem um hexágono?",
+        "options": [
+            {"letter": "A", "text": "7"},
+            {"letter": "B", "text": "8"},
+            {"letter": "C", "text": "6"},
+            {"letter": "D", "text": "5"},
+        ],
+        "correct_option": "C",
+        "narration": "Quantos lados tem um hexágono?",
+        "explanation": "Hexa vem do grego e significa seis.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "MATEMÁTICA",
+        "question": "Quanto é a raiz quadrada de 144?",
+        "options": [
+            {"letter": "A", "text": "16"},
+            {"letter": "B", "text": "10"},
+            {"letter": "C", "text": "12"},
+            {"letter": "D", "text": "14"},
+        ],
+        "correct_option": "C",
+        "narration": "Quanto é a raiz quadrada de 144?",
+        "explanation": "12 vezes 12 é igual a 144.",
+        "source": "Khan Academy (khanacademy.org)",
+    },
+    {
+        "category": "MATEMÁTICA",
+        "question": "Qual é o valor aproximado do número pi?",
+        "options": [
+            {"letter": "A", "text": "4,13"},
+            {"letter": "B", "text": "3,14"},
+            {"letter": "C", "text": "2,71"},
+            {"letter": "D", "text": "1,61"},
+        ],
+        "correct_option": "B",
+        "narration": "Qual é o valor aproximado do número pi?",
+        "explanation": "Pi é a razão entre o perímetro de uma circunferência e o seu diâmetro.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "MATEMÁTICA",
+        "question": "Quanto soma os ângulos internos de qualquer triângulo?",
+        "options": [
+            {"letter": "A", "text": "270 graus"},
+            {"letter": "B", "text": "180 graus"},
+            {"letter": "C", "text": "90 graus"},
+            {"letter": "D", "text": "360 graus"},
+        ],
+        "correct_option": "B",
+        "narration": "Quanto soma os ângulos internos de qualquer triângulo?",
+        "explanation": "Em um triângulo plano, os três ângulos internos sempre somam 180 graus.",
+        "source": "Khan Academy (khanacademy.org)",
+    },
+    {
+        "category": "MATEMÁTICA",
+        "question": "Qual é o maior número primo menor que 20?",
+        "options": [
+            {"letter": "A", "text": "18"},
+            {"letter": "B", "text": "13"},
+            {"letter": "C", "text": "19"},
+            {"letter": "D", "text": "17"},
+        ],
+        "correct_option": "C",
+        "narration": "Qual é o maior número primo menor que 20?",
+        "explanation": "19 só é divisível por 1 e por ele mesmo.",
+        "source": "Khan Academy (khanacademy.org)",
+    },
+    {
+        "category": "MATEMÁTICA",
+        "question": "Quantos lados tem um octógono?",
+        "options": [
+            {"letter": "A", "text": "8"},
+            {"letter": "B", "text": "7"},
+            {"letter": "C", "text": "10"},
+            {"letter": "D", "text": "6"},
+        ],
+        "correct_option": "A",
+        "narration": "Quantos lados tem um octógono?",
+        "explanation": "Octo vem do grego e significa oito, como na placa de pare.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
+    {
+        "category": "TECNOLOGIA",
+        "question": "O que significa a sigla CPU, de um computador?",
+        "options": [
+            {"letter": "A", "text": "Unidade Central de Processamento"},
+            {"letter": "B", "text": "Unidade Central de Programas"},
+            {"letter": "C", "text": "Placa Principal de Usuário"},
+            {"letter": "D", "text": "Painel Universal de Controle"},
+        ],
+        "correct_option": "A",
+        "narration": "O que significa a sigla CPU, de um computador?",
+        "explanation": "A CPU é o processador, o cérebro que executa as instruções do computador.",
+        "source": "Encyclopaedia Britannica (britannica.com)",
+    },
 ]
+
+# =============================================================================
+# Governança Factual Estrita (Missão v2/banco-prova-papel):
+# Prova de papel exige validação humana estrita. LLM self-attestation NÃO é permitida
+# para fatos; perguntas factuais vêm exclusivamente do catálogo canônico verificado
+# por humanos (CANONICAL_PAPER_QUIZ_CATALOG).
+# =============================================================================
+PAPER_QUIZ_USE_LLM: bool = False
 
 
 class QuizContentGenerator:
@@ -2277,43 +3783,84 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
         num_questions: int = 5,
         quiz_title: Optional[str] = None,
         topic_brief: Optional[str] = None,
+        excluded_questions: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Seleciona perguntas factuais homologadas do catálogo rotativo, evitando repetição entre gerações consecutivas."""
-        recent_used_norms = {
-            entry.get("question_normalized")
-            for entry in self.paper_question_history[-30:]
-            if entry.get("question_normalized")
-        }
-
+        """
+        Seleciona perguntas factuais homologadas do catálogo canônico (FONTE ÚNICA 1),
+        evitando colisão contra o histórico do canal (FONTE ÚNICA 2) via dilemma_similarity >= 0.80.
+        Se não houver perguntas inéditas suficientes, falha limpa levantando SEM_PERGUNTAS_NOVAS (FONTE ÚNICA 3).
+        NUNCA completa com perguntas repetidas nem aplica rotação modular.
+        """
         theme_words = set()
         for text_source in (quiz_title, topic_brief, niche):
             if text_source and str(text_source).lower() != "auto":
                 clean_t = self._normalize_text(str(text_source))
                 theme_words.update(w for w in clean_t.split() if len(w) > 3)
 
-        fresh_candidates = []
-        stale_candidates = []
+        scored_candidates = []
         for idx, item in enumerate(CANONICAL_PAPER_QUIZ_CATALOG):
+            cand_dict = {
+                "narration": item.get("narration") or item.get("question", ""),
+                "top_title": "",
+                "bottom_title": "",
+            }
+            # Checagem contra histórico do canal (FONTE ÚNICA 2)
+            is_history_dup = False
+            for exc in (excluded_questions or []):
+                if isinstance(exc, str):
+                    exc_dict = {"narration": exc, "top_title": "", "bottom_title": ""}
+                elif isinstance(exc, dict):
+                    exc_dict = {
+                        "narration": exc.get("narration") or exc.get("question", ""),
+                        "top_title": exc.get("top_title", ""),
+                        "bottom_title": exc.get("bottom_title", ""),
+                    }
+                else:
+                    continue
+                if dilemma_similarity(cand_dict, exc_dict) >= 0.80:
+                    is_history_dup = True
+                    break
+
+            if is_history_dup:
+                continue
+
             norm_q = self._normalize_text(item["question"])
-            is_recent = norm_q in recent_used_norms
             q_words = set(norm_q.split())
             overlap = len(theme_words.intersection(q_words)) if theme_words else 0
-            if is_recent:
-                stale_candidates.append((overlap, idx, item))
-            else:
-                fresh_candidates.append((overlap, idx, item))
+            scored_candidates.append((overlap, idx, item))
 
-        # Prioriza candidatos não usados recentemente
-        fresh_candidates.sort(key=lambda x: (x[0], -x[1]), reverse=True)
-        stale_candidates.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+        # Prioriza candidatos com afinidade temática, mantendo ordem canônica estável
+        scored_candidates.sort(key=lambda x: (x[0], -x[1]), reverse=True)
 
-        pool = [x[2] for x in fresh_candidates] + [x[2] for x in stale_candidates]
-        # Se não houver tema específico com alta afinidade, aplica deslocamento rotativo pelo histórico
-        if not theme_words or fresh_candidates[0][0] == 0:
-            shift = len(self.paper_question_history) % len(pool) if pool else 0
-            pool = pool[shift:] + pool[:shift]
+        selected_raw = []
+        for _, _, item in scored_candidates:
+            cand_dict = {
+                "narration": item.get("narration") or item.get("question", ""),
+                "top_title": "",
+                "bottom_title": "",
+            }
+            # Evita duplicidade interna no mesmo vídeo
+            if any(
+                dilemma_similarity(
+                    cand_dict,
+                    {"narration": prev.get("narration") or prev.get("question", ""), "top_title": "", "bottom_title": ""}
+                ) >= 0.80
+                for prev in selected_raw
+            ):
+                continue
+            selected_raw.append(item)
+            if len(selected_raw) >= num_questions:
+                break
 
-        selected_raw = pool[:num_questions]
+        # Se não houver perguntas inéditas suficientes, FALHA limpa com SEM_PERGUNTAS_NOVAS
+        if len(selected_raw) < num_questions:
+            raise RuntimeError(
+                f"SEM_PERGUNTAS_NOVAS: Não foi possível obter {num_questions} perguntas inéditas para o canal "
+                f"no catálogo canônico. Disponíveis: {len(selected_raw)}/{num_questions} após exclusão "
+                f"do histórico de {len(excluded_questions or [])} itens recentes. "
+                f"Interrupção segura para evitar bloqueio no safety gate."
+            )
+
         formatted_questions = []
         for i, q in enumerate(selected_raw, 1):
             q_copy = dict(q)
@@ -2341,8 +3888,9 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
         quiz_title: Optional[str] = None,
         closing_type: str = "score_challenge",
         topic_brief: Optional[str] = None,
+        excluded_questions: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Gera ou carrega estrutura canônica para o Quiz de Papel (multiple_choice_paper) com rotação dinâmica e anti-repetição."""
+        """Gera ou carrega estrutura canônica para o Quiz de Papel (multiple_choice_paper) com anti-repetição por canal."""
         logger.info(f"[QUIZ_GEN] Gerando quiz de papel: nicho='{niche}', título='{quiz_title}', perguntas={num_questions}")
         template_file = os.path.join(self.templates_dir, "quiz_template_p1_3_papel_homologado.json")
         if not os.path.exists(template_file):
@@ -2356,41 +3904,46 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
             except Exception as e:
                 logger.warning(f"[QUIZ_GEN] Erro ao carregar template canônico de papel: {e}")
 
-        # 1. Tenta geração dinâmica via LLM contextualizada com topic_brief e quiz_title
         questions: List[Dict[str, Any]] = []
-        prompt = self._build_paper_quiz_generation_prompt(
-            niche=niche,
-            num_questions=num_questions,
-            quiz_title=quiz_title,
-            topic_brief=topic_brief,
-        )
-        try:
-            raw_response = llm._generate_response(prompt)
-            parsed_data = self._parse_paper_llm_json(raw_response)
-            if parsed_data and parsed_data.get("questions"):
-                for q in parsed_data["questions"]:
-                    q_text = q.get("question", "")
-                    if q_text and not self.is_paper_question_duplicate(q_text):
-                        idx = len(questions) + 1
-                        q["id"] = f"q{idx}"
-                        q["number"] = idx
-                        q["header"] = f"QUESTÃO {idx:02d}:"
-                        q["verified"] = True
-                        q["fact_status"] = "VERIFIED_CANONICAL"
-                        q["publication_gate"] = "READY"
-                        questions.append(q)
-                        self.record_paper_question(
-                            question_text=q_text,
-                            niche=niche,
-                            category=q.get("category", "GERAL"),
-                            options_text=" ".join(opt.get("text", "") for opt in q.get("options", [])),
-                        )
-                        if len(questions) >= num_questions:
-                            break
-        except Exception as exc:
-            logger.warning(f"[QUIZ_GEN] Geração LLM para quiz de papel falhou ou indisponível: {exc}. Ativando catálogo rotativo.")
 
-        # 2. Se o LLM não completou as perguntas necessárias, seleciona do catálogo rotativo anti-repetição
+        # 1. Governança factual: Prova de papel NÃO gera perguntas via LLM por auto-atestado.
+        # Caso PAPER_QUIZ_USE_LLM seja ativado em ambiente de teste ou futuro, nenhuma pergunta
+        # de LLM sai com verified=True ou VERIFIED_CANONICAL (segue governança: UNVERIFIED_LLM_HEURISTIC).
+        if PAPER_QUIZ_USE_LLM:
+            prompt = self._build_paper_quiz_generation_prompt(
+                niche=niche,
+                num_questions=num_questions,
+                quiz_title=quiz_title,
+                topic_brief=topic_brief,
+            )
+            try:
+                raw_response = llm._generate_response(prompt)
+                parsed_data = self._parse_paper_llm_json(raw_response)
+                if parsed_data and parsed_data.get("questions"):
+                    for q in parsed_data["questions"]:
+                        q_text = q.get("question", "")
+                        if q_text and not self.is_paper_question_duplicate(q_text):
+                            idx = len(questions) + 1
+                            q["id"] = f"q{idx}"
+                            q["number"] = idx
+                            q["header"] = f"QUESTÃO {idx:02d}:"
+                            # Governança factual estrita: LLM self-attestation NÃO concede verified: True!
+                            q["verified"] = False
+                            q["fact_status"] = "UNVERIFIED_LLM_HEURISTIC"
+                            q["publication_gate"] = "BLOCKED_PENDING_EXTERNAL_AUDIT"
+                            questions.append(q)
+                            self.record_paper_question(
+                                question_text=q_text,
+                                niche=niche,
+                                category=q.get("category", "GERAL"),
+                                options_text=" ".join(opt.get("text", "") for opt in q.get("options", [])),
+                            )
+                            if len(questions) >= num_questions:
+                                break
+            except Exception as exc:
+                logger.warning(f"[QUIZ_GEN] Geração LLM para quiz de papel falhou ou indisponível: {exc}. Ativando catálogo canônico.")
+
+        # 2. Seleciona perguntas do catálogo canônico homologado (FONTE ÚNICA 1) com exclusão por canal (FONTE ÚNICA 2)
         if len(questions) < num_questions:
             needed = num_questions - len(questions)
             fallback_qs = self._select_paper_fallback_questions(
@@ -2398,6 +3951,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem blocos ```json, s
                 num_questions=needed,
                 quiz_title=quiz_title,
                 topic_brief=topic_brief,
+                excluded_questions=excluded_questions,
             )
             for fb_q in fallback_qs:
                 idx = len(questions) + 1

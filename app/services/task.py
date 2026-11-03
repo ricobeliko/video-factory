@@ -2816,7 +2816,7 @@ def _run_quiz_pipeline(
     )
 
     excluded_channel_dilemmas: List[Dict[str, Any]] = []
-    if format_type == "subjective" and not is_paper_quiz:
+    if (format_type == "subjective" or is_paper_quiz):
         try:
             from app.services import quiz_safety_gate
             if task_profile_id and task_profile_id != "default":
@@ -2843,6 +2843,7 @@ def _run_quiz_pipeline(
                 quiz_title=params.video_subject if params.video_subject and params.video_subject != "auto" else None,
                 closing_type=closing_type,
                 topic_brief=topic_brief,
+                excluded_questions=excluded_channel_dilemmas,
             )
         else:
             raw_quiz = generator.generate_quiz_structure(
@@ -2861,6 +2862,11 @@ def _run_quiz_pipeline(
         if "SEM_DILEMAS_NOVOS" in err_msg:
             err_details = {
                 "error_code": "SEM_DILEMAS_NOVOS",
+                "reason": err_msg,
+            }
+        elif "SEM_PERGUNTAS_NOVAS" in err_msg:
+            err_details = {
+                "error_code": "SEM_PERGUNTAS_NOVAS",
                 "reason": err_msg,
             }
         return _mark_task_failed(task_id, "script", f"Quiz generation failed: {exc}", details=err_details if err_details else None)

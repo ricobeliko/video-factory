@@ -21,6 +21,9 @@ from app.utils import utils
 @asynccontextmanager
 async def application_lifespan(_: FastAPI):
     """集中处理 API 进程启动恢复和关闭日志。"""
+    from app.utils.logging_utils import init_engine_logging
+    init_engine_logging()
+
     logger.info("startup event")
 
     configured_api_key = config.app.get("api_key", "")

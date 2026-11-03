@@ -1,7 +1,10 @@
+import faulthandler
 import functools
 import os
 import sys
 import threading
+from pathlib import Path
+from typing import Any, Optional, Tuple
 
 from loguru import logger
 
@@ -149,3 +152,72 @@ def configure_terminal_logger(sink, level: str, colorize: bool = True) -> int:
             colorize=colorize,
         )
         return _terminal_handler_id
+
+
+_engine_file_sink_id: Optional[int] = None
+_engine_fatal_file: Optional[Any] = None
+_engine_logging_lock = threading.Lock()
+
+
+def init_engine_logging(
+    logs_dir: Optional[str | Path] = None,
+    base_dir: Optional[str | Path] = None,
+    force: bool = False,
+) -> Tuple[Optional[int], Optional[Any]]:
+    """Configura gravação persistente em arquivo e faulthandler para o Motor V2.
+
+    Requisitos:
+    1. Sink de arquivo do Loguru em storage/logs/engine.log:
+       - Rotação: 20 MB
+       - Retenção: 7 dias
+       - Encoding: UTF-8
+       - enqueue: True (thread-safe)
+    2. faulthandler.enable(file=..., all_threads=True) apontando para
+       storage/logs/engine_fatal.log, mantido aberto durante o processo,
+       para que um 0xC0000005 (Access Violation) grave o traceback Python de todas as threads.
+    """
+    global _engine_file_sink_id, _engine_fatal_file
+
+    with _engine_logging_lock:
+        if logs_dir is not None:
+            target_dir = str(logs_dir)
+        elif base_dir is not None:
+            target_dir = os.path.join(str(base_dir), "storage", "logs")
+        else:
+            target_dir = os.path.join(PROJECT_ROOT, "storage", "logs")
+
+        os.makedirs(target_dir, exist_ok=True)
+
+        if _engine_file_sink_id is None or force:
+            if force and _engine_file_sink_id is not None:
+                try:
+                    logger.remove(_engine_file_sink_id)
+                except Exception:
+                    pass
+            engine_log_path = os.path.join(target_dir, "engine.log")
+            _engine_file_sink_id = logger.add(
+                engine_log_path,
+                level="INFO",
+                format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{function}:{line} - {message}",
+                rotation="20 MB",
+                retention="7 days",
+                encoding="utf-8",
+                enqueue=True,
+            )
+
+        if _engine_fatal_file is None or force:
+            fatal_log_path = os.path.join(target_dir, "engine_fatal.log")
+            try:
+                if force and _engine_fatal_file is not None:
+                    try:
+                        _engine_fatal_file.close()
+                    except Exception:
+                        pass
+                _engine_fatal_file = open(fatal_log_path, "a", encoding="utf-8")
+                faulthandler.enable(file=_engine_fatal_file, all_threads=True)
+            except Exception as exc:
+                logger.warning(
+                    f"Não foi possível ativar faulthandler em {fatal_log_path}: {exc}"
+                )
+
+        return _engine_file_sink_id, _engine_fatal_file

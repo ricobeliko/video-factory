@@ -472,6 +472,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     global _shutdown_completed
     _shutdown_completed = False
 
+    from app.utils.logging_utils import init_engine_logging
+    init_engine_logging()
+
     args = parse_args(argv)
     watchdog: Optional[SchedulerWatchdog] = None
 

@@ -159,6 +159,10 @@ def generate_ideas(
         logger.warning("[Autopilot] LLM returned empty response for ideas generation")
         return []
 
+    if response.strip().startswith("Error: "):
+        logger.error(f"[Autopilot] LLM idea generation returned error: {response}")
+        raise RuntimeError(response)
+
     raw_lines = response.strip().splitlines()
     parsed_ideas = []
     for line in raw_lines:

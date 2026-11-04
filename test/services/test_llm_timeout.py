@@ -182,3 +182,42 @@ def test_config_override_affects_gemini_and_openai():
     assert timeout_openai == 45.0 or timeout_openai == 45, (
         f"Esperava timeout=45s, obteve {timeout_openai}"
     )
+
+
+def test_generate_ideas_raises_runtime_error_on_llm_error():
+    """
+    FONTE ÚNICA: Resposta de erro do LLM ('Error: ...') não pode ser interpretada como ideia.
+    autopilot.generate_ideas deve levantar RuntimeError e NÃO devolver lista de ideias.
+    """
+    from app.services import autopilot
+
+    error_response = "Error: Request timed out."
+
+    with patch("app.services.llm._generate_response", return_value=error_response):
+        with pytest.raises(RuntimeError) as exc_info:
+            autopilot.generate_ideas(niche="curiosidades", count=5)
+
+    err_str = str(exc_info.value)
+    assert "Error: Request timed out." in err_str
+
+
+def test_generate_ideas_returns_ideas_on_normal_response():
+    """
+    Com resposta normal de 3 linhas do LLM, generate_ideas devolve 3 ideias limpas.
+    """
+    from app.services import autopilot
+
+    normal_response = (
+        "1. Mistérios do Fundo do Oceano\n"
+        "2. Segredos do Universo Antigo\n"
+        "3. Como Funcionam os Buracos Negros\n"
+    )
+
+    with patch("app.services.llm._generate_response", return_value=normal_response):
+        ideas = autopilot.generate_ideas(niche="curiosidades", count=3)
+
+    assert isinstance(ideas, list)
+    assert len(ideas) == 3
+    assert ideas[0] == "Mistérios do Fundo do Oceano"
+    assert ideas[1] == "Segredos do Universo Antigo"
+    assert ideas[2] == "Como Funcionam os Buracos Negros"

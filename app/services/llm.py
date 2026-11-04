@@ -22,6 +22,23 @@ MIN_SCRIPT_PARAGRAPH_NUMBER = 1
 MAX_SCRIPT_PARAGRAPH_NUMBER = 10
 MAX_SCRIPT_PROMPT_LENGTH = 2000
 MAX_SCRIPT_SYSTEM_PROMPT_LENGTH = 8000
+# Timeout padrão em segundos para chamadas HTTP a provedores de LLM (FONTE ÚNICA 1)
+LLM_REQUEST_TIMEOUT_SECONDS = 90
+
+
+def get_llm_request_timeout_seconds(app_config: dict | None = None) -> float:
+    """
+    FONTE ÚNICA 1: Retorna o timeout padrão para clientes HTTP de LLM em segundos.
+    Lê de config.app["llm_request_timeout_seconds"] (ou app_config) se configurado,
+    caso contrário usa LLM_REQUEST_TIMEOUT_SECONDS (90).
+    """
+    try:
+        cfg = app_config if isinstance(app_config, dict) else config.app
+        if isinstance(cfg, dict) and "llm_request_timeout_seconds" in cfg:
+            return float(cfg["llm_request_timeout_seconds"])
+    except Exception:
+        pass
+    return float(LLM_REQUEST_TIMEOUT_SECONDS)
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
 _UNCLOSED_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*$", re.IGNORECASE | re.DOTALL)
 _URL_USERINFO_RE = re.compile(
@@ -330,6 +347,9 @@ def _generate_response(prompt: str, app_config=None) -> str:
                     "please set it in the config.toml file."
                 )
 
+        timeout_seconds = get_llm_request_timeout_seconds(runtime_app_config)
+        timeout_ms = int(timeout_seconds * 1000)
+
         if adapter == "qwen":
             import dashscope
             from dashscope.api_entities.dashscope_response import GenerationResponse
@@ -358,7 +378,11 @@ def _generate_response(prompt: str, app_config=None) -> str:
             from google import genai
             from google.genai import types
 
-            http_options = types.HttpOptions(base_url=base_url) if base_url else None
+            http_options = (
+                types.HttpOptions(timeout=timeout_ms, base_url=base_url)
+                if base_url
+                else types.HttpOptions(timeout=timeout_ms)
+            )
             generation_config = types.GenerateContentConfig(
                 temperature=0.5,
                 top_p=1,
@@ -415,6 +439,7 @@ def _generate_response(prompt: str, app_config=None) -> str:
                     f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
                 ),
                 default_headers={"cf-aig-gateway-id": gateway_id},
+                timeout=timeout_seconds,
             )
             response = client.chat.completions.create(
                 model=model_name,
@@ -433,6 +458,7 @@ def _generate_response(prompt: str, app_config=None) -> str:
             response = litellm.completion(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
+                timeout=timeout_seconds,
                 drop_params=True,
             )
 
@@ -453,6 +479,7 @@ def _generate_response(prompt: str, app_config=None) -> str:
                 api_key=api_key,
                 api_version=api_version,
                 azure_endpoint=base_url,
+                timeout=timeout_seconds,
             )
             response = client.chat.completions.create(
                 model=model_name, messages=[{"role": "user", "content": prompt}]
@@ -587,6 +614,7 @@ def _generate_response(prompt: str, app_config=None) -> str:
             client = OpenAI(
                 api_key=api_key,
                 base_url=base_url,
+                timeout=timeout_seconds,
             )
             response = client.chat.completions.create(
                 model=model_name,
@@ -612,6 +640,7 @@ def _generate_response(prompt: str, app_config=None) -> str:
         client = OpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=timeout_seconds,
         )
 
         response = client.chat.completions.create(

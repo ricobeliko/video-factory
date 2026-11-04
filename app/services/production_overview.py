@@ -503,25 +503,6 @@ def _get_production_overview_impl(
             if is_match:
                 candidate_tids.add(tid)
 
-        for tid in events_by_task.keys():
-            t_pid = task_prof_map.get(tid)
-            if not t_pid:
-                for ev in events_by_task[tid]:
-                    m_raw = ev.get("metadata_json")
-                    if m_raw:
-                        try:
-                            m_data = json.loads(m_raw) if isinstance(m_raw, str) else m_raw
-                            if isinstance(m_data, dict) and m_data.get("profile_id"):
-                                t_pid = m_data.get("profile_id")
-                                break
-                        except Exception:
-                            pass
-            if not t_pid:
-                t_pid = "default"
-            is_match = (t_pid == pid) if pid not in ("default", profile_manager.DEFAULT_PROFILE_ID) else (t_pid in ("default", profile_manager.DEFAULT_PROFILE_ID))
-            if is_match:
-                candidate_tids.add(tid)
-
         # Monta os registros consolidados de runs
         runs_list = []
         for tid in candidate_tids:

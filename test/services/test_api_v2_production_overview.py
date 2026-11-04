@@ -728,6 +728,7 @@ class TestApiV2ProductionOverview(unittest.TestCase):
         1) Tarefa sem state em memória com evento generation_approved => status SUCCESS
         2) Tarefa com generation_approved + generation_failed => status FAILED
         3) Tarefa sem eventos nem state => status UNKNOWN
+        4) Tarefa antiga (>24h em task_profiles) com evento recente de analytics NÃO aparece em recent_runs nem em unknown_24h
         """
         now = datetime.now(timezone.utc)
         two_hours_ago = (now - timedelta(hours=2)).isoformat()
@@ -739,7 +740,9 @@ class TestApiV2ProductionOverview(unittest.TestCase):
 
         t_approved = "task-restart-approved"
         t_conflict = "task-restart-conflict"
+        three_days_ago = (now - timedelta(days=3)).isoformat()
         t_unknown = "task-restart-unknown"
+        t_ancient = "task-restart-ancient"
 
         with scheduler.get_connection(self.db_path) as conn:
             # Associa todas as 3 tarefas ao perfil default
@@ -749,6 +752,7 @@ class TestApiV2ProductionOverview(unittest.TestCase):
                     (t_approved, two_hours_ago),
                     (t_conflict, two_hours_ago),
                     (t_unknown, two_hours_ago),
+                    (t_ancient, three_days_ago),
                 ],
             )
             # Tarefa 1: generation_started + generation_approved
@@ -785,6 +789,15 @@ class TestApiV2ProductionOverview(unittest.TestCase):
 
             # Tarefa 3: sem eventos em operational_events (apenas task_profiles)
 
+            # Tarefa 4: antiga (>24h) com apenas evento recente de analytics (não deve virar run)
+            conn.execute(
+                """
+                INSERT INTO operational_events (task_id, component, severity, event_type, message, metadata_json, timestamp)
+                VALUES (?, 'analytics', 'INFO', 'ANALYTICS_COLLECTION_SUCCESS', 'Métricas coletadas', ?, ?);
+                """,
+                (t_ancient, json.dumps({"views": 1500}), one_hour_ago),
+            )
+
         production_overview.clear_production_overview_cache()
         overview = production_overview.get_production_overview(db_path=self.db_path, use_cache=False)
 
@@ -804,7 +817,11 @@ class TestApiV2ProductionOverview(unittest.TestCase):
         self.assertIn(t_unknown, recent_items)
         self.assertEqual(recent_items[t_unknown]["status"], "UNKNOWN")
 
-        # 4. Totais derivados de runs_list
+        # 4. Tarefa antiga com evento recente de analytics NÃO aparece em recent_runs nem em unknown_24h
+        self.assertNotIn(t_ancient, recent_items)
+
+        # 5. Totais derivados de runs_list
+        self.assertEqual(overview["totals"]["total_runs_24h"], 3)
         self.assertEqual(overview["totals"]["success_24h"], 1)
         self.assertEqual(overview["totals"]["failed_24h"], 1)
         self.assertEqual(overview["totals"]["unknown_24h"], 1)

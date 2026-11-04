@@ -44,6 +44,7 @@ from app.services import (
     safety_gate,
     scheduler,
     trend_radar,
+    voice,
     webui_task,
 )
 from app.utils import utils
@@ -3872,6 +3873,21 @@ def _run_autonomous_cycle(
             db_path=db_path,
         )
         return {"status": "blocked", "reason": "provider_unavailable", "message": final_msg}
+
+    # Verificação ativa de disponibilidade do serviço de voz (probe curto 10s, cache 5min)
+    voice_ok, voice_err = voice.check_voice_availability(params.voice_name)
+    if not voice_ok:
+        msg = f"Serviço de voz indisponível ({params.voice_name}): {voice_err}"
+        _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
+        _set_status(KEY_AUTONOMOUS_MESSAGE, msg)
+        _set_status(KEY_AUTONOMOUS_LAST_RESULT, msg)
+        logger.warning(f"[AUTONOMOUS_PRODUCTION] {msg}")
+        return {
+            "status": "tts_indisponivel",
+            "reason": "tts_indisponivel",
+            "message": msg,
+            "profile_id": target_profile_id,
+        }
 
     _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, new_task_id)
     _set_status(KEY_AUTONOMOUS_STATE, STATE_GENERATING)

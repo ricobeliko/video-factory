@@ -15,7 +15,7 @@ import time
 import unicodedata
 import wave
 from datetime import datetime, timedelta
-from typing import Any, Union
+from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape, unescape
 
@@ -1491,6 +1491,98 @@ def azure_tts_v1(
         "attempts_history": attempts_history,
     })
     return None
+
+
+VOICE_PROBE_CACHE_TTL_SECONDS = 300.0
+VOICE_PROBE_TIMEOUT_SECONDS = 10.0
+VOICE_PROBE_TEST_TEXT = "Teste de disponibilidade de voz."
+
+_voice_availability_cache: Dict[Tuple[str, str], Tuple[float, bool, str]] = {}
+_voice_availability_lock = threading.Lock()
+
+
+def clear_voice_availability_cache() -> None:
+    """Limpa o cache em memória de disponibilidade de voz (usado principalmente em testes)."""
+    with _voice_availability_lock:
+        _voice_availability_cache.clear()
+
+
+def check_voice_availability(
+    voice_name: Optional[str],
+    timeout_seconds: float = VOICE_PROBE_TIMEOUT_SECONDS,
+    cache_ttl_seconds: float = VOICE_PROBE_CACHE_TTL_SECONDS,
+) -> Tuple[bool, str]:
+    """
+    Verifica se o serviço de voz/TTS do canal está operacional via probe curto.
+
+    Princípio de Fonte Única:
+    Esta é a ÚNICA função do sistema que avalia a disponibilidade operacional ativa
+    do provedor de voz do canal.
+
+    Regras:
+    1. Apenas provedores baseados em Edge TTS / Azure TTS v1 são testados (outros passam direto).
+    2. Vozes 'no_voice' ou vazias passam direto.
+    3. Executa síntese de teste com 1 frase curta e timeout de 10s (sem retries).
+    4. Cache em memória de 5 minutos (300s) por (provider, voice).
+    """
+    if not voice_name:
+        return True, "ok"
+
+    if is_no_voice(voice_name):
+        return True, "ok"
+
+    if not is_azure_v1_voice(voice_name):
+        return True, "ok"
+
+    parsed_voice = parse_voice_name(voice_name)
+    provider = "edge_tts"
+    cache_key = (provider, parsed_voice)
+    now = time.monotonic()
+
+    with _voice_availability_lock:
+        cached = _voice_availability_cache.get(cache_key)
+        if cached is not None:
+            ts, is_ok, msg = cached
+            if (now - ts) < cache_ttl_seconds:
+                return is_ok, msg
+
+    try:
+        received_audio = False
+
+        def _probe_chunk(chunk):
+            nonlocal received_audio
+            if chunk.get("type") == "audio" and chunk.get("data"):
+                received_audio = True
+
+        communicate = create_edge_tts_communicate(
+            text=VOICE_PROBE_TEST_TEXT,
+            voice_name=parsed_voice,
+            rate_str="+0%",
+        )
+        stream_edge_tts_chunks(
+            communicate,
+            _probe_chunk,
+            timeout_seconds=timeout_seconds,
+        )
+
+        if not received_audio:
+            raise RuntimeError("Nenhum dado de áudio recebido durante o probe de TTS")
+
+        with _voice_availability_lock:
+            _voice_availability_cache[cache_key] = (now, True, "ok")
+        return True, "ok"
+
+    except Exception as exc:
+        raw_msg = str(exc)
+        if isinstance(exc, TimeoutError) and not raw_msg and timeout_seconds:
+            raw_msg = f"edge_tts stream timed out after {timeout_seconds:g}s"
+        clean_err = _sanitize_error_message(raw_msg or type(exc).__name__)
+        logger.warning(
+            f"[VOICE] Probe de disponibilidade falhou para ({provider}, {parsed_voice}): {clean_err}"
+        )
+        with _voice_availability_lock:
+            _voice_availability_cache[cache_key] = (now, False, clean_err)
+        return False, clean_err
 
 
 def siliconflow_tts(

@@ -1034,6 +1034,182 @@ class TestFlowPlaywright(unittest.TestCase):
         self.assertEqual(res["output_count"], 1)
         mock_trigger.click.assert_not_called()
 
+
+    def test_ensure_video_generation_mode_x2_triggers_adjustment_to_x1(self):
+        """1. initial_text com 'x2' => NÃO retorna direto; abre overlay; seleciona x1; confirma x1."""
+        mock_page = MagicMock()
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.first = mock_trigger
+        mock_trigger.inner_text.side_effect = ["Vídeo · 720p · 8s\ncrop_9_16\nx2", "Vídeo · 720p · 8s\ncrop_9_16\nx1"]
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_overlay = MagicMock()
+        mock_overlay.first = mock_overlay
+
+        mock_video_radio = MagicMock()
+        mock_video_radio.count.return_value = 1
+        mock_video_radio.first = mock_video_radio
+        mock_video_radio.first.get_attribute.return_value = "true"
+
+        mock_ar_radio = MagicMock()
+        mock_ar_radio.count.return_value = 1
+        mock_ar_radio.first = mock_ar_radio
+        mock_ar_radio.first.get_attribute.return_value = "true"
+
+        mock_x1_radio = MagicMock()
+        mock_x1_radio.count.return_value = 1
+        mock_x1_radio.first = mock_x1_radio
+        x1_clicked = [False]
+        def _x1_click(**kwargs):
+            x1_clicked[0] = True
+        mock_x1_radio.first.click.side_effect = _x1_click
+        mock_x1_radio.first.get_attribute.side_effect = lambda attr: "true" if (attr == "aria-checked" and x1_clicked[0]) else "false"
+
+        def _get_by_role_overlay(role, name=None):
+            if role == "radio":
+                p = getattr(name, "pattern", "") if name else ""
+                if "v" in p or "video" in p:
+                    return mock_video_radio
+                elif "9:16" in p:
+                    return mock_ar_radio
+                elif "x1" in p:
+                    return mock_x1_radio
+            return MagicMock(count=lambda: 0)
+
+        mock_overlay.get_by_role.side_effect = _get_by_role_overlay
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif "cdk-overlay-pane" in selector:
+                loc.filter.return_value = mock_overlay
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        with patch("scripts.flow_playwright.expect") as mock_expect:
+            res = ensure_video_generation_mode(mock_page)
+            self.assertTrue(res["confirmed"])
+            self.assertTrue(res["changed"])
+            self.assertEqual(res["generation_type"], "VIDEO")
+            self.assertEqual(res["output_count"], 1)
+            mock_trigger.click.assert_called_once()
+            mock_x1_radio.first.click.assert_called_once()
+            mock_page.keyboard.press.assert_called_with("Escape")
+
+    def test_ensure_video_generation_mode_x1_returns_immediately(self):
+        """2. initial_text com 'x1' => retorna direto (zero cliques no seletor)."""
+        mock_page = MagicMock()
+        mock_close = MagicMock()
+        mock_close.count.return_value = 0
+        mock_close.first.is_visible.return_value = False
+        mock_page.locator.return_value.filter.return_value = mock_close
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.first = mock_trigger
+        mock_trigger.inner_text.return_value = "Vídeo · 720p · 8s\ncrop_9_16\nx1"
+        mock_page.get_by_role.return_value = mock_trigger
+
+        res = ensure_video_generation_mode(mock_page)
+        self.assertTrue(res["confirmed"])
+        self.assertFalse(res["changed"])
+        self.assertEqual(res["generation_type"], "VIDEO")
+        self.assertEqual(res["aspect_ratio"], "9:16")
+        self.assertEqual(res["output_count"], 1)
+        mock_trigger.click.assert_not_called()
+
+    def test_ensure_video_generation_mode_x2_fails_closed_when_x1_unconfirmed(self):
+        """3. initial_text com 'x2' e radio x1 falha ao confirmar => retorna erro FLOW_OUTPUT_COUNT_NOT_X1 sem tentar gerar."""
+        mock_page = MagicMock()
+
+        mock_trigger = MagicMock()
+        mock_trigger.count.return_value = 1
+        mock_trigger.first = mock_trigger
+        mock_trigger.inner_text.side_effect = ["Vídeo · 720p · 8s\ncrop_9_16\nx2", "Vídeo · 720p · 8s\ncrop_9_16\nx2"]
+        mock_page.get_by_role.return_value = mock_trigger
+
+        mock_overlay = MagicMock()
+        mock_overlay.first = mock_overlay
+
+        mock_video_radio = MagicMock()
+        mock_video_radio.count.return_value = 1
+        mock_video_radio.first = mock_video_radio
+        mock_video_radio.first.get_attribute.return_value = "true"
+
+        mock_ar_radio = MagicMock()
+        mock_ar_radio.count.return_value = 1
+        mock_ar_radio.first = mock_ar_radio
+        mock_ar_radio.first.get_attribute.return_value = "true"
+
+        mock_x1_radio = MagicMock()
+        mock_x1_radio.count.return_value = 1
+        mock_x1_radio.first = mock_x1_radio
+        mock_x1_radio.first.get_attribute.return_value = "false"
+
+        def _get_by_role_overlay(role, name=None):
+            if role == "radio":
+                p = getattr(name, "pattern", "") if name else ""
+                if "v" in p or "video" in p:
+                    return mock_video_radio
+                elif "9:16" in p:
+                    return mock_ar_radio
+                elif "x1" in p:
+                    return mock_x1_radio
+            return MagicMock(count=lambda: 0)
+
+        mock_overlay.get_by_role.side_effect = _get_by_role_overlay
+
+        def _mock_locator(selector):
+            loc = MagicMock()
+            if "flow-chat" in selector or "Fechar" in selector:
+                mock_close = MagicMock()
+                mock_close.count.return_value = 0
+                mock_close.first.is_visible.return_value = False
+                loc.filter.return_value = mock_close
+            elif "cdk-overlay-pane" in selector:
+                loc.filter.return_value = mock_overlay
+            return loc
+
+        mock_page.locator.side_effect = _mock_locator
+
+        with patch("scripts.flow_playwright.expect"):
+            res = ensure_video_generation_mode(mock_page)
+            self.assertFalse(res["confirmed"])
+            self.assertEqual(res["error"], "FLOW_OUTPUT_COUNT_NOT_X1")
+
+    def test_flow_output_count_not_x1_blocks_generate(self):
+        """Valida que FLOW_OUTPUT_COUNT_NOT_X1 aborta run_playwright_flow_poc antes de preencher prompt ou clicar Generate."""
+        with patch("scripts.flow_playwright.sync_playwright"), \
+             patch("scripts.flow_playwright.launch_flow_context") as mock_launch, \
+             patch("scripts.flow_playwright.check_login_state", return_value="AUTHENTICATED"), \
+             patch("scripts.flow_playwright.ensure_studio_surface"), \
+             patch("scripts.flow_playwright.ensure_video_generation_mode", return_value={"confirmed": False, "changed": False, "generation_type": "UNKNOWN", "error": "FLOW_OUTPUT_COUNT_NOT_X1"}), \
+             patch("scripts.flow_playwright.fill_prompt") as mock_fill, \
+             patch("scripts.flow_playwright.get_generate_button") as mock_get_gen, \
+             patch("os.path.exists", return_value=True), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps({
+                 "scenes": [{"scene_index": 1, "prompt_en": "test prompt", "expected_clip": "flow_scene_01.mp4"}]
+             }))):
+
+            mock_ctx = MagicMock()
+            mock_launch.return_value = (mock_ctx, None)
+
+            res = run_playwright_flow_poc(manifest_path="dummy_manifest.json", scene_index=1, trial_only=False)
+
+            self.assertEqual(res["status"], "FLOW_OUTPUT_COUNT_NOT_X1")
+            self.assertEqual(res["error"], "FLOW_OUTPUT_COUNT_NOT_X1")
+            self.assertFalse(res["generation_type_confirmed"])
+            self.assertEqual(res["generate_click_count_this_run"], 0)
+            mock_fill.assert_not_called()
+            mock_get_gen.assert_not_called()
+
     def test_ensure_video_generation_mode_image_to_video(self):
         """B. image_to_video: abre seletor, escolhe Vídeo exatamente 1 vez, confirma estado."""
         mock_page = MagicMock()

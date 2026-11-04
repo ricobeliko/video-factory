@@ -942,19 +942,28 @@ def ensure_video_generation_mode(
             is_video = bool(re.search(r"\b(v[íi]deo|video|veo|omni)\b", initial_text, re.I))
             is_image = bool(re.search(r"\b(imagem|image|banana|nano)\b", initial_text, re.I))
 
-            if is_video and not is_image:
-                logger.info("Modo de geração já está comprovado como VIDEO via seletor. Zero cliques no seletor.")
-                res["confirmed"] = True
-                res["changed"] = False
-                res["generation_type"] = "VIDEO"
-                if "9:16" in initial_text or "9_16" in initial_text:
-                    res["aspect_ratio"] = "9:16"
-                if "x1" in initial_text:
-                    res["output_count"] = 1
-                return res
+            count_match = re.search(r"\bx([1-9])\b", initial_text, re.I)
+            initial_output_count = int(count_match.group(1)) if count_match else None
 
-            # Se está em IMAGEM ou texto não comprova vídeo diretamente -> Tentar alteração controlada
-            logger.info("Gatilho presente mas modo não está configurado como VIDEO. Abrindo seletor para alteração controlada...")
+            if is_video and not is_image:
+                if initial_output_count is not None and initial_output_count != 1:
+                    logger.info(
+                        f"Modo de geração é VIDEO, mas contagem de saída é x{initial_output_count} (requer x1). "
+                        "Prosseguindo para abertura do overlay para ajuste de contagem..."
+                    )
+                else:
+                    logger.info("Modo de geração já está comprovado como VIDEO via seletor. Zero cliques no seletor.")
+                    res["confirmed"] = True
+                    res["changed"] = False
+                    res["generation_type"] = "VIDEO"
+                    if "9:16" in initial_text or "9_16" in initial_text:
+                        res["aspect_ratio"] = "9:16"
+                    if initial_output_count == 1 or "x1" in initial_text:
+                        res["output_count"] = 1
+                    return res
+
+            # Se está em IMAGEM ou contagem != x1 -> Tentar alteração controlada
+            logger.info("Gatilho presente mas modo não está configurado como VIDEO ou contagem precisa de ajuste. Abrindo seletor para alteração controlada...")
             target_btn.click(timeout=timeout_ms)
 
             overlay = page.locator(".cdk-overlay-pane, [role='dialog'], [role='menu'], mat-menu-panel, flow-menu").filter(
@@ -1006,6 +1015,7 @@ def ensure_video_generation_mode(
                 res["aspect_ratio"] = "9:16"
 
             # Ajusta contagem x1 se disponível
+            x1_radio_confirmed = False
             x1_opt = overlay.first.get_by_role("radio", name=re.compile(r"^x1$", re.I))
             if _safe_locator_count(x1_opt) == 0:
                 x1_opt = overlay.first.locator("[role='radio'], [role='menuitemradio']").filter(
@@ -1019,7 +1029,11 @@ def ensure_video_generation_mode(
                         expect(x1_opt.first).to_have_attribute("aria-checked", "true", timeout=timeout_ms)
                     except Exception:
                         pass
-                res["output_count"] = 1
+                try:
+                    if x1_opt.first.get_attribute("aria-checked") == "true":
+                        x1_radio_confirmed = True
+                except Exception:
+                    pass
 
             page.keyboard.press("Escape")
             try:
@@ -1033,6 +1047,21 @@ def ensure_video_generation_mode(
             final_raw = target_btn.inner_text()
             final_text = final_raw.strip() if isinstance(final_raw, str) else ""
             logger.info(f"Modo VIDEO confirmado na UI com sucesso! Seletor: '{final_text}'")
+
+            final_has_x1 = bool(re.search(r"\bx1\b", final_text, re.I))
+            x1_confirmed = x1_radio_confirmed or final_has_x1
+
+            if x1_confirmed:
+                res["output_count"] = 1
+            elif initial_output_count is not None and initial_output_count != 1:
+                logger.error(
+                    f"FAIL CLOSED: Contagem de saída era x{initial_output_count} e ajuste para x1 não foi confirmado "
+                    f"(radio aria-checked={x1_radio_confirmed}, texto final='{final_text}'). "
+                    "Abortando fail-closed antes de gerar (zero créditos consumidos)."
+                )
+                res["error"] = "FLOW_OUTPUT_COUNT_NOT_X1"
+                res["confirmed"] = False
+                return res
 
             res["confirmed"] = True
             res["changed"] = True
@@ -2163,9 +2192,9 @@ def run_playwright_flow_poc(
                     f"FAIL CLOSED: Modo de geração não pôde ser confirmado como VIDEO ({err_msg}). "
                     f"Abortando antes de preencher prompt ou clicar Generate (zero cliques, zero créditos)."
                 )
-                report["status"] = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+                report["status"] = err_msg if err_msg in ("FLOW_OUTPUT_COUNT_NOT_X1", "FLOW_VIDEO_MODE_NOT_CONFIRMED") else "FLOW_VIDEO_MODE_NOT_CONFIRMED"
                 report["error"] = err_msg
-                _stop_tracing("FLOW_VIDEO_MODE_NOT_CONFIRMED")
+                _stop_tracing(report["status"])
                 context.close()
                 return report
 
@@ -2841,7 +2870,7 @@ def generate_flow_scene(
     credits_consumed = 0
     if raw_status == "ALREADY_COMPLETE":
         credits_consumed = 0
-    elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED" or raw_res.get("generation_type") == "IMAGE":
+    elif raw_status in ("FLOW_VIDEO_MODE_NOT_CONFIRMED", "FLOW_OUTPUT_COUNT_NOT_X1") or raw_res.get("generation_type") == "IMAGE":
         # Modo não confirmado como VIDEO ou mode mismatch: zero créditos de vídeo inferidos
         credits_consumed = 0
     elif policy_blocked and refund_confirmed:
@@ -2905,8 +2934,8 @@ def generate_flow_scene(
         final_status = raw_status
     elif raw_status == "AWAITING_FLOW_EDGE_PROFILE_CLOSE":
         final_status = "FLOW_BROWSER_BUSY"
-    elif raw_status == "FLOW_VIDEO_MODE_NOT_CONFIRMED":
-        final_status = "FLOW_VIDEO_MODE_NOT_CONFIRMED"
+    elif raw_status in ("FLOW_VIDEO_MODE_NOT_CONFIRMED", "FLOW_OUTPUT_COUNT_NOT_X1"):
+        final_status = raw_status
     elif raw_status in ("EXHAUSTED", "FLOW_ACCOUNT_EXHAUSTED"):
         final_status = "FLOW_ACCOUNT_EXHAUSTED"
     elif policy_blocked:

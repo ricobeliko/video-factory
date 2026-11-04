@@ -144,7 +144,76 @@ class TestUpdateProductionHealthAndRollback(unittest.TestCase):
         script_code = (REPO_ROOT / "scripts" / "update_production.ps1").read_text(encoding="utf-8")
         self.assertIn("Contrato Legado V1 (HTTP 200 + 'ok')", script_code)
         self.assertIn("Contrato V2 (HTTP 200 + 'healthy' + is_primary=true)", script_code)
-        self.assertIn('Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout 75s, $RollbackContractDesc)"', script_code)
+        self.assertIn('Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout ${HealthTimeoutSeconds}s, $RollbackContractDesc)"', script_code)
+
+    def test_script_parses_without_powershell_errors(self):
+        """(a) Valida que scripts/update_production.ps1 faz parse sem nenhum erro de sintaxe no PowerShell."""
+        script_path = str(REPO_ROOT / "scripts" / "update_production.ps1").replace("\\", "/")
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"""
+            $tokens = $null
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile('{script_path}', [ref]$tokens, [ref]$errors)
+            if ($errors.Count -eq 0) {{{{
+                exit 0
+            }}}} else {{{{
+                $errors | ForEach-Object {{{{ Write-Error $_.Message }}}}
+                exit 1
+            }}}}
+            """,
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Parse do script falhou: {proc.stderr}")
+
+    def test_invoke_git_quiet_returns_zero_even_with_stderr(self):
+        """(b) Valida que o helper Invoke-GitQuiet devolve exit code 0 mesmo quando git escreve no stderr (em repo temporário)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = tmp_dir.replace("\\", "/")
+            subprocess.run(["git", "init", tmp_path], capture_output=True, check=True)
+            dummy_file = Path(tmp_dir) / "dummy.txt"
+            dummy_file.write_text("test", encoding="utf-8")
+            subprocess.run(["git", "-C", tmp_path, "add", "dummy.txt"], capture_output=True, check=True)
+            subprocess.run(["git", "-C", tmp_path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"], capture_output=True, check=True)
+
+            ps_script_path = str(REPO_ROOT / "scripts" / "update_production.ps1").replace("\\", "/")
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"""
+                $ErrorActionPreference = 'Stop'
+                Set-Location '{tmp_path}'
+                $code = Get-Content '{ps_script_path}' -Raw
+                $fHelper = [regex]::Match($code, '(?s)function Invoke-GitQuiet .*?^}}', [System.Text.RegularExpressions.RegexOptions]::Multiline).Value
+                Invoke-Expression $fHelper
+                $exitCode = Invoke-GitQuiet switch --detach HEAD
+                if ($exitCode -eq 0) {{{{
+                    exit 0
+                }}}} else {{{{
+                    exit 1
+                }}}}
+                """,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, f"Invoke-GitQuiet falhou com retorno {proc.returncode}: {proc.stderr}")
+
+    def test_health_timeout_seconds_parameter_present_and_no_hardcoded_75(self):
+        """Garante parâmetro -HealthTimeoutSeconds com default 180 e ausência de '75' hardcoded."""
+        script_code = (REPO_ROOT / "scripts" / "update_production.ps1").read_text(encoding="utf-8")
+        self.assertIn("[int]$HealthTimeoutSeconds = 180", script_code)
+        self.assertNotIn("timeout 75s", script_code)
+        self.assertNotIn("$TimeoutSeconds = 75", script_code)
+
+    def test_catch_block_restarts_motor_when_task_stopped(self):
+        """Garante que o bloco catch contém a rotina de religar motor com o log canônico."""
+        script_code = (REPO_ROOT / "scripts" / "update_production.ps1").read_text(encoding="utf-8")
+        self.assertIn("MOTOR RELIGADO APÓS ABORT", script_code)
+        self.assertIn("schtasks /Run /TN $TaskName", script_code)
+        self.assertIn("if ($ScriptStoppedTask)", script_code)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Script de Atualização Segura e Não-Destrutiva de Produção (Fase V13-A).
 .DESCRIPTION
@@ -25,6 +25,7 @@ param(
     [string]$TaskName = "VideoFactory Production",
     [string]$HealthUrl = "http://127.0.0.1:8080/api/v2/health",
     [string]$RollbackHealthUrl = "http://127.0.0.1:8080/api/v2/health",
+    [int]$HealthTimeoutSeconds = 180,
     [switch]$PreflightOnly,
     [switch]$SkipTaskCheck = $false
 )
@@ -34,6 +35,21 @@ $ErrorActionPreference = "Stop"
 # ==============================================================================
 # 1. FUNÇÕES AUXILIARES DE LOGGING E SAÚDE
 # ==============================================================================
+
+function Invoke-GitQuiet {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$GitArgs
+    )
+    $OldEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & git @GitArgs 2>$null | Out-Null
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $OldEap
+    }
+}
 
 $Global:LogFilePath = $null
 
@@ -113,7 +129,7 @@ function Get-ActiveProductionProcesses {
 function Test-V2HealthEndpoint {
     param(
         [string]$Url,
-        [int]$TimeoutSeconds = 75,
+        [int]$TimeoutSeconds = 180,
         [int]$IntervalSeconds = 3
     )
     $Watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -144,7 +160,7 @@ function Test-V2HealthEndpoint {
 function Test-LegacyHealthEndpoint {
     param(
         [string]$Url,
-        [int]$TimeoutSeconds = 75,
+        [int]$TimeoutSeconds = 180,
         [int]$IntervalSeconds = 3
     )
     $Watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -167,7 +183,7 @@ function Test-LegacyHealthEndpoint {
 function Test-RollbackHealthEndpoint {
     param(
         [string]$Url,
-        [int]$TimeoutSeconds = 75,
+        [int]$TimeoutSeconds = 180,
         [int]$IntervalSeconds = 3
     )
     if ($Url -like "*/_stcore/health*") {
@@ -421,6 +437,8 @@ if (-not $PreflightOnly) {
     $AcquiredLock = $true
 }
 
+$ScriptStoppedTask = $false
+
 try {
     # ==============================================================================
     # 4. PRE-FLIGHT (FAIL-CLOSED)
@@ -478,10 +496,10 @@ try {
         Write-DeployLog "Executando fetch do remote origin..."
         if ($TargetRef -match '^origin/(.+)$') {
             $TargetBranch = $Matches[1]
-            git fetch origin "${TargetBranch}:refs/remotes/origin/${TargetBranch}" --quiet 2>&1 | Out-Null
+            $null = Invoke-GitQuiet fetch origin "${TargetBranch}:refs/remotes/origin/${TargetBranch}" --quiet
         }
-        git fetch origin --quiet
-        if ($LASTEXITCODE -ne 0) {
+        $FetchExit = Invoke-GitQuiet fetch origin --quiet
+        if ($FetchExit -ne 0) {
             Write-DeployLog "AVISO: Falha ao executar 'git fetch origin'." -Level "WARN"
         }
     } else {
@@ -759,13 +777,13 @@ sys.stdout.flush()
         Write-Host "WEBUI_V2_DIST   : $DistResult"
         Write-Host "BACKUP_STRATEGY : Snapshot SQLite transacional (PRAGMA integrity_check + SHA-256)"
         Write-Host "UPDATE_STRATEGY : Fast-Forward FF-only para $TargetSha (com produção parada)"
-        Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout 75s, HTTP 200 + 'healthy' + is_primary=true)"
+        Write-Host "HEALTH_STRATEGY : $HealthUrl (timeout ${HealthTimeoutSeconds}s, HTTP 200 + 'healthy' + is_primary=true)"
         $RollbackContractDesc = if ($RollbackHealthUrl -like "*/_stcore/health*") {
             "Contrato Legado V1 (HTTP 200 + 'ok')"
         } else {
             "Contrato V2 (HTTP 200 + 'healthy' + is_primary=true)"
         }
-        Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout 75s, $RollbackContractDesc)"
+        Write-Host "ROLLBACK_HEALTH : $RollbackHealthUrl (timeout ${HealthTimeoutSeconds}s, $RollbackContractDesc)"
         Write-Host "ROLLBACK_PLAN   : git switch --detach $CurrentSha (não-destrutivo)"
         Write-Host "STATUS          : PREFLIGHT_PASS"
         Write-Host "==================================================" -ForegroundColor Cyan
@@ -838,6 +856,7 @@ sys.stdout.flush()
     # ==============================================================================
 
     Write-DeployLog "Parando a Scheduled Task '$TaskName' de forma segura..."
+    $ScriptStoppedTask = $true
     schtasks /End /TN $TaskName 2>&1 | Out-Null
 
     $StopTimeoutSeconds = 30
@@ -886,10 +905,15 @@ sys.stdout.flush()
     Write-DeployLog "Aplicando atualização Fast-Forward para TARGET_SHA ($TargetSha)..."
     $CurrentBranch = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
 
+    $UpdateExitCode = 0
     if ($CurrentBranch -eq "HEAD") {
-        git checkout $TargetSha 2>&1 | Out-Null
+        $UpdateExitCode = Invoke-GitQuiet checkout $TargetSha
     } else {
-        git merge --ff-only $TargetSha 2>&1 | Out-Null
+        $UpdateExitCode = Invoke-GitQuiet merge --ff-only $TargetSha
+    }
+    if ($UpdateExitCode -ne 0) {
+        Write-DeployLog "ERRO CRÍTICO: Falha ao aplicar checkout/merge para TARGET_SHA ($TargetSha). Código de saída: $UpdateExitCode" -Level "ERROR" -IsError
+        throw "Atualização Git falhou com código de saída $UpdateExitCode."
     }
 
     $NewSha = (git rev-parse HEAD 2>&1).Trim()
@@ -908,10 +932,10 @@ sys.stdout.flush()
         $PostDepCheck = Test-VenvDependencies -PythonExe $VenvPython -BasePath $RepoPathResolved
         if ($PostDepCheck.status -ne "PASS") {
             Write-DeployLog "ABORT: Dependências obrigatórias ainda ausentes após sincronização: $($PostDepCheck.failure_reason). Executando rollback de emergência..." -Level "ERROR" -IsError
-            git switch --detach $CurrentSha 2>&1 | Out-Null
+            $null = Invoke-GitQuiet switch --detach $CurrentSha
             schtasks /Run /TN $TaskName 2>&1 | Out-Null
-            Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-            $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+            Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout ${HealthTimeoutSeconds}s)..."
+            $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds $HealthTimeoutSeconds -IntervalSeconds 3
             if (-not $RollbackHealthPassed) {
                 Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
             }
@@ -928,10 +952,10 @@ sys.stdout.flush()
         & $VenvPython $WorkingTreeStamp --verify --repo-root $RepoPathResolved 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-DeployLog "ABORT: Bundle Web UI V2 desincronizado após atualização. Executando rollback de emergência..." -Level "ERROR" -IsError
-            git switch --detach $CurrentSha 2>&1 | Out-Null
+            $null = Invoke-GitQuiet switch --detach $CurrentSha
             schtasks /Run /TN $TaskName 2>&1 | Out-Null
-            Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-            $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+            Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout ${HealthTimeoutSeconds}s)..."
+            $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds $HealthTimeoutSeconds -IntervalSeconds 3
             if (-not $RollbackHealthPassed) {
                 Write-DeployLog "ALERTA: Health check do rollback em $RollbackHealthUrl não confirmou sucesso." -Level "WARN"
             }
@@ -956,8 +980,8 @@ sys.stdout.flush()
     # 9. HEALTH CHECK BOUNDED
     # ==============================================================================
 
-    Write-DeployLog "Aguardando startup e executando health check em $HealthUrl (timeout 75s)..."
-    $HealthPassed = Test-V2HealthEndpoint -Url $HealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+    Write-DeployLog "Aguardando startup e executando health check em $HealthUrl (timeout ${HealthTimeoutSeconds}s)..."
+    $HealthPassed = Test-V2HealthEndpoint -Url $HealthUrl -TimeoutSeconds $HealthTimeoutSeconds -IntervalSeconds 3
 
     if ($HealthPassed) {
         Write-DeployLog "Health check da V2 passou com sucesso (HTTP 200, status=healthy, is_primary=true). Atualização concluída com êxito!" -Level "SUCCESS"
@@ -973,12 +997,13 @@ sys.stdout.flush()
 
     # 10.1 Parar novamente a tarefa
     Write-DeployLog "Parando Scheduled Task '$TaskName' para rollback..."
+    $ScriptStoppedTask = $true
     schtasks /End /TN $TaskName 2>&1 | Out-Null
     Start-Sleep -Seconds 5
 
     # 10.2 Retornar ao CURRENT_SHA via git switch --detach (SEM git reset, git restore ou git clean)
     Write-DeployLog "Executando 'git switch --detach $CurrentSha'..."
-    git switch --detach $CurrentSha 2>&1 | Out-Null
+    $null = Invoke-GitQuiet switch --detach $CurrentSha
 
     $RollbackHead = (git rev-parse HEAD 2>&1).Trim()
     Write-DeployLog "HEAD após rollback: $RollbackHead"
@@ -988,8 +1013,8 @@ sys.stdout.flush()
     schtasks /Run /TN $TaskName 2>&1 | Out-Null
 
     # 10.4 Health check do rollback
-    Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout 75s)..."
-    $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds 75 -IntervalSeconds 3
+    Write-DeployLog "Avaliando saúde do serviço pós-rollback em $RollbackHealthUrl (timeout ${HealthTimeoutSeconds}s)..."
+    $RollbackHealthPassed = Test-RollbackHealthEndpoint -Url $RollbackHealthUrl -TimeoutSeconds $HealthTimeoutSeconds -IntervalSeconds 3
 
     if ($RollbackHealthPassed) {
         Write-DeployLog "ROLLBACK_SUCCESS: Produção restaurada e saudável em DETACHED HEAD no CURRENT_SHA ($CurrentSha) checada em $RollbackHealthUrl. Branch main preservada." -Level "SUCCESS"
@@ -1004,6 +1029,28 @@ sys.stdout.flush()
 } catch {
     $ExMsg = $_.Exception.Message
     Write-DeployLog "Falha na execução do pipeline de atualização: $ExMsg" -Level "ERROR" -IsError
+
+    # 3. Religar o motor se este script parou a task e o health do V2 não responde
+    if ($ScriptStoppedTask) {
+        $HealthAlive = $false
+        try {
+            $HealthAlive = Test-V2HealthEndpoint -Url $HealthUrl -TimeoutSeconds 5 -IntervalSeconds 1
+        } catch {
+            $HealthAlive = $false
+        }
+
+        if (-not $HealthAlive) {
+            Write-DeployLog "MOTOR RELIGADO APÓS ABORT" -Level "WARN"
+            $OldEap = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "SilentlyContinue"
+                schtasks /Run /TN $TaskName 2>$null | Out-Null
+            } finally {
+                $ErrorActionPreference = $OldEap
+            }
+        }
+    }
+
     $DispCurrent = if ($CurrentSha) { $CurrentSha } else { "UNKNOWN" }
     $DispTarget = if ($TargetSha) { $TargetSha } else { "UNKNOWN" }
     $DispBackup = if ($BackupSummary) { $BackupSummary } else { "NOT_ATTEMPTED" }

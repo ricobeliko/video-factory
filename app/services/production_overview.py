@@ -503,6 +503,25 @@ def _get_production_overview_impl(
             if is_match:
                 candidate_tids.add(tid)
 
+        for tid in events_by_task.keys():
+            t_pid = task_prof_map.get(tid)
+            if not t_pid:
+                for ev in events_by_task[tid]:
+                    m_raw = ev.get("metadata_json")
+                    if m_raw:
+                        try:
+                            m_data = json.loads(m_raw) if isinstance(m_raw, str) else m_raw
+                            if isinstance(m_data, dict) and m_data.get("profile_id"):
+                                t_pid = m_data.get("profile_id")
+                                break
+                        except Exception:
+                            pass
+            if not t_pid:
+                t_pid = "default"
+            is_match = (t_pid == pid) if pid not in ("default", profile_manager.DEFAULT_PROFILE_ID) else (t_pid in ("default", profile_manager.DEFAULT_PROFILE_ID))
+            if is_match:
+                candidate_tids.add(tid)
+
         # Monta os registros consolidados de runs
         runs_list = []
         for tid in candidate_tids:
@@ -545,6 +564,7 @@ def _get_production_overview_impl(
             is_active = (tid in active_running_tids) or (t_state in (const.TASK_STATE_PROCESSING, const.TASK_STATE_PENDING))
             has_failed_event = any(e.get("event_type") == "generation_failed" for e in t_events)
             has_reject_event = any(e.get("event_type") == "task_gate_rejected" for e in t_events)
+            has_approved_event = any(e.get("event_type") == "generation_approved" for e in t_events)
 
             error_msg = mem_t.get("error") or sql_t.get("error") or None
             safety_status = ms_entry.get("safety_status") or mem_t.get("safety_status") or None
@@ -587,7 +607,26 @@ def _get_production_overview_impl(
                                 pass
                         break
 
-            # (d) status: RUNNING, FAILED, REJECTED, SUCCESS (só quando COMPLETE sem erro/rejeição), senão UNKNOWN
+            # Recupera topic e finished_at a partir dos eventos operacionais se não existirem em memória (ex: pós-reboot)
+            if not topic and t_events:
+                for ev in t_events:
+                    m_raw = ev.get("metadata_json")
+                    if m_raw:
+                        try:
+                            m_data = json.loads(m_raw) if isinstance(m_raw, str) else m_raw
+                            if isinstance(m_data, dict) and m_data.get("topic"):
+                                topic = m_data.get("topic")
+                                break
+                        except Exception:
+                            pass
+
+            if not finished_at and has_approved_event:
+                for ev in reversed(t_events):
+                    if ev.get("event_type") == "generation_approved" and ev.get("timestamp"):
+                        finished_at = ev["timestamp"]
+                        break
+
+            # (d) status: RUNNING, FAILED, REJECTED, SUCCESS (só quando COMPLETE ou generation_approved sem erro/rejeição), senão UNKNOWN
             if is_active:
                 status = "RUNNING"
                 failure_stage = None
@@ -602,7 +641,12 @@ def _get_production_overview_impl(
                 or (safety_status and str(safety_status).upper() == "FAIL")
             ):
                 status = "REJECTED"
-            elif t_state == const.TASK_STATE_COMPLETE and not error_msg and not has_failed_event:
+            elif (
+                (t_state == const.TASK_STATE_COMPLETE or has_approved_event)
+                and not error_msg
+                and not has_failed_event
+                and not has_reject_event
+            ):
                 status = "SUCCESS"
                 failure_stage = None
                 gate_reason = None

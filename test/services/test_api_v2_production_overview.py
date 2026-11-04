@@ -722,3 +722,89 @@ class TestApiV2ProductionOverview(unittest.TestCase):
 
         finally:
             temp_dir.cleanup()
+
+    def test_post_restart_status_classification(self):
+        """Valida que após o restart do motor (sem tarefas em memória):
+        1) Tarefa sem state em memória com evento generation_approved => status SUCCESS
+        2) Tarefa com generation_approved + generation_failed => status FAILED
+        3) Tarefa sem eventos nem state => status UNKNOWN
+        """
+        now = datetime.now(timezone.utc)
+        two_hours_ago = (now - timedelta(hours=2)).isoformat()
+        one_hour_ago = (now - timedelta(hours=1)).isoformat()
+
+        # Simula reinício do motor: MemoryState limpo
+        if hasattr(sm, "state") and hasattr(sm.state, "_tasks"):
+            sm.state._tasks.clear()
+
+        t_approved = "task-restart-approved"
+        t_conflict = "task-restart-conflict"
+        t_unknown = "task-restart-unknown"
+
+        with scheduler.get_connection(self.db_path) as conn:
+            # Associa todas as 3 tarefas ao perfil default
+            conn.executemany(
+                "INSERT INTO task_profiles (task_id, profile_id, created_at) VALUES (?, 'default', ?);",
+                [
+                    (t_approved, two_hours_ago),
+                    (t_conflict, two_hours_ago),
+                    (t_unknown, two_hours_ago),
+                ],
+            )
+            # Tarefa 1: generation_started + generation_approved
+            conn.execute(
+                """
+                INSERT INTO operational_events (task_id, component, severity, event_type, message, metadata_json, timestamp)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_started', 'Iniciando', ?, ?);
+                """,
+                (t_approved, json.dumps({"topic": "Vídeo Aprovado Pós-Restart"}), two_hours_ago),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (task_id, component, severity, event_type, message, metadata_json, timestamp)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', 'Aprovado nos Gates', ?, ?);
+                """,
+                (t_approved, json.dumps({"quality_score": 85.0}), one_hour_ago),
+            )
+
+            # Tarefa 2: generation_approved + generation_failed
+            conn.execute(
+                """
+                INSERT INTO operational_events (task_id, component, severity, event_type, message, metadata_json, timestamp)
+                VALUES (?, 'autonomous_production', 'INFO', 'generation_approved', 'Aprovado nos Gates', ?, ?);
+                """,
+                (t_conflict, json.dumps({"quality_score": 85.0}), two_hours_ago),
+            )
+            conn.execute(
+                """
+                INSERT INTO operational_events (task_id, component, severity, event_type, message, metadata_json, timestamp)
+                VALUES (?, 'autonomous_production', 'ERROR', 'generation_failed', 'Falha posterior', ?, ?);
+                """,
+                (t_conflict, json.dumps({"error": "Erro fatal pós-aprovação"}), one_hour_ago),
+            )
+
+            # Tarefa 3: sem eventos em operational_events (apenas task_profiles)
+
+        production_overview.clear_production_overview_cache()
+        overview = production_overview.get_production_overview(db_path=self.db_path, use_cache=False)
+
+        ch_default = next(c for c in overview["channels"] if c["profile_id"] == "default")
+        recent_items = {item["task_id"]: item for item in ch_default["recent_runs"]["items"]}
+
+        # 1. Tarefa sem state em memória com generation_approved => SUCCESS
+        self.assertIn(t_approved, recent_items)
+        self.assertEqual(recent_items[t_approved]["status"], "SUCCESS")
+        self.assertEqual(recent_items[t_approved]["topic"], "Vídeo Aprovado Pós-Restart")
+
+        # 2. Tarefa com generation_approved + generation_failed => FAILED (precedência FAILED mantida)
+        self.assertIn(t_conflict, recent_items)
+        self.assertEqual(recent_items[t_conflict]["status"], "FAILED")
+
+        # 3. Tarefa sem eventos nem state => UNKNOWN
+        self.assertIn(t_unknown, recent_items)
+        self.assertEqual(recent_items[t_unknown]["status"], "UNKNOWN")
+
+        # 4. Totais derivados de runs_list
+        self.assertEqual(overview["totals"]["success_24h"], 1)
+        self.assertEqual(overview["totals"]["failed_24h"], 1)
+        self.assertEqual(overview["totals"]["unknown_24h"], 1)

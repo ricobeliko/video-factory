@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Script de Atualização Segura e Não-Destrutiva de Produção (Fase V13-A).
 .DESCRIPTION
@@ -1040,7 +1040,7 @@ sys.stdout.flush()
         }
 
         if (-not $HealthAlive) {
-            Write-DeployLog "MOTOR RELIGADO APÓS ABORT" -Level "WARN"
+            Write-DeployLog 'MOTOR RELIGADO APÓS ABORT' -Level "WARN"
             $OldEap = $ErrorActionPreference
             try {
                 $ErrorActionPreference = "SilentlyContinue"

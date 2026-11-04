@@ -208,6 +208,20 @@ class TestUpdateProductionHealthAndRollback(unittest.TestCase):
         self.assertNotIn("timeout 75s", script_code)
         self.assertNotIn("$TimeoutSeconds = 75", script_code)
 
+    def test_update_production_script_has_no_bom(self):
+        """Garante que scripts/update_production.ps1 não possui BOM UTF-8 (ef bb bf) e inicia com '<#'."""
+        script_bytes = (REPO_ROOT / "scripts" / "update_production.ps1").read_bytes()
+        self.assertNotEqual(
+            script_bytes[:3],
+            b"\xef\xbb\xbf",
+            "scripts/update_production.ps1 não deve conter BOM UTF-8 (ef bb bf).",
+        )
+        self.assertEqual(
+            script_bytes[:2],
+            b"<#",
+            "scripts/update_production.ps1 deve iniciar imediatamente com 0x3C 0x23 ('<#').",
+        )
+
     def test_catch_block_restarts_motor_when_task_stopped(self):
         """Garante que o bloco catch contém a rotina de religar motor com o log canônico."""
         script_code = (REPO_ROOT / "scripts" / "update_production.ps1").read_text(encoding="utf-8")

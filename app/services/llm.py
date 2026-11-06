@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from time import perf_counter
 from typing import List
 
@@ -24,6 +25,32 @@ MAX_SCRIPT_PROMPT_LENGTH = 2000
 MAX_SCRIPT_SYSTEM_PROMPT_LENGTH = 8000
 # Timeout padrão em segundos para chamadas HTTP a provedores de LLM (FONTE ÚNICA 1)
 LLM_REQUEST_TIMEOUT_SECONDS = 90
+
+# Política de retry para erros temporários do Gemini (FONTE ÚNICA 1)
+GEMINI_RETRY_DELAYS_SECONDS: tuple[int, ...] = (5, 15, 45)
+GEMINI_TRANSIENT_ERROR_MARKERS: tuple[str, ...] = (
+    "503",
+    "unavailable",
+    "429",
+    "resource_exhausted",
+    "high demand",
+    "overloaded",
+)
+
+
+def _is_gemini_transient_error(exc: Exception) -> bool:
+    """
+    FONTE ÚNICA 1: Identifica se uma exceção do Gemini é um erro temporário elegível para retry.
+    Verifica marcadores case-insensitive no texto da exceção e nos atributos .code / .status.
+    """
+    pieces: list[str] = [str(exc)]
+    for attr in ("code", "status", "message"):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            pieces.append(str(val))
+
+    combined = " ".join(pieces).lower()
+    return any(marker.lower() in combined for marker in GEMINI_TRANSIENT_ERROR_MARKERS)
 
 
 def get_llm_request_timeout_seconds(app_config: dict | None = None) -> float:
@@ -415,11 +442,27 @@ def _generate_response(prompt: str, app_config=None) -> str:
                     api_key=api_key,
                     http_options=http_options,
                 ) as client:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=generation_config,
-                    )
+                    total_attempts = 1 + len(GEMINI_RETRY_DELAYS_SECONDS)
+                    for attempt in range(total_attempts):
+                        try:
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=prompt,
+                                config=generation_config,
+                            )
+                            break
+                        except Exception as exc:
+                            if _is_gemini_transient_error(exc) and attempt < len(
+                                GEMINI_RETRY_DELAYS_SECONDS
+                            ):
+                                delay = GEMINI_RETRY_DELAYS_SECONDS[attempt]
+                                logger.warning(
+                                    f"gemini generate_content failed with transient error: {_sanitize_error_message(exc)}. "
+                                    f"Retrying (attempt {attempt + 1}/{len(GEMINI_RETRY_DELAYS_SECONDS)}) in {delay}s..."
+                                )
+                                time.sleep(delay)
+                                continue
+                            raise
                 generated_text = response.text
             except (AttributeError, IndexError, ValueError) as e:
                 logger.warning(f"gemini returned invalid response content: {str(e)}")

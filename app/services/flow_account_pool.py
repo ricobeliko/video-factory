@@ -841,78 +841,55 @@ def refresh_account_credits(
             "message": f"Telemetria recente ({age_hours:.1f}h atrás).",
         }
 
-    # Proteção de concorrência com geração Flow ativa (FLOW_CONCURRENCY_LOCK em flow_bridge)
-    from app.services.flow_bridge import FLOW_CONCURRENCY_LOCK
+    logger.info(f"[FLOW_CREDIT_REFRESH] Iniciando reconciliação headless para conta '{valid_id}' (motivo: {reason}, force={force})...")
+    verify_res = verify_flow_account_session(valid_id, config_path=config_path, runtime_path=runtime_path)
 
-    acquired = FLOW_CONCURRENCY_LOCK.acquire(blocking=False)
-    if not acquired:
-        logger.info(
-            f"[FLOW_CREDIT_REFRESH] FLOW_CONCURRENCY_LOCK ocupado por uma geração ativa. "
-            f"Navegador não será aberto para '{valid_id}'; saldo anterior preservado."
+    login_st = verify_res.get("login_status")
+    bal = verify_res.get("credits_remaining")
+    src = verify_res.get("credits_source", CREDIT_SOURCE_UNKNOWN)
+
+    if login_st == "AUTHENTICATED" and bal is not None:
+        record_verified_credit_balance(valid_id, bal, runtime_path=runtime_path)
+        logger.info(f"[FLOW_CREDIT_REFRESH] Reconciliação concluída para '{valid_id}': {bal} créditos ({src}).")
+        return {
+            "account_id": valid_id,
+            "refreshed": True,
+            "success": True,
+            "credits_remaining": bal,
+            "credits_source": src,
+            "credits_last_verified_at": datetime.now(timezone.utc).isoformat(),
+            "message": f"Saldo atualizado com sucesso: {bal} créditos.",
+        }
+    elif login_st == "AUTHENTICATED":
+        prev_bal = rt.get("credits_remaining")
+        logger.warning(
+            f"[FLOW_CREDIT_REFRESH] Sessão autenticada para '{valid_id}', mas seletor de saldo não retornou valor. "
+            f"Preservando saldo anterior: {prev_bal}."
         )
         return {
             "account_id": valid_id,
-            "refreshed": False,
+            "refreshed": True,
             "success": False,
-            "reason": "ACCOUNT_BUSY",
-            "credits_remaining": rt.get("credits_remaining"),
-            "credits_source": rt.get("credits_source"),
+            "credits_remaining": prev_bal,
+            "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
             "credits_last_verified_at": rt.get("credits_last_verified_at"),
-            "message": "Conta em uso por uma geração; tente novamente quando terminar.",
+            "message": "Sessão autenticada, mas o seletor de créditos do Flow não retornou valor numérico inequívoco.",
         }
-
-    try:
-        logger.info(f"[FLOW_CREDIT_REFRESH] Iniciando reconciliação headless para conta '{valid_id}' (motivo: {reason}, force={force})...")
-        verify_res = verify_flow_account_session(valid_id, config_path=config_path, runtime_path=runtime_path)
-
-        login_st = verify_res.get("login_status")
-        bal = verify_res.get("credits_remaining")
-        src = verify_res.get("credits_source", CREDIT_SOURCE_UNKNOWN)
-
-        if login_st == "AUTHENTICATED" and bal is not None:
-            record_verified_credit_balance(valid_id, bal, runtime_path=runtime_path)
-            logger.info(f"[FLOW_CREDIT_REFRESH] Reconciliação concluída para '{valid_id}': {bal} créditos ({src}).")
-            return {
-                "account_id": valid_id,
-                "refreshed": True,
-                "success": True,
-                "credits_remaining": bal,
-                "credits_source": src,
-                "credits_last_verified_at": datetime.now(timezone.utc).isoformat(),
-                "message": f"Saldo atualizado com sucesso: {bal} créditos.",
-            }
-        elif login_st == "AUTHENTICATED":
-            prev_bal = rt.get("credits_remaining")
-            logger.warning(
-                f"[FLOW_CREDIT_REFRESH] Sessão autenticada para '{valid_id}', mas seletor de saldo não retornou valor. "
-                f"Preservando saldo anterior: {prev_bal}."
-            )
-            return {
-                "account_id": valid_id,
-                "refreshed": True,
-                "success": False,
-                "credits_remaining": prev_bal,
-                "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
-                "credits_last_verified_at": rt.get("credits_last_verified_at"),
-                "message": "Sessão autenticada, mas o seletor de créditos do Flow não retornou valor numérico inequívoco.",
-            }
-        else:
-            prev_bal = rt.get("credits_remaining")
-            err_msg = verify_res.get("message") or f"Falha de autenticação ({login_st})"
-            logger.warning(
-                f"[FLOW_CREDIT_REFRESH] Falha ao verificar '{valid_id}': {err_msg}. Preservando saldo anterior: {prev_bal}."
-            )
-            return {
-                "account_id": valid_id,
-                "refreshed": True,
-                "success": False,
-                "credits_remaining": prev_bal,
-                "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
-                "credits_last_verified_at": rt.get("credits_last_verified_at"),
-                "message": err_msg,
-            }
-    finally:
-        FLOW_CONCURRENCY_LOCK.release()
+    else:
+        prev_bal = rt.get("credits_remaining")
+        err_msg = verify_res.get("message") or f"Falha de autenticação ({login_st})"
+        logger.warning(
+            f"[FLOW_CREDIT_REFRESH] Falha ao verificar '{valid_id}': {err_msg}. Preservando saldo anterior: {prev_bal}."
+        )
+        return {
+            "account_id": valid_id,
+            "refreshed": True,
+            "success": False,
+            "credits_remaining": prev_bal,
+            "credits_source": rt.get("credits_source", CREDIT_SOURCE_UNKNOWN),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "message": err_msg,
+        }
 
 
 def refresh_all_accounts_credits(

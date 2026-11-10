@@ -4008,14 +4008,38 @@ def refresh_flow_account_credits_op(
     config_path: Optional[str] = None,
     runtime_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Reconcilia saldo de uma conta Google Flow via Playwright headless."""
+    """Reconcilia saldo de uma conta Google Flow via Playwright headless com proteção de concorrência."""
     from app.services import flow_account_pool
-    return flow_account_pool.refresh_account_credits(
-        account_id,
-        force=force,
-        config_path=config_path,
-        runtime_path=runtime_path,
-    )
+    from app.services.flow_bridge import FLOW_CONCURRENCY_LOCK
+
+    acquired = FLOW_CONCURRENCY_LOCK.acquire(blocking=False)
+    if not acquired:
+        valid_id = flow_account_pool.validate_account_id(account_id)
+        rt = flow_account_pool.get_account_runtime(valid_id, runtime_path=runtime_path)
+        logger.info(
+            f"[FLOW_CREDIT_REFRESH_OP] FLOW_CONCURRENCY_LOCK ocupado por uma geração ativa. "
+            f"Navegador não será aberto para '{valid_id}'; saldo anterior preservado."
+        )
+        return {
+            "account_id": valid_id,
+            "refreshed": False,
+            "success": False,
+            "reason": "ACCOUNT_BUSY",
+            "credits_remaining": rt.get("credits_remaining"),
+            "credits_source": rt.get("credits_source"),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "message": "Conta em uso por uma geração; tente novamente quando terminar.",
+        }
+
+    try:
+        return flow_account_pool.refresh_account_credits(
+            account_id,
+            force=force,
+            config_path=config_path,
+            runtime_path=runtime_path,
+        )
+    finally:
+        FLOW_CONCURRENCY_LOCK.release()
 
 
 def refresh_all_flow_accounts_credits_op(
@@ -4023,13 +4047,44 @@ def refresh_all_flow_accounts_credits_op(
     config_path: Optional[str] = None,
     runtime_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Reconcilia saldo de todas as contas do pool Google Flow."""
+    """Reconcilia saldo de todas as contas do pool Google Flow com proteção de concorrência."""
     from app.services import flow_account_pool
-    return flow_account_pool.refresh_all_accounts_credits(
-        force=force,
-        config_path=config_path,
-        runtime_path=runtime_path,
-    )
+    from app.services.flow_bridge import FLOW_CONCURRENCY_LOCK
+
+    acquired = FLOW_CONCURRENCY_LOCK.acquire(blocking=False)
+    if not acquired:
+        logger.info(
+            "[FLOW_CREDIT_REFRESH_OP] FLOW_CONCURRENCY_LOCK ocupado por uma geração ativa. "
+            "Navegador não será aberto para nenhuma conta do pool; saldos preservados."
+        )
+        config = flow_account_pool.load_accounts_config(config_path)
+        accounts = config.get("accounts", [])
+        results = {}
+        for acct in accounts:
+            if not acct.get("enabled", True):
+                continue
+            aid = acct.get("account_id")
+            rt = flow_account_pool.get_account_runtime(aid, runtime_path=runtime_path)
+            results[aid] = {
+                "account_id": aid,
+                "refreshed": False,
+                "success": False,
+                "reason": "ACCOUNT_BUSY",
+                "credits_remaining": rt.get("credits_remaining"),
+                "credits_source": rt.get("credits_source"),
+                "credits_last_verified_at": rt.get("credits_last_verified_at"),
+                "message": "Conta em uso por uma geração; tente novamente quando terminar.",
+            }
+        return results
+
+    try:
+        return flow_account_pool.refresh_all_accounts_credits(
+            force=force,
+            config_path=config_path,
+            runtime_path=runtime_path,
+        )
+    finally:
+        FLOW_CONCURRENCY_LOCK.release()
 
 
 

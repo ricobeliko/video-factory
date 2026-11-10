@@ -131,6 +131,11 @@ def select_default_flow_scenes(
         return [s.scene_index for s in scenes]
 
     indices = [s.scene_index for s in scenes]
+    if target_count <= 0:
+        return []
+    if target_count == 1:
+        return [indices[0]] if indices else []
+
     chosen = {indices[0], indices[-1]}
     remaining_needed = target_count - len(chosen)
 

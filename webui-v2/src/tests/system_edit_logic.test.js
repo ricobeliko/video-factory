@@ -69,6 +69,15 @@ test('1. validateChannelField: valida faixas estritas (incluindo target_ready_st
   assert.equal(validateChannelField('min_interval_hours', 24).isValid, true);
   assert.equal(validateChannelField('min_interval_hours', 0).isValid, false);
   assert.equal(validateChannelField('min_interval_hours', 25).isValid, false);
+
+  // flow_scene_count (1-8)
+  assert.equal(validateChannelField('flow_scene_count', 1).isValid, true);
+  assert.equal(validateChannelField('flow_scene_count', 8).isValid, true);
+  assert.equal(validateChannelField('flow_scene_count', 3).isValid, true);
+  assert.equal(validateChannelField('flow_scene_count', 0).isValid, false);
+  assert.equal(validateChannelField('flow_scene_count', 9).isValid, false);
+  assert.equal(validateChannelField('flow_scene_count', -1).isValid, false);
+  assert.equal(validateChannelField('flow_scene_count', 'xyz').isValid, false);
 });
 
 test('2. validateScheduleWindow: exige start <= end e rejeita janela invertida', () => {
@@ -201,6 +210,18 @@ test('5. buildPatchPayloads: gera payloads contendo SOMENTE campos alterados par
     min_interval_hours: 6,
   });
 
+  // Apenas visual alterado
+  const visualDiff = [
+    { field: 'flow_scene_count', oldValue: 6, newValue: 3 },
+  ];
+  const visualRes = buildPatchPayloads(visualDiff);
+  assert.equal(visualRes.hasChanges, true);
+  assert.equal(visualRes.growthModePayload, null);
+  assert.equal(visualRes.autonomousPayload, null);
+  assert.equal(visualRes.quotasPayload, null);
+  assert.equal(visualRes.schedulePayload, null);
+  assert.deepEqual(visualRes.visualPayload, { flow_scene_count: 3 });
+
   // Quotas e schedule (posts_per_day enviado apenas em quotasPayload)
   const bothDiff = [
     { field: 'target_ready_stock', oldValue: 3, newValue: 5 },
@@ -229,6 +250,7 @@ test('6. formatDiffValueDisplay: formata modos, horas e unidades para diálogo d
   assert.equal(formatDiffValueDisplay('max_generations_24h', 4), '4 vídeos/24h');
   assert.equal(formatDiffValueDisplay('posts_per_day', 2), '2 posts/dia');
   assert.equal(formatDiffValueDisplay('min_interval_hours', 4), '4h');
+  assert.equal(formatDiffValueDisplay('flow_scene_count', 3), '3 cenas (= 45 créditos)');
   assert.equal(formatDiffValueDisplay('outro', null), '—');
 });
 
@@ -275,7 +297,9 @@ test('8. Regra de Controle Único e Rota Única: ExecutionDrawer é somente leit
   assert.equal(systemSource.includes('updateProfileAutonomousMode'), true);
   assert.equal(systemSource.includes('updateProfileQuotas'), true);
   assert.equal(systemSource.includes('updateProfileSchedule'), true);
+  assert.equal(systemSource.includes('updateProfileVisual'), true);
   assert.equal(systemSource.includes('Meta Estoque (3–10 vídeos)'), true);
   assert.equal(systemSource.includes('Gerações/24h (1–10)'), true);
+  assert.equal(systemSource.includes('Cenas Flow por vídeo (1–8)'), true);
   assert.equal(systemSource.includes('sys-channel-${pid}'), true);
 });

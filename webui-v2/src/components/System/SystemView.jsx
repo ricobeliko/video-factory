@@ -13,6 +13,7 @@ import {
   updateProfileQuotas,
   updateProfileSchedule,
   updateProfileVoice,
+  updateProfileVisual,
   getAllowedVoices,
   pauseFactory,
   resumeFactory,
@@ -515,6 +516,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         voice_name: effVoice.voice_name?.value || (allowedVoices[0]?.id || ''),
         voice_rate: isQuiz ? null : (effVoice.voice_rate?.value ?? 1.0),
         voice_volume: effVoice.voice_volume?.value ?? 1.0,
+        flow_scene_count: (fullSettings.workspace_settings || channel.workspace_settings || {})?.visual?.flow_scene_count ?? 6,
         // Destinos de publicação
         yt_enabled: Boolean(ytDest.is_enabled),
         yt_external_account_id: ytDest.external_account_id || '',
@@ -686,6 +688,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       publish_start_hour: origSchedule.publish_start_hour ?? 10,
       publish_end_hour: origSchedule.publish_end_hour ?? 22,
       min_interval_hours: origSchedule.min_interval_hours ?? 4,
+      flow_scene_count: (fullSettings.workspace_settings || channel.workspace_settings || {})?.visual?.flow_scene_count ?? 6,
     };
 
     // Validação de Destinos
@@ -809,6 +812,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       }
       if (payloads.voicePayload) {
         await updateProfileVoice(profileId, payloads.voicePayload);
+      }
+      if (payloads.visualPayload) {
+        await updateProfileVisual(profileId, payloads.visualPayload);
       }
       if (payloads.destinationsPayload && payloads.destinationsPayload.length > 0) {
         await updateChannelDestinations(profileId, { destinations: payloads.destinationsPayload });
@@ -2084,7 +2090,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                         </div>
                       )}
 
-                      {/* Subseção de Workspace (Somente Leitura) */}
+                      {/* Subseção de Workspace */}
                       <h4 className="sys-channel-group-title">Configurações de Workspace</h4>
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Visual Director / Flow</span>
@@ -2096,6 +2102,45 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                             : '—'}
                         </span>
                       </div>
+                      {isQuiz ? (
+                        <div className="sys-stat-row">
+                          <span className="sys-stat-label">Cenas Flow por vídeo</span>
+                          <span className="sys-stat-value">Não aplicável (canal Quiz)</span>
+                        </div>
+                      ) : isEditing ? (
+                        <div className="sys-input-group" style={{ marginTop: '8px' }}>
+                          <div className="sys-edit-row">
+                            <label htmlFor={`flow-scenes-${pid}`} className="sys-stat-label">
+                              Cenas Flow por vídeo (1–8)
+                            </label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <input
+                                id={`flow-scenes-${pid}`}
+                                type="number"
+                                min="1"
+                                max="8"
+                                className={`sys-input ${channelFormErrors.flow_scene_count ? 'sys-input--error' : ''}`}
+                                style={{ width: '80px' }}
+                                value={channelFormData.flow_scene_count ?? ''}
+                                onChange={(e) => handleFieldChange('flow_scene_count', e.target.value)}
+                              />
+                              <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                                = {(Number(channelFormData.flow_scene_count) || 6) * 15} créditos por vídeo
+                              </span>
+                            </div>
+                          </div>
+                          {channelFormErrors.flow_scene_count && (
+                            <span className="sys-field-error">{channelFormErrors.flow_scene_count}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="sys-stat-row">
+                          <span className="sys-stat-label">Cenas Flow por vídeo</span>
+                          <span className="sys-stat-value">
+                            {ws.visual?.flow_scene_count ?? 6} cenas (= {(ws.visual?.flow_scene_count ?? 6) * 15} créditos)
+                          </span>
+                        </div>
+                      )}
 
                       {/* Subseção de Destinos de Publicação */}
                       <h4 className="sys-channel-group-title">Destinos de Publicação</h4>

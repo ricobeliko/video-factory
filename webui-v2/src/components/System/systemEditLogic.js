@@ -10,6 +10,7 @@ export const EDITABLE_FIELD_BOUNDS = {
   publish_start_hour: { min: 0, max: 23, label: 'Horário Inicial da Janela', unit: 'h' },
   publish_end_hour: { min: 0, max: 23, label: 'Horário Final da Janela', unit: 'h' },
   min_interval_hours: { min: 1, max: 24, label: 'Intervalo Mínimo', unit: 'h' },
+  flow_scene_count: { min: 1, max: 8, label: 'Cenas Flow por vídeo', unit: 'cenas' },
 };
 
 export const ALLOWED_GROWTH_MODES = ['WARMUP', 'SCALE'];
@@ -121,7 +122,7 @@ export function validateChannelForm(formData) {
     }
   }
 
-  for (const optionalField of ['max_generations_24h', 'growth_mode', 'autonomous_enabled']) {
+  for (const optionalField of ['max_generations_24h', 'growth_mode', 'autonomous_enabled', 'flow_scene_count']) {
     if (Object.prototype.hasOwnProperty.call(data, optionalField)) {
       const res = validateChannelField(optionalField, data[optionalField]);
       if (!res.isValid) {
@@ -227,12 +228,14 @@ export function buildPatchPayloads(diffList) {
       autonomousPayload: null,
       quotasPayload: null,
       schedulePayload: null,
+      visualPayload: null,
       hasChanges: false,
     };
   }
 
   let growthModePayload = null;
   let autonomousPayload = null;
+  let visualPayload = null;
   const quotas = {};
   const schedule = {};
 
@@ -242,6 +245,9 @@ export function buildPatchPayloads(diffList) {
       growthModePayload = String(newValue).trim().toLowerCase();
     } else if (field === 'autonomous_enabled') {
       autonomousPayload = Boolean(normalizeAutonomousEnabled(newValue));
+    } else if (field === 'flow_scene_count') {
+      visualPayload = visualPayload || {};
+      visualPayload.flow_scene_count = Number(newValue);
     } else if (field === 'target_ready_stock') {
       quotas.target_ready_stock = newValue;
     } else if (field === 'max_generations_24h') {
@@ -264,6 +270,7 @@ export function buildPatchPayloads(diffList) {
     autonomousPayload,
     quotasPayload: Object.keys(quotas).length > 0 ? quotas : null,
     schedulePayload: Object.keys(schedule).length > 0 ? schedule : null,
+    visualPayload,
     hasChanges: true,
   };
 }
@@ -299,6 +306,9 @@ export function formatDiffValueDisplay(field, value) {
   }
   if (field === 'posts_per_day') {
     return `${num} posts/dia`;
+  }
+  if (field === 'flow_scene_count') {
+    return `${num} cenas (= ${num * 15} créditos)`;
   }
   return String(num);
 }

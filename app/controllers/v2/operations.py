@@ -546,6 +546,10 @@ class UpdateVoiceSettingsRequest(BaseModel):
     tts_server: Optional[str] = Field(None, description="Provedor de TTS (ex: azure-tts-v1, elevenlabs)")
 
 
+class UpdateVisualSettingsRequest(BaseModel):
+    flow_scene_count: Optional[int] = Field(None, ge=1, le=8, description="Número de cenas geradas via Google Flow (1 a 8)")
+
+
 class UpdateSchedulerSettingsRequest(BaseModel):
     model_config = {"extra": "forbid", "strict": True}
     auto_publish_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita a publicação automática")
@@ -957,6 +961,77 @@ def update_channel_voice(
         )
 
     return utils.get_response(200, res, message="Profile voice updated successfully")
+
+
+@router.patch(
+    "/channels/{profile_id}/visual",
+    summary="Update visual/Flow settings for a channel/profile",
+)
+def update_channel_visual(
+    request: Request,
+    profile_id: str,
+    payload: UpdateVisualSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile visual settings ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile visual settings ({exc})",
+        )
+
+    try:
+        v_dict = payload.model_dump(exclude_unset=True)
+        old_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+        old_cnt = getattr(old_settings.visual, "flow_scene_count", None)
+        res = profile_manager.update_profile_visual_settings(clean_p, v_dict, db_path=db_path)
+        new_cnt = getattr(res, "flow_scene_count", None)
+        if old_cnt != new_cnt:
+            operator_console.log_operational_event(
+                component="profile_manager",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="PROFILE_VISUAL_UPDATED",
+                message=f"Visual 'flow_scene_count' updated for profile '{clean_p}': {old_cnt} -> {new_cnt}",
+                metadata={
+                    "profile_id": clean_p,
+                    "field": "flow_scene_count",
+                    "old_value": old_cnt,
+                    "new_value": new_cnt,
+                },
+                db_path=db_path,
+            )
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile visual settings: {exc}",
+        )
+
+    return utils.get_response(200, res.model_dump(), message="Profile visual settings updated successfully")
 
 
 @router.get(

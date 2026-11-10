@@ -1210,6 +1210,43 @@ def update_profile_voice_settings(
     return get_effective_voice_settings(clean_id, db_path=db_path)
 
 
+def update_profile_visual_settings(
+    profile_id: str,
+    visual_data: Dict[str, Any],
+    db_path: Optional[str] = None,
+) -> VisualSettings:
+    """Atualiza as configurações visuais/Flow de um perfil no settings_json.
+
+    Valida:
+    - flow_scene_count inteiro entre 1 e 8 (ou None para restaurar padrão global).
+    """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    clean_id = str(profile_id or "").strip()
+    prof = get_profile(clean_id, db_path=db_path)
+    if not prof:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    current_settings = get_profile_settings(clean_id, db_path=db_path)
+
+    if "flow_scene_count" in visual_data:
+        raw_cnt = visual_data["flow_scene_count"]
+        if raw_cnt is not None:
+            try:
+                cnt = int(raw_cnt)
+            except (ValueError, TypeError):
+                raise ValueError(f"Cenas Flow deve ser um número inteiro entre 1 e 8 (recebido: {raw_cnt}).")
+            if cnt < 1 or cnt > 8:
+                raise ValueError(f"Cenas Flow deve estar entre 1 e 8 (recebido: {cnt}).")
+            current_settings.visual.flow_scene_count = cnt
+        else:
+            current_settings.visual.flow_scene_count = None
+
+    update_profile_settings(clean_id, current_settings, db_path=db_path)
+    return current_settings.visual
+
+
 def get_profile_settings(profile_id: str, db_path: Optional[str] = None) -> ChannelWorkspaceSettings:
     """Recupera as configurações tipadas de um perfil. Se inexistente ou vazio, retorna defaults seguros."""
     init_profile_db(db_path)

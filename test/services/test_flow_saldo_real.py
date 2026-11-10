@@ -10,8 +10,10 @@ Testes direcionados da Missão v2/flow-saldo-real:
 6. Formatos sem Flow (flow_enabled=False) operam normalmente sem checar créditos Flow.
 7. Créditos insuficientes no ciclo autônomo => canal entra em espera (STATE_BLOCKED),
    SEM criar tarefa, SEM registrar falha de geração (zero tentativas consumidas), SEM publicar.
-8. Conta BUSY => não chama o navegador e devolve ACCOUNT_BUSY com saldo preservado.
-9. refresh_all_accounts_credits inclui a BUSY sem abortar as outras.
+8. (a) Conta ocupada por geração ativa (FLOW_CONCURRENCY_LOCK ocupado) => não chama o navegador
+   (mock de verify_flow_account_session não é chamado) e devolve ACCOUNT_BUSY com saldo preservado.
+9. (b) Lock livre => refresh executa normalmente e lock é liberado no finally (inclusive sob exceção).
+10. (c) refresh_all com lock ocupado devolve ACCOUNT_BUSY para todas sem abrir navegador.
 """
 
 from datetime import datetime, timezone
@@ -306,80 +308,121 @@ class TestFlowSaldoReal(unittest.TestCase):
         attempts = ap.count_generation_attempts_in_last_24h(db_path=test_db, profile_id="prof-flow")
         self.assertEqual(attempts, 0)
 
-    def test_09_refresh_account_credits_busy_preserves_balance_and_does_not_open_browser(self):
-        """9. Conta BUSY => não chama o navegador (mock de verify_flow_account_session não é chamado)
-        e devolve ACCOUNT_BUSY com saldo preservado."""
-        fap.record_verified_credit_balance("flow-primary", 116, runtime_path=self.runtime_path)
-        fap.update_account_runtime("flow-primary", {"status": fap.STATUS_BUSY}, runtime_path=self.runtime_path)
+    def test_09_refresh_account_credits_busy_when_flow_lock_held_preserves_balance(self):
+        """(a) Com FLOW_CONCURRENCY_LOCK adquirido por outra thread/contexto,
+        refresh devolve ACCOUNT_BUSY, verify_flow_account_session NÃO é chamado e saldo é preservado."""
+        from app.services.flow_bridge import FLOW_CONCURRENCY_LOCK
 
-        mock_verify = MagicMock()
-        with patch("app.services.flow_account_pool.verify_flow_account_session", mock_verify):
+        fap.record_verified_credit_balance("flow-primary", 116, runtime_path=self.runtime_path)
+
+        # Adquire o lock simulando geração em andamento
+        FLOW_CONCURRENCY_LOCK.acquire()
+        try:
+            mock_verify = MagicMock()
+            with patch("app.services.flow_account_pool.verify_flow_account_session", mock_verify):
+                res = fap.refresh_account_credits(
+                    "flow-primary",
+                    force=True,
+                    config_path=self.config_path,
+                    runtime_path=self.runtime_path,
+                )
+
+            # verify_flow_account_session NÃO pode ter sido chamado
+            mock_verify.assert_not_called()
+
+            # Resposta ACCOUNT_BUSY com saldo preservado
+            self.assertFalse(res["refreshed"])
+            self.assertFalse(res["success"])
+            self.assertEqual(res["reason"], "ACCOUNT_BUSY")
+            self.assertEqual(res["credits_remaining"], 116)
+            self.assertIn("Conta em uso por uma geração", res["message"])
+
+            # Runtime mantém saldo anterior intacto
+            rt = fap.get_account_runtime("flow-primary", runtime_path=self.runtime_path)
+            self.assertEqual(rt["credits_remaining"], 116)
+        finally:
+            FLOW_CONCURRENCY_LOCK.release()
+
+    def test_10_refresh_account_credits_lock_released_after_execution_including_on_error(self):
+        """(b) Com o lock livre, refresh executa e o lock é liberado depois,
+        inclusive se a verificação levantar exceção."""
+        from app.services.flow_bridge import FLOW_CONCURRENCY_LOCK
+
+        # 1. Execução normal bem-sucedida libera o lock
+        mock_verify_res = {
+            "account_id": "flow-b",
+            "login_status": "AUTHENTICATED",
+            "credits_remaining": 52,
+            "credits_source": fap.CREDIT_SOURCE_FLOW_UI_VERIFIED,
+            "message": None,
+        }
+        with patch("app.services.flow_account_pool.verify_flow_account_session", return_value=mock_verify_res):
             res = fap.refresh_account_credits(
-                "flow-primary",
+                "flow-b",
                 force=True,
                 config_path=self.config_path,
                 runtime_path=self.runtime_path,
             )
+            self.assertTrue(res["success"])
 
-        # 1. verify_flow_account_session NÃO pode ter sido chamado
-        mock_verify.assert_not_called()
+        # O lock deve estar livre (consegue adquirir sem bloquear)
+        acquired = FLOW_CONCURRENCY_LOCK.acquire(blocking=False)
+        self.assertTrue(acquired, "FLOW_CONCURRENCY_LOCK deveria estar liberado após execução bem-sucedida")
+        FLOW_CONCURRENCY_LOCK.release()
 
-        # 2. Resposta deve indicar refrecência cancelada por ACCOUNT_BUSY
-        self.assertFalse(res["refreshed"])
-        self.assertFalse(res["success"])
-        self.assertEqual(res["reason"], "ACCOUNT_BUSY")
-        self.assertEqual(res["credits_remaining"], 116)
-        self.assertIn("Conta em uso por uma geração", res["message"])
+        # 2. Execução que levanta exceção inesperada também libera o lock no finally
+        with patch("app.services.flow_account_pool.verify_flow_account_session", side_effect=RuntimeError("Browser crash")):
+            with self.assertRaises(RuntimeError):
+                fap.refresh_account_credits(
+                    "flow-b",
+                    force=True,
+                    config_path=self.config_path,
+                    runtime_path=self.runtime_path,
+                )
 
-        # 3. Runtime deve manter saldo e status preservados
-        rt = fap.get_account_runtime("flow-primary", runtime_path=self.runtime_path)
-        self.assertEqual(rt["credits_remaining"], 116)
-        self.assertEqual(rt["status"], fap.STATUS_BUSY)
+        # O lock DEVE estar livre mesmo após a exceção
+        acquired_after_err = FLOW_CONCURRENCY_LOCK.acquire(blocking=False)
+        self.assertTrue(acquired_after_err, "FLOW_CONCURRENCY_LOCK deveria estar liberado após exceção no verify")
+        FLOW_CONCURRENCY_LOCK.release()
 
-    def test_10_refresh_all_accounts_includes_busy_without_aborting_others(self):
-        """10. refresh_all_accounts_credits inclui conta BUSY com reason ACCOUNT_BUSY sem abortar as demais."""
-        # flow-primary está BUSY com saldo 116
+    def test_11_refresh_all_accounts_all_busy_when_flow_lock_held(self):
+        """(c) refresh_all com FLOW_CONCURRENCY_LOCK ocupado devolve ACCOUNT_BUSY para todas sem abrir navegador."""
+        from app.services.flow_bridge import FLOW_CONCURRENCY_LOCK
+
         fap.record_verified_credit_balance("flow-primary", 116, runtime_path=self.runtime_path)
-        fap.update_account_runtime("flow-primary", {"status": fap.STATUS_BUSY}, runtime_path=self.runtime_path)
+        fap.record_verified_credit_balance("flow-b", 52, runtime_path=self.runtime_path)
+        fap.record_verified_credit_balance("flow-c", 50, runtime_path=self.runtime_path)
 
-        # flow-b e flow-c estão AVAILABLE
-        fap.record_verified_credit_balance("flow-b", 50, runtime_path=self.runtime_path)
-        fap.record_verified_credit_balance("flow-c", 40, runtime_path=self.runtime_path)
+        # Lock ocupado por geração em andamento
+        FLOW_CONCURRENCY_LOCK.acquire()
+        try:
+            mock_verify = MagicMock()
+            with patch("app.services.flow_account_pool.verify_flow_account_session", mock_verify):
+                results = fap.refresh_all_accounts_credits(
+                    force=True,
+                    config_path=self.config_path,
+                    runtime_path=self.runtime_path,
+                )
 
-        def mock_verify_side_effect(aid, config_path=None, runtime_path=None):
-            if aid == "flow-primary":
-                raise RuntimeError("verify_flow_account_session não deveria ser chamado para conta BUSY!")
-            new_balances = {"flow-b": 52, "flow-c": 50}
-            return {
-                "account_id": aid,
-                "login_status": "AUTHENTICATED",
-                "credits_remaining": new_balances.get(aid, 0),
-                "credits_source": fap.CREDIT_SOURCE_FLOW_UI_VERIFIED,
-                "message": None,
-            }
+            # verify_flow_account_session NÃO pode ter sido chamado para NENHUMA conta
+            mock_verify.assert_not_called()
 
-        with patch("app.services.flow_account_pool.verify_flow_account_session", side_effect=mock_verify_side_effect):
-            results = fap.refresh_all_accounts_credits(
-                force=True,
-                config_path=self.config_path,
-                runtime_path=self.runtime_path,
-            )
+            # Todas as contas ativadas no pool devem constar como ACCOUNT_BUSY com saldo preservado
+            self.assertIn("flow-primary", results)
+            self.assertIn("flow-b", results)
+            self.assertIn("flow-c", results)
 
-        # 1. Contas presentes no resultado
-        self.assertIn("flow-primary", results)
-        self.assertIn("flow-b", results)
-        self.assertIn("flow-c", results)
+            for aid in ("flow-primary", "flow-b", "flow-c"):
+                self.assertEqual(results[aid]["reason"], "ACCOUNT_BUSY")
+                self.assertFalse(results[aid]["refreshed"])
+                self.assertFalse(results[aid]["success"])
+                self.assertIn("Conta em uso por uma geração", results[aid]["message"])
 
-        # 2. flow-primary tem reason ACCOUNT_BUSY e saldo 116 preservado
-        self.assertEqual(results["flow-primary"]["reason"], "ACCOUNT_BUSY")
-        self.assertEqual(results["flow-primary"]["credits_remaining"], 116)
-        self.assertFalse(results["flow-primary"]["refreshed"])
-
-        # 3. flow-b e flow-c foram atualizadas com sucesso
-        self.assertTrue(results["flow-b"]["success"])
-        self.assertEqual(results["flow-b"]["credits_remaining"], 52)
-        self.assertTrue(results["flow-c"]["success"])
-        self.assertEqual(results["flow-c"]["credits_remaining"], 50)
+            self.assertEqual(results["flow-primary"]["credits_remaining"], 116)
+            self.assertEqual(results["flow-b"]["credits_remaining"], 52)
+            self.assertEqual(results["flow-c"]["credits_remaining"], 50)
+        finally:
+            FLOW_CONCURRENCY_LOCK.release()
 
 
 if __name__ == "__main__":

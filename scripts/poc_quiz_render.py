@@ -53,6 +53,13 @@ from app.utils import utils
 from app.services.media_quality import probe_media
 
 
+class DurationGateError(RuntimeError):
+    """Exceção levantada quando a duração planejada do Quiz não atinge a faixa editorial obrigatória."""
+    def __init__(self, message: str, actual_duration: float = 0.0):
+        super().__init__(message)
+        self.actual_duration = actual_duration
+
+
 # =============================================================================
 # Modelo de Configuração Reutilizável (QuizConfig)
 # =============================================================================
@@ -67,6 +74,8 @@ class QuizConfig:
     images_dir: str = "storage/poc_quiz/images_v2"
     min_target_duration_sec: float = 60.0
     target_duration_range: Tuple[float, float] = (60.0, 70.0)
+    task_id: Optional[str] = None
+    output_json_path: Optional[str] = None
 
     video_settings: Dict[str, Any] = field(default_factory=lambda: {
         "width": 1080,
@@ -760,6 +769,61 @@ class QuizEngine:
         return res_f.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1000
 
     # -------------------------------------------------------------------------
+    # 5.5 Calibração e Planejamento Dinâmico de Duração
+    # -------------------------------------------------------------------------
+    def calculate_pause_plan(self, voice_data: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Calcula a calibração dinâmica de pausas e duração total para itens de voz (FONTE ÚNICA 1 e 2)."""
+        if not voice_data:
+            return {
+                "total_duration": 0.0,
+                "min_total_duration": 0.0,
+                "total_voice_duration": 0.0,
+                "hook_pause": 0.0,
+                "rem_pause": 0.0,
+                "per_q_pause": 0.0,
+            }
+
+        reveal_sec = float(self.config.countdown_settings.get("reveal_sec", 1.0))
+        target_min = float(self.config.target_duration_range[0])
+        target_max = float(self.config.target_duration_range[1])
+        target_center = 65.0
+
+        min_hook_pause = 2.6
+        min_other_pause = max(1.1, reveal_sec + 0.1)
+        max_other_pause = 4.0
+
+        hook_item = next((v for v in voice_data if v.get("is_hook")), None)
+        min_hook_required = max(min_hook_pause, (hook_item["dur_hook"] + 0.15) if hook_item else min_hook_pause)
+        other_count = max(1, len(voice_data) - (1 if hook_item else 0))
+
+        total_voice_duration = sum(v["dur_voice"] for v in voice_data)
+        min_total_duration = total_voice_duration + (min_hook_required if hook_item else 0.0) + (other_count * min_other_pause)
+
+        if min_total_duration > target_center:
+            desired_total = min(target_max - 0.5, max(target_min + 0.5, min_total_duration))
+        else:
+            desired_total = target_center
+
+        total_pause_available = max(0.0, desired_total - total_voice_duration)
+        hook_pause = max(min_hook_required, min(total_pause_available * 0.25, 3.5)) if hook_item else 0.0
+        rem_pause = min(other_count * max_other_pause, max(other_count * min_other_pause, total_pause_available - hook_pause))
+        per_q_pause = rem_pause / other_count
+        total_planned_duration = total_voice_duration + (hook_pause if hook_item else 0.0) + rem_pause
+
+        return {
+            "total_duration": total_planned_duration,
+            "min_total_duration": min_total_duration,
+            "total_voice_duration": total_voice_duration,
+            "hook_pause": hook_pause,
+            "rem_pause": rem_pause,
+            "per_q_pause": per_q_pause,
+        }
+
+    def calculate_planned_duration(self, voice_data: List[Dict[str, Any]]) -> float:
+        """Retorna a duração total planejada calculada pelo plano dinâmico de pausas."""
+        return self.calculate_pause_plan(voice_data)["total_duration"]
+
+    # -------------------------------------------------------------------------
     # 6. Pipeline Completo de Execução
     # -------------------------------------------------------------------------
     async def render_async(self) -> Dict[str, Any]:
@@ -807,31 +871,71 @@ class QuizEngine:
                 "dur_hook": dur_hook,
             })
 
-        total_voice_duration = sum(v["dur_voice"] for v in voice_data)
-        logger.info(f"[QUIZ_DURATION] Voz total sintetizada ({len(voice_data)} cenas): {total_voice_duration:.2f}s")
+        # 4.1.1 Verificação e Trim de Duração Editorial (Missão v2/duracao-quiz-dilemma)
+        target_min = float(self.config.target_duration_range[0])
+        target_max = float(self.config.target_duration_range[1])
+        est_duration = self.calculate_planned_duration(voice_data)
+
+        if est_duration > target_max:
+            dur_before = est_duration
+            count_before = len(voice_data)
+
+            while est_duration > target_max:
+                if len(voice_data) <= 1:
+                    break
+
+                candidate_data = voice_data[:-1]
+                cand_dur = self.calculate_planned_duration(candidate_data)
+
+                # Restam perguntas suficientes para ficar >= target_min (60s)
+                if cand_dur < target_min:
+                    break
+
+                removed_v = voice_data.pop()
+                for key in ("narration_mp3", "hook_mp3"):
+                    fpath = removed_v.get(key)
+                    if fpath and os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                        except OSError:
+                            pass
+
+                est_duration = cand_dur
+
+            if target_min <= est_duration <= target_max:
+                self.config.questions = [v["item"] for v in voice_data]
+                task_id_log = getattr(self.config, "task_id", None) or "unknown"
+                logger.info(
+                    f"[QUIZ_DURATION_TRIM] task_id={task_id_log} antes={dur_before:.2f}s "
+                    f"depois={est_duration:.2f}s perguntas={count_before}->{len(voice_data)}"
+                )
+                if getattr(self.config, "output_json_path", None) and os.path.exists(self.config.output_json_path):
+                    try:
+                        with open(self.config.output_json_path, "r", encoding="utf-8") as f_json:
+                            disk_data = json.load(f_json)
+                        disk_data["questions"] = self.config.questions
+                        with open(self.config.output_json_path, "w", encoding="utf-8") as f_json:
+                            json.dump(disk_data, f_json, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
+            else:
+                raise DurationGateError(
+                    f"Duração de {est_duration:.2f}s fora da faixa editorial obrigatória para Quiz [{target_min:.1f}s, {target_max:.1f}s]",
+                    actual_duration=est_duration,
+                )
+        elif est_duration < target_min:
+            raise DurationGateError(
+                f"Duração de {est_duration:.2f}s fora da faixa editorial obrigatória para Quiz [{target_min:.1f}s, {target_max:.1f}s]",
+                actual_duration=est_duration,
+            )
 
         # 4.2 Calibração dinâmica das pausas para atingir aproximadamente 65s (faixa estrita: 60.0s a 70.0s)
-        target_min, target_max = self.config.target_duration_range[0], self.config.target_duration_range[1]
-        target_center = 65.0
-
-        min_hook_pause = 2.6
-        min_other_pause = max(1.1, reveal_sec + 0.1)
-
-        hook_item = next((v for v in voice_data if v["is_hook"]), None)
-        min_hook_required = max(min_hook_pause, (hook_item["dur_hook"] + 0.15) if hook_item else min_hook_pause)
-        other_count = max(1, len(voice_data) - (1 if hook_item else 0))
-
-        min_total_duration = total_voice_duration + (min_hook_required if hook_item else 0.0) + (other_count * min_other_pause)
-
-        if min_total_duration > target_center:
-            desired_total = min(target_max - 0.5, max(target_min + 0.5, min_total_duration))
-        else:
-            desired_total = target_center
-
-        total_pause_available = max(0.0, desired_total - total_voice_duration)
-        hook_pause = max(min_hook_required, min(total_pause_available * 0.25, 3.5)) if hook_item else 0.0
-        rem_pause = max(other_count * min_other_pause, total_pause_available - hook_pause)
-        per_q_pause = rem_pause / other_count
+        plan = self.calculate_pause_plan(voice_data)
+        hook_pause = plan["hook_pause"]
+        rem_pause = plan["rem_pause"]
+        per_q_pause = plan["per_q_pause"]
+        total_voice_duration = plan["total_voice_duration"]
+        logger.info(f"[QUIZ_DURATION] Voz total sintetizada ({len(voice_data)} cenas): {total_voice_duration:.2f}s")
 
         total_planned_duration = 0.0
         for idx, v in enumerate(voice_data):

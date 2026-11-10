@@ -3556,6 +3556,7 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
         voice_rate: Optional[str] = "+12%",
         bgm_path: Optional[str] = None,
         bgm_volume: float = 0.14,
+        task_id: Optional[str] = None,
     ) -> QuizConfig:
         """Monta a estrutura compatível com a Quiz Engine e exporta para JSON."""
         niche = raw_quiz.get("niche", "curiosidades")
@@ -3595,6 +3596,8 @@ Retorne ESTRITAMENTE um objeto JSON válido (sem markdown, sem tags, sem explica
             "output_thumbnail_path": thumb_path,
             "temp_dir": t_dir,
             "images_dir": img_dir,
+            "task_id": task_id,
+            "output_json_path": output_json_path,
             "min_target_duration_sec": 60.0,
             "target_duration_range": [60.0, 70.0],
             "video_settings": {

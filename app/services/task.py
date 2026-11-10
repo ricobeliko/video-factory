@@ -3117,7 +3117,7 @@ def _run_quiz_pipeline(
             return _mark_task_failed(task_id, "video", f"Paper quiz render failed: {exc}")
     else:
         try:
-            from scripts.poc_quiz_render import QuizConfig, QuizEngine
+            from scripts.poc_quiz_render import QuizConfig, QuizEngine, DurationGateError
             raw_rate = getattr(params, "voice_rate", None)
             v_rate_str = voice.resolve_quiz_voice_rate(raw_rate, default_rate="+12%")
             quiz_cfg = generator.export_to_quiz_config(
@@ -3131,9 +3131,19 @@ def _run_quiz_pipeline(
                 voice_rate=v_rate_str,
                 bgm_path=resolved_bgm_path,
                 bgm_volume=0.14,
+                task_id=task_id,
             )
             engine = QuizEngine(config=quiz_cfg)
             render_result = engine.render()
+        except DurationGateError as dur_err:
+            dur_val = getattr(dur_err, "actual_duration", 0.0)
+            logger.warning(f"[QUIZ_ENGINE][DURATION_GATE_ERROR] task_id={task_id}: {dur_err}")
+            return _mark_task_failed(
+                task_id,
+                "duration_safety",
+                f"Duração de {dur_val:.2f}s fora da faixa editorial obrigatória para Quiz [60.0s, 70.0s]",
+                details={"actual_duration": dur_val, "target_min": 60.0, "target_max": 70.0},
+            )
         except ValueError as val_err:
             logger.error(f"[QUIZ_ENGINE][VOICE_ERROR] task_id={task_id}: {val_err}")
             return _mark_task_failed(task_id, "video", str(val_err))

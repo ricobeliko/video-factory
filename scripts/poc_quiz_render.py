@@ -790,7 +790,6 @@ class QuizEngine:
 
         min_hook_pause = 2.6
         min_other_pause = max(1.1, reveal_sec + 0.1)
-        max_other_pause = 4.0
 
         hook_item = next((v for v in voice_data if v.get("is_hook")), None)
         min_hook_required = max(min_hook_pause, (hook_item["dur_hook"] + 0.15) if hook_item else min_hook_pause)
@@ -806,7 +805,7 @@ class QuizEngine:
 
         total_pause_available = max(0.0, desired_total - total_voice_duration)
         hook_pause = max(min_hook_required, min(total_pause_available * 0.25, 3.5)) if hook_item else 0.0
-        rem_pause = min(other_count * max_other_pause, max(other_count * min_other_pause, total_pause_available - hook_pause))
+        rem_pause = max(other_count * min_other_pause, total_pause_available - hook_pause)
         per_q_pause = rem_pause / other_count
         total_planned_duration = total_voice_duration + (hook_pause if hook_item else 0.0) + rem_pause
 
@@ -874,13 +873,14 @@ class QuizEngine:
         # 4.1.1 Verificação e Trim de Duração Editorial (Missão v2/duracao-quiz-dilemma)
         target_min = float(self.config.target_duration_range[0])
         target_max = float(self.config.target_duration_range[1])
+        effective_max = target_max - 0.5
         est_duration = self.calculate_planned_duration(voice_data)
 
-        if est_duration > target_max:
+        if est_duration > effective_max:
             dur_before = est_duration
             count_before = len(voice_data)
 
-            while est_duration > target_max:
+            while est_duration > effective_max:
                 if len(voice_data) <= 1:
                     break
 
@@ -902,22 +902,26 @@ class QuizEngine:
 
                 est_duration = cand_dur
 
+            task_id_log = getattr(self.config, "task_id", None) or "unknown"
             if target_min <= est_duration <= target_max:
-                self.config.questions = [v["item"] for v in voice_data]
-                task_id_log = getattr(self.config, "task_id", None) or "unknown"
-                logger.info(
-                    f"[QUIZ_DURATION_TRIM] task_id={task_id_log} antes={dur_before:.2f}s "
-                    f"depois={est_duration:.2f}s perguntas={count_before}->{len(voice_data)}"
-                )
-                if getattr(self.config, "output_json_path", None) and os.path.exists(self.config.output_json_path):
-                    try:
-                        with open(self.config.output_json_path, "r", encoding="utf-8") as f_json:
-                            disk_data = json.load(f_json)
-                        disk_data["questions"] = self.config.questions
-                        with open(self.config.output_json_path, "w", encoding="utf-8") as f_json:
-                            json.dump(disk_data, f_json, ensure_ascii=False, indent=2)
-                    except Exception:
-                        pass
+                if len(voice_data) < count_before:
+                    self.config.questions = [v["item"] for v in voice_data]
+                    logger.info(
+                        f"[QUIZ_DURATION_TRIM] task_id={task_id_log} antes={dur_before:.2f}s "
+                        f"depois={est_duration:.2f}s perguntas={count_before}->{len(voice_data)}"
+                    )
+                    if getattr(self.config, "output_json_path", None) and os.path.exists(self.config.output_json_path):
+                        try:
+                            with open(self.config.output_json_path, "r", encoding="utf-8") as f_json:
+                                disk_data = json.load(f_json)
+                            disk_data["questions"] = self.config.questions
+                            with open(self.config.output_json_path, "w", encoding="utf-8") as f_json:
+                                json.dump(disk_data, f_json, ensure_ascii=False, indent=2)
+                        except Exception as err:
+                            logger.warning(
+                                f"[QUIZ_DURATION_TRIM] task_id={task_id_log} falha ao atualizar output_json_path "
+                                f"{self.config.output_json_path}: {err}"
+                            )
             else:
                 raise DurationGateError(
                     f"Duração de {est_duration:.2f}s fora da faixa editorial obrigatória para Quiz [{target_min:.1f}s, {target_max:.1f}s]",

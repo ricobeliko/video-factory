@@ -95,6 +95,18 @@ export async function getLiveExecutions() {
   return fetchJson('/api/v2/executions/live');
 }
 
+export async function refreshFlowAccountCredits(accountId, force = true) {
+  return fetchJson(`/api/v2/flow/accounts/${encodeURIComponent(accountId)}/refresh?force=${force}`, {
+    method: 'POST',
+  });
+}
+
+export async function refreshAllFlowAccountsCredits(force = true) {
+  return fetchJson(`/api/v2/flow/accounts/refresh?force=${force}`, {
+    method: 'POST',
+  });
+}
+
 export async function getExecutionDetail(taskId) {
   if (!taskId) return null;
   return fetchJson(`/api/v2/executions/${encodeURIComponent(taskId)}`);

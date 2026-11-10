@@ -1210,7 +1210,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
 
         
         {/* Cartão Flow Accounts / Provider Pool */}
-        <FlowAccountsSection flowPool={flowPool} />
+        <FlowAccountsSection flowPool={flowPool} onRefresh={fetchData} />
 
         {/* Seção: Chaves e Conexões (M7 / Paridade V1-V2 Itens 4.1 e 4.2) */}
         <section className="sys-section" aria-labelledby="section-keys-title">

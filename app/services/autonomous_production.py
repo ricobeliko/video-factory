@@ -2631,6 +2631,8 @@ def check_required_providers_preflight(
     video_source: Optional[str] = None,
     voice_name: Optional[str] = None,
     db_path: Optional[str] = None,
+    flow_enabled: bool = False,
+    flow_scene_count: Optional[int] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Validação passiva e estática (sem chamadas pagas) de provedores requeridos."""
     from app.config import config
@@ -2736,6 +2738,20 @@ def check_required_providers_preflight(
         if not material.has_material_api_keys("coverr"):
             return False, "Fonte de mídia 'coverr' selecionada mas coverr_api_keys não está configurada", {"Media": "UNAVAILABLE"}
         details["Media"] = "Coverr"
+
+    # 6. Google Flow Multi-Account Pool (se Flow estiver ativado no perfil)
+    if flow_enabled:
+        from app.services import flow_account_pool
+        scene_cnt = int(flow_scene_count or 6)
+        req_credits = scene_cnt * flow_account_pool.DEFAULT_FLOW_CREDITS_PER_SCENE
+        acct = flow_account_pool.select_flow_account(required_credits=req_credits)
+        if not acct:
+            return (
+                False,
+                f"Créditos Flow insuficientes no pool de contas (necessário: {req_credits} cr para {scene_cnt} cenas)",
+                {"Flow": "INSUFFICIENT_CREDITS"},
+            )
+        details["Flow"] = f"Account {acct.get('account_id')}"
 
     return True, "Todos os provedores necessários estão disponíveis", details
 
@@ -3646,10 +3662,13 @@ def _run_autonomous_cycle(
         video_source=probe_params.video_source,
         voice_name=probe_params.voice_name,
         db_path=db_path,
+        flow_enabled=bool(getattr(probe_params, "flow_enabled", False)),
+        flow_scene_count=getattr(probe_params, "flow_scene_count", 6),
     )
     if not prov_ok:
         _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         _set_status(KEY_AUTONOMOUS_MESSAGE, prov_msg)
+        reason_code = "flow_creditos_insuficientes" if prov_details.get("Flow") == "INSUFFICIENT_CREDITS" else "provider_unavailable"
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -3658,7 +3677,7 @@ def _run_autonomous_cycle(
             metadata=prov_details,
             db_path=db_path,
         )
-        return {"status": "blocked", "reason": "provider_unavailable", "message": prov_msg}
+        return {"status": "blocked", "reason": reason_code, "message": prov_msg}
 
     # -----------------------------------------------------------------------
     # Etapa B: Cálculo do Estoque Pronto YouTube vs Meta (get_autonomous_ready_stock)
@@ -3860,10 +3879,13 @@ def _run_autonomous_cycle(
         video_source=params.video_source,
         voice_name=params.voice_name,
         db_path=db_path,
+        flow_enabled=bool(getattr(params, "flow_enabled", False)),
+        flow_scene_count=getattr(params, "flow_scene_count", 6),
     )
     if not final_ok:
         _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         _set_status(KEY_AUTONOMOUS_MESSAGE, final_msg)
+        reason_code = "flow_creditos_insuficientes" if final_details.get("Flow") == "INSUFFICIENT_CREDITS" else "provider_unavailable"
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -3872,7 +3894,7 @@ def _run_autonomous_cycle(
             metadata=final_details,
             db_path=db_path,
         )
-        return {"status": "blocked", "reason": "provider_unavailable", "message": final_msg}
+        return {"status": "blocked", "reason": reason_code, "message": final_msg}
 
     # Verificação ativa de disponibilidade do serviço de voz (probe curto 10s, cache 5min)
     voice_ok, voice_err = voice.check_voice_availability(params.voice_name)

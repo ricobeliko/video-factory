@@ -1692,3 +1692,44 @@ def list_publishing_accounts(
         _PUBLISHING_ACCOUNTS_CACHE[cache_key] = (now_m, accounts)
 
     return utils.get_response(200, {"accounts": accounts, "total": len(accounts)})
+
+
+# ---------------------------------------------------------------------------
+# Google Flow Multi-Account Pool Operations (v2/flow-saldo-real)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/flow/accounts/{account_id}/refresh",
+    summary="Refresh credit balance for a specific Google Flow account from UI",
+)
+def refresh_flow_account_credits(
+    request: Request,
+    account_id: str,
+    force: bool = Query(default=True, description="Force headless UI check even if cache is fresh"),
+):
+    request_id = base.get_task_id(request)
+    try:
+        result = operator_console.refresh_flow_account_credits_op(account_id=account_id, force=force)
+        return utils.get_response(200, result)
+    except ValueError as val_err:
+        raise HttpException(task_id=request_id, status_code=400, message=str(val_err))
+    except Exception as exc:
+        logger.error(f"[FLOW_REFRESH_API] Erro ao reconciliar conta '{account_id}': {exc}")
+        raise HttpException(task_id=request_id, status_code=500, message=f"Falha ao reconciliar conta: {exc}")
+
+
+@router.post(
+    "/flow/accounts/refresh",
+    summary="Refresh credit balance for all enabled Google Flow accounts from UI",
+)
+def refresh_all_flow_accounts_credits(
+    request: Request,
+    force: bool = Query(default=True, description="Force headless UI check even if cache is fresh"),
+):
+    request_id = base.get_task_id(request)
+    try:
+        results = operator_console.refresh_all_flow_accounts_credits_op(force=force)
+        return utils.get_response(200, results)
+    except Exception as exc:
+        logger.error(f"[FLOW_REFRESH_API] Erro ao reconciliar pool de contas: {exc}")
+        raise HttpException(task_id=request_id, status_code=500, message=f"Falha ao reconciliar pool: {exc}")

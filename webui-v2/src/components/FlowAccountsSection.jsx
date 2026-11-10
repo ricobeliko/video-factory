@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { refreshFlowAccountCredits, refreshAllFlowAccountsCredits } from '../api';
 
 /**
  * Mapeamento semântico centralizado de status do Google Flow (R6A.5).
@@ -120,7 +121,44 @@ function formatCurrentTask(taskId) {
  * FlowAccountsSection — AI Compute Vault / Google Flow Pool (R6A.5).
  * Read-only visual upgrade with prominent balance metrics and structured capacity layout.
  */
-export default function FlowAccountsSection({ flowPool }) {
+export default function FlowAccountsSection({ flowPool, onRefresh }) {
+  const [isRefreshingAll, setIsRefreshingAll] = useState(false);
+  const [refreshingAccounts, setRefreshingAccounts] = useState({});
+  const [actionFeedback, setActionFeedback] = useState(null);
+
+  const handleRefreshAll = async () => {
+    setIsRefreshingAll(true);
+    setActionFeedback(null);
+    try {
+      await refreshAllFlowAccountsCredits(true);
+      setActionFeedback({ type: 'success', text: 'Reconciliação do pool de contas concluída com sucesso.' });
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setActionFeedback({ type: 'error', text: `Falha ao reconciliar pool: ${err.message}` });
+    } finally {
+      setIsRefreshingAll(false);
+    }
+  };
+
+  const handleRefreshAccount = async (accountId) => {
+    setRefreshingAccounts((prev) => ({ ...prev, [accountId]: true }));
+    setActionFeedback(null);
+    try {
+      const res = await refreshFlowAccountCredits(accountId, true);
+      const data = res.data || res;
+      const msg = data.message || `Saldo atualizado: ${data.credits_remaining ?? '—'} créditos`;
+      setActionFeedback({
+        type: data.success !== false ? 'success' : 'warning',
+        text: `[${accountId}] ${msg}`,
+      });
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setActionFeedback({ type: 'error', text: `[${accountId}] Falha: ${err.message}` });
+    } finally {
+      setRefreshingAccounts((prev) => ({ ...prev, [accountId]: false }));
+    }
+  };
+
   if (!flowPool || flowPool.error) {
     return (
       <section className="flow-pool-section degraded" aria-label="Google Flow Provider Pool">
@@ -154,15 +192,66 @@ export default function FlowAccountsSection({ flowPool }) {
           </span>
         </div>
 
-        {total_known_credits !== null && total_known_credits !== undefined && (
-          <div className="flow-credits-summary" title="Total somado de saldos verificados em memória">
-            <span className="summary-label">Pool Total Verificado:</span>
-            <strong className="summary-value">
-              {Number(total_known_credits).toLocaleString('pt-BR')} créditos
-            </strong>
-          </div>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {total_known_credits !== null && total_known_credits !== undefined && (
+            <div className="flow-credits-summary" title="Total somado de saldos verificados em memória">
+              <span className="summary-label">Pool Total Verificado:</span>
+              <strong className="summary-value">
+                {Number(total_known_credits).toLocaleString('pt-BR')} créditos
+              </strong>
+            </div>
+          )}
+          <button
+            type="button"
+            className="flow-refresh-btn"
+            onClick={handleRefreshAll}
+            disabled={isRefreshingAll}
+            title="Reconcilia saldo real de todas as contas no Google Flow via headless (sem geração)"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: '500',
+              borderRadius: '6px',
+              border: '1px solid var(--fleet-border, #334155)',
+              background: 'var(--fleet-card-bg, #1e293b)',
+              color: 'var(--fleet-text, #f1f5f9)',
+              cursor: isRefreshingAll ? 'wait' : 'pointer',
+            }}
+          >
+            <span>{isRefreshingAll ? '⏳' : '🔄'}</span>
+            <span>{isRefreshingAll ? 'Atualizando todas…' : 'Atualizar Todas'}</span>
+          </button>
+        </div>
       </div>
+
+      {actionFeedback && (
+        <div
+          style={{
+            margin: '0 0 12px 0',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            background: actionFeedback.type === 'error' ? 'rgba(239, 68, 68, 0.15)' : actionFeedback.type === 'warning' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+            border: `1px solid ${actionFeedback.type === 'error' ? '#ef4444' : actionFeedback.type === 'warning' ? '#f59e0b' : '#10b981'}`,
+            color: 'var(--fleet-text, #f1f5f9)',
+          }}
+        >
+          <span>{actionFeedback.text}</span>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '14px' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="flow-cards-deck">
         {accounts.length === 0 ? (
@@ -273,6 +362,42 @@ export default function FlowAccountsSection({ flowPool }) {
                   >
                     {taskInfo.label}
                   </div>
+                </div>
+
+                {/* Verification Action & Meta Row */}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: '8px',
+                    paddingTop: '8px',
+                    borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  }}
+                >
+                  <span
+                    style={{ fontSize: '11px', color: 'var(--fleet-muted, #94a3b8)' }}
+                    title={acct.credits_last_verified_at || ''}
+                  >
+                    {acct.last_verified_display || 'Nunca verificado'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleRefreshAccount(acct.account_id)}
+                    disabled={refreshingAccounts[acct.account_id] || isRefreshingAll}
+                    title="Reconcilia saldo real desta conta no Google Flow via headless"
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      borderRadius: '4px',
+                      border: '1px solid var(--fleet-border, #334155)',
+                      background: 'transparent',
+                      color: 'var(--fleet-text, #f1f5f9)',
+                      cursor: refreshingAccounts[acct.account_id] ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {refreshingAccounts[acct.account_id] ? '⏳ Verificando…' : '🔄 Atualizar'}
+                  </button>
                 </div>
               </div>
             );

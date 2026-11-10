@@ -130,8 +130,18 @@ export default function FlowAccountsSection({ flowPool, onRefresh }) {
     setIsRefreshingAll(true);
     setActionFeedback(null);
     try {
-      await refreshAllFlowAccountsCredits(true);
-      setActionFeedback({ type: 'success', text: 'Reconciliação do pool de contas concluída com sucesso.' });
+      const res = await refreshAllFlowAccountsCredits(true);
+      const data = res.data || res;
+      const busyAccounts = Object.values(data || {}).filter(item => item && item.reason === 'ACCOUNT_BUSY');
+      if (busyAccounts.length > 0) {
+        const busyNames = busyAccounts.map(b => b.account_id).join(', ');
+        setActionFeedback({
+          type: 'warning',
+          text: `Reconciliação concluída. Conta(s) em uso ignorada(s): ${busyNames}.`,
+        });
+      } else {
+        setActionFeedback({ type: 'success', text: 'Reconciliação do pool de contas concluída com sucesso.' });
+      }
       if (onRefresh) onRefresh();
     } catch (err) {
       setActionFeedback({ type: 'error', text: `Falha ao reconciliar pool: ${err.message}` });

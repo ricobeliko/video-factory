@@ -823,6 +823,23 @@ def refresh_account_credits(
     valid_id = validate_account_id(account_id)
     rt = get_account_runtime(valid_id, runtime_path=runtime_path)
 
+    # Se a conta estiver ocupada por uma geração em andamento, não abre o navegador (evita colisão no user_data_dir)
+    if rt.get("status") == STATUS_BUSY:
+        logger.info(
+            f"[FLOW_CREDIT_REFRESH] Conta '{valid_id}' em uso por uma geração (status={STATUS_BUSY}). "
+            f"Navegador não será aberto; saldo anterior preservado."
+        )
+        return {
+            "account_id": valid_id,
+            "refreshed": False,
+            "success": False,
+            "reason": "ACCOUNT_BUSY",
+            "credits_remaining": rt.get("credits_remaining"),
+            "credits_source": rt.get("credits_source"),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "message": "Conta em uso por uma geração; tente novamente quando terminar.",
+        }
+
     is_stale, reason, age_hours = is_credit_reading_stale(rt, max_age_hours=max_age_hours)
 
     if not force and not is_stale and rt.get("credits_source") == CREDIT_SOURCE_FLOW_UI_VERIFIED:

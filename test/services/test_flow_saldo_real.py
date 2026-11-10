@@ -10,6 +10,8 @@ Testes direcionados da Missão v2/flow-saldo-real:
 6. Formatos sem Flow (flow_enabled=False) operam normalmente sem checar créditos Flow.
 7. Créditos insuficientes no ciclo autônomo => canal entra em espera (STATE_BLOCKED),
    SEM criar tarefa, SEM registrar falha de geração (zero tentativas consumidas), SEM publicar.
+8. Conta BUSY => não chama o navegador e devolve ACCOUNT_BUSY com saldo preservado.
+9. refresh_all_accounts_credits inclui a BUSY sem abortar as outras.
 """
 
 from datetime import datetime, timezone
@@ -303,6 +305,81 @@ class TestFlowSaldoReal(unittest.TestCase):
         # 3. Nenhuma tentativa 24h consumida
         attempts = ap.count_generation_attempts_in_last_24h(db_path=test_db, profile_id="prof-flow")
         self.assertEqual(attempts, 0)
+
+    def test_09_refresh_account_credits_busy_preserves_balance_and_does_not_open_browser(self):
+        """9. Conta BUSY => não chama o navegador (mock de verify_flow_account_session não é chamado)
+        e devolve ACCOUNT_BUSY com saldo preservado."""
+        fap.record_verified_credit_balance("flow-primary", 116, runtime_path=self.runtime_path)
+        fap.update_account_runtime("flow-primary", {"status": fap.STATUS_BUSY}, runtime_path=self.runtime_path)
+
+        mock_verify = MagicMock()
+        with patch("app.services.flow_account_pool.verify_flow_account_session", mock_verify):
+            res = fap.refresh_account_credits(
+                "flow-primary",
+                force=True,
+                config_path=self.config_path,
+                runtime_path=self.runtime_path,
+            )
+
+        # 1. verify_flow_account_session NÃO pode ter sido chamado
+        mock_verify.assert_not_called()
+
+        # 2. Resposta deve indicar refrecência cancelada por ACCOUNT_BUSY
+        self.assertFalse(res["refreshed"])
+        self.assertFalse(res["success"])
+        self.assertEqual(res["reason"], "ACCOUNT_BUSY")
+        self.assertEqual(res["credits_remaining"], 116)
+        self.assertIn("Conta em uso por uma geração", res["message"])
+
+        # 3. Runtime deve manter saldo e status preservados
+        rt = fap.get_account_runtime("flow-primary", runtime_path=self.runtime_path)
+        self.assertEqual(rt["credits_remaining"], 116)
+        self.assertEqual(rt["status"], fap.STATUS_BUSY)
+
+    def test_10_refresh_all_accounts_includes_busy_without_aborting_others(self):
+        """10. refresh_all_accounts_credits inclui conta BUSY com reason ACCOUNT_BUSY sem abortar as demais."""
+        # flow-primary está BUSY com saldo 116
+        fap.record_verified_credit_balance("flow-primary", 116, runtime_path=self.runtime_path)
+        fap.update_account_runtime("flow-primary", {"status": fap.STATUS_BUSY}, runtime_path=self.runtime_path)
+
+        # flow-b e flow-c estão AVAILABLE
+        fap.record_verified_credit_balance("flow-b", 50, runtime_path=self.runtime_path)
+        fap.record_verified_credit_balance("flow-c", 40, runtime_path=self.runtime_path)
+
+        def mock_verify_side_effect(aid, config_path=None, runtime_path=None):
+            if aid == "flow-primary":
+                raise RuntimeError("verify_flow_account_session não deveria ser chamado para conta BUSY!")
+            new_balances = {"flow-b": 52, "flow-c": 50}
+            return {
+                "account_id": aid,
+                "login_status": "AUTHENTICATED",
+                "credits_remaining": new_balances.get(aid, 0),
+                "credits_source": fap.CREDIT_SOURCE_FLOW_UI_VERIFIED,
+                "message": None,
+            }
+
+        with patch("app.services.flow_account_pool.verify_flow_account_session", side_effect=mock_verify_side_effect):
+            results = fap.refresh_all_accounts_credits(
+                force=True,
+                config_path=self.config_path,
+                runtime_path=self.runtime_path,
+            )
+
+        # 1. Contas presentes no resultado
+        self.assertIn("flow-primary", results)
+        self.assertIn("flow-b", results)
+        self.assertIn("flow-c", results)
+
+        # 2. flow-primary tem reason ACCOUNT_BUSY e saldo 116 preservado
+        self.assertEqual(results["flow-primary"]["reason"], "ACCOUNT_BUSY")
+        self.assertEqual(results["flow-primary"]["credits_remaining"], 116)
+        self.assertFalse(results["flow-primary"]["refreshed"])
+
+        # 3. flow-b e flow-c foram atualizadas com sucesso
+        self.assertTrue(results["flow-b"]["success"])
+        self.assertEqual(results["flow-b"]["credits_remaining"], 52)
+        self.assertTrue(results["flow-c"]["success"])
+        self.assertEqual(results["flow-c"]["credits_remaining"], 50)
 
 
 if __name__ == "__main__":

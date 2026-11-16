@@ -4306,7 +4306,7 @@ def _get_fleet_summary_impl(db_path: Optional[str] = None, fresh: bool = False) 
         if "operational_events" in existing_tables and "task_profiles" in existing_tables:
             try:
                 att_rows = conn.execute(
-                    """
+                    f"""
                     SELECT
                         COALESCE(tp.profile_id, 'default') AS pid,
                         count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
@@ -4315,6 +4315,7 @@ def _get_fleet_summary_impl(db_path: Optional[str] = None, fresh: bool = False) 
                     WHERE o.component = 'autonomous_production'
                       AND o.event_type = 'generation_started'
                       AND o.timestamp >= ?
+                      AND {autonomous_production.SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT}
                     GROUP BY COALESCE(tp.profile_id, 'default');
                     """,
                     (h24_ago_iso,),

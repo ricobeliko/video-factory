@@ -35,12 +35,19 @@ from app.utils import utils
 FLOW_CONCURRENCY_LOCK = threading.Lock()
 
 FLOW_PROVENANCE_PERSIST_FAILED = "FLOW_PROVENANCE_PERSIST_FAILED"
+INSUFFICIENT_POOL_CREDITS = "INSUFFICIENT_POOL_CREDITS"
 
 
 class FlowProvenancePersistError(RuntimeError):
     """Falha ao persistir scene_materials/material_sources (fail-closed antes do render)."""
 
     reason_code = FLOW_PROVENANCE_PERSIST_FAILED
+
+
+class FlowInsufficientCreditsError(RuntimeError):
+    """Falha limpa quando o pool Flow nao possui saldo suficiente para gerar as cenas."""
+
+    reason_code = INSUFFICIENT_POOL_CREDITS
 
 
 def get_task_flow_dir(task_id: str) -> str:
@@ -125,6 +132,13 @@ def resolve_flow_materials_for_task(
         )
     if gen_res.get("status") == "FLOW_BROWSER_BUSY":
         raise RuntimeError("FLOW_BROWSER_BUSY: Sessão do navegador Flow ocupada.")
+    if gen_res.get("status") == INSUFFICIENT_POOL_CREDITS:
+        detail_msg = gen_res.get("error") or gen_res.get("message") or (
+            f"Pool do Google Flow sem créditos suficientes para gerar cenas da task '{task_id}'."
+        )
+        if INSUFFICIENT_POOL_CREDITS not in str(detail_msg):
+            detail_msg = f"{INSUFFICIENT_POOL_CREDITS}: {detail_msg}"
+        raise FlowInsufficientCreditsError(detail_msg)
 
     # 3. Resolução de materiais (Material-Only Resolver)
     material_selections = flow_workflow.resolve_project_materials(

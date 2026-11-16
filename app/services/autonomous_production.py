@@ -13,6 +13,8 @@ Transforma a Video Factory em uma fábrica de conteúdo autônoma e self-feeding
 9. NUNCA publica diretamente: o Scheduler Worker permanece como único executor da publicação.
 """
 import copy
+import hashlib
+import json
 import math
 import os
 import shutil
@@ -113,11 +115,144 @@ KEY_AUTONOMOUS_REJECTED_NARRATIVE_STRUCTURE = "autonomous_rejected_narrative_str
 KEY_AUTONOMOUS_GLOBAL_MAX_24H = "autonomous_global_max_generations_24h"
 KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = "autonomous_global_max_attempts_24h"
 
+# Persistência e classificação única de bloqueio por saldo insuficiente no pool Google Flow
+KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG = "autonomous_flow_credits_block_sig"
+KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_MSG = "autonomous_flow_credits_block_msg"
+SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT = (
+    "NOT EXISTS ("
+    "SELECT 1 FROM operational_events blk "
+    "WHERE blk.task_id = o.task_id "
+    "  AND blk.task_id IS NOT NULL AND blk.task_id != '' "
+    "  AND blk.component = 'autonomous_production' "
+    "  AND blk.event_type = 'provider_unavailable_block' "
+    "  AND json_valid(blk.metadata_json) = 1 "
+    "  AND json_extract(blk.metadata_json, '$.Flow') = 'INSUFFICIENT_CREDITS'"
+    ")"
+)
+
 DEFAULT_AUTONOMOUS_MAX_CONSECUTIVE_REJECTIONS = 10
 DEFAULT_AUTONOMOUS_MAX_ATTEMPTS_24H = 15
 DEFAULT_AUTONOMOUS_GLOBAL_MAX_GENERATIONS_24H = 100
 DEFAULT_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = 100
 _cycle_lock = threading.Lock()
+
+
+def is_insufficient_credits_block_metadata(metadata: Any) -> bool:
+    """Identifica metadados de evento provider_unavailable_block causados por saldo Flow insuficiente."""
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            return False
+    return isinstance(metadata, dict) and metadata.get("Flow") == "INSUFFICIENT_CREDITS"
+
+
+def _is_insufficient_pool_credits_failure(task_data: Dict[str, Any]) -> bool:
+    """Identifica se uma task FAILED falhou por falta de créditos no pool Google Flow."""
+    if not isinstance(task_data, dict):
+        return False
+    code = str(task_data.get("error_code") or task_data.get("reason") or "").strip()
+    if code == "INSUFFICIENT_POOL_CREDITS":
+        return True
+    details = task_data.get("details")
+    if isinstance(details, dict):
+        d_code = str(details.get("error_code") or details.get("reason") or "").strip()
+        if d_code == "INSUFFICIENT_POOL_CREDITS":
+            return True
+    err_txt = str(task_data.get("error") or "")
+    return "INSUFFICIENT_POOL_CREDITS" in err_txt
+
+
+def _compute_flow_pool_credit_signature(
+    flow_scene_count: Optional[int] = None,
+    config_path: Optional[str] = None,
+    runtime_path: Optional[str] = None,
+) -> str:
+    """Assinatura determinística do saldo/estado do pool Flow e custo exigido por vídeo."""
+    from app.services import flow_account_pool
+    scene_cnt = max(0, int(flow_scene_count if flow_scene_count is not None else 6))
+    required_credits = scene_cnt * flow_account_pool.DEFAULT_FLOW_CREDITS_PER_SCENE
+    accounts = flow_account_pool.load_accounts_config(config_path).get("accounts", [])
+    acct_entries = []
+    for acct in accounts:
+        aid = str(acct.get("account_id") or "")
+        rt = flow_account_pool.get_account_runtime(aid, runtime_path=runtime_path)
+        acct_entries.append({
+            "account_id": aid,
+            "enabled": bool(acct.get("enabled", True)),
+            "status": rt.get("status"),
+            "credits_remaining": rt.get("credits_remaining"),
+            "credits_source": rt.get("credits_source"),
+            "credits_last_verified_at": rt.get("credits_last_verified_at"),
+            "cooldown_until": rt.get("cooldown_until"),
+        })
+    acct_entries.sort(key=lambda item: item["account_id"])
+    payload = {"required_credits": required_credits, "accounts": acct_entries}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _resolve_profile_flow_scene_count(profile_id: Optional[str], db_path: Optional[str] = None) -> int:
+    """Obtém flow_scene_count canônico do perfil sem efeitos colaterais."""
+    try:
+        assigned = profile_id or profile_manager.get_active_profile_id(db_path=db_path)
+        ctx = profile_manager.get_generation_profile_context(profile_id=assigned, db_path=db_path)
+        return max(1, int(ctx.get("flow_scene_count", 6) or 6))
+    except Exception:
+        return 6
+
+
+def _record_flow_insufficient_credits_block(
+    *,
+    profile_id: Optional[str],
+    message: str,
+    flow_scene_count: Optional[int] = None,
+    task_id: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+    log_event: bool = True,
+) -> Dict[str, Any]:
+    """Fonte única de classificação e persistência do bloqueio por saldo Flow insuficiente."""
+    _set_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, profile_id=profile_id, db_path=db_path)
+    _set_cycle_setting(KEY_AUTONOMOUS_MESSAGE, message, profile_id=profile_id, db_path=db_path)
+    _set_cycle_setting(KEY_AUTONOMOUS_LAST_RESULT, message, profile_id=profile_id, db_path=db_path)
+
+    scene_cnt = (
+        flow_scene_count
+        if flow_scene_count is not None
+        else _resolve_profile_flow_scene_count(profile_id, db_path=db_path)
+    )
+    try:
+        sig = _compute_flow_pool_credit_signature(flow_scene_count=scene_cnt)
+        _set_cycle_setting(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG, sig, profile_id=profile_id, db_path=db_path)
+        _set_cycle_setting(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_MSG, message, profile_id=profile_id, db_path=db_path)
+    except Exception as sig_exc:
+        logger.debug(f"[AUTONOMOUS_PRODUCTION] Falha ao calcular assinatura Flow credits: {sig_exc}")
+
+    if log_event:
+        meta = dict(details or {})
+        meta.setdefault("Flow", "INSUFFICIENT_CREDITS")
+        meta.setdefault("flow_scene_count", scene_cnt)
+        operator_console.log_operational_event(
+            component="autonomous_production",
+            severity=operator_console.SEVERITY_ERROR,
+            event_type="provider_unavailable_block",
+            task_id=task_id,
+            message=message,
+            metadata=meta,
+            db_path=db_path,
+        )
+
+    result: Dict[str, Any] = {
+        "status": "blocked",
+        "reason": "flow_creditos_insuficientes",
+        "message": message,
+        "profile_id": profile_id,
+    }
+    if task_id:
+        result["task_id"] = task_id
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1469,38 +1604,41 @@ def count_generation_attempts_in_last_24h(now: Optional[datetime] = None, db_pat
         with scheduler.get_connection(db_path) as conn:
             if not clean_profile:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
                     FROM operational_events o
                     WHERE o.component = 'autonomous_production'
                       AND o.event_type = 'generation_started'
-                      AND o.timestamp >= ?;
+                      AND o.timestamp >= ?
+                      AND {SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT};
                     """,
                     (since_iso,),
                 ).fetchone()
             elif is_default:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
                     FROM operational_events o
                     LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
                     WHERE o.component = 'autonomous_production'
                       AND o.event_type = 'generation_started'
                       AND (tp.profile_id = ? OR tp.profile_id IS NULL OR tp.profile_id = 'default')
-                      AND o.timestamp >= ?;
+                      AND o.timestamp >= ?
+                      AND {SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT};
                     """,
                     (profile_manager.DEFAULT_PROFILE_ID, since_iso),
                 ).fetchone()
             else:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
                     FROM operational_events o
                     JOIN task_profiles tp ON tp.task_id = o.task_id
                     WHERE o.component = 'autonomous_production'
                       AND o.event_type = 'generation_started'
                       AND tp.profile_id = ?
-                      AND o.timestamp >= ?;
+                      AND o.timestamp >= ?
+                      AND {SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT};
                     """,
                     (clean_profile, since_iso),
                 ).fetchone()
@@ -1584,12 +1722,13 @@ def count_all_profiles_attempts_24h(now: Optional[datetime] = None, db_path: Opt
     try:
         with scheduler.get_connection(db_path) as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT)))
                 FROM operational_events o
                 WHERE o.component = 'autonomous_production'
                   AND o.event_type = 'generation_started'
-                  AND o.timestamp >= ?;
+                  AND o.timestamp >= ?
+                  AND {SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT};
                 """,
                 (since_iso,),
             ).fetchone()
@@ -3088,6 +3227,20 @@ def _run_autonomous_cycle(
         if task_state == const.TASK_STATE_FAILED:
             failed_task_id = current_task_id
             _set_status(KEY_AUTONOMOUS_CURRENT_TASK_ID, "")
+            if _is_insufficient_pool_credits_failure(task_data):
+                err_detail = task_data.get("error") or failed_stage or "Créditos Flow insuficientes no pool"
+                return _record_flow_insufficient_credits_block(
+                    profile_id=target_profile_id,
+                    message=err_detail,
+                    task_id=failed_task_id,
+                    details={
+                        "Flow": "INSUFFICIENT_CREDITS",
+                        "error_code": "INSUFFICIENT_POOL_CREDITS",
+                        "failed_stage": failed_stage or task_data.get("stage"),
+                    },
+                    db_path=db_path,
+                    log_event=True,
+                )
             _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
             is_interrupted = (
                 failed_stage in ("interrupted_by_restart", "generation_interrupted")
@@ -3658,17 +3811,49 @@ def _run_autonomous_cycle(
         )
         return {"status": "blocked", "reason": "invalid_configuration", "message": str(cfg_err)}
 
+    probe_flow_enabled = bool(getattr(probe_params, "flow_enabled", False))
+    probe_scene_count = getattr(probe_params, "flow_scene_count", 6)
+    saved_flow_block_sig = str(_get_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG, "") or "").strip()
+    if not probe_flow_enabled:
+        if saved_flow_block_sig:
+            _set_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG, "")
+            _set_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_MSG, "")
+    elif saved_flow_block_sig:
+        current_flow_sig = _compute_flow_pool_credit_signature(flow_scene_count=probe_scene_count)
+        if saved_flow_block_sig == current_flow_sig:
+            cached_msg = (
+                str(_get_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_MSG, "") or "").strip()
+                or f"Créditos Flow insuficientes no pool para {probe_scene_count} cenas; aguardando recarga, reconciliação ou redução de cenas."
+            )
+            return _record_flow_insufficient_credits_block(
+                profile_id=target_profile_id,
+                message=cached_msg,
+                flow_scene_count=probe_scene_count,
+                db_path=db_path,
+                log_event=False,
+            )
+        _set_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG, "")
+        _set_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_MSG, "")
+
     prov_ok, prov_msg, prov_details = check_required_providers_preflight(
         video_source=probe_params.video_source,
         voice_name=probe_params.voice_name,
         db_path=db_path,
-        flow_enabled=bool(getattr(probe_params, "flow_enabled", False)),
-        flow_scene_count=getattr(probe_params, "flow_scene_count", 6),
+        flow_enabled=probe_flow_enabled,
+        flow_scene_count=probe_scene_count,
     )
     if not prov_ok:
+        if prov_details.get("Flow") == "INSUFFICIENT_CREDITS":
+            return _record_flow_insufficient_credits_block(
+                profile_id=target_profile_id,
+                message=prov_msg,
+                flow_scene_count=probe_scene_count,
+                details=prov_details,
+                db_path=db_path,
+                log_event=True,
+            )
         _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         _set_status(KEY_AUTONOMOUS_MESSAGE, prov_msg)
-        reason_code = "flow_creditos_insuficientes" if prov_details.get("Flow") == "INSUFFICIENT_CREDITS" else "provider_unavailable"
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -3677,7 +3862,7 @@ def _run_autonomous_cycle(
             metadata=prov_details,
             db_path=db_path,
         )
-        return {"status": "blocked", "reason": reason_code, "message": prov_msg}
+        return {"status": "blocked", "reason": "provider_unavailable", "message": prov_msg}
 
     # -----------------------------------------------------------------------
     # Etapa B: Cálculo do Estoque Pronto YouTube vs Meta (get_autonomous_ready_stock)
@@ -3875,17 +4060,26 @@ def _run_autonomous_cycle(
     )
 
     # Validação estrita do mesmo conjunto de parâmetros construídos
+    final_flow_scene_count = getattr(params, "flow_scene_count", 6)
     final_ok, final_msg, final_details = check_required_providers_preflight(
         video_source=params.video_source,
         voice_name=params.voice_name,
         db_path=db_path,
         flow_enabled=bool(getattr(params, "flow_enabled", False)),
-        flow_scene_count=getattr(params, "flow_scene_count", 6),
+        flow_scene_count=final_flow_scene_count,
     )
     if not final_ok:
+        if final_details.get("Flow") == "INSUFFICIENT_CREDITS":
+            return _record_flow_insufficient_credits_block(
+                profile_id=target_profile_id,
+                message=final_msg,
+                flow_scene_count=final_flow_scene_count,
+                details=final_details,
+                db_path=db_path,
+                log_event=True,
+            )
         _set_status(KEY_AUTONOMOUS_STATE, STATE_BLOCKED)
         _set_status(KEY_AUTONOMOUS_MESSAGE, final_msg)
-        reason_code = "flow_creditos_insuficientes" if final_details.get("Flow") == "INSUFFICIENT_CREDITS" else "provider_unavailable"
         operator_console.log_operational_event(
             component="autonomous_production",
             severity=operator_console.SEVERITY_ERROR,
@@ -3894,7 +4088,7 @@ def _run_autonomous_cycle(
             metadata=final_details,
             db_path=db_path,
         )
-        return {"status": "blocked", "reason": reason_code, "message": final_msg}
+        return {"status": "blocked", "reason": "provider_unavailable", "message": final_msg}
 
     # Verificação ativa de disponibilidade do serviço de voz (probe curto 10s, cache 5min)
     voice_ok, voice_err = voice.check_voice_availability(params.voice_name)

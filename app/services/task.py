@@ -3769,11 +3769,14 @@ def _run_pipeline(
         except Exception as exc:
             reason = getattr(exc, "reason_code", "FLOW_MATERIAL_FAILED")
             logger.error(f"[FLOW_MATERIAL][BLOCK] task_id={task_id} reason={reason} detail={exc}")
+            fail_details = {"reason": reason}
+            if reason != "FLOW_MATERIAL_FAILED":
+                fail_details["error_code"] = reason
             return _mark_task_failed(
                 task_id,
                 "materials",
                 f"Flow material resolution failed: {exc}",
-                details={"reason": reason},
+                details=fail_details,
             )
     elif getattr(params, "scene_based_generation_enabled", False) and scene_plan:
         try:

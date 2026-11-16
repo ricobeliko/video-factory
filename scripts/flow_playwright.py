@@ -2615,6 +2615,41 @@ class FlowSceneResult:
         return getattr(self, item, default)
 
 
+INSUFFICIENT_POOL_CREDITS_CODE = "INSUFFICIENT_POOL_CREDITS"
+
+
+def _build_insufficient_pool_credits_result(
+    *,
+    scene_index: int,
+    required_credits: int,
+    project_url: Optional[str],
+    error: str,
+    account_id: Optional[str] = None,
+    credits_remaining: Optional[int] = None,
+) -> FlowSceneResult:
+    """Constroi FlowSceneResult de falha limpa por saldo insuficiente no pool (sem kwargs invalidos)."""
+    details: Dict[str, Any] = {
+        "pool_insufficient": True,
+        "required_credits": required_credits,
+        "error_code": INSUFFICIENT_POOL_CREDITS_CODE,
+    }
+    if account_id is not None:
+        details["account_id"] = account_id
+    if credits_remaining is not None:
+        details["credits_remaining"] = credits_remaining
+    return FlowSceneResult(
+        status="FAILED",
+        scene_index=scene_index,
+        output_file=None,
+        output_valid=False,
+        duration=0.0,
+        credits_consumed=0,
+        project_url=project_url,
+        error=error,
+        details=details,
+    )
+
+
 def generate_flow_scene(
     manifest_path: str,
     scene_index: int,
@@ -2719,19 +2754,11 @@ def generate_flow_scene(
             f"para produzir o vídeo (orçamento estimado: {required_credits} créditos)."
         )
         logger.error(f"[FLOW_DISPATCH] {err_msg}")
-        return FlowSceneResult(
-            status="FAILED",
+        return _build_insufficient_pool_credits_result(
             scene_index=scene_index,
-            clip_path=None,
-            prompt_used=None,
-            generation_time_sec=0.0,
+            required_credits=required_credits,
             project_url=target_project_url,
             error=err_msg,
-            details={
-                "pool_insufficient": True,
-                "required_credits": required_credits,
-                "error_code": "INSUFFICIENT_POOL_CREDITS",
-            },
         )
 
     flow_account_id = account_info.get("account_id", "flow-primary")
@@ -2793,20 +2820,13 @@ def generate_flow_scene(
                     f"e nenhuma conta alternativa no pool possui saldo suficiente para a tarefa."
                 )
                 logger.error(f"[FLOW_DISPATCH] {err_msg}")
-                return FlowSceneResult(
-                    status="FAILED",
+                return _build_insufficient_pool_credits_result(
                     scene_index=scene_index,
-                    clip_path=None,
-                    prompt_used=None,
-                    generation_time_sec=0.0,
+                    required_credits=required_credits,
                     project_url=target_project_url,
                     error=err_msg,
-                    details={
-                        "pool_insufficient": True,
-                        "required_credits": required_credits,
-                        "account_id": flow_account_id,
-                        "credits_remaining": credits_before,
-                    },
+                    account_id=flow_account_id,
+                    credits_remaining=credits_before,
                 )
 
     # 3. Executa driver Playwright (single-flight)

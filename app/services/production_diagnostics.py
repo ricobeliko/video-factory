@@ -440,7 +440,7 @@ def _get_diagnostics_overview_impl(
         if "operational_events" in existing_tables and "task_profiles" in existing_tables:
             try:
                 att_rows = conn.execute(
-                    """
+                    f"""
                     SELECT
                         COALESCE(tp.profile_id, 'default') AS pid,
                         count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
@@ -449,6 +449,7 @@ def _get_diagnostics_overview_impl(
                     WHERE o.component = 'autonomous_production'
                       AND o.event_type = 'generation_started'
                       AND o.timestamp >= ?
+                      AND {autonomous_production.SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT}
                     GROUP BY COALESCE(tp.profile_id, 'default');
                     """,
                     (h24_ago_iso,),
@@ -729,8 +730,18 @@ def _get_diagnostics_overview_impl(
             t_evs_sorted = sorted(t_evs, key=lambda x: x["timestamp"])
 
             start_ev = next((e for e in t_evs_sorted if e["event_type"] == "generation_started"), None)
+            credit_block_ev = next(
+                (
+                    e
+                    for e in reversed(t_evs_sorted)
+                    if e["event_type"] == "provider_unavailable_block"
+                    and autonomous_production.is_insufficient_credits_block_metadata(e.get("metadata"))
+                ),
+                None,
+            )
             if start_ev:
-                counts_started += 1
+                if not credit_block_ev:
+                    counts_started += 1
                 started_at_dt = _parse_iso_to_utc(start_ev["timestamp"])
                 topic = _extract_topic_from_event(start_ev["message"], start_ev["metadata"])
             else:
@@ -756,6 +767,9 @@ def _get_diagnostics_overview_impl(
                 outcome = "INTERRUPTED"
                 counts_interrupted += 1
                 reason = has_interruption["message"]
+            elif credit_block_ev:
+                outcome = "BLOCKED"
+                reason = credit_block_ev["message"]
             elif has_failed:
                 outcome = "FAILED"
                 reason = has_failed["message"]

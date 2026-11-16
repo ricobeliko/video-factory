@@ -588,6 +588,19 @@ def generate_pending_flow_scenes(
                 completed_scenes=completed_scenes,
             )
             break
+        elif (
+            res.status == "INSUFFICIENT_POOL_CREDITS"
+            or (res.details or {}).get("error_code") == "INSUFFICIENT_POOL_CREDITS"
+        ):
+            overall_status = "INSUFFICIENT_POOL_CREDITS"
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status="INSUFFICIENT_POOL_CREDITS",
+                completed_scenes=completed_scenes,
+            )
+            break
         else:
             overall_status = f"FAILED_SCENE_{s_idx}"
             update_manifest_flow_checkpoint(

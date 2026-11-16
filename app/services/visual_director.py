@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger
@@ -29,7 +30,11 @@ from pydantic import BaseModel, Field
 
 from app.config import config
 from app.models.llm_provider import get_llm_provider
-from app.services.llm import sanitize_error_message
+from app.services.llm import (
+    GEMINI_RETRY_DELAYS_SECONDS,
+    _is_gemini_transient_error,
+    sanitize_error_message,
+)
 
 
 # =============================================================================
@@ -378,23 +383,36 @@ def direct_scenes(
             max_output_tokens=8192,
         )
 
+        def _invoke_generate_content(active_client: Any) -> Any:
+            delays = GEMINI_RETRY_DELAYS_SECONDS
+            max_attempts = 1 + len(delays)
+            for attempt_idx in range(max_attempts):
+                try:
+                    return active_client.models.generate_content(
+                        model=model_name,
+                        contents=full_prompt,
+                        config=generation_config,
+                    )
+                except Exception as exc:
+                    if _is_gemini_transient_error(exc) and attempt_idx < len(delays):
+                        delay_s = delays[attempt_idx]
+                        logger.warning(
+                            f"visual_director Gemini transient error (attempt {attempt_idx + 1}/{max_attempts}), "
+                            f"retrying in {delay_s}s: {sanitize_error_message(exc)}"
+                        )
+                        time.sleep(delay_s)
+                        continue
+                    raise
+
         if client is not None:
             # Reutiliza cliente fornecido (injeção para mocks / testes)
-            response = client.models.generate_content(
-                model=model_name,
-                contents=full_prompt,
-                config=generation_config,
-            )
+            response = _invoke_generate_content(client)
         else:
             with genai.Client(
                 api_key=api_key,
                 http_options=http_options,
             ) as real_client:
-                response = real_client.models.generate_content(
-                    model=model_name,
-                    contents=full_prompt,
-                    config=generation_config,
-                )
+                response = _invoke_generate_content(real_client)
 
         plan: Optional[VisualDirectionPlan] = None
         if hasattr(response, "parsed") and isinstance(response.parsed, VisualDirectionPlan):

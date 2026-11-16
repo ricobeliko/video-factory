@@ -195,22 +195,57 @@ def get_channels_overview(request: Request):
         return _get_channels_overview_impl(request)
 
 
+def build_channel_settings_payload(
+    profile_id: str,
+    profile: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fonte única do formato completo de settings de um canal.
+
+    Reutilizada tanto por GET /api/v2/channels/{profile_id}/settings quanto
+    por cada item de GET /api/v2/channels (`channels[].settings`).
+    """
+    prof = profile if profile is not None else (profile_manager.get_profile(profile_id, db_path=db_path) or {})
+    clean_p = prof.get("id", profile_id)
+    quotas = profile_manager.get_profile_quotas(clean_p, db_path=db_path)
+    schedule_model = profile_manager.get_profile_schedule(clean_p, db_path=db_path)
+    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p, db_path=db_path)
+    ws_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+    effective_v = profile_manager.get_effective_voice_settings(clean_p, db_path=db_path)
+
+    return {
+        "profile_id": clean_p,
+        "profile_name": prof.get("name"),
+        "growth_mode": prof.get("growth_mode", "WARMUP"),
+        "autonomous_enabled": is_auto,
+        "quotas": quotas,
+        "schedule": schedule_model.model_dump(),
+        "workspace_settings": ws_settings.model_dump(),
+        "effective_voice": effective_v,
+        "is_quiz": profile_manager.is_quiz_profile(clean_p, db_path=db_path),
+    }
+
+
 def _get_channels_overview_impl(request: Request):
+    db_path = operator_console.get_db_path()
     profile_overviews = operator_console.get_profile_operations_overview()
     channels_data = []
     for p in profile_overviews:
         pid = p.get("profile_id", "")
-        settings = profile_manager.get_profile_settings(pid)
-        channels = profile_manager.list_channels(profile_id=pid)
+        profile = profile_manager.get_profile(pid, db_path=db_path)
+        clean_p = profile.get("id", pid) if profile else pid
+        full_settings = build_channel_settings_payload(clean_p, profile, db_path=db_path)
+        channels = profile_manager.list_channels(profile_id=pid, db_path=db_path)
         yt_channel = next((c for c in channels if c.get("platform") == "youtube"), None)
-        is_auto = autonomous_production.is_profile_autonomous_mode_enabled(pid)
-        target_stock = autonomous_production.get_target_ready_stock(pid)
+        is_auto = bool(full_settings.get("autonomous_enabled"))
+        target_stock = (full_settings.get("quotas") or {}).get("target_ready_stock")
+        is_quiz = bool(full_settings.get("is_quiz"))
 
         channels_data.append({
             "channel_id": pid,
             "profile_id": pid,
             "format": p.get("format") or "traditional",
-            "is_quiz": profile_manager.is_quiz_profile(pid),
+            "is_quiz": is_quiz,
             "name": p.get("name"),
             "slug": p.get("slug"),
             "niche": p.get("niche") or "—",
@@ -233,7 +268,7 @@ def _get_channels_overview_impl(request: Request):
             "channels_enabled": p.get("channels_enabled", 0),
             "channels": channels,
             "youtube_channel": yt_channel,
-            "settings": settings.model_dump(),
+            "settings": full_settings,
         })
 
     return utils.get_response(200, {"channels": channels_data, "total": len(channels_data)})
@@ -710,31 +745,16 @@ def update_profile_autonomous_mode(
 def get_channel_settings(request: Request, profile_id: str):
     request_id = base.get_task_id(request)
     db_path = operator_console.get_db_path()
-    profile = profile_manager.get_profile(profile_id, db_path=db_path)
-    if not profile:
-        raise HttpException(
-            task_id=request_id,
-            status_code=404,
-            message=f"Profile '{profile_id}' not found",
-        )
-    clean_p = profile.get("id", profile_id)
-    quotas = profile_manager.get_profile_quotas(clean_p, db_path=db_path)
-    schedule_model = profile_manager.get_profile_schedule(clean_p, db_path=db_path)
-    is_auto = autonomous_production.is_profile_autonomous_mode_enabled(clean_p, db_path=db_path)
-    ws_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
-    effective_v = profile_manager.get_effective_voice_settings(clean_p, db_path=db_path)
-
-    data = {
-        "profile_id": clean_p,
-        "profile_name": profile.get("name"),
-        "growth_mode": profile.get("growth_mode", "WARMUP"),
-        "autonomous_enabled": is_auto,
-        "quotas": quotas,
-        "schedule": schedule_model.model_dump(),
-        "workspace_settings": ws_settings.model_dump(),
-        "effective_voice": effective_v,
-        "is_quiz": profile_manager.is_quiz_profile(clean_p, db_path=db_path),
-    }
+    with operator_console.render_pass_scope():
+        profile = profile_manager.get_profile(profile_id, db_path=db_path)
+        if not profile:
+            raise HttpException(
+                task_id=request_id,
+                status_code=404,
+                message=f"Profile '{profile_id}' not found",
+            )
+        clean_p = profile.get("id", profile_id)
+        data = build_channel_settings_payload(clean_p, profile, db_path=db_path)
     return utils.get_response(200, data)
 
 

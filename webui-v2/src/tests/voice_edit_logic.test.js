@@ -10,6 +10,7 @@ import {
   formatVoiceDiffDisplay,
   QUIZ_VOICE_RATE_NOTICE,
 } from '../components/System/voiceEditLogic.js';
+import { calculateSettingsDiff } from '../components/System/systemEditLogic.js';
 
 test('1. validateVoiceField: valida limites de velocidade (0.5–2.0) e volume (0.0–1.0)', () => {
   // voice_rate: faixa 0.5 - 2.0
@@ -241,4 +242,66 @@ test('12. calculateVoiceDiff: quiz com pinned em voice_rate não gera diff de ve
   );
 
   assert.equal(diff.length, 0);
+});
+
+test('13. Simulação de edição a partir de c.settings completo: com effective_voice presente e sem mexer em voz, NÃO gera linhas de voz na confirmação', () => {
+  // Retorno completo vindo de GET /api/v2/channels (channels[].settings) == GET /api/v2/channels/{id}/settings
+  const fullSettings = {
+    profile_id: 'default',
+    profile_name: 'Dose Diária De Internet',
+    growth_mode: 'warmup',
+    autonomous_enabled: true,
+    is_quiz: false,
+    quotas: { target_ready_stock: 3, max_generations_24h: 2, posts_per_day: 1 },
+    schedule: { publish_start_hour: 10, publish_end_hour: 22, min_interval_hours: 4, posts_per_day: 1 },
+    workspace_settings: {
+      visual: { flow_scene_count: 6 },
+      music: { volume: 0.12 },
+    },
+    effective_voice: {
+      voice_name: { value: 'en-US-BrianMultilingualNeural', source: 'global' },
+      voice_rate: { value: 1.1, source: 'channel' },
+      voice_volume: { value: 1.0, source: 'default' },
+    },
+  };
+
+  // Inicialização equivalente a SystemView.handleStartEdit
+  const effVoice = fullSettings.effective_voice;
+  const orig = {
+    growth_mode: String(fullSettings.growth_mode).toUpperCase(),
+    autonomous_enabled: Boolean(fullSettings.autonomous_enabled),
+    target_ready_stock: fullSettings.quotas.target_ready_stock,
+    max_generations_24h: fullSettings.quotas.max_generations_24h,
+    posts_per_day: fullSettings.quotas.posts_per_day,
+    publish_start_hour: fullSettings.schedule.publish_start_hour,
+    publish_end_hour: fullSettings.schedule.publish_end_hour,
+    min_interval_hours: fullSettings.schedule.min_interval_hours,
+    flow_scene_count: fullSettings.workspace_settings.visual.flow_scene_count ?? 6,
+    music_volume: Math.round(Number(fullSettings.workspace_settings.music.volume) * 100),
+  };
+
+  const formData = {
+    ...orig,
+    voice_name: effVoice.voice_name?.value || '',
+    voice_rate: fullSettings.is_quiz ? null : (effVoice.voice_rate?.value ?? 1.0),
+    voice_volume: effVoice.voice_volume?.value ?? 1.0,
+    // Operador altera apenas o volume da música de 12% para 8% e NÃO mexe em voz
+    music_volume: 8,
+  };
+
+  const settingsDiff = calculateSettingsDiff(orig, formData);
+  const voiceDiff = calculateVoiceDiff(fullSettings.effective_voice, formData, {
+    isQuiz: fullSettings.is_quiz,
+    pinned: new Set(),
+  });
+  const voicePatch = buildVoicePatchPayload(voiceDiff);
+
+  assert.equal(voiceDiff.length, 0, 'Não deve gerar nenhuma linha de voz na confirmação');
+  assert.equal(voicePatch.hasChanges, false);
+  assert.equal(voicePatch.payload, null);
+
+  assert.equal(settingsDiff.length, 1);
+  assert.equal(settingsDiff[0].field, 'music_volume');
+  assert.equal(settingsDiff[0].oldValue, 12);
+  assert.equal(settingsDiff[0].newValue, 8);
 });

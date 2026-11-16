@@ -355,7 +355,7 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - **Channel Factory Multi-Formato:** Adicionado `quiz_paper` às escolhas de formato da Channel Factory e Web UI (`webui/components/channel_factory.py`, `webui/Main.py`, `app/models/const.py`, `app/services/safety_gate.py`). Canais operacionais escolhem seu formato permanentemente.
   - **Templates Canônicos Preservados:**
     - `quiz_paper` -> Template canônico P1.3 (`quiz_template_p1_3_papel_homologado.json`): 5 perguntas, 4 opções simultâneas, timer circular de 6s, revelação com chime e comentários de 6s.
-    - `quiz_dilemma` -> Template canônico Q0-R (`quiz_template_q0r_homologado.json`): 8 dilemas de 2 escolhas com gancho e encerramento configurável.
+    - `quiz_dilemma` -> Template canônico Q0-R (`quiz_template_escolhas_impossiveis.json` / `scripts/poc_quiz_render.py`): 8 dilemas de 2 escolhas com gancho e encerramento configurável.
   - **Destinos Multi-Plataforma Independentes (YouTube + TikTok):**
     - Formulário de onboarding e card/expander permitem configurar explicitamente: Conta YouTube, Conta TikTok, Ambas ou Nenhuma (somente estoque).
     - Descoberta segura via Post for Me (`list_connected_publishing_accounts`).
@@ -875,14 +875,14 @@ sem confirmação após crash/falha de auditoria mantém adaptação suspensa co
 geração baseline continua. Não excluir histórico para liberar adaptação automaticamente.
 
 Schema changes: NONE. Reutiliza tabelas existentes. Testes executados via
-`scripts/run_closed_loop_tests.py`, cópia temporária de fontes com config sintética e rede bloqueada.
+`pytest` isolado, cópia temporária de fontes com config sintética e rede bloqueada.
 Resultados finais de validação serão registrados após a regressão.
 Próximo gate: revisão DEV; deploy e ativação em produção exigem autorizações separadas.
 
 Comando de regressão isolada (somente DEV; mocks/fakes, sem rede):
 
 ```powershell
-.venv/Scripts/python.exe -B scripts/run_closed_loop_tests.py `
+.venv/Scripts/python.exe -m pytest `
   test/services/test_analytics.py test/services/test_analytics_scheduler.py `
   test/services/test_analytics_ingestion.py test/services/test_analytics_providers.py `
   test/services/test_analytics_real_fetch.py test/services/test_content_strategy.py `

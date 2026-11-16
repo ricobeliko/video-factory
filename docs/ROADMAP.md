@@ -247,7 +247,7 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
   - **Dois Formatos Integrados na Channel Factory:** Adicionado `quiz_paper` ("📝 Quiz de Papel / Perguntas & Respostas") aos formatos editoriais da fábrica (`app/models/const.py`, `app/services/safety_gate.py`, `webui/components/channel_factory.py`, `webui/Main.py`), coexistindo com `quiz_dilemma` ("❓ Quiz / Escolhas Impossíveis") e `traditional`.
   - **Templates Canônicos Preservados:**
     - `quiz_paper`: Template canônico P1.3 homologado (`resource/quiz_templates/quiz_template_p1_3_papel_homologado.json`) com 5 perguntas, 4 alternativas simultâneas, timer circular de 6s, revelação com chime e tela de comentários de 6s.
-    - `quiz_dilemma`: Template canônico Q0-R homologado (`resource/quiz_templates/quiz_template_q0r_homologado.json`) com 8 dilemas, 2 escolhas (top/bottom) e encerramento configurável.
+    - `quiz_dilemma`: Template canônico Q0-R homologado (`resource/quiz_templates/quiz_template_escolhas_impossiveis.json` / `scripts/poc_quiz_render.py`) com 8 dilemas, 2 escolhas (top/bottom) e encerramento configurável.
   - **Multi-Destino Independente (YouTube + TikTok):**
     - Channel Factory permite escolher explicitamente Conta YouTube, Conta TikTok, Ambas ou Nenhuma (somente estoque).
     - Descoberta automatizada de contas conectadas via `post_for_me.list_connected_publishing_accounts(platform=...)`.

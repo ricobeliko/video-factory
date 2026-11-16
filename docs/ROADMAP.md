@@ -137,18 +137,18 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
   - Gate de aprovação concluído com sucesso (commit local `132ae83`, vídeo MP4 64.36s, thumbnail JPG 1080x1920, 3 testes direcionados PASS em `test/services/test_quiz_engine.py`).
 
 - **Fase Q2 — Geração e Estruturação de Conteúdo por Nicho:** `COMPLETED / COMMITTED`
-  - Gerador de conteúdo automatizado implementado em `app/services/quiz_generator.py` e CLI `scripts/generate_quiz_content.py`.
+  - Gerador de conteúdo automatizado implementado em `app/services/quiz_generator.py` (integrado ao pipeline em `app/services/task.py`).
   - Diferenciação clara entre quizzes subjetivos (`subjective`: escolhas impossíveis / dilemas morais sem resposta certa) e quizzes factuais (`factual`: conhecimentos/trivia com resposta cientificamente comprovada, gabarito `correct_option` e `fact_explanation`).
   - Governança factual estrita: autodeclaração do LLM não concede `verified: True`. Requer evidência factual comprovada externamente; caso contrário, bloqueado para publicação até validação independente.
   - Deduplicação contra histórico persistente via similaridade léxica de Jaccard e normalização (`storage/quiz_history/generated_questions.json`).
   - Deduplicação de imagens Pexels via `asset_id` e hashes SHA-256 (`storage/quiz_history/used_images.json`).
   - Ganchos de retenção dinâmicos contextualizados com o clímax da última pergunta.
   - Encerramentos flexíveis e configuráveis por canal (`engagement_cta`, `score_challenge`, `quiz_choice_religious`).
-  - Validação completa com 2 exemplos gerados e compatíveis 100% com o QuizConfig: `quiz_escolhas_impossiveis_gerado.json` e `quiz_conhecimentos_animais_factual.json`.
+  - Validação completa com 2 exemplos gerados (subjetivo e factual) e compatíveis 100% com o `QuizConfig`.
   - 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (commit `b4745ca`).
 
 - **Fase Q3 — Asset Ingestion & Image Pipeline Automation:** `COMPLETED / DEV VALIDATED`
-  - Gerenciador de ativos implementado em `app/services/quiz_assets.py` (`QuizAssetManager`) e CLI `scripts/resolve_quiz_assets.py`.
+  - Gerenciador de ativos implementado em `app/services/quiz_assets.py` (`QuizAssetManager`).
   - Reutilização integral dos serviços existentes de material (`material.get_api_key`, `material.has_material_api_keys`, rotação e detecção passiva de Pexels e Pixabay).
   - Deduplicação rigorosa contra histórico (`storage/quiz_history/used_images.json`) e intra-tarefa (0 imagens duplicadas por vídeo).
   - Preparação automatizada em resolução ideal para o renderizador (1200x1066) via aspect-fill proporcional e center crop (LANCZOS).
@@ -160,7 +160,7 @@ Criação e industrialização do novo formato viral **Quiz de Escolhas Impossí
 - **Fase Q0-R — Refinamento de Retenção Visual e Sonora:** `HOMOLOGADA / FROZEN VISUAL STANDARD`
   - **Status:** OFICIALMENTE HOMOLOGADA E CONGELADA PELO USUÁRIO como padrão visual canônico da Quiz Engine.
   - **Vídeo de Referência Oficial:** `storage/poc_quiz/quiz_gate_q0r_escolhas_impossiveis.mp4` (MP4 1080x1920, 69.26s, 6.29 MB, 2077 frames a 30fps).
-  - **Template Canônico Versionado:** `resource/quiz_templates/quiz_template_q0r_homologado.json`.
+  - **Template Canônico Versionado:** `resource/quiz_templates/quiz_template_escolhas_impossiveis.json` (padrão Q0-R consolidado em `scripts/poc_quiz_render.py`).
   - **Regras Visuais, Ritmo e Retenção Congeladas:**
     1. **Narração Direta e Ágil:** Expressão "O que você prefere?" restrita unicamente à abertura (q1). Da 2ª pergunta em diante, narração imediata das opções sem anúncios ordinais ("segunda escolha", etc.) e sem pausas mortas (Edge TTS pt-BR-AntonioNeural a +12% rate).
     2. **Eliminação do Contador Numérico:** Remoção dos números 3, 2, 1; mantida janela de 2.0s de expectativa dinâmica com movimento contínuo Ken Burns (zoompan lento) sem congelar a imagem.
@@ -1519,7 +1519,7 @@ Cada projeto deve ter somente UMA fase ativa de implementação.
     | Novos LLMs / VoxCPM / MuAPI | Vários | SKIP | Rejeitados por política: mantemos edge-tts / azure / gpt-sovits sem provedores pagos desnecessários. | N/A |
     | Auto Publish Activation | `task.py` | SKIP | Rejeitado: Auto Publish permanece estritamente desativado em DEV e sob controle humano no PC forte. | N/A |
 - **Validação Local Controlada:**
-  - Script executado: `scripts/validate_v16_12_controlled_render.py`.
+  - Validação controlada de renderização V16.12 executada localmente (`test/services/test_v16_12_backport.py`).
   - Render success: `True`, timeout não disparado (`elapsed=50.48s` < 3600s).
   - Resolução: `1080x1920` (9:16 portrait), duração 3.0s, tamanho: 511.977 bytes.
   - BT.709 detectado: `yuv420p(tv, bt709, progressive)` validado via FFmpeg stream info.
@@ -1580,7 +1580,7 @@ Melhorar significativamente a qualidade visual dos vídeos gerados utilizando **
   4. Video Factory responsável por montagem, descarte do áudio dos clipes Flow, legendas ASS nativas, trilha sonora e render 1080x1920 (9:16).
 - **Critério de Aceite:** Duração >= 60s, meta 75–90s, narração completa, legendas corretas e qualidade visual consistente.
 - **Status:** ✅ CONCLUÍDA / APROVADA
-  - **Runner final:** `scripts/run_v1_1_flow_jfk_video.py`
+  - **Runner consolidado (V1.2+):** `scripts/flow_workflow.py`
   - **Commit funcional de referência:** `65ff981`
   - **Duração final obtida:** 90.50s (tamanho 30.08 MB, 1080x1920, áudio íntegro).
   - **Resultado:** `QUALITY_BASELINE = APROVADA`, `PUBLICÁVEL = SIM`.

@@ -289,7 +289,7 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - **Validação de Testes:** 3 testes unitários direcionados PASS em `test/services/test_quiz_engine.py` (2.88s).
   - **Gate de Renderização:** Execução única via JSON concluída com sucesso (Vídeo MP4 64.36s, Thumbnail JPG 1080x1920, áudio sincronizado, 0 dependências novas, 0 arquivos de produção modificados).
 - **Fase Q2 (Geração e Estruturação de Conteúdo por Nicho):** `COMPLETED / DEV VALIDATED`
-  - **Serviço Implementado:** `app/services/quiz_generator.py` (`QuizContentGenerator`) e CLI `scripts/generate_quiz_content.py`.
+  - **Serviço Implementado:** `app/services/quiz_generator.py` (`QuizContentGenerator`, integrado ao pipeline em `app/services/task.py`).
   - **Formatos Suportados:**
     - `subjective`: Dilemas psicológicos de escolhas impossíveis ("O que você prefere?"), sem resposta certa, alta polarização e debate nos comentários.
     - `factual`: Conhecimentos gerais, curiosidades científicas e animais com respostas comprovadas, validação de evidência, gabarito estrito (`correct_option`: 'A'|'B') e `fact_explanation`.
@@ -298,12 +298,10 @@ Caso seja necessário desativar e desregistrar a Web UI V2:
   - **Gancho de Retenção Dinâmico:** Gerado automaticamente referenciando o clímax ou tópico da última pergunta (ex: "Mas atenção... a última pergunta sobre o beija-flor vai te surpreender!").
   - **Encerramento Flexível por Canal:** Suporte a `engagement_cta`, `score_challenge` e `quiz_choice_religious`, sem impor encerramento religioso globalmente.
   - **Validação com 2 Exemplos Estruturados:**
-    - `resource/quiz_templates/quiz_escolhas_impossiveis_gerado.json` (subjetivo, 6 perguntas, hook contextualizado).
-    - `resource/quiz_templates/quiz_conhecimentos_animais_factual.json` (factual, 6 perguntas com checagem científica 6/6, gabarito e explicação).
-    - Ambos 100% compatíveis e aceitos pelo `QuizConfig` da engine.
+    - Exemplos subjetivo (6 perguntas, hook contextualizado) e factual (6 perguntas com checagem científica 6/6, gabarito e explicação), ambos 100% compatíveis e aceitos pelo `QuizConfig` da engine (templates ativos mantidos em `resource/quiz_templates/quiz_template_escolhas_impossiveis.json` e `resource/quiz_templates/quiz_template_perguntas_respostas_papel.json`).
   - **Suíte de Testes:** 4 testes unitários direcionados PASS em `test/services/test_quiz_generator.py` (17.05s).
 - **Fase Q3 (Asset Ingestion & Image Pipeline Automation):** `COMPLETED / DEV VALIDATED` (Commit `97d9d7a`; `QuizAssetManager` em `app/services/quiz_assets.py`, deduplicação Pexels/Pixabay via `used_images.json`, redimensionamento 1200x1066, proveniência auditável e fallback estilizado).
-- **Fase Q0-R (Refinamento de Retenção Visual e Sonora):** `HOMOLOGADA / FROZEN VISUAL STANDARD` (Commit `6ed2af3`; padrão visual canônico congelado em `resource/quiz_templates/quiz_template_q0r_homologado.json` e `storage/poc_quiz/quiz_gate_q0r_escolhas_impossiveis.mp4`; ritmo ágil sem ordinais, expectativa 2.0s sem números 3,2,1 com Ken Burns contínuo, porcentagens simultâneas por 1.0s com chime harmônico, penúltima religiosa e última seguir no padrão de cards, thumbnail 9:16 independente).
+- **Fase Q0-R (Refinamento de Retenção Visual e Sonora):** `HOMOLOGADA / FROZEN VISUAL STANDARD` (Commit `6ed2af3`; padrão visual canônico congelado em `scripts/poc_quiz_render.py` / `resource/quiz_templates/quiz_template_escolhas_impossiveis.json` e `storage/poc_quiz/quiz_gate_q0r_escolhas_impossiveis.mp4`; ritmo ágil sem ordinais, expectativa 2.0s sem números 3,2,1 com Ken Burns contínuo, porcentagens simultâneas por 1.0s com chime harmônico, penúltima religiosa e última seguir no padrão de cards, thumbnail 9:16 independente).
 - **Fase Q4 (Integração à Video Factory & Channel Factory):** `COMPLETED (Q4-A & Q4-B) / DEV VALIDATED`
   - **Q4-A:** Auditoria de integração concluída com mapeamento do menor ponto de integração sem novas dependências ou abstrações.
   - **Q4-B:** Integração mínima implementada em `app/services/task.py` via `_run_quiz_pipeline` e branch limpo em `_run_pipeline` baseado em `narrative_structure` (prefixo `quiz_` ou `quiz`).
@@ -819,7 +817,7 @@ Comando de regressão isolada (23 suítes; o runner existente cria configuraçã
 sintética, bloqueia sockets e usa somente diretórios temporários):
 
 ```powershell
-.venv/Scripts/python.exe -B scripts/run_closed_loop_tests.py `
+.venv/Scripts/python.exe -m pytest `
   test/services/test_analytics.py test/services/test_analytics_scheduler.py test/services/test_analytics_ingestion.py test/services/test_analytics_providers.py test/services/test_analytics_real_fetch.py `
   test/services/test_content_strategy.py test/services/test_quality_score.py test/services/test_autonomous_production.py test/services/test_autonomous_stock_buffer.py `
   test/services/test_scheduler.py test/services/test_scheduler_worker.py test/services/test_operator_console.py test/services/test_publication_persistence.py `
@@ -1963,7 +1961,7 @@ Entregas V16.4.1A:
   - **Robustez de Upload-Post:** Rejeição de redirecionamentos 3xx (`allow_redirects=False`) e propagação de UUID4 `client_request_id` em form-data para idempotência de publicação, com fallback `unconfirmed_response` em timeouts ou erros de servidor preservando metadados proprietários (`external_profile_name` e `privacyStatus`).
   - **Escopo de Logs:** Vinculação de log por thread (`bind_log_scope`, `log_scope_thread_id`) assegurando rastreamento preciso em background workers.
 - **Validação Local Controlada:**
-  - Script: `scripts/validate_v16_12_controlled_render.py`
+  - Validação controlada de renderização V16.12 executada localmente (`test/services/test_v16_12_backport.py`)
   - Render success: `True`, timeout não disparado (`elapsed=50.48s`).
   - Resolução: `1080x1920` (9:16 portrait), duração 3.0s, tamanho: 511.977 bytes.
   - BT.709 verificado: `yuv420p(tv, bt709, progressive)` confirmado no stream de vídeo.

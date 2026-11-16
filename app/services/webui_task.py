@@ -248,7 +248,7 @@ def submit_generation(
     # 12. Trilha Sonora (BGM)
     if "bgm_type" not in explicit_fields or not getattr(task_params, "bgm_type", None):
         if ctx.get("music_enabled"):
-            task_params.bgm_volume = ctx.get("music_volume", 0.20)
+            task_params.bgm_volume = ctx.get("effective_bgm_volume", ctx.get("music_volume", 0.20))
             task_params.bgm_default_mood = ctx.get("music_default_mood", "neutral")
 
     # Persistência imutável da associação task <-> profile

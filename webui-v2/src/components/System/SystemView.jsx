@@ -14,6 +14,7 @@ import {
   updateProfileSchedule,
   updateProfileVoice,
   updateProfileVisual,
+  updateProfileMusic,
   getAllowedVoices,
   pauseFactory,
   resumeFactory,
@@ -517,6 +518,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         voice_rate: isQuiz ? null : (effVoice.voice_rate?.value ?? 1.0),
         voice_volume: effVoice.voice_volume?.value ?? 1.0,
         flow_scene_count: (fullSettings.workspace_settings || channel.workspace_settings || {})?.visual?.flow_scene_count ?? 6,
+        music_volume: (fullSettings.workspace_settings || channel.workspace_settings || {})?.music?.volume != null
+          ? Math.round(Number((fullSettings.workspace_settings || channel.workspace_settings || {}).music.volume) * 100)
+          : '',
         // Destinos de publicação
         yt_enabled: Boolean(ytDest.is_enabled),
         yt_external_account_id: ytDest.external_account_id || '',
@@ -689,6 +693,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       publish_end_hour: origSchedule.publish_end_hour ?? 22,
       min_interval_hours: origSchedule.min_interval_hours ?? 4,
       flow_scene_count: (fullSettings.workspace_settings || channel.workspace_settings || {})?.visual?.flow_scene_count ?? 6,
+      music_volume: (fullSettings.workspace_settings || channel.workspace_settings || {})?.music?.volume != null
+        ? Math.round(Number((fullSettings.workspace_settings || channel.workspace_settings || {}).music.volume) * 100)
+        : null,
     };
 
     // Validação de Destinos
@@ -815,6 +822,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       }
       if (payloads.visualPayload) {
         await updateProfileVisual(profileId, payloads.visualPayload);
+      }
+      if (payloads.musicPayload) {
+        await updateProfileMusic(profileId, payloads.musicPayload);
       }
       if (payloads.destinationsPayload && payloads.destinationsPayload.length > 0) {
         await updateChannelDestinations(profileId, { destinations: payloads.destinationsPayload });
@@ -2138,6 +2148,59 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                           <span className="sys-stat-label">Cenas Flow por vídeo</span>
                           <span className="sys-stat-value">
                             {ws.visual?.flow_scene_count ?? 6} cenas (= {(ws.visual?.flow_scene_count ?? 6) * 15} créditos)
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Volume da Música */}
+                      {isEditing ? (
+                        <div className="sys-input-group" style={{ marginTop: '8px' }}>
+                          <div className="sys-edit-row">
+                            <label htmlFor={`music-vol-${pid}`} className="sys-stat-label">
+                              Volume da música (2%–20%)
+                            </label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <input
+                                id={`music-vol-${pid}`}
+                                type="number"
+                                min="2"
+                                max="20"
+                                step="1"
+                                placeholder={isQuiz ? '14' : '20'}
+                                className={`sys-input ${channelFormErrors.music_volume ? 'sys-input--error' : ''}`}
+                                style={{ width: '80px' }}
+                                value={channelFormData.music_volume ?? ''}
+                                onChange={(e) => handleFieldChange('music_volume', e.target.value)}
+                              />
+                              <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                                {channelFormData.music_volume !== '' && channelFormData.music_volume != null
+                                  ? `${channelFormData.music_volume}%`
+                                  : `Padrão do formato (${isQuiz ? '14%' : '20%'})`}
+                              </span>
+                              {channelFormData.music_volume !== '' && channelFormData.music_volume != null && (
+                                <button
+                                  type="button"
+                                  className="sys-btn sys-btn--secondary"
+                                  style={{ padding: '2px 8px', fontSize: '11px', height: '26px' }}
+                                  onClick={() => handleFieldChange('music_volume', '')}
+                                  title="Restaurar padrão do formato"
+                                >
+                                  Padrão
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {channelFormErrors.music_volume && (
+                            <span className="sys-field-error">{channelFormErrors.music_volume}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="sys-stat-row">
+                          <span className="sys-stat-label">Volume da música</span>
+                          <span className="sys-stat-value">
+                            {ws.music?.volume != null
+                              ? `${Math.round(Number(ws.music.volume) * 100)}%`
+                              : `${isQuiz ? '14%' : '20%'} (padrão do formato)`}
                           </span>
                         </div>
                       )}

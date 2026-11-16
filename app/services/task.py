@@ -3039,12 +3039,22 @@ def _run_quiz_pipeline(
     bgm_prov_status = bgm_resolution.get("provenance_status", "NONE")
     bgm_track_id = bgm_resolution.get("track_id")
 
+    from app.services import profile_manager
+    task_profile_id = getattr(params, "profile_id", None)
+    if not task_profile_id and task_id:
+        task_profile_id = profile_manager.get_task_profile_id(task_id)
+
+    effective_bgm_vol = profile_manager.resolve_effective_bgm_volume(
+        profile_id=task_profile_id,
+        video_format=quiz_format_key,
+    )
+
     if hasattr(params, "bgm_type"):
         params.bgm_type = "ambient_auto" if bgm_source == "procedural" else ("whitelist" if bgm_source == "whitelist" else "none")
     if hasattr(params, "bgm_file"):
         params.bgm_file = resolved_bgm_path or ""
     if hasattr(params, "bgm_volume"):
-        params.bgm_volume = 0.14 if resolved_bgm_path else 0.0
+        params.bgm_volume = effective_bgm_vol if resolved_bgm_path else 0.0
 
     bgm_asset_entry = {
         "asset_id": bgm_track_id or f"bgm_{quiz_format_key}",
@@ -3072,11 +3082,6 @@ def _run_quiz_pipeline(
         bgm_resolution=bgm_resolution,
     )
 
-    from app.services import profile_manager
-    task_profile_id = getattr(params, "profile_id", None)
-    if not task_profile_id and task_id:
-        task_profile_id = profile_manager.get_task_profile_id(task_id)
-
     raw_quiz_voice = getattr(params, "voice_name", None)
     if not raw_quiz_voice or not str(raw_quiz_voice).strip():
         effective_v = profile_manager.get_effective_voice_settings(task_profile_id)
@@ -3102,7 +3107,7 @@ def _run_quiz_pipeline(
                 voice_name=quiz_voice_name,
                 voice_rate=v_rate_str,
                 bgm_path=resolved_bgm_path,
-                bgm_volume=0.14,
+                bgm_volume=effective_bgm_vol,
             )
             engine = PaperQuizEngine(config=paper_cfg)
             render_result = engine.render()
@@ -3130,7 +3135,7 @@ def _run_quiz_pipeline(
                 voice_name=quiz_voice_name,
                 voice_rate=v_rate_str,
                 bgm_path=resolved_bgm_path,
-                bgm_volume=0.14,
+                bgm_volume=effective_bgm_vol,
                 task_id=task_id,
             )
             engine = QuizEngine(config=quiz_cfg)

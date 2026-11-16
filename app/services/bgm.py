@@ -401,8 +401,11 @@ def resolve_autonomous_bgm(
 
         clean_mode = str(m_mode or "").lower().strip()
         if bool(m_enabled) and clean_mode == "auto":
-            from app.services import ambient_bgm
-            validated_vol = ambient_bgm.normalize_volume(m_volume, default=0.20)
+            from app.services import profile_manager
+            validated_vol = profile_manager.resolve_effective_bgm_volume(
+                music_settings=music,
+                video_format="traditional",
+            )
             return {
                 "enabled": True,
                 "type": "ambient_auto",

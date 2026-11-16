@@ -11,6 +11,7 @@ export const EDITABLE_FIELD_BOUNDS = {
   publish_end_hour: { min: 0, max: 23, label: 'Horário Final da Janela', unit: 'h' },
   min_interval_hours: { min: 1, max: 24, label: 'Intervalo Mínimo', unit: 'h' },
   flow_scene_count: { min: 1, max: 8, label: 'Cenas Flow por vídeo', unit: 'cenas' },
+  music_volume: { min: 2, max: 20, label: 'Volume da Música', unit: '%' },
 };
 
 export const ALLOWED_GROWTH_MODES = ['WARMUP', 'SCALE'];
@@ -57,6 +58,24 @@ export function validateChannelField(fieldName, value) {
       return {
         isValid: false,
         error: 'Modo Autônomo deve ser Ativo (SIM) ou Desligado (NÃO).',
+      };
+    }
+    return { isValid: true, error: null };
+  }
+
+  if (fieldName === 'music_volume') {
+    if (value === null || value === undefined || value === '') {
+      return { isValid: true, error: null };
+    }
+    const bounds = EDITABLE_FIELD_BOUNDS.music_volume;
+    const num = Number(value);
+    if (!Number.isInteger(num)) {
+      return { isValid: false, error: `${bounds.label} deve ser um número inteiro de ${bounds.min}% a ${bounds.max}%.` };
+    }
+    if (num < bounds.min || num > bounds.max) {
+      return {
+        isValid: false,
+        error: `${bounds.label} deve estar entre ${bounds.min}% e ${bounds.max}% (ou vazio para o padrão do formato).`,
       };
     }
     return { isValid: true, error: null };
@@ -122,7 +141,7 @@ export function validateChannelForm(formData) {
     }
   }
 
-  for (const optionalField of ['max_generations_24h', 'growth_mode', 'autonomous_enabled', 'flow_scene_count']) {
+  for (const optionalField of ['max_generations_24h', 'growth_mode', 'autonomous_enabled', 'flow_scene_count', 'music_volume']) {
     if (Object.prototype.hasOwnProperty.call(data, optionalField)) {
       const res = validateChannelField(optionalField, data[optionalField]);
       if (!res.isValid) {
@@ -193,7 +212,25 @@ export function calculateSettingsDiff(originalSettings, formData) {
     }
   }
 
-  const fields = Object.keys(EDITABLE_FIELD_BOUNDS);
+  // Music volume (armazenado em % no form: 2 a 20 ou null para padrão do formato)
+  if (Object.prototype.hasOwnProperty.call(formData, 'music_volume')) {
+    const rawOld = originalSettings ? originalSettings.music_volume : undefined;
+    const oldVal = (rawOld === null || rawOld === undefined || rawOld === '') ? null : Number(rawOld);
+    const rawNew = formData.music_volume;
+    const newVal = (rawNew === null || rawNew === undefined || rawNew === '') ? null : Number(rawNew);
+
+    if (oldVal !== newVal) {
+      diffs.push({
+        field: 'music_volume',
+        label: EDITABLE_FIELD_BOUNDS.music_volume.label,
+        oldValue: oldVal,
+        newValue: newVal,
+        unit: EDITABLE_FIELD_BOUNDS.music_volume.unit,
+      });
+    }
+  }
+
+  const fields = Object.keys(EDITABLE_FIELD_BOUNDS).filter((f) => f !== 'music_volume');
   for (const field of fields) {
     const oldVal = originalSettings ? originalSettings[field] : undefined;
     const newVal = formData[field];
@@ -229,6 +266,7 @@ export function buildPatchPayloads(diffList) {
       quotasPayload: null,
       schedulePayload: null,
       visualPayload: null,
+      musicPayload: null,
       hasChanges: false,
     };
   }
@@ -236,6 +274,7 @@ export function buildPatchPayloads(diffList) {
   let growthModePayload = null;
   let autonomousPayload = null;
   let visualPayload = null;
+  let musicPayload = null;
   const quotas = {};
   const schedule = {};
 
@@ -248,6 +287,10 @@ export function buildPatchPayloads(diffList) {
     } else if (field === 'flow_scene_count') {
       visualPayload = visualPayload || {};
       visualPayload.flow_scene_count = Number(newValue);
+    } else if (field === 'music_volume') {
+      musicPayload = {
+        volume: (newValue === null || newValue === undefined || newValue === '') ? null : Number((Number(newValue) / 100).toFixed(4)),
+      };
     } else if (field === 'target_ready_stock') {
       quotas.target_ready_stock = newValue;
     } else if (field === 'max_generations_24h') {
@@ -271,6 +314,7 @@ export function buildPatchPayloads(diffList) {
     quotasPayload: Object.keys(quotas).length > 0 ? quotas : null,
     schedulePayload: Object.keys(schedule).length > 0 ? schedule : null,
     visualPayload,
+    musicPayload,
     hasChanges: true,
   };
 }
@@ -279,6 +323,11 @@ export function buildPatchPayloads(diffList) {
  * 6. Formata valor de diff para exibição amigável no diálogo de confirmação.
  */
 export function formatDiffValueDisplay(field, value) {
+  if (field === 'music_volume') {
+    if (value === null || value === undefined || value === '') return 'Padrão do formato';
+    return `${value}%`;
+  }
+
   if (value === null || value === undefined) return '—';
 
   if (field === 'growth_mode') {

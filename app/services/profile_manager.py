@@ -6,6 +6,7 @@ garantindo compatibilidade retroativa total com o nó PRIMARY e suporte
 a operações de leitura em nós secundários (VIEW ONLY).
 """
 import json
+import math
 import os
 import re
 import sqlite3
@@ -103,7 +104,7 @@ class ScheduleSettings(BaseModel):
 class MusicSettings(BaseModel):
     enabled: bool = False
     mode: str = "auto"
-    volume: float = 0.20
+    volume: Optional[float] = None
     default_mood: str = "neutral"
 
 
@@ -264,6 +265,24 @@ def init_profile_db(db_path: Optional[str] = None, force: bool = False) -> None:
                 "YouTube (Default)",
             ),
         )
+
+        # Migração idempotente: converter music.volume == 0.2 (antigo default estático) para None
+        # garantindo que perfis legados sem customização herdem o padrão do formato (0.14 quiz, 0.20 tradicional/autônomo).
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY);")
+        if not conn.execute("SELECT 1 FROM schema_migrations WHERE name = 'v2_music_volume_optional';").fetchone():
+            rows = conn.execute(
+                "SELECT id, settings_json FROM content_profiles WHERE settings_json LIKE '%\"volume\": 0.2%' OR settings_json LIKE '%\"volume\":0.2%';"
+            ).fetchall()
+            for r in rows:
+                try:
+                    data = json.loads(r["settings_json"])
+                    m = data.get("music")
+                    if isinstance(m, dict) and m.get("volume") == 0.2:
+                        m["volume"] = None
+                        conn.execute("UPDATE content_profiles SET settings_json = ? WHERE id = ?;", (json.dumps(data), r["id"]))
+                except Exception:
+                    pass
+            conn.execute("INSERT OR REPLACE INTO schema_migrations (name) VALUES ('v2_music_volume_optional');")
 
     with _PROFILE_INIT_LOCK:
         _INITIALIZED_PROFILE_DBS.add(resolved)
@@ -1247,6 +1266,92 @@ def update_profile_visual_settings(
     return current_settings.visual
 
 
+def resolve_effective_bgm_volume(
+    music_settings: Optional[Union[MusicSettings, Dict[str, Any]]] = None,
+    video_format: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> float:
+    """Fonte única de resolução do volume efetivo de BGM para todos os pipelines.
+
+    Regras canônicas:
+    - Se volume configurado no perfil for válido e finito: clamp seguro em [0.02, 0.20].
+    - Se volume for None ou não definido:
+        - Formatos de Quiz (quiz_dilemma, quiz_paper): 0.14
+        - Demais formatos (traditional / autônomo / flow): 0.20
+    """
+    if music_settings is None and profile_id:
+        settings = get_profile_settings(profile_id, db_path=db_path)
+        music_settings = settings.music
+        if video_format is None:
+            video_format = settings.editorial.video_format
+
+    fmt = str(video_format or "").strip().lower()
+    is_quiz = fmt in (
+        const.VIDEO_FORMAT_QUIZ_DILEMMA,
+        const.VIDEO_FORMAT_QUIZ_PAPER,
+        "quiz",
+        "quiz_dilemma",
+        "quiz_paper",
+        "paper",
+        "quiz_escolhas_impossiveis",
+    )
+    default_vol = 0.14 if is_quiz else 0.20
+
+    vol = None
+    if music_settings is not None:
+        if isinstance(music_settings, dict):
+            vol = music_settings.get("volume")
+        else:
+            vol = getattr(music_settings, "volume", None)
+
+    if vol is not None:
+        try:
+            val = float(vol)
+            if math.isfinite(val) and val > 0:
+                return round(max(0.02, min(0.20, val)), 4)
+        except (ValueError, TypeError):
+            pass
+    return default_vol
+
+
+def update_profile_music_settings(
+    profile_id: str,
+    music_data: Dict[str, Any],
+    db_path: Optional[str] = None,
+) -> MusicSettings:
+    """Atualiza as configurações de música (BGM) de um perfil no settings_json.
+
+    Valida:
+    - volume float entre 0.02 e 0.20 (ou None para restaurar padrão do formato).
+    """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    clean_id = str(profile_id or "").strip()
+    prof = get_profile(clean_id, db_path=db_path)
+    if not prof:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    current_settings = get_profile_settings(clean_id, db_path=db_path)
+
+    if "volume" in music_data:
+        raw_vol = music_data["volume"]
+        if raw_vol is not None:
+            try:
+                vol = float(raw_vol)
+            except (ValueError, TypeError):
+                raise ValueError(f"Volume da música deve ser um número entre 0.02 e 0.20 (recebido: {raw_vol}).")
+            if not math.isfinite(vol) or vol < 0.02 or vol > 0.20:
+                raise ValueError(f"Volume da música deve estar entre 0.02 e 0.20 (recebido: {vol}).")
+            current_settings.music.volume = round(vol, 4)
+        else:
+            current_settings.music.volume = None
+
+    update_profile_settings(clean_id, current_settings, db_path=db_path)
+    return current_settings.music
+
+
 def get_profile_settings(profile_id: str, db_path: Optional[str] = None) -> ChannelWorkspaceSettings:
     """Recupera as configurações tipadas de um perfil. Se inexistente ou vazio, retorna defaults seguros."""
     init_profile_db(db_path)
@@ -1806,6 +1911,12 @@ def get_generation_profile_context(
     canonical_auto_enabled = autonomous_production.is_profile_autonomous_mode_enabled(pid, db_path=db_path)
     canonical_target_stock = autonomous_production.get_target_ready_stock(pid, db_path=db_path)
 
+    # 6. Music / Trilha Sonora BGM
+    effective_bgm_vol = resolve_effective_bgm_volume(
+        music_settings=settings.music,
+        video_format=resolved_format,
+    )
+
     return {
         "profile_id": pid,
         "profile_name": profile.get("name") or DEFAULT_PROFILE_NAME,
@@ -1840,6 +1951,7 @@ def get_generation_profile_context(
         "music_enabled": bool(settings.music.enabled),
         "music_mode": settings.music.mode,
         "music_volume": settings.music.volume,
+        "effective_bgm_volume": effective_bgm_vol,
         "music_default_mood": settings.music.default_mood,
         "settings": settings.model_dump(),
     }

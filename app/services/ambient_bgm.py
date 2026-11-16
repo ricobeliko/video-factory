@@ -35,7 +35,7 @@ SUPPORTED_MOODS = (
 )
 DEFAULT_MOOD = "neutral"
 DEFAULT_BGM_VOLUME = 0.20
-MIN_BGM_VOLUME = 0.05
+MIN_BGM_VOLUME = 0.02
 MAX_BGM_VOLUME = 0.20
 FADE_IN_SECONDS = 1.5
 FADE_OUT_SECONDS = 2.0
@@ -154,7 +154,7 @@ def normalize_volume(volume: Any, default: float = DEFAULT_BGM_VOLUME) -> float:
     """
     Normaliza o volume da trilha ambiente garantindo limites seguros.
 
-    min: 0.05
+    min: 0.02
     max: 0.20
     fallback em caso inválido: 0.20
     """

@@ -78,6 +78,19 @@ test('1. validateChannelField: valida faixas estritas (incluindo target_ready_st
   assert.equal(validateChannelField('flow_scene_count', 9).isValid, false);
   assert.equal(validateChannelField('flow_scene_count', -1).isValid, false);
   assert.equal(validateChannelField('flow_scene_count', 'xyz').isValid, false);
+
+  // music_volume (2-20, opcional/vazio para padrão do formato)
+  assert.equal(validateChannelField('music_volume', 2).isValid, true);
+  assert.equal(validateChannelField('music_volume', 20).isValid, true);
+  assert.equal(validateChannelField('music_volume', 14).isValid, true);
+  assert.equal(validateChannelField('music_volume', 8).isValid, true);
+  assert.equal(validateChannelField('music_volume', null).isValid, true);
+  assert.equal(validateChannelField('music_volume', '').isValid, true);
+  assert.equal(validateChannelField('music_volume', undefined).isValid, true);
+  assert.equal(validateChannelField('music_volume', 1).isValid, false);
+  assert.equal(validateChannelField('music_volume', 21).isValid, false);
+  assert.equal(validateChannelField('music_volume', 14.5).isValid, false);
+  assert.equal(validateChannelField('music_volume', 'abc').isValid, false);
 });
 
 test('2. validateScheduleWindow: exige start <= end e rejeita janela invertida', () => {
@@ -171,6 +184,16 @@ test('4. calculateSettingsDiff: detecta apenas campos com valores alterados (inc
   assert.equal(diffQuotas[0].field, 'target_ready_stock');
   assert.equal(diffQuotas[0].oldValue, 3);
   assert.equal(diffQuotas[0].newValue, 5);
+
+  // Apenas music_volume alterado
+  const diffMusic = calculateSettingsDiff(original, {
+    ...original,
+    music_volume: 8,
+  });
+  assert.equal(diffMusic.length, 1);
+  assert.equal(diffMusic[0].field, 'music_volume');
+  assert.equal(diffMusic[0].oldValue, null);
+  assert.equal(diffMusic[0].newValue, 8);
 });
 
 test('5. buildPatchPayloads: gera payloads contendo SOMENTE campos alterados para as rotas específicas (posts_per_day unicamente em quotasPayload)', () => {
@@ -220,7 +243,29 @@ test('5. buildPatchPayloads: gera payloads contendo SOMENTE campos alterados par
   assert.equal(visualRes.autonomousPayload, null);
   assert.equal(visualRes.quotasPayload, null);
   assert.equal(visualRes.schedulePayload, null);
+  assert.equal(visualRes.musicPayload, null);
   assert.deepEqual(visualRes.visualPayload, { flow_scene_count: 3 });
+
+  // Apenas music alterado (definir 8%)
+  const musicDiff = [
+    { field: 'music_volume', oldValue: null, newValue: 8 },
+  ];
+  const musicRes = buildPatchPayloads(musicDiff);
+  assert.equal(musicRes.hasChanges, true);
+  assert.equal(musicRes.growthModePayload, null);
+  assert.equal(musicRes.autonomousPayload, null);
+  assert.equal(musicRes.quotasPayload, null);
+  assert.equal(musicRes.schedulePayload, null);
+  assert.equal(musicRes.visualPayload, null);
+  assert.deepEqual(musicRes.musicPayload, { volume: 0.08 });
+
+  // Resetar music_volume para padrão do formato (null)
+  const musicResetDiff = [
+    { field: 'music_volume', oldValue: 14, newValue: null },
+  ];
+  const musicResetRes = buildPatchPayloads(musicResetDiff);
+  assert.equal(musicResetRes.hasChanges, true);
+  assert.deepEqual(musicResetRes.musicPayload, { volume: null });
 
   // Quotas e schedule (posts_per_day enviado apenas em quotasPayload)
   const bothDiff = [
@@ -251,6 +296,9 @@ test('6. formatDiffValueDisplay: formata modos, horas e unidades para diálogo d
   assert.equal(formatDiffValueDisplay('posts_per_day', 2), '2 posts/dia');
   assert.equal(formatDiffValueDisplay('min_interval_hours', 4), '4h');
   assert.equal(formatDiffValueDisplay('flow_scene_count', 3), '3 cenas (= 45 créditos)');
+  assert.equal(formatDiffValueDisplay('music_volume', 14), '14%');
+  assert.equal(formatDiffValueDisplay('music_volume', null), 'Padrão do formato');
+  assert.equal(formatDiffValueDisplay('music_volume', ''), 'Padrão do formato');
   assert.equal(formatDiffValueDisplay('outro', null), '—');
 });
 

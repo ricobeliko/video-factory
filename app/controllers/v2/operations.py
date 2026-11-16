@@ -396,7 +396,7 @@ def create_channel(request: Request, payload: CreateChannelRequest):
 
     settings_obj.music.enabled = False
     settings_obj.music.mode = "auto"
-    settings_obj.music.volume = 0.20
+    settings_obj.music.volume = None
     settings_obj.music.default_mood = "neutral"
 
     # 6. Reutiliza profile_manager.onboard_channel_workspace
@@ -548,6 +548,10 @@ class UpdateVoiceSettingsRequest(BaseModel):
 
 class UpdateVisualSettingsRequest(BaseModel):
     flow_scene_count: Optional[int] = Field(None, ge=1, le=8, description="Número de cenas geradas via Google Flow (1 a 8)")
+
+
+class UpdateMusicSettingsRequest(BaseModel):
+    volume: Optional[float] = Field(None, ge=0.02, le=0.20, description="Volume da música de fundo (0.02 a 0.20) ou None para padrão do formato")
 
 
 class UpdateSchedulerSettingsRequest(BaseModel):
@@ -1032,6 +1036,77 @@ def update_channel_visual(
         )
 
     return utils.get_response(200, res.model_dump(), message="Profile visual settings updated successfully")
+
+
+@router.patch(
+    "/channels/{profile_id}/music",
+    summary="Update music (BGM) settings for a channel/profile",
+)
+def update_channel_music(
+    request: Request,
+    profile_id: str,
+    payload: UpdateMusicSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile music settings ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile music settings ({exc})",
+        )
+
+    try:
+        m_dict = payload.model_dump(exclude_unset=True)
+        old_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+        old_vol = getattr(old_settings.music, "volume", None)
+        res = profile_manager.update_profile_music_settings(clean_p, m_dict, db_path=db_path)
+        new_vol = getattr(res, "volume", None)
+        if old_vol != new_vol:
+            operator_console.log_operational_event(
+                component="profile_manager",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="PROFILE_MUSIC_UPDATED",
+                message=f"Music 'volume' updated for profile '{clean_p}': {old_vol} -> {new_vol}",
+                metadata={
+                    "profile_id": clean_p,
+                    "field": "volume",
+                    "old_value": old_vol,
+                    "new_value": new_vol,
+                },
+                db_path=db_path,
+            )
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile music settings: {exc}",
+        )
+
+    return utils.get_response(200, res.model_dump(), message="Profile music settings updated successfully")
 
 
 @router.get(

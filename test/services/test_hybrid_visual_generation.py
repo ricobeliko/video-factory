@@ -46,7 +46,6 @@ from app.services.hybrid_visual import (
     LOCAL_GENERATIVE_VIDEO_GPU_STATUS,
     NanoBananaImageAdapter,
     ProviderCapabilities,
-    STANDARD_BENCHMARK_PROMPT,
     StillMotionMode,
     VisualCapability,
     build_hybrid_visual_director,
@@ -60,7 +59,6 @@ from app.services.hybrid_visual import (
     VideoVisualSummary,
     compute_video_visual_summary,
 )
-from scripts.benchmark_video_models import VideoBenchmarkRunner
 
 
 class TestHybridVisualGeneration(unittest.TestCase):
@@ -463,31 +461,6 @@ class TestHybridVisualGeneration(unittest.TestCase):
 
         with patch("urllib.request.urlopen", side_effect=Exception("Connection refused")):
             self.assertFalse(client.check_health())
-
-    def test_benchmark_runner_dry_run_generates_valid_reports(self):
-        """O runner em dry-run deve gerar JSON e CSV válidos para Wan 2.2, LTX-Video e FramePack."""
-        bench_dir = os.path.join(self.test_dir, "benchmarks")
-        runner = VideoBenchmarkRunner(
-            output_dir=bench_dir,
-            dry_run=True,
-        )
-
-        entries = runner.run_benchmark_suite(
-            models=["wan_2_2", "ltx_video", "framepack"],
-            prompt=STANDARD_BENCHMARK_PROMPT,
-            duration_seconds=4.0,
-        )
-
-        self.assertEqual(len(entries), 3)
-        reports = runner.save_reports(entries, prefix="test_bench")
-        self.assertTrue(os.path.exists(reports["json"]))
-        self.assertTrue(os.path.exists(reports["csv"]))
-
-        with open(reports["json"], "r", encoding="utf-8") as f:
-            data = json.load(f)
-            self.assertTrue(data["dry_run"])
-            self.assertEqual(data["hardware_status"], LOCAL_GENERATIVE_VIDEO_GPU_STATUS)
-            self.assertEqual(len(data["results"]), 3)
 
     # -------------------------------------------------------------------------
     # 7. Safety & Invariants

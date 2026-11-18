@@ -15,6 +15,7 @@ import {
   updateProfileVoice,
   updateProfileVisual,
   updateProfileMusic,
+  updateProfileEditorial,
   getAllowedVoices,
   pauseFactory,
   resumeFactory,
@@ -521,6 +522,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
         music_volume: (fullSettings.workspace_settings || channel.workspace_settings || {})?.music?.volume != null
           ? Math.round(Number((fullSettings.workspace_settings || channel.workspace_settings || {}).music.volume) * 100)
           : '',
+        web_search: Boolean((fullSettings.workspace_settings || channel.workspace_settings || {})?.editorial?.web_search),
         // Destinos de publicação
         yt_enabled: Boolean(ytDest.is_enabled),
         yt_external_account_id: ytDest.external_account_id || '',
@@ -598,7 +600,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
 
   const handleFieldChange = (field, value) => {
     const normalizedVal =
-      field === 'autonomous_enabled'
+      field === 'autonomous_enabled' || field === 'web_search'
         ? value === true || value === 'true'
         : value;
     const updated = { ...channelFormData, [field]: normalizedVal };
@@ -625,16 +627,19 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       const valResult = validateChannelForm(updated);
       setChannelFormErrors((prev) => {
         const copy = { ...prev };
-        // Atualiza erros de modo, cota e agendamento
+        // Atualiza erros de modo, editorial, cota e agendamento
         for (const k of [
           'growth_mode',
           'autonomous_enabled',
+          'web_search',
           'target_ready_stock',
           'max_generations_24h',
           'posts_per_day',
           'publish_start_hour',
           'publish_end_hour',
           'min_interval_hours',
+          'flow_scene_count',
+          'music_volume',
         ]) {
           if (valResult.errors[k]) {
             copy[k] = valResult.errors[k];
@@ -696,6 +701,7 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       music_volume: (fullSettings.workspace_settings || channel.workspace_settings || {})?.music?.volume != null
         ? Math.round(Number((fullSettings.workspace_settings || channel.workspace_settings || {}).music.volume) * 100)
         : null,
+      web_search: Boolean((fullSettings.workspace_settings || channel.workspace_settings || {})?.editorial?.web_search),
     };
 
     // Validação de Destinos
@@ -825,6 +831,9 @@ export default function SystemView({ onNavigate, focusChannelId }) {
       }
       if (payloads.musicPayload) {
         await updateProfileMusic(profileId, payloads.musicPayload);
+      }
+      if (payloads.editorialPayload) {
+        await updateProfileEditorial(profileId, payloads.editorialPayload);
       }
       if (payloads.destinationsPayload && payloads.destinationsPayload.length > 0) {
         await updateChannelDestinations(profileId, { destinations: payloads.destinationsPayload });
@@ -1704,12 +1713,50 @@ export default function SystemView({ onNavigate, focusChannelId }) {
                         </>
                       )}
 
+                      {/* Subseção Editorial */}
+                      <h4 className="sys-channel-group-title">Editorial</h4>
                       <div className="sys-stat-row">
                         <span className="sys-stat-label">Nicho / Formato</span>
                         <span className="sys-stat-value">
                           {formatProviderValue(ch.niche)} / {formatVideoFormat(ch.format || ws.editorial?.video_format).label}
                         </span>
                       </div>
+                      {isQuiz ? (
+                        <div className="sys-stat-row">
+                          <span className="sys-stat-label">Pesquisar na web (notícias recentes)</span>
+                          <span className="sys-stat-value">Não aplicável (canal Quiz)</span>
+                        </div>
+                      ) : isEditing ? (
+                        <div className="sys-input-group" style={{ marginTop: '6px', marginBottom: '8px' }}>
+                          <div className="sys-edit-row">
+                            <label htmlFor={`web-search-${pid}`} className="sys-stat-label" style={{ cursor: 'pointer' }}>
+                              Pesquisar na web (notícias recentes)
+                            </label>
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#E8EBF1' }}>
+                              <input
+                                id={`web-search-${pid}`}
+                                type="checkbox"
+                                checked={Boolean(channelFormData.web_search)}
+                                onChange={(e) => handleFieldChange('web_search', e.target.checked)}
+                              />
+                              <span>{channelFormData.web_search ? 'SIM (Ativo)' : 'NÃO (Desligado)'}</span>
+                            </label>
+                          </div>
+                          <div style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '2px', lineHeight: 1.4 }}>
+                            Só para temas de notícia. Usa a busca do Google no Gemini; pode aumentar custo e tempo.
+                          </div>
+                          {channelFormErrors.web_search && (
+                            <span className="sys-field-error">{channelFormErrors.web_search}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="sys-stat-row">
+                          <span className="sys-stat-label">Pesquisar na web (notícias recentes)</span>
+                          <span className="sys-stat-value">
+                            {ws.editorial?.web_search ? 'SIM (Ativo)' : 'NÃO (Desligado)'}
+                          </span>
+                        </div>
+                      )}
 
                       {/* Subseção de Cotas Operacionais */}
                       <h4 className="sys-channel-group-title">Cotas Operacionais</h4>

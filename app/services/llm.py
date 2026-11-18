@@ -7,8 +7,9 @@ import shutil
 import subprocess
 import tempfile
 import time
+from datetime import datetime
 from time import perf_counter
-from typing import List
+from typing import Any, List
 
 from loguru import logger
 from openai import AzureOpenAI, OpenAI
@@ -298,7 +299,32 @@ def _extract_qwen_generation_text(response) -> str:
     return _normalize_text_response(text, "qwen")
 
 
-def _generate_response(prompt: str, app_config=None) -> str:
+def _count_gemini_grounding_sources(response: Any) -> int:
+    """Retorna a quantidade de fontes/grounding chunks devolvidas pelo Gemini (0 se ausente)."""
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return 0
+        gm = getattr(candidates[0], "grounding_metadata", None)
+        if gm is None:
+            return 0
+        chunks = getattr(gm, "grounding_chunks", None)
+        if chunks is not None:
+            return len(chunks)
+        supports = getattr(gm, "grounding_supports", None)
+        if supports is not None:
+            return len(supports)
+    except Exception:
+        return 0
+    return 0
+
+
+def _generate_response(
+    prompt: str,
+    app_config=None,
+    web_search: bool = False,
+    web_search_stage: str = "script",
+) -> str:
     try:
         # WebUI 在视频生成期间允许用户准备下一条文案。调用方可以传入提交瞬间
         # 的配置快照，确保模型请求重试期间不会因为后台任务结束并应用新配置，
@@ -377,6 +403,13 @@ def _generate_response(prompt: str, app_config=None) -> str:
         timeout_seconds = get_llm_request_timeout_seconds(runtime_app_config)
         timeout_ms = int(timeout_seconds * 1000)
 
+        use_web_search = bool(web_search)
+        if use_web_search and adapter != "gemini":
+            logger.warning(
+                f"[WEB_RESEARCH] web_search=True ignorado: provider='{llm_provider}' (adapter='{adapter}') não suporta Google Search grounding."
+            )
+            use_web_search = False
+
         if adapter == "qwen":
             import dashscope
             from dashscope.api_entities.dashscope_response import GenerationResponse
@@ -410,29 +443,58 @@ def _generate_response(prompt: str, app_config=None) -> str:
                 if base_url
                 else types.HttpOptions(timeout=timeout_ms)
             )
-            generation_config = types.GenerateContentConfig(
-                temperature=0.5,
-                top_p=1,
-                top_k=1,
-                max_output_tokens=2048,
-                safety_settings=[
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HARASSMENT",
-                        threshold="BLOCK_ONLY_HIGH",
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HATE_SPEECH",
-                        threshold="BLOCK_ONLY_HIGH",
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        threshold="BLOCK_ONLY_HIGH",
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                        threshold="BLOCK_ONLY_HIGH",
-                    ),
-                ],
+            safety_settings = [
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HARASSMENT",
+                    threshold="BLOCK_ONLY_HIGH",
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HATE_SPEECH",
+                    threshold="BLOCK_ONLY_HIGH",
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    threshold="BLOCK_ONLY_HIGH",
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                    threshold="BLOCK_ONLY_HIGH",
+                ),
+            ]
+            base_config_kwargs = {
+                "temperature": 0.5,
+                "top_p": 1,
+                "top_k": 1,
+                "max_output_tokens": 2048,
+                "safety_settings": safety_settings,
+            }
+
+            def _call_gemini_with_retries(client_obj, gen_cfg):
+                total_attempts = 1 + len(GEMINI_RETRY_DELAYS_SECONDS)
+                for attempt in range(total_attempts):
+                    try:
+                        return client_obj.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=gen_cfg,
+                        )
+                    except Exception as exc:
+                        if _is_gemini_transient_error(exc) and attempt < len(
+                            GEMINI_RETRY_DELAYS_SECONDS
+                        ):
+                            delay = GEMINI_RETRY_DELAYS_SECONDS[attempt]
+                            logger.warning(
+                                f"gemini generate_content failed with transient error: {_sanitize_error_message(exc)}. "
+                                f"Retrying (attempt {attempt + 1}/{len(GEMINI_RETRY_DELAYS_SECONDS)}) in {delay}s..."
+                            )
+                            time.sleep(delay)
+                            continue
+                        raise
+
+            stage_label = (
+                web_search_stage
+                if web_search_stage in ("script", "ideias")
+                else "script"
             )
 
             try:
@@ -442,28 +504,43 @@ def _generate_response(prompt: str, app_config=None) -> str:
                     api_key=api_key,
                     http_options=http_options,
                 ) as client:
-                    total_attempts = 1 + len(GEMINI_RETRY_DELAYS_SECONDS)
-                    for attempt in range(total_attempts):
+                    if use_web_search:
+                        search_config = types.GenerateContentConfig(
+                            **base_config_kwargs,
+                            tools=[types.Tool(google_search=types.GoogleSearch())],
+                        )
+                        fallback_needed = False
+                        fallback_reason = ""
+                        response = None
+                        generated_text = None
                         try:
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=prompt,
-                                config=generation_config,
+                            response = _call_gemini_with_retries(client, search_config)
+                            generated_text = response.text
+                            if not generated_text or not str(generated_text).strip():
+                                fallback_needed = True
+                                fallback_reason = "empty_response"
+                        except Exception as search_exc:
+                            if _is_gemini_transient_error(search_exc):
+                                raise
+                            fallback_needed = True
+                            fallback_reason = _sanitize_error_message(search_exc)
+
+                        if fallback_needed:
+                            logger.warning(
+                                f"[WEB_RESEARCH] fallback sem busca (etapa={stage_label}, modelo={model_name}, motivo={fallback_reason})"
                             )
-                            break
-                        except Exception as exc:
-                            if _is_gemini_transient_error(exc) and attempt < len(
-                                GEMINI_RETRY_DELAYS_SECONDS
-                            ):
-                                delay = GEMINI_RETRY_DELAYS_SECONDS[attempt]
-                                logger.warning(
-                                    f"gemini generate_content failed with transient error: {_sanitize_error_message(exc)}. "
-                                    f"Retrying (attempt {attempt + 1}/{len(GEMINI_RETRY_DELAYS_SECONDS)}) in {delay}s..."
-                                )
-                                time.sleep(delay)
-                                continue
-                            raise
-                generated_text = response.text
+                            plain_config = types.GenerateContentConfig(**base_config_kwargs)
+                            response = _call_gemini_with_retries(client, plain_config)
+                            generated_text = response.text
+                        else:
+                            sources_count = _count_gemini_grounding_sources(response)
+                            logger.info(
+                                f"[WEB_RESEARCH] ativo=True etapa={stage_label} provider=gemini modelo={model_name} fontes={sources_count}"
+                            )
+                    else:
+                        generation_config = types.GenerateContentConfig(**base_config_kwargs)
+                        response = _call_gemini_with_retries(client, generation_config)
+                        generated_text = response.text
             except (AttributeError, IndexError, ValueError) as e:
                 logger.warning(f"gemini returned invalid response content: {str(e)}")
                 raise ValueError(f"[{llm_provider}] returned invalid response content")
@@ -772,6 +849,7 @@ def build_script_prompt(
     monetization_preset: str = "",
     narrative_structure: str = "",
     topic_brief: str = "",
+    web_search: bool = False,
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -823,6 +901,13 @@ def build_script_prompt(
 - Fechamento: Varie o fechamento ou termine com reflexão/impacto (CTA não é obrigatório em todos os vídeos).
 """.rstrip()
 
+    if web_search:
+        today_iso = datetime.now().date().isoformat()
+        prompt += (
+            f"\n\n# Pesquisa na Web (Data de hoje: {today_iso}):\n"
+            "- use somente fatos encontrados na pesquisa; se algo não estiver confirmado por fonte, diga 'segundo relatos' ou omita; nunca apresente rumor como fato confirmado; nunca invente datas, números, nomes ou imagens."
+        )
+
     if video_script_prompt:
         prompt += f"""
 
@@ -843,6 +928,7 @@ def generate_script(
     monetization_preset: str = "",
     narrative_structure: str = "",
     topic_brief: str = "",
+    web_search: bool = False,
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -860,13 +946,15 @@ def generate_script(
         monetization_preset=monetization_preset,
         narrative_structure=narrative_structure,
         topic_brief=topic_brief,
+        web_search=bool(web_search),
     )
     final_script = ""
     logger.info(
         "generating video script: "
         f"subject={video_subject}, paragraph_number={paragraph_number}, "
         f"has_custom_prompt={bool(video_script_prompt.strip())}, "
-        f"has_custom_system_prompt={bool(custom_system_prompt.strip())}"
+        f"has_custom_system_prompt={bool(custom_system_prompt.strip())}, "
+        f"web_search={bool(web_search)}"
     )
 
     def format_response(response):
@@ -892,10 +980,13 @@ def generate_script(
 
     for i in range(_max_retries):
         try:
-            if app_config is None:
-                response = _generate_response(prompt=prompt)
-            else:
-                response = _generate_response(prompt=prompt, app_config=app_config)
+            gen_kwargs: dict[str, Any] = {"prompt": prompt}
+            if app_config is not None:
+                gen_kwargs["app_config"] = app_config
+            if web_search:
+                gen_kwargs["web_search"] = True
+                gen_kwargs["web_search_stage"] = "script"
+            response = _generate_response(**gen_kwargs)
             if response:
                 final_script = format_response(response)
             else:

@@ -274,6 +274,17 @@ export async function updateProfileMusic(profileId, musicSettings) {
   });
 }
 
+export async function updateProfileEditorial(profileId, editorialSettings) {
+  if (!profileId) throw new Error('profileId é obrigatório');
+  return fetchJson(`/api/v2/channels/${encodeURIComponent(profileId)}/editorial`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(editorialSettings),
+  });
+}
+
 export async function getAllowedVoices() {
   return fetchJson('/api/v2/voices/allowed');
 }

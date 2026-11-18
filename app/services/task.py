@@ -328,6 +328,7 @@ def generate_script(task_id, params):
             monetization_preset=getattr(params, "monetization_preset", ""),
             narrative_structure=getattr(params, "narrative_structure", ""),
             topic_brief=getattr(params, "topic_brief", None),
+            web_search=bool(getattr(params, "web_search", False)),
         )
     else:
         logger.debug(f"video script: \n{video_script}")

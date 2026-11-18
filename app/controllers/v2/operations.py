@@ -589,6 +589,14 @@ class UpdateMusicSettingsRequest(BaseModel):
     volume: Optional[float] = Field(None, ge=0.02, le=0.20, description="Volume da música de fundo (0.02 a 0.20) ou None para padrão do formato")
 
 
+class UpdateEditorialSettingsRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    web_search: Optional[bool] = Field(
+        None,
+        description="Habilita ou desabilita pesquisa na web (Google Search grounding do Gemini) para ideias e roteiro",
+    )
+
+
 class UpdateSchedulerSettingsRequest(BaseModel):
     model_config = {"extra": "forbid", "strict": True}
     auto_publish_enabled: Optional[bool] = Field(None, description="Habilita ou desabilita a publicação automática")
@@ -1127,6 +1135,77 @@ def update_channel_music(
         )
 
     return utils.get_response(200, res.model_dump(), message="Profile music settings updated successfully")
+
+
+@router.patch(
+    "/channels/{profile_id}/editorial",
+    summary="Update editorial settings (e.g. web_search) for a channel/profile",
+)
+def update_channel_editorial(
+    request: Request,
+    profile_id: str,
+    payload: UpdateEditorialSettingsRequest,
+):
+    request_id = base.get_task_id(request)
+    db_path = operator_console.get_db_path()
+    profile = profile_manager.get_profile(profile_id, db_path=db_path)
+    if not profile:
+        raise HttpException(
+            task_id=request_id,
+            status_code=404,
+            message=f"Profile '{profile_id}' not found",
+        )
+    clean_p = profile.get("id", profile_id)
+
+    try:
+        operator_console.require_primary_instance(db_path=db_path)
+    except PermissionError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile editorial settings ({exc})",
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"Operation blocked: only primary instance can update profile editorial settings ({exc})",
+        )
+
+    try:
+        e_dict = payload.model_dump(exclude_unset=True)
+        old_settings = profile_manager.get_profile_settings(clean_p, db_path=db_path)
+        old_ws = bool(getattr(old_settings.editorial, "web_search", False))
+        res = profile_manager.update_profile_editorial_settings(clean_p, e_dict, db_path=db_path)
+        new_ws = bool(getattr(res, "web_search", False))
+        if old_ws != new_ws:
+            operator_console.log_operational_event(
+                component="profile_manager",
+                severity=operator_console.SEVERITY_INFO,
+                event_type="PROFILE_EDITORIAL_UPDATED",
+                message=f"Editorial 'web_search' updated for profile '{clean_p}': {old_ws} -> {new_ws}",
+                metadata={
+                    "profile_id": clean_p,
+                    "field": "web_search",
+                    "old_value": old_ws,
+                    "new_value": new_ws,
+                },
+                db_path=db_path,
+            )
+    except ValueError as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=400,
+            message=str(exc),
+        )
+    except Exception as exc:
+        raise HttpException(
+            task_id=request_id,
+            status_code=500,
+            message=f"Internal error updating profile editorial settings: {exc}",
+        )
+
+    return utils.get_response(200, res.model_dump(), message="Profile editorial settings updated successfully")
 
 
 @router.get(

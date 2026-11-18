@@ -63,6 +63,17 @@ export function validateChannelField(fieldName, value) {
     return { isValid: true, error: null };
   }
 
+  if (fieldName === 'web_search') {
+    const norm = normalizeAutonomousEnabled(value);
+    if (norm === null) {
+      return {
+        isValid: false,
+        error: 'Pesquisa na web deve ser Ativa (SIM) ou Desligada (NÃO).',
+      };
+    }
+    return { isValid: true, error: null };
+  }
+
   if (fieldName === 'music_volume') {
     if (value === null || value === undefined || value === '') {
       return { isValid: true, error: null };
@@ -141,7 +152,7 @@ export function validateChannelForm(formData) {
     }
   }
 
-  for (const optionalField of ['max_generations_24h', 'growth_mode', 'autonomous_enabled', 'flow_scene_count', 'music_volume']) {
+  for (const optionalField of ['max_generations_24h', 'growth_mode', 'autonomous_enabled', 'web_search', 'flow_scene_count', 'music_volume']) {
     if (Object.prototype.hasOwnProperty.call(data, optionalField)) {
       const res = validateChannelField(optionalField, data[optionalField]);
       if (!res.isValid) {
@@ -212,6 +223,26 @@ export function calculateSettingsDiff(originalSettings, formData) {
     }
   }
 
+  if (
+    formData.web_search !== undefined &&
+    formData.web_search !== null &&
+    originalSettings &&
+    originalSettings.web_search !== undefined &&
+    originalSettings.web_search !== null
+  ) {
+    const oldWs = normalizeAutonomousEnabled(originalSettings.web_search);
+    const newWs = normalizeAutonomousEnabled(formData.web_search);
+    if (oldWs !== null && newWs !== null && oldWs !== newWs) {
+      diffs.push({
+        field: 'web_search',
+        label: 'Pesquisar na web (notícias recentes)',
+        oldValue: oldWs,
+        newValue: newWs,
+        unit: '',
+      });
+    }
+  }
+
   // Music volume (armazenado em % no form: 2 a 20 ou null para padrão do formato)
   if (Object.prototype.hasOwnProperty.call(formData, 'music_volume')) {
     const rawOld = originalSettings ? originalSettings.music_volume : undefined;
@@ -263,6 +294,7 @@ export function buildPatchPayloads(diffList) {
     return {
       growthModePayload: null,
       autonomousPayload: null,
+      editorialPayload: null,
       quotasPayload: null,
       schedulePayload: null,
       visualPayload: null,
@@ -273,6 +305,7 @@ export function buildPatchPayloads(diffList) {
 
   let growthModePayload = null;
   let autonomousPayload = null;
+  let editorialPayload = null;
   let visualPayload = null;
   let musicPayload = null;
   const quotas = {};
@@ -284,6 +317,9 @@ export function buildPatchPayloads(diffList) {
       growthModePayload = String(newValue).trim().toLowerCase();
     } else if (field === 'autonomous_enabled') {
       autonomousPayload = Boolean(normalizeAutonomousEnabled(newValue));
+    } else if (field === 'web_search') {
+      editorialPayload = editorialPayload || {};
+      editorialPayload.web_search = Boolean(normalizeAutonomousEnabled(newValue));
     } else if (field === 'flow_scene_count') {
       visualPayload = visualPayload || {};
       visualPayload.flow_scene_count = Number(newValue);
@@ -311,6 +347,7 @@ export function buildPatchPayloads(diffList) {
   return {
     growthModePayload,
     autonomousPayload,
+    editorialPayload,
     quotasPayload: Object.keys(quotas).length > 0 ? quotas : null,
     schedulePayload: Object.keys(schedule).length > 0 ? schedule : null,
     visualPayload,
@@ -334,7 +371,7 @@ export function formatDiffValueDisplay(field, value) {
     const clean = String(value).trim().toUpperCase();
     return clean === 'SCALE' ? 'SCALE (Escala)' : 'WARMUP (Aquecimento)';
   }
-  if (field === 'autonomous_enabled') {
+  if (field === 'autonomous_enabled' || field === 'web_search') {
     const norm = normalizeAutonomousEnabled(value);
     return norm ? 'SIM (Ativo)' : 'NÃO (Desligado)';
   }

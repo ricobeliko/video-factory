@@ -278,6 +278,7 @@ test('13. Simulação de edição a partir de c.settings completo: com effective
     min_interval_hours: fullSettings.schedule.min_interval_hours,
     flow_scene_count: fullSettings.workspace_settings.visual.flow_scene_count ?? 6,
     music_volume: Math.round(Number(fullSettings.workspace_settings.music.volume) * 100),
+    web_search: Boolean(fullSettings.workspace_settings?.editorial?.web_search),
   };
 
   const formData = {
@@ -304,4 +305,23 @@ test('13. Simulação de edição a partir de c.settings completo: com effective
   assert.equal(settingsDiff[0].field, 'music_volume');
   assert.equal(settingsDiff[0].oldValue, 12);
   assert.equal(settingsDiff[0].newValue, 8);
+
+  // Operador liga apenas Pesquisa na Web e NÃO mexe em voz nem música
+  const formWebOnly = {
+    ...orig,
+    voice_name: effVoice.voice_name?.value || '',
+    voice_rate: fullSettings.is_quiz ? null : (effVoice.voice_rate?.value ?? 1.0),
+    voice_volume: effVoice.voice_volume?.value ?? 1.0,
+    web_search: true,
+  };
+  const webOnlyDiff = calculateSettingsDiff(orig, formWebOnly);
+  const webOnlyVoiceDiff = calculateVoiceDiff(fullSettings.effective_voice, formWebOnly, {
+    isQuiz: fullSettings.is_quiz,
+    pinned: new Set(),
+  });
+  assert.equal(webOnlyVoiceDiff.length, 0, 'Ligar web_search não deve inventar pins de voz');
+  assert.equal(webOnlyDiff.length, 1, 'A confirmação deve mostrar apenas a linha web_search alterada');
+  assert.equal(webOnlyDiff[0].field, 'web_search');
+  assert.equal(webOnlyDiff[0].oldValue, false);
+  assert.equal(webOnlyDiff[0].newValue, true);
 });

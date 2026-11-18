@@ -194,6 +194,18 @@ test('4. calculateSettingsDiff: detecta apenas campos com valores alterados (inc
   assert.equal(diffMusic[0].field, 'music_volume');
   assert.equal(diffMusic[0].oldValue, null);
   assert.equal(diffMusic[0].newValue, 8);
+
+  // Apenas web_search alterado (confirmação mostra somente a linha alterada)
+  const origWithWebSearch = { ...original, web_search: false };
+  const diffWebSearch = calculateSettingsDiff(origWithWebSearch, {
+    ...origWithWebSearch,
+    web_search: true,
+  });
+  assert.equal(diffWebSearch.length, 1);
+  assert.equal(diffWebSearch[0].field, 'web_search');
+  assert.equal(diffWebSearch[0].label, 'Pesquisar na web (notícias recentes)');
+  assert.equal(diffWebSearch[0].oldValue, false);
+  assert.equal(diffWebSearch[0].newValue, true);
 });
 
 test('5. buildPatchPayloads: gera payloads contendo SOMENTE campos alterados para as rotas específicas (posts_per_day unicamente em quotasPayload)', () => {
@@ -267,6 +279,20 @@ test('5. buildPatchPayloads: gera payloads contendo SOMENTE campos alterados par
   assert.equal(musicResetRes.hasChanges, true);
   assert.deepEqual(musicResetRes.musicPayload, { volume: null });
 
+  // Apenas editorial (web_search) alterado
+  const editorialDiff = [
+    { field: 'web_search', oldValue: false, newValue: true },
+  ];
+  const editorialRes = buildPatchPayloads(editorialDiff);
+  assert.equal(editorialRes.hasChanges, true);
+  assert.equal(editorialRes.growthModePayload, null);
+  assert.equal(editorialRes.autonomousPayload, null);
+  assert.equal(editorialRes.quotasPayload, null);
+  assert.equal(editorialRes.schedulePayload, null);
+  assert.equal(editorialRes.visualPayload, null);
+  assert.equal(editorialRes.musicPayload, null);
+  assert.deepEqual(editorialRes.editorialPayload, { web_search: true });
+
   // Quotas e schedule (posts_per_day enviado apenas em quotasPayload)
   const bothDiff = [
     { field: 'target_ready_stock', oldValue: 3, newValue: 5 },
@@ -299,6 +325,8 @@ test('6. formatDiffValueDisplay: formata modos, horas e unidades para diálogo d
   assert.equal(formatDiffValueDisplay('music_volume', 14), '14%');
   assert.equal(formatDiffValueDisplay('music_volume', null), 'Padrão do formato');
   assert.equal(formatDiffValueDisplay('music_volume', ''), 'Padrão do formato');
+  assert.equal(formatDiffValueDisplay('web_search', true), 'SIM (Ativo)');
+  assert.equal(formatDiffValueDisplay('web_search', false), 'NÃO (Desligado)');
   assert.equal(formatDiffValueDisplay('outro', null), '—');
 });
 
@@ -346,6 +374,9 @@ test('8. Regra de Controle Único e Rota Única: ExecutionDrawer é somente leit
   assert.equal(systemSource.includes('updateProfileQuotas'), true);
   assert.equal(systemSource.includes('updateProfileSchedule'), true);
   assert.equal(systemSource.includes('updateProfileVisual'), true);
+  assert.equal(systemSource.includes('updateProfileEditorial'), true);
+  assert.equal(systemSource.includes('Pesquisar na web (notícias recentes)'), true);
+  assert.equal(systemSource.includes('Só para temas de notícia. Usa a busca do Google no Gemini; pode aumentar custo e tempo.'), true);
   assert.equal(systemSource.includes('Meta Estoque (3–10 vídeos)'), true);
   assert.equal(systemSource.includes('Gerações/24h (1–10)'), true);
   assert.equal(systemSource.includes('Cenas Flow por vídeo (1–8)'), true);

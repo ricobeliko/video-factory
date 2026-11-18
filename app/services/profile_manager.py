@@ -47,6 +47,7 @@ DEFAULT_FLOW_PREMIUM_SCENES_PER_SHORT = 6
 
 class EditorialSettings(BaseModel):
     topic_brief: Optional[str] = None
+    web_search: bool = False
     content_style: Optional[str] = None
     video_format: Optional[str] = None
     narrative_structure: Optional[str] = None
@@ -58,6 +59,8 @@ class EditorialSettings(BaseModel):
     def reconcile_editorial(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        if data.get("web_search") is None:
+            data["web_search"] = False
         if data.get("content_style") and not data.get("narrative_structure"):
             data["narrative_structure"] = data["content_style"]
         if str(data.get("closing_type") or "").strip().lower() == "comments":
@@ -1352,6 +1355,36 @@ def update_profile_music_settings(
     return current_settings.music
 
 
+def update_profile_editorial_settings(
+    profile_id: str,
+    editorial_data: Dict[str, Any],
+    db_path: Optional[str] = None,
+) -> EditorialSettings:
+    """Atualiza campos editoriais mutáveis de um perfil no settings_json,
+    preservando integralmente os demais campos de EditorialSettings (ex.: topic_brief).
+    """
+    from app.services import operator_console
+    operator_console.require_primary_instance(db_path=db_path)
+
+    clean_id = str(profile_id or "").strip()
+    prof = get_profile(clean_id, db_path=db_path)
+    if not prof:
+        raise ValueError(f"Perfil com ID '{clean_id}' não encontrado.")
+
+    current_settings = get_profile_settings(clean_id, db_path=db_path)
+
+    if "web_search" in editorial_data:
+        raw_ws = editorial_data["web_search"]
+        if not isinstance(raw_ws, bool):
+            raise ValueError(f"Campo 'web_search' deve ser booleano (recebido: {raw_ws!r}).")
+        if raw_ws and is_quiz_profile(clean_id, db_path=db_path):
+            raise ValueError("Pesquisa na web não se aplica a canais de Quiz.")
+        current_settings.editorial.web_search = raw_ws
+
+    update_profile_settings(clean_id, current_settings, db_path=db_path)
+    return current_settings.editorial
+
+
 def get_profile_settings(profile_id: str, db_path: Optional[str] = None) -> ChannelWorkspaceSettings:
     """Recupera as configurações tipadas de um perfil. Se inexistente ou vazio, retorna defaults seguros."""
     init_profile_db(db_path)
@@ -1927,6 +1960,7 @@ def get_generation_profile_context(
         "default_preset": profile.get("default_preset") or fallback_preset,
         "growth_mode": profile.get("growth_mode") or fallback_growth,
         "topic_brief": settings.editorial.topic_brief or "",
+        "web_search": bool(settings.editorial.web_search),
         "content_style": settings.editorial.content_style or "",
         "video_format": resolved_format,
         "narrative_structure": resolved_narrative,

@@ -201,9 +201,13 @@ def submit_generation(
         else:
             task_params.narrative_structure = ctx.get("narrative_structure") or None
 
-    # 7. Diretriz Temática Editorial (topic_brief)
+    # 7. Diretriz Temática Editorial (topic_brief e web_search)
     if "topic_brief" not in explicit_fields or not getattr(task_params, "topic_brief", None):
         task_params.topic_brief = ctx.get("topic_brief") or None
+    if task_params.video_format in (const.VIDEO_FORMAT_QUIZ_DILEMMA, const.VIDEO_FORMAT_QUIZ_PAPER):
+        task_params.web_search = False
+    elif "web_search" not in explicit_fields:
+        task_params.web_search = bool(ctx.get("web_search", False))
 
     # 8. Encerramento e Quantidade de Questões (Quiz)
     if "closing_type" not in explicit_fields or getattr(task_params, "closing_type", None) in (None, "", "auto"):

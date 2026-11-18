@@ -1,5 +1,6 @@
 import re
 import string
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 import unicodedata
 from loguru import logger
@@ -70,7 +71,13 @@ def _clean_idea_line(line: str) -> str:
     return line
 
 
-def build_ideas_prompt(niche: str, count: int, language: str = "", topic_brief: Optional[str] = None) -> str:
+def build_ideas_prompt(
+    niche: str,
+    count: int,
+    language: str = "",
+    topic_brief: Optional[str] = None,
+    web_search: bool = False,
+) -> str:
     """Constrói o prompt curto para geração de ideias em uma única chamada ao LLM."""
     count = max(MIN_IDEAS_COUNT, min(MAX_IDEAS_COUNT, int(count)))
     normalized_lang = (language or "").strip().lower().replace("_", "-")
@@ -90,7 +97,7 @@ def build_ideas_prompt(niche: str, count: int, language: str = "", topic_brief: 
         brief_clause = f'\n\nDiretriz editorial e foco temático obrigatório: "{brief_clean}". Todos os temas gerados DEVEM se ater estritamente a este foco editorial.'
 
     if is_pt:
-        return f"""Você é um especialista em criação de conteúdo viral para vídeos curtos (Shorts, TikTok, Reels).
+        prompt = f"""Você é um especialista em criação de conteúdo viral para vídeos curtos (Shorts, TikTok, Reels).
 
 Gere exatamente {count} ideias de temas para vídeos no nicho: "{niche}".{brief_clause}
 
@@ -110,8 +117,16 @@ Regras obrigatórias:
 5. Escreva em português do Brasil (pt-BR), natural e direto.
 6. Responda APENAS com a lista numerada de 1 a {count}, uma ideia por linha, sem introdução, sem explicações e sem comentários adicionais.
 """.strip()
+        if web_search:
+            today_iso = datetime.now().date().isoformat()
+            prompt += (
+                f"\n\nPesquisa na Web ativa (Data de hoje: {today_iso}):\n"
+                "- Priorize ideias sobre notícias e fatos recentes verificáveis relacionados ao nicho e à diretriz editorial.\n"
+                "- Regra factual: use somente fatos encontrados na pesquisa; se algo não estiver confirmado por fonte, diga 'segundo relatos' ou omita; nunca apresente rumor como fato confirmado; nunca invente datas, números, nomes ou imagens."
+            )
+        return prompt
 
-    return f"""You are an expert short-form viral content creator (Shorts, TikTok, Reels).
+    prompt = f"""You are an expert short-form viral content creator (Shorts, TikTok, Reels).
 
 Generate exactly {count} video topic ideas for the niche: "{niche}".{brief_clause}
 
@@ -131,6 +146,14 @@ Mandatory rules:
 5. Write in the requested language: {language or "English"}.
 6. Output ONLY the numbered list from 1 to {count}, one idea per line, with no introductory or concluding text.
 """.strip()
+    if web_search:
+        today_iso = datetime.now().date().isoformat()
+        prompt += (
+            f"\n\nWeb Search active (Today's date: {today_iso}):\n"
+            "- Prioritize topic ideas about recent, verifiable news and facts related to the niche and editorial brief.\n"
+            "- Factual rule: use somente fatos encontrados na pesquisa; se algo não estiver confirmado por fonte, diga 'segundo relatos' ou omita; nunca apresente rumor como fato confirmado; nunca invente datas, números, nomes ou imagens."
+        )
+    return prompt
 
 
 def generate_ideas(
@@ -139,6 +162,7 @@ def generate_ideas(
     language: str = "pt-BR",
     app_config: Optional[Any] = None,
     topic_brief: Optional[str] = None,
+    web_search: bool = False,
 ) -> List[str]:
     """Gera ideias de temas usando o LLM configurado, deduplica e retorna a lista."""
     niche = (niche or "").strip()
@@ -146,11 +170,23 @@ def generate_ideas(
         return []
 
     count = max(MIN_IDEAS_COUNT, min(MAX_IDEAS_COUNT, int(count)))
-    prompt = build_ideas_prompt(niche=niche, count=count, language=language, topic_brief=topic_brief)
+    prompt = build_ideas_prompt(
+        niche=niche,
+        count=count,
+        language=language,
+        topic_brief=topic_brief,
+        web_search=bool(web_search),
+    )
 
-    logger.info(f"[Autopilot] Generating {count} ideas for niche='{niche}', lang='{language}'")
+    logger.info(
+        f"[Autopilot] Generating {count} ideas for niche='{niche}', lang='{language}', web_search={bool(web_search)}"
+    )
     try:
-        response = llm._generate_response(prompt=prompt, app_config=app_config)
+        gen_kwargs: Dict[str, Any] = {"prompt": prompt, "app_config": app_config}
+        if web_search:
+            gen_kwargs["web_search"] = True
+            gen_kwargs["web_search_stage"] = "ideias"
+        response = llm._generate_response(**gen_kwargs)
     except Exception as exc:
         logger.error(f"[Autopilot] LLM idea generation failed: {exc}")
         raise exc

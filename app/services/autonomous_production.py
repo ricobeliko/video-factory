@@ -2244,6 +2244,7 @@ def discover_candidate_topic(
     language: str = "pt-BR",
     db_path: Optional[str] = None,
     topic_brief: Optional[str] = None,
+    web_search: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Obtém o melhor candidato a novo tema a partir do Trend Radar ou Content Strategy.
 
@@ -2291,6 +2292,7 @@ def discover_candidate_topic(
             count=10,
             language=language,
             topic_brief=topic_brief,
+            web_search=bool(web_search),
         )
         for idea in ideas:
             if not is_topic_duplicate(idea, existing_topics):
@@ -2703,6 +2705,17 @@ def build_autonomous_video_params(
     bgm_volume = auto_bgm["volume"]
     bgm_default_mood = auto_bgm.get("default_mood", "neutral")
 
+    is_quiz_fmt = str(profile_format or "").strip().lower() in (
+        const.VIDEO_FORMAT_QUIZ_DILEMMA,
+        const.VIDEO_FORMAT_QUIZ_PAPER,
+    ) or str(resolved_narrative_structure or "").strip().lower() in (
+        const.VIDEO_FORMAT_QUIZ_DILEMMA,
+        const.VIDEO_FORMAT_QUIZ_PAPER,
+        const.STRUCTURE_QUIZ_DILEMMA,
+        const.STRUCTURE_QUIZ_PAPER,
+    )
+    resolved_web_search = False if is_quiz_fmt else bool(ctx.get("web_search", False))
+
     params = VideoParams(
         video_subject=topic,
         video_language=language,
@@ -2713,6 +2726,7 @@ def build_autonomous_video_params(
         closing_type=resolved_closing_type,
         num_questions=resolved_num_questions,
         topic_brief=ctx.get("topic_brief") or None,
+        web_search=resolved_web_search,
         profile_id=assigned_profile_id,
         video_source=video_source,
         voice_name=resolved_voice_name,
@@ -3882,6 +3896,7 @@ def _run_autonomous_cycle(
         language=probe_params.video_language,
         db_path=db_path,
         topic_brief=probe_params.topic_brief,
+        web_search=bool(getattr(probe_params, "web_search", False)),
     )
     if not candidate or not candidate.get("topic"):
         _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)

@@ -1276,9 +1276,9 @@ class TestVideoService(unittest.TestCase):
                 "Tôi vẫn luôn tin vào một tương lai tươi sáng",
             ),
             (
-                "thai",
-                "Charm-Regular.ttf",
-                "นี่คือข้อความสำหรับตรวจสอบบรรทัดสุดท้ายของคำบรรยาย",
+                "portuguese_with_descenders",
+                "BeVietnamPro-Bold.ttf",
+                "Você já reparou na última linha desta legenda em português?",
             ),
             (
                 "simplified_chinese",
@@ -1292,12 +1292,12 @@ class TestVideoService(unittest.TestCase):
             ),
             (
                 "cyrillic",
-                "MicrosoftYaHeiNormal.ttc",
+                "MicrosoftYaHeiBold.ttc",
                 "Это текст для проверки последней строки субтитров",
             ),
             (
                 "greek",
-                "STHeitiLight.ttc",
+                "STHeitiMedium.ttc",
                 "Αυτό είναι κείμενο για τον έλεγχο της τελευταίας γραμμής",
             ),
         )

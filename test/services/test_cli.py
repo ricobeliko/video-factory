@@ -1656,7 +1656,7 @@ class TestCliUiDefaults(unittest.TestCase):
                 "--video-subject",
                 "test",
                 "--font-name",
-                "STHeitiLight.ttc",
+                "BeVietnamPro-Bold.ttf",
                 "--text-fore-color",
                 "#AABBCC",
                 "--font-size",
@@ -1670,7 +1670,7 @@ class TestCliUiDefaults(unittest.TestCase):
         with patch.dict(app_config.ui, self.UI_CONFIG, clear=True):
             params = cli.build_video_params(args)
 
-        self.assertEqual(params.font_name, "STHeitiLight.ttc")
+        self.assertEqual(params.font_name, "BeVietnamPro-Bold.ttf")
         self.assertEqual(params.text_fore_color, "#AABBCC")
         self.assertEqual(params.font_size, 72)
         self.assertEqual(params.voice_name, "no-voice")

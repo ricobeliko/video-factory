@@ -28,6 +28,9 @@ if ROOT_DIR not in sys.path:
 from loguru import logger  # noqa: E402
 from app.services.task_artifacts import atomic_write_json  # noqa: E402
 from scripts.flow_playwright import (  # noqa: E402
+    FlowBlockingModalError,
+    FlowProjectNotFoundError,
+    FlowSceneResult,
     generate_flow_scene,
     validate_clip_file,
 )
@@ -355,6 +358,7 @@ def update_manifest_flow_checkpoint(
     last_scene: Optional[int] = None,
     status: Optional[str] = None,
     completed_scenes: Optional[List[int]] = None,
+    error: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Persiste metadados operacionais de checkpoint no manifest.json do projeto.
@@ -372,6 +376,8 @@ def update_manifest_flow_checkpoint(
     flow_gen = manifest.get("flow_generation", {})
     if status is not None:
         flow_gen["status"] = status
+    if error is not None:
+        flow_gen["error"] = error
     if project_url is not None:
         flow_gen["project_url"] = project_url
     elif "flow_project_url" in manifest:
@@ -387,6 +393,29 @@ def update_manifest_flow_checkpoint(
     manifest["flow_generation"] = flow_gen
     atomic_write_json(manifest_path, manifest)
     return flow_gen
+
+
+def _can_recreate_dead_flow_project(
+    manifest: Dict[str, Any],
+    completed_scenes_in_run: Optional[List[int]] = None,
+) -> bool:
+    """Fonte única da decisão de recriar projeto morto no Google Flow.
+
+    Respeita flow_account_pool.can_failover_account (avaliando o manifesto sem flow_project_url)
+    e garante que NÃO existam cenas completas nem dispatch/aprovação de crédito confirmados.
+    """
+    if not manifest or not isinstance(manifest, dict):
+        return False
+    if completed_scenes_in_run:
+        return False
+    if manifest.get("generation_start_confirmed") or manifest.get("credit_approval_confirmed"):
+        return False
+
+    from app.services.flow_account_pool import can_failover_account
+
+    probe_manifest = dict(manifest)
+    probe_manifest.pop("flow_project_url", None)
+    return can_failover_account(probe_manifest)
 
 
 def generate_pending_flow_scenes(
@@ -423,6 +452,7 @@ def generate_pending_flow_scenes(
     completed_scenes: List[int] = []
     scene_results: List[Dict[str, Any]] = []
     attempted_count = 0
+    project_recreate_attempted = False
     overall_status = "ALL_FLOW_SCENES_READY"
 
     # Recovery guard com reconciliação determinística segura:
@@ -513,12 +543,93 @@ def generate_pending_flow_scenes(
 
         # 3. Execução sequencial controlada (single-flight)
         attempted_count += 1
-        res = generate_flow_scene(
-            manifest_path=manifest_path,
-            scene_index=s_idx,
-            project_url=effective_project_url,
-            failure_policy=failure_policy,
-        )
+        try:
+            res = generate_flow_scene(
+                manifest_path=manifest_path,
+                scene_index=s_idx,
+                project_url=effective_project_url,
+                failure_policy=failure_policy,
+            )
+        except FlowProjectNotFoundError as pnf_exc:
+            res = FlowSceneResult(
+                status="FLOW_PROJECT_NOT_FOUND",
+                scene_index=s_idx,
+                project_url=effective_project_url,
+                error=str(pnf_exc),
+            )
+        except FlowBlockingModalError as modal_exc:
+            res = FlowSceneResult(
+                status="FLOW_BLOCKING_MODAL",
+                scene_index=s_idx,
+                project_url=effective_project_url,
+                error=str(modal_exc),
+            )
+
+        # Se o projeto Flow está morto ("Projeto não encontrado"), decide se pode recriar UMA vez
+        # na mesma conta (sem trocar flow_account_id) quando não há cenas completas nem dispatch confirmado.
+        if (
+            res.status == "FLOW_PROJECT_NOT_FOUND"
+            or "FLOW_PROJECT_NOT_FOUND" in str(res.error or "")
+        ):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f_cur:
+                    current_manifest = json.load(f_cur)
+            except Exception:
+                current_manifest = manifest
+
+            res_details = res.details or {}
+            dispatch_confirmed_in_res = bool(
+                res_details.get("generation_start_confirmed")
+                or res_details.get("credit_approval_confirmed")
+            )
+
+            if (
+                not project_recreate_attempted
+                and not dispatch_confirmed_in_res
+                and _can_recreate_dead_flow_project(current_manifest, completed_scenes)
+            ):
+                project_recreate_attempted = True
+                kept_account_id = current_manifest.get("flow_account_id")
+                dead_url = current_manifest.pop("flow_project_url", None)
+                cur_fg = current_manifest.get("flow_generation")
+                if isinstance(cur_fg, dict):
+                    cur_fg.pop("project_url", None)
+                atomic_write_json(manifest_path, current_manifest)
+                manifest = current_manifest
+                effective_project_url = None
+                logger.warning(
+                    f"[FLOW_PROJECT_RECREATE] Projeto morto detectado ({dead_url}) na cena {s_idx}. "
+                    f"Limpando flow_project_url (mantendo flow_account_id={kept_account_id}) "
+                    f"e retentando UMA vez com force_new_project=True."
+                )
+                try:
+                    res = generate_flow_scene(
+                        manifest_path=manifest_path,
+                        scene_index=s_idx,
+                        project_url=None,
+                        failure_policy=failure_policy,
+                        force_new_project=True,
+                    )
+                except FlowProjectNotFoundError as retry_pnf_exc:
+                    res = FlowSceneResult(
+                        status="FLOW_PROJECT_NOT_FOUND",
+                        scene_index=s_idx,
+                        project_url=None,
+                        error=str(retry_pnf_exc),
+                    )
+                except FlowBlockingModalError as retry_modal_exc:
+                    res = FlowSceneResult(
+                        status="FLOW_BLOCKING_MODAL",
+                        scene_index=s_idx,
+                        project_url=None,
+                        error=str(retry_modal_exc),
+                    )
+            else:
+                logger.warning(
+                    f"[FLOW_PROJECT_NOT_FOUND] Recriação automática não permitida para cena {s_idx} "
+                    f"(recreate_attempted={project_recreate_attempted}, completed_scenes={completed_scenes}). "
+                    f"Preservando flow_project_url do manifesto."
+                )
 
         if res.project_url:
             effective_project_url = res.project_url
@@ -586,6 +697,39 @@ def generate_pending_flow_scenes(
                 last_scene=s_idx,
                 status="FLOW_BROWSER_BUSY",
                 completed_scenes=completed_scenes,
+            )
+            break
+        elif res.status == "FLOW_BLOCKING_MODAL":
+            overall_status = "FLOW_BLOCKING_MODAL"
+            err_msg = res.error or "FLOW_BLOCKING_MODAL"
+            logger.error(
+                f"[FLOW_BLOCKING_MODAL] Cena {s_idx} bloqueada por modal persistente no Flow: {err_msg}"
+            )
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status="FLOW_BLOCKING_MODAL",
+                completed_scenes=completed_scenes,
+                error=err_msg,
+            )
+            break
+        elif (
+            res.status == "FLOW_PROJECT_NOT_FOUND"
+            or "FLOW_PROJECT_NOT_FOUND" in str(res.error or "")
+        ):
+            overall_status = "FLOW_PROJECT_NOT_FOUND"
+            err_msg = res.error or "FLOW_PROJECT_NOT_FOUND"
+            logger.error(
+                f"[FLOW_PROJECT_NOT_FOUND] Cena {s_idx} falhou com projeto não encontrado: {err_msg}"
+            )
+            update_manifest_flow_checkpoint(
+                manifest_path=manifest_path,
+                project_url=effective_project_url,
+                last_scene=s_idx,
+                status="FLOW_PROJECT_NOT_FOUND",
+                completed_scenes=completed_scenes,
+                error=err_msg,
             )
             break
         elif (

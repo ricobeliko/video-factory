@@ -1017,6 +1017,17 @@ def read_flow_credit_balance(page: Any) -> Tuple[Optional[int], str]:
                 continue
 
         # Etapa 2: Localizar e abrir o menu de conta/avatar no canto superior direito
+        # Reutiliza a fonte única de dispensa de modais de scripts/flow_playwright.py antes do clique.
+        from scripts.flow_playwright import (
+            FlowBlockingModalError,
+            dismiss_flow_announcements,
+        )
+        try:
+            dismiss_flow_announcements(page)
+        except FlowBlockingModalError as modal_exc:
+            logger.warning(f"[FLOW_CREDIT_READER] Modal bloqueante impediu leitura de saldo: {modal_exc}")
+            return None, CREDIT_SOURCE_UNKNOWN
+
         account_trigger = page.locator(
             "flow-header-user-icon [role='button'], flow-header-user-icon, [aria-label*='Detalhes da conta' i], [aria-label*='Account details' i], button[aria-label*='Conta' i], button[aria-label*='Account' i]"
         ).first

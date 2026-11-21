@@ -29,6 +29,10 @@ LLM_REQUEST_TIMEOUT_SECONDS = 90
 
 # Política de retry para erros temporários do Gemini (FONTE ÚNICA 1)
 GEMINI_RETRY_DELAYS_SECONDS: tuple[int, ...] = (5, 15, 45)
+GEMINI_QUOTA_ERROR_MARKERS: tuple[str, ...] = (
+    "429",
+    "resource_exhausted",
+)
 GEMINI_TRANSIENT_ERROR_MARKERS: tuple[str, ...] = (
     "503",
     "unavailable",
@@ -37,6 +41,29 @@ GEMINI_TRANSIENT_ERROR_MARKERS: tuple[str, ...] = (
     "high demand",
     "overloaded",
 )
+
+
+class WebResearchUnavailableError(RuntimeError):
+    """FONTE ÚNICA 2: Erro fail-closed quando a pesquisa na web (Gemini Google Search) está indisponível."""
+
+    def __init__(self, reason: str, stage: str = "script", model: str = ""):
+        clean_reason = str(reason or "web_research_unavailable").strip()
+        self.reason = clean_reason
+        self.stage = stage
+        self.model = model
+        super().__init__(f"web_research_unavailable: {clean_reason}")
+
+
+def _is_gemini_quota_error(exc: Exception) -> bool:
+    """Identifica erros de cota/rate-limit (429 / RESOURCE_EXHAUSTED) do Gemini."""
+    pieces: list[str] = [str(exc)]
+    for attr in ("code", "status", "message"):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            pieces.append(str(val))
+
+    combined = " ".join(pieces).lower()
+    return any(marker in combined for marker in GEMINI_QUOTA_ERROR_MARKERS)
 
 
 def _is_gemini_transient_error(exc: Exception) -> bool:
@@ -469,7 +496,7 @@ def _generate_response(
                 "safety_settings": safety_settings,
             }
 
-            def _call_gemini_with_retries(client_obj, gen_cfg):
+            def _call_gemini_with_retries(client_obj, gen_cfg, *, retry_on_quota: bool = True):
                 total_attempts = 1 + len(GEMINI_RETRY_DELAYS_SECONDS)
                 for attempt in range(total_attempts):
                     try:
@@ -479,6 +506,8 @@ def _generate_response(
                             config=gen_cfg,
                         )
                     except Exception as exc:
+                        if not retry_on_quota and _is_gemini_quota_error(exc):
+                            raise
                         if _is_gemini_transient_error(exc) and attempt < len(
                             GEMINI_RETRY_DELAYS_SECONDS
                         ):
@@ -505,42 +534,57 @@ def _generate_response(
                     http_options=http_options,
                 ) as client:
                     if use_web_search:
+                        # FONTE ÚNICA 1: política fail-closed para pesquisa na web.
+                        # Nunca cai em geração sem busca; 429/RESOURCE_EXHAUSTED falha
+                        # imediatamente (sem retries 5/15/45s); 503/overloaded/unavailable
+                        # mantêm os retries existentes e, ao esgotar, levantam WebResearchUnavailableError.
                         search_config = types.GenerateContentConfig(
                             **base_config_kwargs,
                             tools=[types.Tool(google_search=types.GoogleSearch())],
                         )
-                        fallback_needed = False
-                        fallback_reason = ""
-                        response = None
-                        generated_text = None
                         try:
-                            response = _call_gemini_with_retries(client, search_config)
+                            response = _call_gemini_with_retries(
+                                client,
+                                search_config,
+                                retry_on_quota=False,
+                            )
                             generated_text = response.text
-                            if not generated_text or not str(generated_text).strip():
-                                fallback_needed = True
-                                fallback_reason = "empty_response"
                         except Exception as search_exc:
-                            if _is_gemini_transient_error(search_exc):
-                                raise
-                            fallback_needed = True
-                            fallback_reason = _sanitize_error_message(search_exc)
-
-                        if fallback_needed:
+                            short_reason = _sanitize_error_message(search_exc)[:240]
                             logger.warning(
-                                f"[WEB_RESEARCH] fallback sem busca (etapa={stage_label}, modelo={model_name}, motivo={fallback_reason})"
+                                f"[WEB_RESEARCH] indisponivel etapa={stage_label} motivo={short_reason} video adiado"
                             )
-                            plain_config = types.GenerateContentConfig(**base_config_kwargs)
-                            response = _call_gemini_with_retries(client, plain_config)
-                            generated_text = response.text
-                        else:
-                            sources_count = _count_gemini_grounding_sources(response)
-                            logger.info(
-                                f"[WEB_RESEARCH] ativo=True etapa={stage_label} provider=gemini modelo={model_name} fontes={sources_count}"
+                            raise WebResearchUnavailableError(
+                                reason=short_reason,
+                                stage=stage_label,
+                                model=model_name,
+                            ) from search_exc
+
+                        if not generated_text or not str(generated_text).strip():
+                            short_reason = "empty_response"
+                            logger.warning(
+                                f"[WEB_RESEARCH] indisponivel etapa={stage_label} motivo={short_reason} video adiado"
                             )
+                            raise WebResearchUnavailableError(
+                                reason=short_reason,
+                                stage=stage_label,
+                                model=model_name,
+                            )
+
+                        sources_count = _count_gemini_grounding_sources(response)
+                        logger.info(
+                            f"[WEB_RESEARCH] ativo=True etapa={stage_label} provider=gemini modelo={model_name} fontes={sources_count}"
+                        )
                     else:
                         generation_config = types.GenerateContentConfig(**base_config_kwargs)
-                        response = _call_gemini_with_retries(client, generation_config)
+                        response = _call_gemini_with_retries(
+                            client,
+                            generation_config,
+                            retry_on_quota=True,
+                        )
                         generated_text = response.text
+            except WebResearchUnavailableError:
+                raise
             except (AttributeError, IndexError, ValueError) as e:
                 logger.warning(f"gemini returned invalid response content: {str(e)}")
                 raise ValueError(f"[{llm_provider}] returned invalid response content")
@@ -779,6 +823,8 @@ def _generate_response(
                 f"[{llm_provider}] returned an empty response, please check your network connection and try again."
             )
 
+    except WebResearchUnavailableError:
+        raise
     except Exception as e:
         return f"Error: {_sanitize_error_message(e)}"
 
@@ -998,6 +1044,8 @@ def generate_script(
 
             if final_script:
                 break
+        except WebResearchUnavailableError:
+            raise
         except Exception as e:
             logger.error(f"failed to generate script: {e}")
 

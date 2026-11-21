@@ -5,7 +5,7 @@ Sem chamadas de rede reais: todos os clientes externos são mockados.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import os
 import tempfile
 import types as py_types
@@ -16,6 +16,7 @@ from fastapi import Request
 
 from app.config import config
 from app.controllers.v2 import operations as v2_ops
+from app.models import const
 from app.models.exception import HttpException
 from app.services import (
     autonomous_production,
@@ -24,6 +25,7 @@ from app.services import (
     operator_console,
     profile_manager,
     scheduler,
+    state as sm,
     task as tm,
     trend_radar,
 )
@@ -216,28 +218,26 @@ class TestPesquisaWebRoteiro(unittest.TestCase):
         self.assertNotIn("SECRET_GEMINI_KEY_XYZ", joined_logs)
 
     # ------------------------------------------------------------------
-    # (3) falha na chamada com busca -> segunda chamada sem busca + warning explícito
+    # (3) falha na chamada com busca -> levanta WebResearchUnavailableError (NUNCA fallback sem busca)
     # ------------------------------------------------------------------
-    def test_3_web_search_failure_falls_back_once_without_search_and_logs_warning(self):
+    def test_3_web_search_failure_raises_unavailable_without_fallback(self):
         app_cfg = {
             "llm_provider": "gemini",
-            "gemini_api_key": "fake-key-fallback",
+            "gemini_api_key": "fake-key-fail-closed",
             "gemini_model_name": "gemini-2.5-flash",
             "gemini_base_url": "",
         }
 
-        # Caso A: modelo rejeita google_search (erro não transitório 400)
+        # Caso A: modelo rejeita google_search (erro 400) -> 1 chamada, sem fallback sem busca
         configs_case_a = []
 
         class FakeModelsUnsupported:
             def generate_content(self, **kwargs):
                 cfg = kwargs["config"]
                 configs_case_a.append(cfg)
-                if cfg.tools:
-                    err = Exception("400 INVALID_ARGUMENT: Search grounding is not supported for this model")
-                    err.code = 400
-                    raise err
-                return py_types.SimpleNamespace(text="Roteiro gerado via fallback sem busca")
+                err = Exception("400 INVALID_ARGUMENT: Search grounding is not supported for this model")
+                err.code = 400
+                raise err
 
         class FakeClientA:
             def __init__(self, **kwargs):
@@ -252,32 +252,33 @@ class TestPesquisaWebRoteiro(unittest.TestCase):
         warnings_a: list[str] = []
         sink_a = llm.logger.add(lambda msg: warnings_a.append(str(msg)), level="WARNING")
         try:
-            with patch("google.genai.Client", FakeClientA):
-                out_a = llm._generate_response(
-                    "Escreva roteiro GTA VI",
-                    app_config=app_cfg,
-                    web_search=True,
-                    web_search_stage="script",
-                )
+            with patch("google.genai.Client", FakeClientA), patch("app.services.llm.time.sleep") as mock_sleep_a:
+                with self.assertRaises(llm.WebResearchUnavailableError) as ctx_a:
+                    llm._generate_response(
+                        "Escreva roteiro GTA VI",
+                        app_config=app_cfg,
+                        web_search=True,
+                        web_search_stage="script",
+                    )
         finally:
             llm.logger.remove(sink_a)
 
-        self.assertEqual(out_a, "Roteiro gerado via fallback sem busca")
-        self.assertEqual(len(configs_case_a), 2)
+        self.assertEqual(len(configs_case_a), 1)
         self.assertIsNotNone(configs_case_a[0].tools)
-        self.assertIsNone(configs_case_a[1].tools)
-        self.assertTrue(any("[WEB_RESEARCH] fallback sem busca" in w for w in warnings_a))
+        mock_sleep_a.assert_not_called()
+        self.assertIn("web_research_unavailable", str(ctx_a.exception))
+        self.assertTrue(
+            any("[WEB_RESEARCH] indisponivel etapa=script motivo=" in w and "video adiado" in w for w in warnings_a)
+        )
 
-        # Caso B: chamada com busca retorna resposta vazia -> fallback sem busca
+        # Caso B: chamada com busca retorna resposta vazia -> levanta WebResearchUnavailableError sem fallback
         configs_case_b = []
 
         class FakeModelsEmptySearch:
             def generate_content(self, **kwargs):
                 cfg = kwargs["config"]
                 configs_case_b.append(cfg)
-                if cfg.tools:
-                    return py_types.SimpleNamespace(text="   ")
-                return py_types.SimpleNamespace(text="Texto válido sem busca")
+                return py_types.SimpleNamespace(text="   ")
 
         class FakeClientB:
             def __init__(self, **kwargs):
@@ -293,20 +294,22 @@ class TestPesquisaWebRoteiro(unittest.TestCase):
         sink_b = llm.logger.add(lambda msg: warnings_b.append(str(msg)), level="WARNING")
         try:
             with patch("google.genai.Client", FakeClientB):
-                out_b = llm._generate_response(
-                    "Escreva roteiro GTA VI",
-                    app_config=app_cfg,
-                    web_search=True,
-                    web_search_stage="script",
-                )
+                with self.assertRaises(llm.WebResearchUnavailableError) as ctx_b:
+                    llm._generate_response(
+                        "Escreva roteiro GTA VI",
+                        app_config=app_cfg,
+                        web_search=True,
+                        web_search_stage="ideias",
+                    )
         finally:
             llm.logger.remove(sink_b)
 
-        self.assertEqual(out_b, "Texto válido sem busca")
-        self.assertEqual(len(configs_case_b), 2)
+        self.assertEqual(len(configs_case_b), 1)
         self.assertIsNotNone(configs_case_b[0].tools)
-        self.assertIsNone(configs_case_b[1].tools)
-        self.assertTrue(any("[WEB_RESEARCH] fallback sem busca" in w for w in warnings_b))
+        self.assertEqual(ctx_b.exception.reason, "empty_response")
+        self.assertTrue(
+            any("[WEB_RESEARCH] indisponivel etapa=ideias motivo=empty_response video adiado" in w for w in warnings_b)
+        )
 
     # ------------------------------------------------------------------
     # (4) provider não-Gemini com web_search=True: ignora busca, loga aviso 1x e não quebra
@@ -490,6 +493,412 @@ class TestPesquisaWebRoteiro(unittest.TestCase):
                     payload=v2_ops.UpdateEditorialSettingsRequest(web_search=True),
                 )
             self.assertEqual(ctx.exception.status_code, 400)
+
+    # ------------------------------------------------------------------
+    # Falha fechada (v2/pesquisa-web-falha-fechada)
+    # (1) 429/RESOURCE_EXHAUSTED com busca falha imediatamente, sem sleep de retry
+    # ------------------------------------------------------------------
+    def test_8_429_with_web_search_fails_immediately_without_sleep(self):
+        app_cfg = {
+            "llm_provider": "gemini",
+            "gemini_api_key": "fake-key-429",
+            "gemini_model_name": "gemini-2.5-flash-lite",
+            "gemini_base_url": "",
+        }
+        calls = 0
+
+        class FakeModels429:
+            def generate_content(self, **kwargs):
+                nonlocal calls
+                calls += 1
+                err = Exception("429 RESOURCE_EXHAUSTED: Search grounding quota exceeded")
+                err.code = 429
+                raise err
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.models = FakeModels429()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        logs: list[str] = []
+        sink_id = llm.logger.add(lambda m: logs.append(str(m)), level="WARNING")
+        try:
+            with patch("google.genai.Client", FakeClient), patch("app.services.llm.time.sleep") as mock_sleep:
+                with self.assertRaises(llm.WebResearchUnavailableError) as ctx:
+                    llm._generate_response(
+                        "Notícias de hoje sobre GTA VI",
+                        app_config=app_cfg,
+                        web_search=True,
+                        web_search_stage="ideias",
+                    )
+        finally:
+            llm.logger.remove(sink_id)
+
+        self.assertEqual(calls, 1)
+        mock_sleep.assert_not_called()
+        self.assertIn("429", ctx.exception.reason)
+        self.assertTrue(
+            any("[WEB_RESEARCH] indisponivel etapa=ideias motivo=" in w and "video adiado" in w for w in logs)
+        )
+
+    # ------------------------------------------------------------------
+    # (2) 503 com busca respeita os retries existentes (5, 15, 45) e depois levanta WebResearchUnavailableError
+    # ------------------------------------------------------------------
+    def test_9_503_with_web_search_respects_retries_then_raises_unavailable(self):
+        app_cfg = {
+            "llm_provider": "gemini",
+            "gemini_api_key": "fake-key-503",
+            "gemini_model_name": "gemini-2.5-flash-lite",
+            "gemini_base_url": "",
+        }
+        calls = 0
+
+        class FakeModels503:
+            def generate_content(self, **kwargs):
+                nonlocal calls
+                calls += 1
+                err = Exception("503 UNAVAILABLE: Model overloaded")
+                err.code = 503
+                raise err
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.models = FakeModels503()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        with patch("google.genai.Client", FakeClient), patch("app.services.llm.time.sleep") as mock_sleep:
+            with self.assertRaises(llm.WebResearchUnavailableError):
+                llm._generate_response(
+                    "Roteiro com busca",
+                    app_config=app_cfg,
+                    web_search=True,
+                    web_search_stage="script",
+                )
+
+        # 1 tentativa inicial + 3 retries (5, 15, 45) = 4 chamadas; zero fallback sem busca
+        self.assertEqual(calls, 1 + len(llm.GEMINI_RETRY_DELAYS_SECONDS))
+        self.assertEqual(
+            [c.args[0] for c in mock_sleep.call_args_list],
+            list(llm.GEMINI_RETRY_DELAYS_SECONDS),
+        )
+
+    # ------------------------------------------------------------------
+    # (3) Regressão: chamada SEM busca com 429 mantém os retries atuais
+    # ------------------------------------------------------------------
+    def test_10_429_without_web_search_preserves_existing_retries(self):
+        app_cfg = {
+            "llm_provider": "gemini",
+            "gemini_api_key": "fake-key-no-search-429",
+            "gemini_model_name": "gemini-2.5-flash",
+            "gemini_base_url": "",
+        }
+        calls = 0
+
+        class FakeModels429Recover:
+            def generate_content(self, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    err = Exception("429 RESOURCE_EXHAUSTED: Rate limit")
+                    err.code = 429
+                    raise err
+                return py_types.SimpleNamespace(text="Recuperado sem busca")
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.models = FakeModels429Recover()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        with patch("google.genai.Client", FakeClient), patch("app.services.llm.time.sleep") as mock_sleep:
+            res = llm._generate_response(
+                "Prompt comum sem busca",
+                app_config=app_cfg,
+                web_search=False,
+            )
+
+        self.assertEqual(res, "Recuperado sem busca")
+        self.assertEqual(calls, 2)
+        mock_sleep.assert_called_once_with(llm.GEMINI_RETRY_DELAYS_SECONDS[0])
+
+    # ------------------------------------------------------------------
+    # Helper de perfil para testes de ciclo autônomo
+    # ------------------------------------------------------------------
+    def _create_autonomous_profile(self, name: str, web_search: bool) -> str:
+        onboard = profile_manager.onboard_channel_workspace(
+            name=name,
+            niche="games_gta",
+            topic_brief="Notícias recentes verificadas sobre GTA VI",
+            video_format="traditional",
+            autonomous_enabled=True,
+            require_destination=False,
+            db_path=self.db_path,
+        )
+        pid = onboard["profile_id"]
+        ws = profile_manager.get_profile_settings(pid, db_path=self.db_path)
+        ws.voice.voice_name = "pt-BR-AntonioNeural"
+        ws.visual.flow_enabled = False
+        ws.editorial.web_search = web_search
+        profile_manager.update_profile_settings(pid, ws, db_path=self.db_path)
+
+        # Destino YouTube ativo para não bloquear por falta de destino
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with profile_manager.get_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO publishing_channels
+                    (id, profile_id, platform, display_name, is_enabled, auto_publish_authorized, created_at, updated_at)
+                VALUES (?, ?, 'youtube', ?, 1, 0, ?, ?);
+                """,
+                (f"ch-yt-{pid}", pid, f"{name} YT", now_iso, now_iso),
+            )
+            conn.commit()
+        scheduler.set_setting("youtube_enabled", True, db_path=self.db_path)
+        autonomous_production.set_profile_autonomous_mode_enabled(pid, True, db_path=self.db_path)
+        return pid
+
+    # ------------------------------------------------------------------
+    # (4) Ideias: ciclo termina idle com reason="web_research_unavailable", sem tarefa e sem tentativa
+    # ------------------------------------------------------------------
+    def test_11_ideas_unavailable_cycle_ends_idle_without_task_or_attempt(self):
+        pid = self._create_autonomous_profile("Canal GTA Web", web_search=True)
+        now_dt = datetime(2026, 11, 21, 18, 0, 0, tzinfo=timezone.utc)
+        task_base = os.path.join(self.temp_dir.name, "tasks_ideas")
+        os.makedirs(task_base, exist_ok=True)
+
+        with (
+            patch.object(operator_console, "get_db_path", return_value=self.db_path),
+            patch.object(operator_console, "is_factory_paused", return_value=False),
+            patch.object(operator_console, "require_primary_instance", return_value=None),
+            patch.object(autonomous_production, "check_required_providers_preflight", return_value=(True, "ok", {})),
+            patch.object(
+                autopilot,
+                "generate_ideas",
+                side_effect=llm.WebResearchUnavailableError("429 RESOURCE_EXHAUSTED", stage="ideias"),
+            ),
+            patch("app.services.webui_task.submit_generation") as mock_submit,
+            patch("app.services.webui_task.has_active_generation_tasks", return_value=False),
+        ):
+            res = autonomous_production.run_autonomous_cycle(
+                now=now_dt,
+                force=True,
+                db_path=self.db_path,
+                task_base_dir=task_base,
+                profile_id=pid,
+            )
+
+        self.assertEqual(res["status"], "idle")
+        self.assertEqual(res["reason"], "web_research_unavailable")
+        mock_submit.assert_not_called()
+        self.assertEqual(
+            autonomous_production.count_generation_attempts_in_last_24h(
+                now=now_dt, db_path=self.db_path, profile_id=pid
+            ),
+            0,
+        )
+        # Visibilidade: motivo aparece no estado/mensagem do canal e em operational_events
+        saved_state = autonomous_production._get_cycle_setting(
+            autonomous_production.KEY_AUTONOMOUS_STATE, "", profile_id=pid, db_path=self.db_path
+        )
+        saved_msg = autonomous_production._get_cycle_setting(
+            autonomous_production.KEY_AUTONOMOUS_MESSAGE, "", profile_id=pid, db_path=self.db_path
+        )
+        self.assertEqual(saved_state, autonomous_production.STATE_BLOCKED)
+        self.assertIn("429 RESOURCE_EXHAUSTED", saved_msg)
+
+    # ------------------------------------------------------------------
+    # (5) Roteiro: erro propaga sem laço 3x/5x, tarefa falha no estágio script e NÃO conta nas tentativas 24h
+    # ------------------------------------------------------------------
+    def test_12_script_error_propagates_without_retry_loop_and_excludes_24h_attempt(self):
+        pid = self._create_autonomous_profile("Canal GTA Script", web_search=True)
+        now_dt = datetime.now(timezone.utc)
+        tid = "task-wr-script-001"
+
+        # Registra a tarefa no perfil e um evento generation_started (como o ciclo faz ao iniciar)
+        profile_manager.save_task_profile(tid, pid, db_path=self.db_path)
+        operator_console.log_operational_event(
+            component="autonomous_production",
+            severity=operator_console.SEVERITY_INFO,
+            event_type="generation_started",
+            task_id=tid,
+            message="Iniciando geração autônoma",
+            metadata={"profile_id": pid},
+            db_path=self.db_path,
+        )
+        self.assertEqual(
+            autonomous_production.count_generation_attempts_in_last_24h(
+                now=now_dt, db_path=self.db_path, profile_id=pid
+            ),
+            1,
+        )
+
+        # (5a) llm.generate_script deixa WebResearchUnavailableError propagar na 1ª tentativa (sem repetir _max_retries)
+        gen_calls = 0
+
+        def fail_web_research(**kwargs):
+            nonlocal gen_calls
+            gen_calls += 1
+            raise llm.WebResearchUnavailableError("429 RESOURCE_EXHAUSTED", stage="script")
+
+        with patch.object(llm, "_generate_response", side_effect=fail_web_research):
+            with self.assertRaises(llm.WebResearchUnavailableError):
+                llm.generate_script(
+                    video_subject="Novidade GTA VI",
+                    language="pt-BR",
+                    paragraph_number=1,
+                    web_search=True,
+                )
+        self.assertEqual(gen_calls, 1)
+
+        # (5b) task.start falha no estágio "script" com motivo web_research_unavailable e registra provider_unavailable_block
+        params = autonomous_production.build_autonomous_video_params(
+            topic="Novidade GTA VI",
+            profile_id=pid,
+            db_path=self.db_path,
+        )
+        orig_state = tm.sm.state
+        mem_state = sm.MemoryState()
+        tm.sm.state = mem_state
+        try:
+            with (
+                patch.object(operator_console, "get_db_path", return_value=self.db_path),
+                patch.object(llm, "_generate_response", side_effect=fail_web_research),
+            ):
+                fail_res = tm.start(tid, params, stop_at="script")
+        finally:
+            tm.sm.state = orig_state
+
+        self.assertEqual(gen_calls, 2)  # +1 chamada apenas (sem retry loop)
+        self.assertEqual(fail_res["state"], const.TASK_STATE_FAILED)
+        self.assertEqual(fail_res["failed_stage"], "script")
+        self.assertEqual(fail_res["reason"], "web_research_unavailable")
+        self.assertEqual(fail_res["WebResearch"], "UNAVAILABLE")
+
+        # (5c) Tentativas 24h por perfil, globais e consulta em lote do operator_console NÃO contam essa tarefa
+        self.assertEqual(
+            autonomous_production.count_generation_attempts_in_last_24h(
+                now=now_dt, db_path=self.db_path, profile_id=pid
+            ),
+            0,
+        )
+        self.assertEqual(
+            autonomous_production.count_all_profiles_attempts_24h(
+                now=now_dt, db_path=self.db_path
+            ),
+            0,
+        )
+        # Verifica também o SQL do operator_console (~4318) diretamente
+        h24_ago = (now_dt - timedelta(hours=24)).isoformat()
+        with scheduler.get_connection(self.db_path) as conn:
+            row = conn.execute(
+                f"""
+                SELECT count(DISTINCT COALESCE(NULLIF(o.task_id, ''), CAST(o.id AS TEXT))) AS cnt
+                FROM operational_events o
+                LEFT JOIN task_profiles tp ON tp.task_id = o.task_id
+                WHERE o.component = 'autonomous_production'
+                  AND o.event_type = 'generation_started'
+                  AND o.timestamp >= ?
+                  AND {autonomous_production.SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT};
+                """,
+                (h24_ago,),
+            ).fetchone()
+        self.assertEqual(int(row[0]), 0)
+
+    # ------------------------------------------------------------------
+    # (6) Cooldown de 20 min impede nova tentativa do mesmo perfil até expirar
+    # ------------------------------------------------------------------
+    def test_13_cooldown_20_min_blocks_same_profile_until_expired(self):
+        pid = self._create_autonomous_profile("Canal GTA Cooldown", web_search=True)
+        t0 = datetime(2026, 11, 21, 18, 0, 0, tzinfo=timezone.utc)
+        t_during = t0 + timedelta(minutes=10)
+        t_after = t0 + timedelta(minutes=21)
+        task_base = os.path.join(self.temp_dir.name, "tasks_cooldown")
+        os.makedirs(task_base, exist_ok=True)
+
+        discover_calls = 0
+
+        def fake_discover(*args, **kwargs):
+            nonlocal discover_calls
+            discover_calls += 1
+            if discover_calls == 1:
+                raise llm.WebResearchUnavailableError("429 RESOURCE_EXHAUSTED", stage="ideias")
+            return None  # após expirar cooldown, volta a consultar normalmente
+
+        with (
+            patch.object(operator_console, "get_db_path", return_value=self.db_path),
+            patch.object(operator_console, "is_factory_paused", return_value=False),
+            patch.object(operator_console, "require_primary_instance", return_value=None),
+            patch.object(autonomous_production, "check_required_providers_preflight", return_value=(True, "ok", {})),
+            patch.object(autonomous_production, "discover_candidate_topic", side_effect=fake_discover),
+            patch("app.services.webui_task.has_active_generation_tasks", return_value=False),
+        ):
+            r1 = autonomous_production.run_autonomous_cycle(
+                now=t0, force=True, db_path=self.db_path, task_base_dir=task_base, profile_id=pid
+            )
+            # 10 min depois: bloqueado pelo cooldown de 20 min sem chamar discover_candidate_topic novamente
+            r2 = autonomous_production.run_autonomous_cycle(
+                now=t_during, force=True, db_path=self.db_path, task_base_dir=task_base, profile_id=pid
+            )
+            # 21 min depois: cooldown expirou -> volta a chamar discover_candidate_topic
+            r3 = autonomous_production.run_autonomous_cycle(
+                now=t_after, force=True, db_path=self.db_path, task_base_dir=task_base, profile_id=pid
+            )
+
+        self.assertEqual(r1["status"], "idle")
+        self.assertEqual(r1["reason"], "web_research_unavailable")
+
+        self.assertEqual(r2["status"], "idle")
+        self.assertEqual(r2["reason"], "web_research_unavailable")
+        self.assertGreaterEqual(r2.get("cooldown_remaining_minutes", 0), 1)
+
+        self.assertEqual(r3["status"], "idle")
+        self.assertEqual(r3["reason"], "no_candidate")
+        # discover_candidate_topic chamado em t0 e t_after, mas NÃO em t_during!
+        self.assertEqual(discover_calls, 2)
+
+    # ------------------------------------------------------------------
+    # (7) Canal sem web_search não muda de comportamento
+    # ------------------------------------------------------------------
+    def test_14_channel_without_web_search_is_unaffected(self):
+        pid = self._create_autonomous_profile("Canal Normal Sem Busca", web_search=False)
+        now_dt = datetime(2026, 11, 21, 18, 0, 0, tzinfo=timezone.utc)
+        task_base = os.path.join(self.temp_dir.name, "tasks_normal")
+        os.makedirs(task_base, exist_ok=True)
+
+        # Mesmo com erro genérico no autopilot, canal sem web_search continua retornando no_candidate (sem WebResearchUnavailableError)
+        with (
+            patch.object(operator_console, "get_db_path", return_value=self.db_path),
+            patch.object(operator_console, "is_factory_paused", return_value=False),
+            patch.object(operator_console, "require_primary_instance", return_value=None),
+            patch.object(autonomous_production, "check_required_providers_preflight", return_value=(True, "ok", {})),
+            patch.object(autopilot, "generate_ideas", side_effect=RuntimeError("Erro genérico LLM")) as mock_ideas,
+            patch("app.services.webui_task.has_active_generation_tasks", return_value=False),
+        ):
+            res = autonomous_production.run_autonomous_cycle(
+                now=now_dt,
+                force=True,
+                db_path=self.db_path,
+                task_base_dir=task_base,
+                profile_id=pid,
+            )
+
+        self.assertEqual(res["status"], "idle")
+        self.assertEqual(res["reason"], "no_candidate")
+        self.assertIs(mock_ideas.call_args.kwargs["web_search"], False)
 
 
 if __name__ == "__main__":

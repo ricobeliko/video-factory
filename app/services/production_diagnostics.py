@@ -735,7 +735,7 @@ def _get_diagnostics_overview_impl(
                     e
                     for e in reversed(t_evs_sorted)
                     if e["event_type"] == "provider_unavailable_block"
-                    and autonomous_production.is_insufficient_credits_block_metadata(e.get("metadata"))
+                    and autonomous_production.is_non_attempt_provider_block_metadata(e.get("metadata"))
                 ),
                 None,
             )

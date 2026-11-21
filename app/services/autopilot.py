@@ -187,6 +187,8 @@ def generate_ideas(
             gen_kwargs["web_search"] = True
             gen_kwargs["web_search_stage"] = "ideias"
         response = llm._generate_response(**gen_kwargs)
+    except llm.WebResearchUnavailableError:
+        raise
     except Exception as exc:
         logger.error(f"[Autopilot] LLM idea generation failed: {exc}")
         raise exc

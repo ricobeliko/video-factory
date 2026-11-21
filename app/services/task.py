@@ -3440,7 +3440,30 @@ def _run_pipeline(
 
     # 1. Generate script
     logger.info(f"[GEN][SCRIPT_START] task_id={task_id}")
-    video_script = generate_script(task_id, params)
+    try:
+        video_script = generate_script(task_id, params)
+    except llm.WebResearchUnavailableError as web_err:
+        err_msg = str(web_err)
+        logger.warning(f"[GEN][WEB_RESEARCH_UNAVAILABLE] task_id={task_id} error={err_msg}")
+        try:
+            from app.services import autonomous_production
+            autonomous_production.record_web_research_task_block_event(
+                task_id=task_id,
+                message=err_msg,
+                failed_stage="script",
+            )
+        except Exception as blk_exc:
+            logger.debug(f"[GEN][WEB_RESEARCH_UNAVAILABLE] Falha não-bloqueante ao registrar evento: {blk_exc}")
+        return _mark_task_failed(
+            task_id,
+            "script",
+            err_msg,
+            details={
+                "error_code": "web_research_unavailable",
+                "reason": "web_research_unavailable",
+                "WebResearch": "UNAVAILABLE",
+            },
+        )
     if not video_script or "Error: " in video_script:
         error = (
             video_script.removeprefix("Error: ").strip()

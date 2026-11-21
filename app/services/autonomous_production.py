@@ -118,6 +118,11 @@ KEY_AUTONOMOUS_GLOBAL_MAX_ATTEMPTS_24H = "autonomous_global_max_attempts_24h"
 # Persistência e classificação única de bloqueio por saldo insuficiente no pool Google Flow
 KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG = "autonomous_flow_credits_block_sig"
 KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_MSG = "autonomous_flow_credits_block_msg"
+# Persistência e cooldown mínimo por perfil para indisponibilidade de Pesquisa na Web (Gemini Search grounding)
+KEY_AUTONOMOUS_WEB_RESEARCH_COOLDOWN_UNTIL = "autonomous_web_research_cooldown_until"
+KEY_AUTONOMOUS_WEB_RESEARCH_BLOCK_MSG = "autonomous_web_research_block_msg"
+WEB_RESEARCH_COOLDOWN_MINUTES = 20
+
 SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT = (
     "NOT EXISTS ("
     "SELECT 1 FROM operational_events blk "
@@ -126,7 +131,10 @@ SQL_EXCLUDE_INSUFFICIENT_CREDITS_ATTEMPT = (
     "  AND blk.component = 'autonomous_production' "
     "  AND blk.event_type = 'provider_unavailable_block' "
     "  AND json_valid(blk.metadata_json) = 1 "
-    "  AND json_extract(blk.metadata_json, '$.Flow') = 'INSUFFICIENT_CREDITS'"
+    "  AND ("
+    "    json_extract(blk.metadata_json, '$.Flow') = 'INSUFFICIENT_CREDITS'"
+    "    OR json_extract(blk.metadata_json, '$.WebResearch') = 'UNAVAILABLE'"
+    "  )"
     ")"
 )
 
@@ -145,6 +153,39 @@ def is_insufficient_credits_block_metadata(metadata: Any) -> bool:
         except Exception:
             return False
     return isinstance(metadata, dict) and metadata.get("Flow") == "INSUFFICIENT_CREDITS"
+
+
+def is_web_research_unavailable_block_metadata(metadata: Any) -> bool:
+    """Identifica metadados de evento provider_unavailable_block causados por pesquisa na web indisponível."""
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            return False
+    return isinstance(metadata, dict) and metadata.get("WebResearch") == "UNAVAILABLE"
+
+
+def is_non_attempt_provider_block_metadata(metadata: Any) -> bool:
+    """Identifica bloqueios de provedor que NÃO devem ser contabilizados como tentativa de geração em 24h."""
+    return is_insufficient_credits_block_metadata(metadata) or is_web_research_unavailable_block_metadata(metadata)
+
+
+def _is_web_research_unavailable_failure(task_data: Dict[str, Any]) -> bool:
+    """Identifica se uma task FAILED falhou por indisponibilidade da pesquisa na web (fail-closed)."""
+    if not isinstance(task_data, dict):
+        return False
+    code = str(task_data.get("error_code") or task_data.get("reason") or "").strip().lower()
+    if code == "web_research_unavailable":
+        return True
+    if task_data.get("WebResearch") == "UNAVAILABLE":
+        return True
+    details = task_data.get("details")
+    if isinstance(details, dict):
+        d_code = str(details.get("error_code") or details.get("reason") or "").strip().lower()
+        if d_code == "web_research_unavailable" or details.get("WebResearch") == "UNAVAILABLE":
+            return True
+    err_txt = str(task_data.get("error") or "").lower()
+    return "web_research_unavailable" in err_txt
 
 
 def _is_insufficient_pool_credits_failure(task_data: Dict[str, Any]) -> bool:
@@ -252,6 +293,123 @@ def _record_flow_insufficient_credits_block(
     }
     if task_id:
         result["task_id"] = task_id
+    return result
+
+
+def _has_web_research_block_event_for_task(
+    task_id: Optional[str],
+    db_path: Optional[str] = None,
+) -> bool:
+    """Verifica se já existe evento provider_unavailable_block de WebResearch para a task."""
+    clean_tid = str(task_id or "").strip()
+    if not clean_tid:
+        return False
+    try:
+        effective_db = db_path or operator_console.get_db_path()
+        with scheduler.get_connection(effective_db) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM operational_events
+                WHERE task_id = ?
+                  AND component = 'autonomous_production'
+                  AND event_type = 'provider_unavailable_block'
+                  AND json_valid(metadata_json) = 1
+                  AND json_extract(metadata_json, '$.WebResearch') = 'UNAVAILABLE'
+                LIMIT 1;
+                """,
+                (clean_tid,),
+            ).fetchone()
+            return row is not None
+    except Exception:
+        return False
+
+
+def record_web_research_task_block_event(
+    task_id: str,
+    message: str,
+    *,
+    failed_stage: str = "script",
+    db_path: Optional[str] = None,
+) -> None:
+    """Registra evento provider_unavailable_block com marcador $.WebResearch='UNAVAILABLE' para uma task."""
+    clean_tid = str(task_id or "").strip()
+    effective_db = db_path or operator_console.get_db_path()
+    if not clean_tid or _has_web_research_block_event_for_task(clean_tid, db_path=effective_db):
+        return
+    operator_console.log_operational_event(
+        component="autonomous_production",
+        severity=operator_console.SEVERITY_WARNING,
+        event_type="provider_unavailable_block",
+        task_id=clean_tid,
+        message=message,
+        metadata={
+            "WebResearch": "UNAVAILABLE",
+            "reason": "web_research_unavailable",
+            "failed_stage": failed_stage,
+        },
+        db_path=effective_db,
+    )
+
+
+def _record_web_research_unavailable(
+    *,
+    profile_id: str,
+    message: str,
+    stage: str,
+    now: datetime,
+    task_id: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+    log_event: bool = True,
+    set_cooldown: bool = True,
+    return_status: str = "idle",
+    cooldown_remaining_minutes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Classifica, persiste estado/cooldown por perfil e registra evento de pesquisa na web indisponível."""
+    _set_cycle_setting(KEY_AUTONOMOUS_STATE, STATE_BLOCKED, profile_id=profile_id, db_path=db_path)
+    _set_cycle_setting(KEY_AUTONOMOUS_MESSAGE, message, profile_id=profile_id, db_path=db_path)
+    _set_cycle_setting(KEY_AUTONOMOUS_LAST_RESULT, message, profile_id=profile_id, db_path=db_path)
+
+    if set_cooldown:
+        until_iso = (now + timedelta(minutes=WEB_RESEARCH_COOLDOWN_MINUTES)).isoformat()
+        _set_cycle_setting(
+            KEY_AUTONOMOUS_WEB_RESEARCH_COOLDOWN_UNTIL,
+            until_iso,
+            profile_id=profile_id,
+            db_path=db_path,
+        )
+        _set_cycle_setting(
+            KEY_AUTONOMOUS_WEB_RESEARCH_BLOCK_MSG,
+            message,
+            profile_id=profile_id,
+            db_path=db_path,
+        )
+
+    if log_event and not _has_web_research_block_event_for_task(task_id, db_path=db_path):
+        meta = dict(details or {})
+        meta.setdefault("WebResearch", "UNAVAILABLE")
+        meta.setdefault("reason", "web_research_unavailable")
+        meta.setdefault("stage", stage)
+        operator_console.log_operational_event(
+            component="autonomous_production",
+            severity=operator_console.SEVERITY_WARNING,
+            event_type="provider_unavailable_block",
+            task_id=task_id,
+            message=message,
+            metadata=meta,
+            db_path=db_path,
+        )
+
+    result: Dict[str, Any] = {
+        "status": return_status,
+        "reason": "web_research_unavailable",
+        "message": message,
+        "profile_id": profile_id,
+    }
+    if task_id:
+        result["task_id"] = task_id
+    if cooldown_remaining_minutes is not None:
+        result["cooldown_remaining_minutes"] = cooldown_remaining_minutes
     return result
 
 
@@ -2286,7 +2444,7 @@ def discover_candidate_topic(
 
     # 3. Fallback: Autopilot Idea Generator
     try:
-        from app.services import autopilot
+        from app.services import autopilot, llm
         ideas = autopilot.generate_ideas(
             niche=niche,
             count=10,
@@ -2303,6 +2461,8 @@ def discover_candidate_topic(
                     "trend_data": None,
                     "origin": "autopilot_ideas",
                 }
+    except llm.WebResearchUnavailableError:
+        raise
     except Exception as exc:
         logger.warning(f"[AUTONOMOUS_PRODUCTION] Erro ao gerar ideias via autopilot: {exc}")
 
@@ -3255,6 +3415,28 @@ def _run_autonomous_cycle(
                     db_path=db_path,
                     log_event=True,
                 )
+            if _is_web_research_unavailable_failure(task_data):
+                err_detail = task_data.get("error") or "Pesquisa na web indisponível"
+                msg = (
+                    f"Pesquisa na web indisponível no roteiro ({err_detail}). "
+                    f"Vídeo adiado por {WEB_RESEARCH_COOLDOWN_MINUTES} min (sem consumir tentativa)."
+                )
+                return _record_web_research_unavailable(
+                    profile_id=target_profile_id,
+                    message=msg,
+                    stage="script",
+                    now=current_time,
+                    task_id=failed_task_id,
+                    details={
+                        "WebResearch": "UNAVAILABLE",
+                        "reason": "web_research_unavailable",
+                        "failed_stage": failed_stage or task_data.get("stage") or "script",
+                    },
+                    db_path=db_path,
+                    log_event=True,
+                    set_cooldown=True,
+                    return_status="blocked",
+                )
             _set_status(KEY_AUTONOMOUS_STATE, STATE_ERROR)
             is_interrupted = (
                 failed_stage in ("interrupted_by_restart", "generation_interrupted")
@@ -3827,6 +4009,39 @@ def _run_autonomous_cycle(
 
     probe_flow_enabled = bool(getattr(probe_params, "flow_enabled", False))
     probe_scene_count = getattr(probe_params, "flow_scene_count", 6)
+    probe_web_search = bool(getattr(probe_params, "web_search", False))
+
+    # Guarda de cooldown por perfil para Pesquisa na Web indisponível (20 min)
+    saved_wr_until = str(_get_status(KEY_AUTONOMOUS_WEB_RESEARCH_COOLDOWN_UNTIL, "") or "").strip()
+    if not probe_web_search:
+        if saved_wr_until:
+            _set_status(KEY_AUTONOMOUS_WEB_RESEARCH_COOLDOWN_UNTIL, "")
+            _set_status(KEY_AUTONOMOUS_WEB_RESEARCH_BLOCK_MSG, "")
+    elif saved_wr_until:
+        try:
+            wr_until_dt = scheduler._from_iso(saved_wr_until)
+            if current_time < wr_until_dt:
+                rem_min = max(1, int(math.ceil((wr_until_dt - current_time).total_seconds() / 60.0)))
+                cached_wr_msg = (
+                    str(_get_status(KEY_AUTONOMOUS_WEB_RESEARCH_BLOCK_MSG, "") or "").strip()
+                    or f"Pesquisa na web indisponível. Aguardando cooldown ({rem_min} min restantes)."
+                )
+                return _record_web_research_unavailable(
+                    profile_id=target_profile_id,
+                    message=cached_wr_msg,
+                    stage="cooldown",
+                    now=current_time,
+                    db_path=db_path,
+                    log_event=False,
+                    set_cooldown=False,
+                    return_status="idle",
+                    cooldown_remaining_minutes=rem_min,
+                )
+        except Exception:
+            pass
+        _set_status(KEY_AUTONOMOUS_WEB_RESEARCH_COOLDOWN_UNTIL, "")
+        _set_status(KEY_AUTONOMOUS_WEB_RESEARCH_BLOCK_MSG, "")
+
     saved_flow_block_sig = str(_get_status(KEY_AUTONOMOUS_FLOW_CREDITS_BLOCK_SIG, "") or "").strip()
     if not probe_flow_enabled:
         if saved_flow_block_sig:
@@ -3891,13 +4106,37 @@ def _run_autonomous_cycle(
     _set_status(KEY_AUTONOMOUS_STATE, STATE_PLANNING)
     _set_status(KEY_AUTONOMOUS_MESSAGE, f"Estoque abaixo da meta ({ready_total}/{target_stock}). Selecionando {tasks_to_create} tema(s)...")
 
-    candidate = discover_candidate_topic(
-        niche=probe_params.niche,
-        language=probe_params.video_language,
-        db_path=db_path,
-        topic_brief=probe_params.topic_brief,
-        web_search=bool(getattr(probe_params, "web_search", False)),
-    )
+    from app.services import llm as llm_service
+
+    try:
+        candidate = discover_candidate_topic(
+            niche=probe_params.niche,
+            language=probe_params.video_language,
+            db_path=db_path,
+            topic_brief=probe_params.topic_brief,
+            web_search=bool(getattr(probe_params, "web_search", False)),
+        )
+    except llm_service.WebResearchUnavailableError as web_err:
+        msg = (
+            f"Pesquisa na web indisponível ({web_err.reason}). "
+            f"Vídeo adiado por {WEB_RESEARCH_COOLDOWN_MINUTES} min."
+        )
+        return _record_web_research_unavailable(
+            profile_id=target_profile_id,
+            message=msg,
+            stage="ideias",
+            now=current_time,
+            details={
+                "WebResearch": "UNAVAILABLE",
+                "reason": "web_research_unavailable",
+                "stage": "ideias",
+                "detail": web_err.reason,
+            },
+            db_path=db_path,
+            log_event=True,
+            set_cooldown=True,
+            return_status="idle",
+        )
     if not candidate or not candidate.get("topic"):
         _set_status(KEY_AUTONOMOUS_STATE, STATE_IDLE)
         msg = "Nenhum candidato a tema elegível encontrado sem duplicação."

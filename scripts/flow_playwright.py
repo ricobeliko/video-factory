@@ -23,8 +23,9 @@ import sys
 import copy
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 from playwright.sync_api import BrowserContext, Locator, Page, Playwright, expect, sync_playwright
@@ -57,6 +58,90 @@ WINDOWS_WINDOW_BORDER_Y: int = 16   # bordas verticais da moldura da janela
 EDGE_CHROME_HEADER_HEIGHT: int = 80 # altura do cabeçalho do Edge (abas, barra de navegação/endereços)
 MIN_HEADFUL_WIDTH: int = 1024
 MIN_HEADFUL_HEIGHT: int = 600
+
+
+class FlowBlockingModalError(RuntimeError):
+    """Erro explícito quando um modal bloqueante do Flow persiste após tentativas seguras de dispensa."""
+
+
+class FlowProjectNotFoundError(RuntimeError):
+    """Erro imediato quando uma project_url do Flow exibe 'Projeto não encontrado' / 'Project not found'."""
+
+
+FLOW_MODAL_ALLOWLIST_LABELS: Tuple[str, ...] = (
+    "got it",
+    "entendi",
+    "continuar",
+    "continue",
+    "começar",
+    "comecar",
+    "get started",
+    "fechar",
+    "close",
+    "dismiss",
+    "agora não",
+    "agora nao",
+    "not now",
+    "skip",
+    "pular",
+    "ok",
+)
+
+FLOW_MODAL_FORBIDDEN_TERMS: Tuple[str, ...] = (
+    "upgrade",
+    "assinar",
+    "subscribe",
+    "comprar",
+    "buy",
+    "purchase",
+    "pagar",
+    "pay",
+    "plano",
+    "plan",
+    "créditos",
+    "creditos",
+    "credits",
+)
+
+PROJECT_NOT_FOUND_PATTERNS: Tuple[str, ...] = (
+    "Projeto não encontrado",
+    "Project not found",
+)
+
+
+def _normalize_modal_text(text: str) -> str:
+    """Normaliza espaços e caixa para comparação segura de rótulos de modal."""
+    return re.sub(r"\s+", " ", (text or "").strip()).lower()
+
+
+def _fold_accents(text: str) -> str:
+    """Remove diacríticos para comparação case/accent-insensitive."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+
+
+_FLOW_MODAL_ALLOWLIST_FOLDED: Set[str] = {
+    _fold_accents(_normalize_modal_text(label)) for label in FLOW_MODAL_ALLOWLIST_LABELS
+}
+_FLOW_MODAL_FORBIDDEN_FOLDED: Tuple[str, ...] = tuple(
+    sorted({_fold_accents(_normalize_modal_text(term)) for term in FLOW_MODAL_FORBIDDEN_TERMS})
+)
+
+
+def _contains_forbidden_modal_term(text: str) -> bool:
+    """Retorna True se o texto contiver qualquer termo proibido (compra/assinatura/upgrade/créditos)."""
+    folded = _fold_accents(_normalize_modal_text(text))
+    if not folded:
+        return False
+    return any(term in folded for term in _FLOW_MODAL_FORBIDDEN_FOLDED)
+
+
+def _is_allowed_modal_label(text: str) -> bool:
+    """Retorna True somente se o rótulo normalizado estiver na allowlist estrita."""
+    folded = _fold_accents(_normalize_modal_text(text))
+    if not folded:
+        return False
+    return folded in _FLOW_MODAL_ALLOWLIST_FOLDED
 
 
 def get_windows_workarea() -> Optional[Tuple[int, int]]:
@@ -517,6 +602,23 @@ def navigate_landing_to_studio(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_
     return page.url
 
 
+def _is_project_not_found_visible(page: Any) -> bool:
+    """Fonte única de detecção da mensagem 'Projeto não encontrado' / 'Project not found'."""
+    if not page:
+        return False
+    locator_fn = getattr(page, "locator", None)
+    if not locator_fn:
+        return False
+    for pattern in PROJECT_NOT_FOUND_PATTERNS:
+        try:
+            loc = locator_fn(f"text={pattern}")
+            if _safe_locator_count(loc) > 0 and getattr(loc.first, "is_visible", lambda: False)() is True:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def ensure_studio_surface(
     page: Page,
     project_url: Optional[str] = None,
@@ -532,6 +634,8 @@ def ensure_studio_surface(
     4. Landing page sem project_url -> clica 'Novo projeto' exatamente uma vez
 
     NUNCA clica em 'Novo projeto' quando project_url for fornecida.
+    Se 'Projeto não encontrado' / 'Project not found' estiver visível após abrir project_url,
+    levanta FlowProjectNotFoundError imediatamente (sem aguardar 30s).
     """
     page.set_default_timeout(timeout_ms)
     editor = page.locator('div.ProseMirror[contenteditable="true"]')
@@ -541,7 +645,50 @@ def ensure_studio_surface(
         if page.url != project_url:
             page.goto(project_url)
             page.wait_for_load_state("domcontentloaded")
-        page.wait_for_url(re.compile(r".*/project/.*"), timeout=timeout_ms)
+        if _is_project_not_found_visible(page):
+            logger.error(f"[FLOW_PROJECT_NOT_FOUND] Projeto não encontrado ao abrir project_url: {project_url}")
+            raise FlowProjectNotFoundError(
+                f"FLOW_PROJECT_NOT_FOUND: Projeto não encontrado na URL {project_url}"
+            )
+        try:
+            page.wait_for_url(re.compile(r".*/project/.*"), timeout=timeout_ms)
+        except Exception:
+            if _is_project_not_found_visible(page):
+                logger.error(f"[FLOW_PROJECT_NOT_FOUND] Projeto não encontrado ao abrir project_url: {project_url}")
+                raise FlowProjectNotFoundError(
+                    f"FLOW_PROJECT_NOT_FOUND: Projeto não encontrado na URL {project_url}"
+                )
+            raise
+        if _is_project_not_found_visible(page):
+            logger.error(f"[FLOW_PROJECT_NOT_FOUND] Projeto não encontrado após abrir project_url: {project_url}")
+            raise FlowProjectNotFoundError(
+                f"FLOW_PROJECT_NOT_FOUND: Projeto não encontrado na URL {project_url}"
+            )
+        # Espera cooperativa curta para detectar 'Projeto não encontrado' assim que o SPA renderizar,
+        # evitando aguardar 30s no expect(editor) quando o projeto está morto.
+        try:
+            editor_vis_fn = getattr(editor, "is_visible", None)
+            if callable(editor_vis_fn) and editor_vis_fn() is False:
+                deadline = time.monotonic() + (timeout_ms / 1000.0)
+                while time.monotonic() < deadline:
+                    if _is_project_not_found_visible(page):
+                        logger.error(
+                            f"[FLOW_PROJECT_NOT_FOUND] Projeto não encontrado durante carregamento de: {project_url}"
+                        )
+                        raise FlowProjectNotFoundError(
+                            f"FLOW_PROJECT_NOT_FOUND: Projeto não encontrado na URL {project_url}"
+                        )
+                    if editor_vis_fn() is True:
+                        break
+                    wait_fn = getattr(page, "wait_for_timeout", None)
+                    if callable(wait_fn):
+                        wait_fn(500)
+                    else:
+                        break
+        except FlowProjectNotFoundError:
+            raise
+        except Exception:
+            pass
         expect(editor).to_be_visible(timeout=timeout_ms)
         logger.info(f"Superfície Studio confirmada no projeto alvo: {project_url}")
         return project_url
@@ -1238,6 +1385,7 @@ def get_generate_button(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> 
     Localiza o botão 'Iniciar geração' / 'Generate'.
     Exige locator único e visível.
     """
+    dismiss_flow_announcements(page)
     btn = page.get_by_role("button", name=re.compile(r"iniciar gera..o|generate", re.I))
     btn.wait_for(state="visible", timeout=timeout_ms)
 
@@ -1246,6 +1394,164 @@ def get_generate_button(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_UI_MS) -> 
         raise RuntimeError(f"AMBIGUOUS_OR_MISSING_GENERATE_BUTTON: count={count}")
 
     return btn
+
+
+def _get_visible_modal_dialogs(page: Any) -> List[Any]:
+    """Retorna todos os elementos [role='dialog'] / [aria-modal='true'] visíveis na página."""
+    if not page:
+        return []
+    locator_fn = getattr(page, "locator", None)
+    if not callable(locator_fn):
+        return []
+    try:
+        dialogs = locator_fn("[role='dialog'], [aria-modal='true']")
+        cnt = _safe_locator_count(dialogs)
+        visible: List[Any] = []
+        for idx in range(min(cnt, 10)):
+            try:
+                dlg = dialogs.nth(idx)
+                if getattr(dlg, "is_visible", lambda: False)() is True:
+                    visible.append(dlg)
+            except Exception:
+                continue
+        return visible
+    except Exception:
+        return []
+
+
+def _extract_safe_button_strings(btn: Any) -> Tuple[str, str]:
+    """Extrai (texto_visivel, aria_label) de um botão sem falhar em mocks."""
+    raw_text = ""
+    try:
+        t = btn.inner_text()
+        if isinstance(t, str):
+            raw_text = t.strip()
+    except Exception:
+        pass
+    if not raw_text:
+        try:
+            tc = btn.text_content()
+            if isinstance(tc, str):
+                raw_text = tc.strip()
+        except Exception:
+            pass
+
+    raw_aria = ""
+    try:
+        a = btn.get_attribute("aria-label")
+        if isinstance(a, str):
+            raw_aria = a.strip()
+    except Exception:
+        pass
+    return raw_text, raw_aria
+
+
+def dismiss_flow_announcements(page: Any, max_rounds: int = 3) -> int:
+    """Fonte única para dispensar modais/avisos de novidade do Google Flow com segurança.
+
+    Regras estritas:
+    - Detecta somente diálogos visíveis ([role='dialog'], [aria-modal='true']).
+    - Se não houver modal visível, não executa nenhuma ação extra e retorna 0.
+    - Fecha SOMENTE clicando em botões cujo rótulo pertença à allowlist estrita
+      (FLOW_MODAL_ALLOWLIST_LABELS) e NUNCA contenha termos proibidos
+      (FLOW_MODAL_FORBIDDEN_TERMS: upgrade, assinar, comprar, pagar, plano, créditos, etc.).
+    - Na ausência de botão permitido, tenta Escape.
+    - Máximo `max_rounds` (3) rodadas. Loga "[FLOW_MODAL_DISMISSED] rotulo=..." sem logar
+      conteúdo de conta/e-mail.
+    - Se o modal persistir após todas as rodadas, levanta FlowBlockingModalError ("FLOW_BLOCKING_MODAL").
+    """
+    if not page:
+        return 0
+
+    dismissed_count = 0
+    rounds = max(1, int(max_rounds))
+
+    for round_idx in range(1, rounds + 1):
+        visible_dialogs = _get_visible_modal_dialogs(page)
+        if not visible_dialogs:
+            break
+
+        clicked_label: Optional[str] = None
+        # Inspeciona do modal mais ao topo (último no DOM) para o mais antigo
+        for dlg in reversed(visible_dialogs):
+            btn_locator_fn = getattr(dlg, "locator", None)
+            if not callable(btn_locator_fn):
+                continue
+            try:
+                buttons = btn_locator_fn("button, [role='button']")
+                btn_cnt = _safe_locator_count(buttons)
+            except Exception:
+                continue
+
+            for b_idx in range(min(btn_cnt, 20)):
+                try:
+                    btn = buttons.nth(b_idx)
+                    if getattr(btn, "is_visible", lambda: False)() is not True:
+                        continue
+                    raw_text, raw_aria = _extract_safe_button_strings(btn)
+                    combined = f"{raw_text} {raw_aria}".strip()
+                    if _contains_forbidden_modal_term(combined):
+                        continue
+
+                    candidate_label: Optional[str] = None
+                    if raw_text and _is_allowed_modal_label(raw_text):
+                        candidate_label = raw_text
+                    elif raw_aria and _is_allowed_modal_label(raw_aria):
+                        candidate_label = raw_aria
+
+                    if candidate_label is not None:
+                        btn.click(timeout=2000)
+                        clicked_label = candidate_label
+                        break
+                except Exception:
+                    continue
+
+            if clicked_label is not None:
+                break
+
+        wait_fn = getattr(page, "wait_for_timeout", None)
+        if clicked_label is not None:
+            dismissed_count += 1
+            logger.info(f"[FLOW_MODAL_DISMISSED] rotulo={clicked_label} rodada={round_idx}/{rounds}")
+            if callable(wait_fn):
+                try:
+                    wait_fn(300)
+                except Exception:
+                    pass
+            continue
+
+        # Nenhum botão da allowlist encontrado no modal visível: tentar Escape
+        kb = getattr(page, "keyboard", None)
+        if kb is not None and callable(getattr(kb, "press", None)):
+            try:
+                kb.press("Escape")
+            except Exception:
+                pass
+        if callable(wait_fn):
+            try:
+                wait_fn(300)
+            except Exception:
+                pass
+
+        remaining_after_escape = _get_visible_modal_dialogs(page)
+        if not remaining_after_escape:
+            dismissed_count += 1
+            logger.info(f"[FLOW_MODAL_DISMISSED] rotulo=Escape rodada={round_idx}/{rounds}")
+            break
+
+    still_visible = _get_visible_modal_dialogs(page)
+    if still_visible:
+        logger.error(
+            f"[FLOW_BLOCKING_MODAL] Modal bloqueante persistiu após {rounds} rodadas de dispensa segura."
+        )
+        raise FlowBlockingModalError(
+            f"FLOW_BLOCKING_MODAL: Modal bloqueante persistiu após {rounds} rodadas sem botão permitido ou Escape efetivo."
+        )
+
+    if dismissed_count > 0:
+        dismiss_overlay_backdrops(page)
+
+    return dismissed_count
 
 
 def dismiss_overlay_backdrops(page: Any) -> None:
@@ -2173,12 +2479,18 @@ def run_playwright_flow_poc(
                 context.close()
                 return report
 
+            # 1b. Dispensa avisos/modais de novidade antes de abrir/criar projeto
+            dismiss_flow_announcements(page)
+
             # 2. Navegação para Studio (com precedência mandatória para target_project_url)
             ensure_studio_surface(page, project_url=target_project_url, force_new_project=force_new_project)
             report["landing_to_studio"] = True
             report["editor_found"] = True
             report["project_url_confirmed"] = True
             report["project_url"] = page.url
+
+            # 2a. Dispensa avisos/modais de novidade sobre o Studio antes de modo/créditos/prompt
+            dismiss_flow_announcements(page)
 
             # 2b. MODO DE GERAÇÃO = VIDEO (GARANTIA OPERACIONAL MANDATÓRIA FAIL-CLOSED)
             mode_res = ensure_video_generation_mode(page)
@@ -2232,6 +2544,7 @@ def run_playwright_flow_poc(
                 report["prompt_filled"] = True
                 report["prompt_confirmed"] = True
 
+                dismiss_flow_announcements(page)
                 gen_btn = get_generate_button(page)
                 actionable = check_generate_actionable(gen_btn)
                 report["generate_actionable"] = actionable
@@ -2567,6 +2880,26 @@ def run_playwright_flow_poc(
             context.close()
             return report
 
+        except FlowBlockingModalError as exc:
+            logger.error(f"[FLOW_BLOCKING_MODAL] {exc}")
+            report["status"] = "FLOW_BLOCKING_MODAL"
+            report["error"] = str(exc)
+            _stop_tracing("FLOW_BLOCKING_MODAL")
+            try:
+                context.close()
+            except Exception:
+                pass
+            return report
+        except FlowProjectNotFoundError as exc:
+            logger.error(f"[FLOW_PROJECT_NOT_FOUND] {exc}")
+            report["status"] = "FLOW_PROJECT_NOT_FOUND"
+            report["error"] = str(exc)
+            _stop_tracing("FLOW_PROJECT_NOT_FOUND")
+            try:
+                context.close()
+            except Exception:
+                pass
+            return report
         except Exception as exc:
             logger.exception(f"Erro durante a execução do Playwright Flow: {exc}")
             report["status"] = "UNEXPECTED_ERROR"
@@ -2659,6 +2992,7 @@ def generate_flow_scene(
     timeout_gen_sec: int = DEFAULT_TIMEOUT_GEN_SEC,
     download_only: bool = False,
     headless: Optional[bool] = None,
+    force_new_project: bool = False,
 ) -> FlowSceneResult:
     """
     API canônica reutilizável para o flow_workflow.py.
@@ -2701,7 +3035,7 @@ def generate_flow_scene(
             error=f"SCENE_{scene_index}_NOT_FOUND_IN_MANIFEST",
         )
 
-    target_project_url = project_url or manifest.get("flow_project_url")
+    target_project_url = None if force_new_project else (project_url or manifest.get("flow_project_url"))
     project_dir = os.path.dirname(os.path.abspath(manifest_path))
     clip_filename = target_scene.get("expected_clip", f"flow_scene_{scene_index:02d}.mp4")
     canonical_output_path = os.path.join(project_dir, "clips", clip_filename)
@@ -2774,7 +3108,7 @@ def generate_flow_scene(
         initial_status in ("EXHAUSTED", "AUTH_FAILED", "AUTH_REQUIRED", "DISABLED", "COOLDOWN")
         or (credits_before is not None and credits_before < required_credits)
     )
-    if can_failover_account(manifest) and needs_pre_failover:
+    if not force_new_project and can_failover_account(manifest) and needs_pre_failover:
         # Se for por insuficiência de crédito ou status de esgotamento, mas a telemetria for stale,
         # tenta reconciliar antes de executar failover
         if initial_status not in ("AUTH_FAILED", "AUTH_REQUIRED", "DISABLED"):
@@ -2837,6 +3171,7 @@ def generate_flow_scene(
         timeout_gen_sec=timeout_gen_sec,
         project_url=target_project_url,
         download_only=download_only,
+        force_new_project=force_new_project,
         headless=headless,
         user_data_dir=account_user_data_dir,
         flow_account_id=flow_account_id,
@@ -2851,8 +3186,15 @@ def generate_flow_scene(
     if (
         not confirmed_dispatch
         and not failover_done
+        and not force_new_project
         and can_failover_account(manifest)
-        and raw_res.get("status") not in ("SUCCESS", "ALREADY_COMPLETE", "PRE_FLIGHT_TRIAL_PASS")
+        and raw_res.get("status") not in (
+            "SUCCESS",
+            "ALREADY_COMPLETE",
+            "PRE_FLIGHT_TRIAL_PASS",
+            "FLOW_BLOCKING_MODAL",
+            "FLOW_PROJECT_NOT_FOUND",
+        )
     ):
         failover_reason = raw_res.get("error") or raw_res.get("status") or "Pre-dispatch failure"
         alt_acc = failover_flow_account(
